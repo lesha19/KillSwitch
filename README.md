@@ -12,7 +12,11 @@ Rules are loaded at boot, before login.
 - `Helper/local.killswitch.plist` — LaunchDaemon: applies rules at boot and re-checks every 30 s.
 - `Helper/install.sh` — installs the above into `/Library/KillSwitch` (root-owned) and lets the
   installing user run `ks` without a password (only `ks`), so the app works in one click.
-- `App/` — SwiftUI window app: state, VPN status, on / off / pause.
+- `Helper/uninstall.sh` — removes everything install.sh put in place.
+- `App/` — SwiftUI app: window, menu bar icon, install / uninstall from the window (admin password once), launch at login.
+- `Widget/` — WidgetKit widget with on/off button. The widget is sandboxed, so its button posts a
+  Darwin notification and the running app performs the switch; state reaches the widget through
+  the app group `YR58655PJ7.killswitch`.
 
 ## How the core is recognised
 
@@ -23,11 +27,12 @@ with gid 20 (staff), root daemons with gid 0. pf matches the socket's effective 
 ## Install
 
 ```bash
-Helper/install.sh
 xcodegen generate
-xcodebuild -project KillSwitch.xcodeproj -scheme KillSwitch -configuration Release -derivedDataPath build build
+xcodebuild -project KillSwitch.xcodeproj -scheme KillSwitch -configuration Release -derivedDataPath build -allowProvisioningUpdates build
 cp -R build/Build/Products/Release/KillSwitch.app /Applications/
 ```
+
+Then open the app and press "Установить защиту" (or run `Helper/install.sh` in Terminal).
 
 ## Emergency off
 

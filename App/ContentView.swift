@@ -2,55 +2,86 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(KillSwitchControl.self) private var control
+    @State private var confirmUninstall = false
 
     var body: some View {
-        VStack(spacing: 20) {
-            Image(systemName: icon)
-                .font(.system(size: 64))
-                .foregroundStyle(color)
+        @Bindable var control = control
 
-            VStack(spacing: 6) {
-                Text(title).font(.title2.bold())
-                Text(subtitle).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            }
-
-            Label(control.vpnUp ? "VPN dropweb подключён" : "VPN dropweb не подключён",
-                  systemImage: control.vpnUp ? "network" : "network.slash")
-                .foregroundStyle(control.vpnUp ? .green : .orange)
-
-            if control.state == .notInstalled {
-                Text("Защита не установлена. Запусти в Терминале:\n~/KillSwitch/Helper/install.sh")
-                    .font(.callout).multilineTextAlignment(.center).textSelection(.enabled)
-            } else {
-                VStack(spacing: 10) {
-                    if control.state == .on {
-                        Button("Выключить") { control.turnOff() }
-                            .controlSize(.large).buttonStyle(.borderedProminent).tint(.red)
-                        HStack {
-                            Button("Пауза 5 минут") { control.pause(minutes: 5) }
-                            Button("Пауза 30 минут") { control.pause(minutes: 30) }
-                        }
-                    } else {
-                        Button("Включить") { control.turnOn() }
-                            .controlSize(.large).buttonStyle(.borderedProminent).tint(.green)
-                    }
+        VStack(spacing: 0) {
+            VStack(spacing: 18) {
+                ZStack {
+                    Circle().fill(color.opacity(0.15)).frame(width: 120, height: 120)
+                    Image(systemName: control.state.symbol)
+                        .font(.system(size: 56, weight: .semibold))
+                        .foregroundStyle(color)
+                        .contentTransition(.symbolEffect(.replace))
                 }
-                .disabled(control.busy || control.state == .unknown)
-            }
 
-            if let error = control.error {
-                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                VStack(spacing: 6) {
+                    Text(control.state.title).font(.title2.bold())
+                    Text(subtitle).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
+
+                Label(control.vpnUp ? "VPN dropweb подключён" : "VPN dropweb не подключён",
+                      systemImage: control.vpnUp ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    .foregroundStyle(control.vpnUp ? .green : .orange)
+                    .font(.callout)
+
+                actions
+                    .disabled(control.busy || control.state == .unknown)
+
+                if let error = control.error {
+                    Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                        .multilineTextAlignment(.center)
+                }
             }
+            .padding(28)
+
+            Divider()
+
+            HStack {
+                Toggle("Запускать при входе", isOn: $control.launchAtLogin)
+                    .toggleStyle(.switch).controlSize(.small)
+                Spacer()
+                if control.state != .notInstalled && control.state != .unknown {
+                    Button("Удалить защиту…", role: .destructive) { confirmUninstall = true }
+                        .buttonStyle(.link).foregroundStyle(.secondary)
+                }
+            }
+            .font(.callout)
+            .padding(.horizontal, 20).padding(.vertical, 12)
         }
-        .padding(32)
-        .frame(width: 360)
+        .frame(width: 380)
+        .animation(.default, value: control.state)
+        .confirmationDialog("Удалить защиту?", isPresented: $confirmUninstall) {
+            Button("Удалить", role: .destructive) { control.uninstall() }
+        } message: {
+            Text("Правила снимутся, программы снова смогут выходить в интернет без VPN. Понадобится пароль.")
+        }
     }
 
-    private var icon: String {
+    @ViewBuilder private var actions: some View {
         switch control.state {
-        case .on: "lock.shield.fill"
-        case .off, .paused: "shield.slash"
-        case .notInstalled, .unknown: "shield"
+        case .notInstalled:
+            Button { control.install() } label: {
+                Text("Установить защиту").frame(maxWidth: .infinity)
+            }
+            .controlSize(.large).buttonStyle(.borderedProminent)
+            Text("Пароль спросят один раз.").font(.caption).foregroundStyle(.secondary)
+        case .on:
+            Button { control.turnOff() } label: {
+                Text("Выключить").frame(maxWidth: .infinity)
+            }
+            .controlSize(.large).buttonStyle(.borderedProminent).tint(.red)
+            HStack {
+                Button("Пауза 5 минут") { control.pause(minutes: 5) }
+                Button("Пауза 30 минут") { control.pause(minutes: 30) }
+            }
+        case .off, .paused, .unknown:
+            Button { control.turnOn() } label: {
+                Text("Включить").frame(maxWidth: .infinity)
+            }
+            .controlSize(.large).buttonStyle(.borderedProminent).tint(.green)
         }
     }
 
@@ -63,22 +94,13 @@ struct ContentView: View {
         }
     }
 
-    private var title: String {
-        switch control.state {
-        case .on: "Защита включена"
-        case .off: "Защита выключена"
-        case .paused: "Защита на паузе"
-        case .notInstalled: "Не установлена"
-        case .unknown: "Проверяю…"
-        }
-    }
-
     private var subtitle: String {
         switch control.state {
-        case .on: "Интернет только через VPN. Домашняя сеть доступна."
+        case .on: "Интернет только через VPN.\nДомашняя сеть доступна."
         case .off: "Программы выходят в интернет и без VPN."
         case .paused(let until): "Включится сама в \(until.formatted(date: .omitted, time: .shortened))."
-        case .notInstalled, .unknown: ""
+        case .notInstalled: "Программы выходят в интернет и без VPN."
+        case .unknown: " "
         }
     }
 }

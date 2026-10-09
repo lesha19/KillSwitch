@@ -6,7 +6,7 @@ set -eu
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
 cd "$(dirname "$0")"
 DIR="/Library/KillSwitch"
-USER_NAME="${SUDO_USER:?run as a normal user, not as root}"
+USER_NAME="${SUDO_USER:-${1:?usage: install.sh <user> when run as root}}"
 
 pfctl -n -f killswitch.pf.conf   # syntax check, loads nothing
 

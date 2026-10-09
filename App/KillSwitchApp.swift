@@ -10,5 +10,12 @@ struct KillSwitchApp: App {
                 .environment(control)
         }
         .windowResizability(.contentSize)
+
+        MenuBarExtra {
+            MenuView()
+                .environment(control)
+        } label: {
+            Image(systemName: control.state.symbol)
+        }
     }
 }

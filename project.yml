@@ -1,28 +1,59 @@
 name: KillSwitch
 options:
-  bundleIdPrefix: local.lesha
+  bundleIdPrefix: com.lesha19
   deploymentTarget:
     macOS: "15.0"
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    CODE_SIGN_IDENTITY: "-"
-    CODE_SIGN_STYLE: Manual
-    MARKETING_VERSION: "0.1"
-    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: YR58655PJ7
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "Apple Development"
+    MARKETING_VERSION: "0.2"
+    CURRENT_PROJECT_VERSION: "2"
+    ENABLE_HARDENED_RUNTIME: NO
+    GENERATE_INFOPLIST_FILE: YES
 targets:
   KillSwitch:
     type: application
     platform: macOS
-    sources: [App]
-    info:
-      path: App/Info.plist
+    sources:
+      - App
+      - Shared
+      - path: Helper
+        type: folder
+        buildPhase: resources
+    resources: [Assets.xcassets]
+    dependencies:
+      - target: KillSwitchWidget
+    entitlements:
+      path: App/KillSwitch.entitlements
       properties:
-        CFBundleDisplayName: KillSwitch
-        LSApplicationCategoryType: public.app-category.utilities
+        com.apple.security.application-groups: [YR58655PJ7.killswitch]
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: local.lesha.KillSwitch
-        ENABLE_APP_SANDBOX: NO
-        ENABLE_HARDENED_RUNTIME: NO
-        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.lesha19.KillSwitch
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_CFBundleDisplayName: KillSwitch
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+  KillSwitchWidget:
+    type: app-extension
+    platform: macOS
+    sources: [Widget, Shared]
+    entitlements:
+      path: Widget/KillSwitchWidget.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups: [YR58655PJ7.killswitch]
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleDisplayName: KillSwitch
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lesha19.KillSwitch.Widget
+        GENERATE_INFOPLIST_FILE: NO
