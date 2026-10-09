@@ -4,8 +4,9 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             AccessSettings().tabItem { Label("Что пропускать", systemImage: "checklist") }
-            HappSettings().tabItem { Label("Happ", systemImage: "network") }
+            ServerSettings().tabItem { Label("Серверы VPN", systemImage: "network") }
             ExceptionSettings().tabItem { Label("Исключения", systemImage: "list.bullet") }
+            CheckSettings().tabItem { Label("Проверка", systemImage: "checkmark.shield") }
             GeneralSettings().tabItem { Label("Общие", systemImage: "gearshape") }
         }
         .frame(width: 480)
@@ -21,6 +22,7 @@ private struct AccessSettings: View {
                 toggle("Домашняя сеть", "Роутер, NAS, принтер, AirPlay.", key: "lan", value: control.allowLAN)
                 toggle("Адреса сайтов через роутер", "Пока VPN выключен, Mac может узнавать адреса сайтов у роутера. Само содержимое не уходит, но видно, куда ходит Mac.", key: "dns", value: control.allowRouterDNS)
                     .disabled(!control.allowLAN)
+                toggle("Сайты мимо VPN через dropweb", "Ядро dropweb сможет выходить на любые адреса, а не только к серверам VPN. Это слабее защиты: любая программа может запустить ядро со своим конфигом и выйти мимо VPN.", key: "direct", value: control.allowDirect)
                 toggle("Tailscale напрямую", "Прямая связь Tailscale между своими устройствами без VPN. Только для системной службы Tailscale.", key: "tailscale", value: control.allowTailscale)
             } footer: {
                 Text("Каждое изменение спросит пароль.").foregroundStyle(.secondary)
@@ -38,38 +40,86 @@ private struct AccessSettings: View {
     }
 }
 
-private struct HappSettings: View {
+private struct ServerSettings: View {
     @Environment(KillSwitchControl.self) private var control
 
     var body: some View {
+        // found servers first, then ones that are allowed but no longer in any profile
+        let rows = control.foundServers + control.servers.filter { !control.foundServers.contains($0) }
         Form {
             Section {
-                if control.happServers.isEmpty {
-                    Text("Серверы Happ не найдены. Подключись в Happ хотя бы раз.").foregroundStyle(.secondary)
+                if rows.isEmpty {
+                    Text("Серверы не найдены. Подключись в dropweb или Happ хотя бы раз.").foregroundStyle(.secondary)
                 }
-                ForEach(control.happServers, id: \.self) { server in
+                ForEach(rows, id: \.self) { server in
                     HStack {
                         Text(server).monospaced()
                         Spacer()
-                        if control.exceptions.contains(server) {
+                        if control.servers.contains(server) {
                             Label("пропускается", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                            Button("Убрать", role: .destructive) { control.removeServer(server) }
                         } else {
                             Label("закрыт", systemImage: "xmark.circle.fill").foregroundStyle(.red)
                         }
                     }
                 }
-                if control.happServers.contains(where: { !control.exceptions.contains($0) }) {
-                    Button("Пропускать серверы Happ") { control.allowHappServers() }
+                if control.foundServers.contains(where: { !control.servers.contains($0) }) {
+                    Button("Пропускать найденные серверы") { control.allowFoundServers() }
                 }
             } header: {
-                Text("Серверы Happ")
+                Text("Серверы VPN")
             } footer: {
-                Text("Happ нельзя отличить от других программ, поэтому пропускаются адреса его серверов. Сайты, которые Happ отправляет мимо VPN (российские, Apple, Steam), при включённой защите открываться не будут. Добавление спросит пароль.")
+                Text("Без VPN доступны только эти адреса, и к ним сможет подключиться любая программа. Сайты, которые Happ отправляет мимо VPN (российские, Apple, Steam), при включённой защите открываться не будут. Изменения спросят пароль.")
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
         .disabled(control.busy || control.state == .notInstalled)
+    }
+}
+
+private struct CheckSettings: View {
+    @Environment(KillSwitchControl.self) private var control
+
+    var body: some View {
+        Form {
+            Section {
+                Button(control.leakRunning ? "Проверяю…" : "Проверить утечку") { control.checkLeak() }
+                    .disabled(control.leakRunning)
+                ForEach(control.leakResults) { result in
+                    if result.leaked {
+                        Label("\(result.interface): утечка, интернет идёт мимо VPN", systemImage: "xmark.octagon.fill")
+                            .foregroundStyle(.red)
+                    } else {
+                        Label("\(result.interface): защищено", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    }
+                }
+                if let ip = control.externalIP {
+                    LabeledContent("Внешний адрес") { Text(ip).monospaced().textSelection(.enabled) }
+                }
+            } header: {
+                Text("Утечка")
+            } footer: {
+                Text("Проверка пытается выйти в интернет напрямую через физические интерфейсы. Ответ значит утечку.")
+                    .foregroundStyle(.secondary)
+            }
+            Section("События защиты") {
+                if control.events.isEmpty {
+                    Text("Пусто").foregroundStyle(.secondary)
+                } else {
+                    Text(control.events.joined(separator: "\n")).monospaced().font(.caption).textSelection(.enabled)
+                }
+            }
+            Section("Советы") {
+                Text("Выключи «Частный узел iCloud» (Private Relay): он может обходить фильтр.")
+                Text("После каждого обновления macOS перезагрузи Mac и нажми проверку.")
+                Text("Для полной защиты при загрузке выключай Wi-Fi перед выключением Mac.")
+            }
+            .foregroundStyle(.secondary)
+        }
+        .formStyle(.grouped)
+        .task { control.refreshEvents() }
     }
 }
 
@@ -98,7 +148,7 @@ private struct ExceptionSettings: View {
             } header: {
                 Text("Всегда без VPN")
             } footer: {
-                Text("Программы смогут ходить на эти адреса без VPN. Чтобы работал Happ, добавь сюда адреса его серверов. Каждое изменение спросит пароль.")
+                Text("Программы смогут ходить на эти адреса без VPN. Адреса серверов VPN добавляются на вкладке «Серверы VPN». Каждое изменение спросит пароль.")
                     .foregroundStyle(.secondary)
             }
         }

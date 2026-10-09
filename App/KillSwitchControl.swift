@@ -56,7 +56,20 @@ final class KillSwitchControl {
     private(set) var allowTailscale = true
     private(set) var allowRouterDNS = false
     private(set) var exceptions: [String] = []
-    private(set) var happServers: [String] = []
+    private(set) var allowDirect = false
+    private(set) var servers: [String] = []          // /Library/KillSwitch/servers
+    private(set) var foundServers: [String] = []     // from dropweb profiles and Happ's config
+    private(set) var daemonProblem = false
+    private(set) var events: [String] = []
+    private(set) var leakResults: [LeakResult] = []
+    private(set) var externalIP: String?
+    private(set) var leakRunning = false
+
+    struct LeakResult: Identifiable {
+        let interface: String
+        let leaked: Bool
+        var id: String { interface }
+    }
     var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
         set {
@@ -72,6 +85,7 @@ final class KillSwitchControl {
     private var timer: Timer?
 
     init() {
+        notifyIfMacOSUpdated()
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
@@ -91,16 +105,18 @@ final class KillSwitchControl {
     }
     func removeException(_ address: String) { runAsAdmin([helper, "unallow", address]) }
 
-    /// Lets Happ's servers through. Happ's tunnel runs as the ordinary user, so it cannot be
-    /// told apart from other apps; only the addresses of its servers can be allowed.
-    func allowHappServers() {
-        let missing = happServers.filter { !exceptions.contains($0) }
+    /// VPN servers are reachable by any process (Happ's tunnel runs as the ordinary user and
+    /// cannot be told apart from other apps), so only these addresses are let out.
+    func allowFoundServers() {
+        let missing = foundServers.filter { !servers.contains($0) }
         guard !missing.isEmpty else { return }
-        let script = missing.map { "\(helper) allow \($0)" }.joined(separator: " && ")
+        let script = missing.map { "\(helper) server-add \($0)" }.joined(separator: " && ")
         runAsAdmin(["/bin/sh", "-c", script])
     }
+    func removeServer(_ address: String) { runAsAdmin([helper, "server-remove", address]) }
 
-    func install() { runBundled("install.sh", [NSUserName()]) }
+    /// Also used to upgrade the installed helper: install.sh keeps settings and lists.
+    func install() { runBundled("install.sh", [NSUserName()] + foundServers) }
     func uninstall() { runBundled("uninstall.sh", []) }
 
     func refresh() {
@@ -108,6 +124,7 @@ final class KillSwitchControl {
         vpnUp = Self.dropwebTunnelUp()
         if wasVPNUp && !vpnUp && state == .on { notify(.vpnDropped) }
         readSettings()
+        checkDaemon()
         guard FileManager.default.fileExists(atPath: helper) else {
             publish(.notInstalled)
             return
@@ -181,9 +198,36 @@ final class KillSwitchControl {
         allowLAN = (values["lan"] ?? "1") == "1"
         allowTailscale = (values["tailscale"] ?? "1") == "1"
         allowRouterDNS = (values["dns"] ?? "0") == "1"
-        let allow = (try? String(contentsOfFile: "/Library/KillSwitch/allow", encoding: .utf8)) ?? ""
-        exceptions = allow.split(separator: "\n").map(String.init)
-        happServers = Self.readHappServers()
+        allowDirect = (values["direct"] ?? "0") == "1"
+        exceptions = Self.readLines("/Library/KillSwitch/allow")
+        servers = Self.readLines("/Library/KillSwitch/servers")
+        let dropweb = Self.readDropwebServers()
+        foundServers = dropweb + Self.readHappServers().filter { !dropweb.contains($0) }
+    }
+
+    private static func readLines(_ path: String) -> [String] {
+        ((try? String(contentsOfFile: path, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+    }
+
+    /// Plain IPs only: these go into a root command, and profiles/configs are user-writable.
+    private static func isPlainIP(_ text: String) -> Bool {
+        text.wholeMatch(of: /[0-9A-Fa-f:.]{2,45}/) != nil
+            && (text.contains(":") || text.wholeMatch(of: /[0-9]{1,3}(\.[0-9]{1,3}){3}/) != nil)
+    }
+
+    /// `server: <ip>` lines from dropweb's profiles.
+    private static func readDropwebServers() -> [String] {
+        let dir = NSHomeDirectory() + "/Library/Application Support/org.dropweb.vpn/profiles"
+        let files = ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).filter { $0.hasSuffix(".yaml") }.sorted()
+        var found: [String] = []
+        for file in files {
+            let text = (try? String(contentsOfFile: dir + "/" + file, encoding: .utf8)) ?? ""
+            for match in text.matches(of: /(?m)^[ \t-]*server:[ \t]*["']?([0-9A-Fa-f:.]{2,45})["']?[ \t]*$/) {
+                let address = String(match.1)
+                if isPlainIP(address) && !found.contains(address) { found.append(address) }
+            }
+        }
+        return found
     }
 
     /// Server addresses from Happ's connected Xray config.
@@ -199,14 +243,14 @@ final class KillSwitchControl {
             let entries = (settings["vnext"] as? [[String: Any]] ?? []) + (settings["servers"] as? [[String: Any]] ?? [])
             // Happ's config is user-writable and these go into a root command: plain IPs only.
             for case let address as String in entries.compactMap({ $0["address"] })
-            where address.wholeMatch(of: /[0-9A-Fa-f:.]{2,45}/) != nil && !servers.contains(address) {
+            where isPlainIP(address) && !servers.contains(address) {
                 servers.append(address)
             }
         }
         return servers
     }
 
-    enum Event { case vpnDropped, pauseEnded }
+    enum Event { case vpnDropped, pauseEnded, daemonOff, macOSUpdated }
 
     private func notify(_ event: Event) {
         let defaults = UserDefaults.standard
@@ -220,12 +264,73 @@ final class KillSwitchControl {
             guard defaults.object(forKey: "notifyPauseEnded") as? Bool ?? true else { return }
             content.title = "Пауза закончилась"
             content.body = "Защита снова включена."
+        case .daemonOff:
+            content.title = "Служба защиты выключена"
+            content.body = "Включи её в Системных настройках → Основные → Объекты входа."
+        case .macOSUpdated:
+            content.title = "macOS обновилась"
+            content.body = "Перезагрузи Mac и проверь утечки в KillSwitch"
         }
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         Task {
             let center = UNUserNotificationCenter.current()
             guard (try? await center.requestAuthorization(options: [.alert, .sound])) == true else { return }
             try? await center.add(request)
+        }
+    }
+
+    private func notifyIfMacOSUpdated() {
+        let current = ProcessInfo.processInfo.operatingSystemVersionString
+        let defaults = UserDefaults.standard
+        if let last = defaults.string(forKey: "lastOSVersion"), last != current { notify(.macOSUpdated) }
+        defaults.set(current, forKey: "lastOSVersion")
+    }
+
+    /// The daemon (ks watch) is what keeps the rules in place; BTM can switch it off in System Settings.
+    private func checkDaemon() {
+        guard FileManager.default.fileExists(atPath: helper) else { daemonProblem = false; return }
+        Task {
+            let disabled = await Self.exec("/bin/launchctl", ["print-disabled", "system"]).output
+            let running = await Self.exec("/bin/launchctl", ["print", "system/local.killswitch"]).status == 0
+            let isDisabled = disabled.contains("\"local.killswitch\" => disabled") || disabled.contains("\"local.killswitch\" => true")
+            daemonProblem = isDisabled || !running
+            let defaults = UserDefaults.standard
+            if daemonProblem {
+                if !defaults.bool(forKey: "daemonWarned") {
+                    defaults.set(true, forKey: "daemonWarned")
+                    notify(.daemonOff)
+                }
+            } else {
+                defaults.set(false, forKey: "daemonWarned")
+            }
+        }
+    }
+
+    func refreshEvents() {
+        events = Array(Self.readLines("/Library/KillSwitch/events.log").suffix(15))
+    }
+
+    /// Tries to reach 1.1.1.1 straight through the physical interfaces, as an ordinary user.
+    /// A reply means the filter has a hole.
+    func checkLeak() {
+        guard !leakRunning else { return }
+        leakRunning = true
+        leakResults = []
+        Task {
+            var interfaces = ["en0"]
+            let route = await Self.exec("/sbin/route", ["-n", "get", "default"]).output
+            if let match = route.firstMatch(of: /interface:[ \t]*([A-Za-z0-9]+)/) {
+                let name = String(match.1)
+                if !name.hasPrefix("utun") && !interfaces.contains(name) { interfaces.append(name) }
+            }
+            for name in interfaces {
+                let result = await Self.exec("/usr/bin/curl", ["-s", "-m", "6", "-o", "/dev/null", "--interface", name, "https://1.1.1.1"])
+                leakResults.append(LeakResult(interface: name, leaked: result.status == 0))
+            }
+            let ip = await Self.exec("/usr/bin/curl", ["-s", "-m", "6", "https://api.ipify.org"]).output
+            externalIP = Self.isPlainIP(ip) ? ip : nil
+            refreshEvents()
+            leakRunning = false
         }
     }
 

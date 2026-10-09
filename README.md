@@ -9,30 +9,56 @@ Rules are loaded at boot, before login.
 
 - `Helper/ks` — root helper: generates the pf rules from settings and loads them into anchor
   `com.apple/killswitch` (`/etc/pf.conf` untouched). `status | state | on | off | pause [min] |
-  set lan|tailscale|dns 0|1 | allow <addr> | unallow <addr> | apply`.
-- `Helper/local.killswitch.plist` — LaunchDaemon: applies rules at boot (before login) and re-checks every 30 s.
-- `Helper/install.sh` / `uninstall.sh` — put everything into root-owned `/Library/KillSwitch`.
-- `App/` — SwiftUI app: window, menu bar icon, settings, notifications, install / uninstall.
+  set lan|tailscale|dns|direct 0|1 | allow <addr> | unallow <addr> | server-add <ip> |
+  server-remove <ip> | apply | watch`.
+- `Helper/local.killswitch.plist` — LaunchDaemon: runs `ks watch` (RunAtLoad + KeepAlive), so rules
+  are loaded at boot, before login, and checked every 3 s. `AssociatedBundleIdentifiers` makes it
+  show up under the app's name in System Settings → Login Items & Extensions.
+- `Helper/install.sh [user] [server-ip ...]` / `uninstall.sh` — put everything into root-owned
+  `/Library/KillSwitch`. install.sh is safe to re-run: it upgrades the helper in place and keeps
+  `settings`, `allow` and `servers`. The app's "Обновить защиту" button does exactly that.
+- `App/` — SwiftUI app: window, menu bar icon, settings, notifications, install / upgrade / uninstall,
+  leak test.
 - `Widget/` — WidgetKit widget with on/off button. It is sandboxed, so its button posts a Darwin
   notification and the running app performs the switch; state reaches it via app group `YR58655PJ7.killswitch`.
 
+Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct),
+`allow` (addresses reachable by any process), `servers` (VPN server IPs, reachable by any process),
+`rules.sha256` and `tunnels` (state of the last load, for tamper checks), `events.log`
+(world-readable, last 500 corrective actions).
+
 ## Security model
 
-- Default deny on every interface except loopback, tunnels (utun*) and AirDrop links. New
-  interface types (iPhone USB, PPP, Thunderbolt) are covered automatically.
-- The dropweb core is let out by socket credentials **uid 0 and gid 80** together: DropwebCore is
-  setuid root + setgid admin. A user process cannot get uid 0 (so `newgrp admin` does not help),
-  root daemons have gid 0. A scan of /Applications, /Library, /opt and ~/Library found no other
-  binary that is both setuid root and setgid admin.
-- Tailscale direct UDP and STUN are allowed only for root (system tailscaled), so a user process
-  binding port 41641 gets nothing.
+- Default deny on every interface except loopback, AirDrop links and real VPN tunnels. A tunnel is a
+  `utun` whose IPv4 address is in 198.18.0.0/16 (dropweb and Happ TUN both use 198.18.0.1), detected
+  with `ifconfig` on every load. Other `utun` interfaces (iCloud Private Relay, other VPNs, a
+  Tailscale exit node) get nothing. New interface types (iPhone USB, PPP, Thunderbolt) are covered
+  automatically.
+- VPN server addresses (`servers`) are reachable by any process. That is needed for Happ, whose
+  tunnel runs as the user and cannot be told apart from other apps. Only these addresses are open.
+- The dropweb core is **not** trusted by default. DropwebCore is setuid root + setgid admin and is
+  executable by anyone, so a rule on uid 0 / gid 80 would let any local program start it with its own
+  config and escape. The rule exists only with `direct=1` ("Сайты мимо VPN через dropweb"), a weaker mode
+  in which the core reaches any address. Without it dropweb still works through its servers; its DIRECT
+  rules (Russian sites and so on) do not.
+- Tailscale: direct UDP and STUN only for root (system tailscaled); with the Tailscale setting on, the
+  tailnet itself (100.64.0.0/10, fd7a:115c:a1e0::/48) is allowed on Tailscale's utun, exit-node traffic is not.
 - DNS to LAN resolvers is blocked by default (setting `dns`), so names do not leak via the router.
 - Rules and settings are root-owned. Passwordless sudo covers only `ks state` and `ks on`; turning
   off, pausing and every setting change ask for the admin password.
+- Watchdog (`ks watch`, every 3 s, honours off / pause): checks that pf is enabled, that the main
+  ruleset still references the `com.apple/*` anchor (otherwise reloads `/etc/pf.conf`), that the
+  sha256 of the loaded anchor equals the hash saved right after our load, and that the set of tunnel
+  interfaces did not change. Any mismatch reloads the rules and is written to `events.log`.
+- The app warns (banner and notification) when the daemon is disabled in System Settings → Login Items
+  & Extensions or is not loaded, and after a macOS update asks to reboot and re-check.
+- Settings → "Проверка": tries `curl --interface en0` (and the default-route interface) to 1.1.1.1 as an
+  ordinary user; a reply means a leak. It also shows the external IP and the tail of `events.log`.
 
-What it does not protect against: anything already running as root (it can unload pf); the
-seconds of boot before the LaunchDaemon runs (only system daemons are up then); dropweb's own
-rules (DIRECT rules and its local proxy go out by design); LAN hosts that act as proxies.
+What it does not protect against: anything already running as root (it can unload pf; the watchdog
+restores the rules within 3 s and logs it, but this is detection, not prevention); the seconds of boot
+before the LaunchDaemon runs (only system daemons are up then); dropweb's own rules in `direct=1` mode;
+LAN hosts that act as proxies; anything that can reach a listed VPN server, if the server itself relays.
 
 ## Install
 
@@ -42,7 +68,9 @@ xcodebuild -project KillSwitch.xcodeproj -scheme KillSwitch -configuration Relea
 cp -R build/Build/Products/Release/KillSwitch.app /Applications/
 ```
 
-Then open the app and press "Установить защиту" (or run `Helper/install.sh` in Terminal).
+Then open the app and press "Установить защиту" (or run `Helper/install.sh` in Terminal; server
+addresses found in dropweb and Happ configs are passed to it). After updating the app, press
+"Обновить защиту" to upgrade the installed helper.
 
 ## Emergency off
 
@@ -52,7 +80,13 @@ sudo pfctl -a com.apple/killswitch -F all
 
 ## Known limits
 
-- Happ and other VPN clients cannot get out while it is on — add their server addresses to exceptions.
+- Happ's direct sites (Russian, Apple, Steam) do not open while it is on: only VPN server addresses are open.
 - Captive Wi-Fi portals: use pause.
-- Tailscale: only direct UDP from system tailscaled; DERP relays are blocked.
+- Tailscale: only direct UDP from system tailscaled and the tailnet; DERP relays and exit nodes are blocked.
 - VM networks outside private ranges (e.g. OrbStack 198.19.0.0/16) are blocked.
+- iCloud Private Relay can bypass the filter: turn it off.
+- After every macOS update reboot the Mac and run the leak test; system updates may replace `/etc/pf.conf`
+  or change how pf behaves.
+- At boot, protection starts when launchd starts the daemon; for full protection switch Wi-Fi off before
+  shutting the Mac down.
+- If the daemon is switched off in System Settings, the rules stay but nothing watches them.

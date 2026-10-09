@@ -37,6 +37,13 @@ struct ContentView: View {
             }
             .padding(28)
 
+            if control.daemonProblem {
+                Label("Фоновая служба защиты выключена в Системных настройках → Основные → Объекты входа. Правила пока действуют, но следить за ними некому.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout).foregroundStyle(.orange)
+                    .padding(.horizontal, 20).padding(.bottom, 16)
+            }
+
             Divider()
 
             HStack {
@@ -44,6 +51,8 @@ struct ContentView: View {
                     .buttonStyle(.link)
                 Spacer()
                 if control.state != .notInstalled && control.state != .unknown {
+                    Button("Обновить защиту") { control.install() }
+                        .buttonStyle(.link).disabled(control.busy)
                     Button("Удалить защиту…", role: .destructive) { confirmUninstall = true }
                         .buttonStyle(.link).foregroundStyle(.secondary)
                 }
