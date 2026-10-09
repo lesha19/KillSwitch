@@ -11,6 +11,11 @@ struct KillSwitchApp: App {
         }
         .windowResizability(.contentSize)
 
+        Settings {
+            SettingsView()
+                .environment(control)
+        }
+
         MenuBarExtra {
             MenuView()
                 .environment(control)

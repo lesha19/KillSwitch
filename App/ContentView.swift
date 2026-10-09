@@ -2,11 +2,11 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(KillSwitchControl.self) private var control
+    @AppStorage("pauseShort") private var pauseShort = 5
+    @AppStorage("pauseLong") private var pauseLong = 30
     @State private var confirmUninstall = false
 
     var body: some View {
-        @Bindable var control = control
-
         VStack(spacing: 0) {
             VStack(spacing: 18) {
                 ZStack {
@@ -40,8 +40,8 @@ struct ContentView: View {
             Divider()
 
             HStack {
-                Toggle("Запускать при входе", isOn: $control.launchAtLogin)
-                    .toggleStyle(.switch).controlSize(.small)
+                SettingsLink { Label("Настройки", systemImage: "gearshape") }
+                    .buttonStyle(.link)
                 Spacer()
                 if control.state != .notInstalled && control.state != .unknown {
                     Button("Удалить защиту…", role: .destructive) { confirmUninstall = true }
@@ -67,15 +67,16 @@ struct ContentView: View {
                 Text("Установить защиту").frame(maxWidth: .infinity)
             }
             .controlSize(.large).buttonStyle(.borderedProminent)
-            Text("Пароль спросят один раз.").font(.caption).foregroundStyle(.secondary)
+            Text("Попросит пароль.").font(.caption).foregroundStyle(.secondary)
         case .on:
             Button { control.turnOff() } label: {
                 Text("Выключить").frame(maxWidth: .infinity)
             }
             .controlSize(.large).buttonStyle(.borderedProminent).tint(.red)
+            Text("Выключение и пауза просят пароль.").font(.caption).foregroundStyle(.secondary)
             HStack {
-                Button("Пауза 5 минут") { control.pause(minutes: 5) }
-                Button("Пауза 30 минут") { control.pause(minutes: 30) }
+                Button("Пауза \(pauseShort) мин") { control.pause(minutes: pauseShort) }
+                Button("Пауза \(pauseLong) мин") { control.pause(minutes: pauseLong) }
             }
         case .off, .paused, .unknown:
             Button { control.turnOn() } label: {

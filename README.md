@@ -7,22 +7,32 @@ Rules are loaded at boot, before login.
 
 ## Parts
 
-- `Helper/killswitch.pf.conf` — pf rules, loaded into anchor `com.apple/killswitch` (`/etc/pf.conf` untouched).
-- `Helper/ks` — control script: `status | state | on | off | pause [min] | apply`.
-- `Helper/local.killswitch.plist` — LaunchDaemon: applies rules at boot and re-checks every 30 s.
-- `Helper/install.sh` — installs the above into `/Library/KillSwitch` (root-owned) and lets the
-  installing user run `ks` without a password (only `ks`), so the app works in one click.
-- `Helper/uninstall.sh` — removes everything install.sh put in place.
-- `App/` — SwiftUI app: window, menu bar icon, install / uninstall from the window (admin password once), launch at login.
-- `Widget/` — WidgetKit widget with on/off button. The widget is sandboxed, so its button posts a
-  Darwin notification and the running app performs the switch; state reaches the widget through
-  the app group `YR58655PJ7.killswitch`.
+- `Helper/ks` — root helper: generates the pf rules from settings and loads them into anchor
+  `com.apple/killswitch` (`/etc/pf.conf` untouched). `status | state | on | off | pause [min] |
+  set lan|tailscale|dns 0|1 | allow <addr> | unallow <addr> | apply`.
+- `Helper/local.killswitch.plist` — LaunchDaemon: applies rules at boot (before login) and re-checks every 30 s.
+- `Helper/install.sh` / `uninstall.sh` — put everything into root-owned `/Library/KillSwitch`.
+- `App/` — SwiftUI app: window, menu bar icon, settings, notifications, install / uninstall.
+- `Widget/` — WidgetKit widget with on/off button. It is sandboxed, so its button posts a Darwin
+  notification and the running app performs the switch; state reaches it via app group `YR58655PJ7.killswitch`.
 
-## How the core is recognised
+## Security model
 
-`DropwebCore` is setuid root + setgid admin, so its sockets carry gid 80. Ordinary apps run
-with gid 20 (staff), root daemons with gid 0. pf matches the socket's effective gid, so
-`group 80` lets only the core out. No server list to maintain.
+- Default deny on every interface except loopback, tunnels (utun*) and AirDrop links. New
+  interface types (iPhone USB, PPP, Thunderbolt) are covered automatically.
+- The dropweb core is let out by socket credentials **uid 0 and gid 80** together: DropwebCore is
+  setuid root + setgid admin. A user process cannot get uid 0 (so `newgrp admin` does not help),
+  root daemons have gid 0. A scan of /Applications, /Library, /opt and ~/Library found no other
+  binary that is both setuid root and setgid admin.
+- Tailscale direct UDP and STUN are allowed only for root (system tailscaled), so a user process
+  binding port 41641 gets nothing.
+- DNS to LAN resolvers is blocked by default (setting `dns`), so names do not leak via the router.
+- Rules and settings are root-owned. Passwordless sudo covers only `ks state` and `ks on`; turning
+  off, pausing and every setting change ask for the admin password.
+
+What it does not protect against: anything already running as root (it can unload pf); the
+seconds of boot before the LaunchDaemon runs (only system daemons are up then); dropweb's own
+rules (DIRECT rules and its local proxy go out by design); LAN hosts that act as proxies.
 
 ## Install
 
@@ -42,7 +52,7 @@ sudo pfctl -a com.apple/killswitch -F all
 
 ## Known limits
 
-- Happ and other VPN clients cannot get out while it is on — only dropweb.
+- Happ and other VPN clients cannot get out while it is on — add their server addresses to exceptions.
 - Captive Wi-Fi portals: use pause.
-- Tailscale: only direct UDP 41641 and STUN; DERP relays are blocked.
-- While the VPN is down, DNS queries to the home router are still allowed (LAN).
+- Tailscale: only direct UDP from system tailscaled; DERP relays are blocked.
+- VM networks outside private ranges (e.g. OrbStack 198.19.0.0/16) are blocked.

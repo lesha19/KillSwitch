@@ -1,27 +1,70 @@
 #!/bin/bash
 # Kill switch control.
-#   ks status         show state and loaded rules
-#   ks state          one word for the app: on | off | paused:<epoch>
-#   ks on             enable (also after reboot)
-#   ks off            disable until "ks on"
-#   ks pause [min]    disable for N minutes (default 5), e.g. for a captive Wi-Fi portal
-#   ks apply          used by the LaunchDaemon: (re)load rules unless disabled
+#   ks status               show state and loaded rules
+#   ks state                one word for the app: on | off | paused:<epoch>
+#   ks on                   enable (also after reboot)
+#   ks off                  disable until "ks on"
+#   ks pause [min]          disable for N minutes (default 5), e.g. for a captive Wi-Fi portal
+#   ks set <key> <0|1>      lan, tailscale, dns (see rules() below)
+#   ks allow <addr[/n]>     always let this address or network out without VPN
+#   ks unallow <addr[/n]>
+#   ks apply                used by the LaunchDaemon: (re)load rules unless disabled
 set -u
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
 
 DIR="/Library/KillSwitch"
 ANCHOR="com.apple/killswitch"
-RULES="$DIR/killswitch.pf.conf"
-FLAG="$DIR/disabled"   # contains epoch when to re-enable, 0 = never
+FLAG="$DIR/disabled"     # contains epoch when to re-enable, 0 = never
+SETTINGS="$DIR/settings" # key=value, root-owned
+ALLOW="$DIR/allow"       # one address or network per line, root-owned
+
+setting() {  # setting <key> <default>
+  local v
+  v=$(grep -E "^$1=" "$SETTINGS" 2>/dev/null | tail -1 | cut -d= -f2)
+  echo "${v:-$2}"
+}
+
+# Prints the pf rules for the current settings.
+# Default is deny: every packet leaving the Mac is dropped unless listed here, on any
+# interface (Wi-Fi, Ethernet, iPhone USB, Thunderbolt, PPP, interfaces that appear later).
+# Only loopback, tunnels (utun*) and AirDrop links are left alone: what goes into a tunnel
+# still has to leave through a physical interface, and that is filtered.
+# The dropweb core is recognised by its socket credentials: DropwebCore is setuid root +
+# setgid admin, so it runs as uid 0 with gid 80. Ordinary apps run as the user (uid 501,
+# gid 20) and cannot become uid 0; root daemons run with gid 0. Both conditions must match.
+rules() {  # rules [allow-file]
+  local allow_file="${1:-$ALLOW}" tun
+  tun=$(printf 'utun%d ' $(seq 0 255))
+  echo "pass out quick on { lo0 awdl0 llw0 $tun} all"
+  echo 'pass out quick proto { tcp udp } user 0 group 80 keep state'
+  echo 'pass out quick inet proto udp from any port 68 to any port 67 keep state'
+  echo 'pass out quick inet to { 169.254.0.0/16, 224.0.0.0/4, 255.255.255.255 } keep state'
+  echo 'pass out quick inet6 to { fe80::/10, ff00::/8 } keep state'
+  if [ "$(setting lan 1)" = 1 ]; then
+    [ "$(setting dns 0)" = 1 ] || echo 'block drop out quick proto { tcp udp } to { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } port 53'
+    echo 'pass out quick inet to { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } keep state'
+  fi
+  if [ "$(setting tailscale 1)" = 1 ]; then
+    # only root's tailscaled; a user process binding port 41641 must not get through
+    echo 'pass out quick proto udp from any port 41641 user 0 keep state'
+    echo 'pass out quick proto udp to any port 3478 user 0 keep state'
+  fi
+  if [ -s "$allow_file" ]; then
+    echo "pass out quick to { $(paste -sd, "$allow_file") } keep state"
+  fi
+  echo 'block drop out quick all'
+}
 
 load() {
-  pfctl -a "$ANCHOR" -f "$RULES" 2>/dev/null || { echo "rules failed to load" >&2; return 1; }
+  rules | pfctl -a "$ANCHOR" -f - 2>/dev/null || { echo "rules failed to load" >&2; return 1; }
   pfctl -s info 2>/dev/null | grep -q 'Status: Enabled' || pfctl -E >/dev/null 2>&1
 }
 
 loaded() {
   [ -n "$(pfctl -a "$ANCHOR" -s rules 2>/dev/null)" ] && pfctl -s info 2>/dev/null | grep -q 'Status: Enabled'
 }
+
+reload_if_on() { if loaded; then load; fi; }
 
 disable() {
   echo "$1" > "$FLAG"
@@ -38,7 +81,28 @@ case "${1:-status}" in
     ;;
   on)    rm -f "$FLAG"; load && echo "kill switch: ON" ;;
   off)   disable 0; echo "kill switch: OFF (until 'ks on')" ;;
-  pause) min=${2:-5}; disable $(( $(date +%s) + min * 60 )); echo "kill switch: paused for $min min" ;;
+  pause) min=${2:-5}; [[ "$min" =~ ^[0-9]{1,4}$ ]] || { echo "bad minutes" >&2; exit 1; }
+         disable $(( $(date +%s) + min * 60 )); echo "kill switch: paused for $min min" ;;
+  set)
+    key=${2:-}; val=${3:-}
+    [[ "$key" =~ ^(lan|tailscale|dns)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns 0|1" >&2; exit 1; }
+    { grep -vE "^$key=" "$SETTINGS" 2>/dev/null; echo "$key=$val"; } > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+    reload_if_on
+    ;;
+  allow)
+    addr=${2:-}
+    [[ "$addr" =~ ^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$ ]] || { echo "Не похоже на адрес: $addr" >&2; exit 1; }
+    grep -qxF "$addr" "$ALLOW" 2>/dev/null && exit 0
+    { cat "$ALLOW" 2>/dev/null; echo "$addr"; } > "$ALLOW.tmp"
+    rules "$ALLOW.tmp" | pfctl -n -a "$ANCHOR" -f - >/dev/null 2>&1 || { rm -f "$ALLOW.tmp"; echo "Не похоже на адрес: $addr" >&2; exit 1; }
+    mv "$ALLOW.tmp" "$ALLOW"
+    reload_if_on
+    ;;
+  unallow)
+    addr=${2:-}
+    grep -vxF "$addr" "$ALLOW" > "$ALLOW.tmp" 2>/dev/null; mv "$ALLOW.tmp" "$ALLOW"
+    reload_if_on
+    ;;
   state)
     if loaded; then echo on
     elif [ -f "$FLAG" ] && [ "$(cat "$FLAG")" != 0 ]; then echo "paused:$(cat "$FLAG")"
@@ -50,5 +114,5 @@ case "${1:-status}" in
     [ -f "$FLAG" ] && { u=$(cat "$FLAG"); [ "$u" = 0 ] && echo "disabled by hand" || echo "back on at $(date -r "$u" +%H:%M)"; }
     pfctl -a "$ANCHOR" -s rules 2>/dev/null
     ;;
-  *) sed -n '2,9p' "$0"; exit 1 ;;
+  *) sed -n '2,12p' "$0"; exit 1 ;;
 esac
