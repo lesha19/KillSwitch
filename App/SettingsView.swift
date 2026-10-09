@@ -184,7 +184,54 @@ private struct GeneralSettings: View {
             Section {
                 Toggle("Запускать при входе", isOn: $control.launchAtLogin)
             }
+            FilterSection(filter: control.filter)
         }
         .formStyle(.grouped)
+    }
+}
+
+/// Second layer: macOS content filter, independent of pf.
+private struct FilterSection: View {
+    let filter: FilterControl
+
+    var body: some View {
+        Section {
+            HStack {
+                Text(statusText).foregroundStyle(statusColor)
+                Spacer()
+                switch filter.status {
+                case .notInstalled, .failed:
+                    Button("Установить") { filter.install() }
+                case .on, .off:
+                    Button("Удалить", role: .destructive) { filter.uninstall() }
+                case .waitingForApproval, .unknown:
+                    EmptyView()
+                }
+            }
+        } header: {
+            Text("Второй слой: фильтр macOS")
+        } footer: {
+            Text("Отдельная от правил pf проверка внутри macOS. Пока VPN не подключён, пропускает только домашнюю сеть, серверы VPN, Tailscale и исключения — даже если правила pf кто-то снял. Включается и выключается вместе с защитой. Виден в Системных настройках → Сеть → Фильтры.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var statusText: String {
+        switch filter.status {
+        case .unknown: "Проверяю…"
+        case .notInstalled: "Не установлен"
+        case .waitingForApproval: "Разреши в Системных настройках → Основные → Объекты входа и расширения → Сетевые расширения"
+        case .off: "Установлен, выключен"
+        case .on: "Работает"
+        case .failed(let message): "Ошибка: \(message)"
+        }
+    }
+
+    private var statusColor: Color {
+        switch filter.status {
+        case .on: .green
+        case .failed, .waitingForApproval: .orange
+        default: .secondary
+        }
     }
 }

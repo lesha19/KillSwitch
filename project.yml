@@ -26,10 +26,13 @@ targets:
     resources: [Assets.xcassets]
     dependencies:
       - target: KillSwitchWidget
+      - target: KillSwitchFilter
     entitlements:
       path: App/KillSwitch.entitlements
       properties:
         com.apple.security.application-groups: [YR58655PJ7.killswitch]
+        com.apple.developer.system-extension.install: true
+        com.apple.developer.networking.networkextension: [content-filter-provider]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lesha19.KillSwitch
@@ -56,4 +59,20 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lesha19.KillSwitch.Widget
+        GENERATE_INFOPLIST_FILE: NO
+  KillSwitchFilter:
+    type: system-extension
+    platform: macOS
+    sources: [Filter]
+    entitlements:
+      path: Filter/KillSwitchFilter.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.application-groups: [YR58655PJ7.killswitch]
+        com.apple.developer.networking.networkextension: [content-filter-provider]
+    info:
+      path: Filter/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lesha19.KillSwitch.Filter
         GENERATE_INFOPLIST_FILE: NO

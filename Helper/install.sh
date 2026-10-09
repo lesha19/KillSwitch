@@ -41,7 +41,9 @@ fi
 install -d -o root -g wheel -m 755 "$DIR/core"
 if [ -f mihomo ]; then
   install -o root -g wheel -m 755 mihomo "$DIR/core/mihomo"
-  [ -f /Library/LaunchDaemons/local.killswitch.core.plist ] || launchctl disable system/local.killswitch.core
+  # the core starts at boot only after "ks core on"; an upgrade keeps a running core running
+  launchctl print system/local.killswitch.core 2>/dev/null | grep -q 'state = running' ||
+    launchctl disable system/local.killswitch.core
   install -o root -g wheel -m 644 local.killswitch.core.plist /Library/LaunchDaemons/local.killswitch.core.plist
   GEOIP="/Users/$USER_NAME/Library/Application Support/org.dropweb.vpn/geoip.metadb"
   [ -f "$DIR/core/geoip.metadb" ] || [ ! -f "$GEOIP" ] || install -o root -g wheel -m 644 "$GEOIP" "$DIR/core/geoip.metadb"

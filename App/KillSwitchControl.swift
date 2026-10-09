@@ -86,6 +86,9 @@ final class KillSwitchControl {
         }
     }
 
+    /// Second layer, see FilterControl.
+    let filter = FilterControl()
+
     private let helper = "/Library/KillSwitch/ks"
     private var timer: Timer?
 
@@ -169,6 +172,7 @@ final class KillSwitchControl {
         let changed = new != state || defaults?.bool(forKey: Shared.vpnKey) != vpnUp
         if case .paused = state, new == .on { notify(.pauseEnded) }
         state = new
+        syncFilter()
         guard changed else { return }
         defaults?.set(new.stored, forKey: Shared.stateKey)
         defaults?.set(vpnUp, forKey: Shared.vpnKey)
@@ -209,6 +213,18 @@ final class KillSwitchControl {
             busy = false
             refresh()
         }
+    }
+
+    /// What the content filter lets out while no VPN tunnel is up, mirroring the pf settings.
+    private func syncFilter() {
+        var addresses = servers + exceptions
+        if allowTailscale {
+            addresses += Self.readLines("/Library/KillSwitch/tsrelays").filter { !$0.hasPrefix("#") && !$0.isEmpty }
+        }
+        let config: [String: AnyHashable] = [
+            "addresses": addresses, "lan": allowLAN, "tailscale": allowTailscale, "direct": allowDirect,
+        ]
+        filter.sync(config: config, enabled: state == .on)
     }
 
     /// Settings files are root-owned but world-readable.
