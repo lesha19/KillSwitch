@@ -5,11 +5,15 @@
 #   ks on                   enable (also after reboot)
 #   ks off                  disable until "ks on"
 #   ks pause [min]          disable for N minutes (default 5), e.g. for a captive Wi-Fi portal
-#   ks set <key> <0|1>      lan, tailscale, dns (see rules() below)
+#   ks set <key> <0|1>      lan, tailscale, dns, direct (see rules() below)
 #   ks allow <addr[/n]>     always let this address or network out without VPN
 #   ks unallow <addr[/n]>
-#   ks apply                used by the LaunchDaemon: (re)load rules unless disabled
+#   ks server-add <addr>    VPN server: reachable by any process (needed by Happ)
+#   ks server-remove <addr>
+#   ks apply                (re)load rules once unless disabled
+#   ks watch                used by the LaunchDaemon: apply + tamper checks every 3 s
 set -u
+umask 022
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
 
 DIR="/Library/KillSwitch"
@@ -17,6 +21,11 @@ ANCHOR="com.apple/killswitch"
 FLAG="$DIR/disabled"     # contains epoch when to re-enable, 0 = never
 SETTINGS="$DIR/settings" # key=value, root-owned
 ALLOW="$DIR/allow"       # one address or network per line, root-owned
+SERVERS="$DIR/servers"   # VPN server addresses, one per line, root-owned
+EVENTS="$DIR/events.log" # corrective actions of the watchdog, world-readable
+HASHF="$DIR/rules.sha256" # hash of the anchor as loaded by us
+SIGF="$DIR/tunnels"      # tunnel interfaces the loaded rules were built for
+ADDR_RE='^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$'
 
 setting() {  # setting <key> <default>
   local v
@@ -24,19 +33,35 @@ setting() {  # setting <key> <default>
   echo "${v:-$2}"
 }
 
+# "interface address" for every utun that has an IPv4 address, sorted.
+utun_addrs() {
+  ifconfig 2>/dev/null | awk '/^[A-Za-z0-9]+:/ { i=$1; sub(/:$/,"",i) } i ~ /^utun[0-9]+$/ && $1=="inet" { print i, $2 }' | sort
+}
+# VPN tunnels: dropweb and Happ TUN both sit in 198.18.0.0/16.
+vpn_ifaces() { utun_addrs | awk '$2 ~ /^198\.18\./ { print $1 }' | sort -u; }
+# Tailscale: 100.64.0.0/10.
+ts_ifaces() { utun_addrs | awk '$2 ~ /^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./ { print $1 }' | sort -u; }
+tunnel_sig() { echo "vpn:$(vpn_ifaces | paste -sd, -) ts:$(ts_ifaces | paste -sd, -)"; }
+
 # Prints the pf rules for the current settings.
 # Default is deny: every packet leaving the Mac is dropped unless listed here, on any
 # interface (Wi-Fi, Ethernet, iPhone USB, Thunderbolt, PPP, interfaces that appear later).
-# Only loopback, tunnels (utun*) and AirDrop links are left alone: what goes into a tunnel
-# still has to leave through a physical interface, and that is filtered.
-# The dropweb core is recognised by its socket credentials: DropwebCore is setuid root +
-# setgid admin, so it runs as uid 0 with gid 80. Ordinary apps run as the user (uid 501,
-# gid 20) and cannot become uid 0; root daemons run with gid 0. Both conditions must match.
-rules() {  # rules [allow-file]
-  local allow_file="${1:-$ALLOW}" tun
-  tun=$(printf 'utun%d ' $(seq 0 255))
-  echo "pass out quick on { lo0 awdl0 llw0 $tun} all"
-  echo 'pass out quick proto { tcp udp } user 0 group 80 keep state'
+# Passed without conditions: loopback, AirDrop links and the VPN tunnels (utun with an address
+# in 198.18.0.0/16); what goes into a tunnel still has to leave through a physical
+# interface, and that is filtered. Other utun interfaces (iCloud Private Relay, third-party
+# VPNs, a Tailscale exit node) get nothing.
+# VPN servers (file "servers") are reachable by any process: Happ's tunnel runs as the user.
+# The dropweb core can reach any address only with direct=1. It is recognised by its socket
+# credentials: DropwebCore is setuid root + setgid admin, so it runs as uid 0 with gid 80.
+# That is weak (anyone can start it with their own config), hence off by default.
+# Output is deterministic (interfaces sorted) so its hash can be compared.
+rules() {  # rules [allow-file] [servers-file]
+  local allow_file="${1:-$ALLOW}" servers_file="${2:-$SERVERS}" vpn ts
+  vpn=$(vpn_ifaces | paste -sd' ' -)
+  ts=$(ts_ifaces | paste -sd' ' -)
+  echo "pass out quick on { lo0 awdl0 llw0 $vpn } all"
+  [ -s "$servers_file" ] && echo "pass out quick to { $(paste -sd, "$servers_file") } keep state"
+  [ "$(setting direct 0)" = 1 ] && echo 'pass out quick proto { tcp udp } user 0 group 80 keep state'
   echo 'pass out quick inet proto udp from any port 68 to any port 67 keep state'
   echo 'pass out quick inet to { 169.254.0.0/16, 224.0.0.0/4, 255.255.255.255 } keep state'
   echo 'pass out quick inet6 to { fe80::/10, ff00::/8 } keep state'
@@ -48,6 +73,9 @@ rules() {  # rules [allow-file]
     # only root's tailscaled; a user process binding port 41641 must not get through
     echo 'pass out quick proto udp from any port 41641 user 0 keep state'
     echo 'pass out quick proto udp to any port 3478 user 0 keep state'
+    # tailnet traffic only, not exit-node traffic
+    [ -n "$ts" ] && echo "pass out quick on { $ts } inet to { 100.64.0.0/10 } keep state"
+    [ -n "$ts" ] && echo "pass out quick on { $ts } inet6 to { fd7a:115c:a1e0::/48 } keep state"
   fi
   if [ -s "$allow_file" ]; then
     echo "pass out quick to { $(paste -sd, "$allow_file") } keep state"
@@ -55,13 +83,29 @@ rules() {  # rules [allow-file]
   echo 'block drop out quick all'
 }
 
+pf_enabled() { pfctl -s info 2>/dev/null | grep -q 'Status: Enabled'; }
+rules_hash() { pfctl -a "$ANCHOR" -s rules 2>/dev/null | shasum -a 256 | cut -d' ' -f1; }
+
+log_event() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$EVENTS"
+  chmod 644 "$EVENTS"
+  if [ "$(wc -l < "$EVENTS")" -gt 500 ]; then
+    tail -n 500 "$EVENTS" > "$EVENTS.tmp" && mv "$EVENTS.tmp" "$EVENTS"
+  fi
+}
+
 load() {
+  [ -f "$FLAG" ] && return 0   # a switch-off raced with the watchdog
+  pf_enabled || pfctl -E >/dev/null 2>&1   # enable first: loading can take a moment
+  local sig
+  sig=$(tunnel_sig)
   rules | pfctl -a "$ANCHOR" -f - 2>/dev/null || { echo "rules failed to load" >&2; return 1; }
-  pfctl -s info 2>/dev/null | grep -q 'Status: Enabled' || pfctl -E >/dev/null 2>&1
+  echo "$sig" > "$SIGF"
+  rules_hash > "$HASHF"
 }
 
 loaded() {
-  [ -n "$(pfctl -a "$ANCHOR" -s rules 2>/dev/null)" ] && pfctl -s info 2>/dev/null | grep -q 'Status: Enabled'
+  [ -n "$(pfctl -a "$ANCHOR" -s rules 2>/dev/null)" ] && pf_enabled
 }
 
 reload_if_on() { if loaded; then load; fi; }
@@ -71,27 +115,50 @@ disable() {
   pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
 }
 
-case "${1:-status}" in
-  apply)
-    if [ -f "$FLAG" ]; then
-      until=$(cat "$FLAG")
-      [ "$until" != 0 ] && [ "$(date +%s)" -ge "$until" ] && rm -f "$FLAG"
+# One pass of the watchdog: respects pause / off, reloads if anything was tampered with.
+guard() {
+  local until why=""
+  if [ -f "$FLAG" ]; then
+    until=$(cat "$FLAG")
+    if [ "$until" != 0 ] && [ "$(date +%s)" -ge "$until" ]; then
+      rm -f "$FLAG"; log_event "pause ended"
+    else
+      return 0
     fi
-    [ -f "$FLAG" ] || loaded || load
-    ;;
+  fi
+  if [ ! -f "$HASHF" ]; then why="initial load"
+  elif ! pf_enabled; then why="pf was disabled"
+  elif ! pfctl -s rules 2>/dev/null | grep -q 'anchor "com.apple/\*"'; then
+    why="anchor missing from main ruleset"
+    pfctl -f /etc/pf.conf >/dev/null 2>&1
+  elif [ "$(rules_hash)" != "$(cat "$HASHF" 2>/dev/null)" ]; then why="rules were changed or flushed"
+  elif [ "$(tunnel_sig)" != "$(cat "$SIGF" 2>/dev/null)" ]; then why="tunnels changed ($(tunnel_sig))"
+  fi
+  [ -z "$why" ] && return 0
+  log_event "$why: reloading"
+  load || log_event "reload failed"
+}
+
+valid_addr() {  # a bare name must not reach pfctl, it would be resolved through DNS
+  [[ "$1" =~ $ADDR_RE ]] && { [[ "$1" == *:* ]] || [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?$ ]]; }
+}
+
+case "${1:-status}" in
+  apply) guard ;;
+  watch) while :; do guard; sleep 3; done ;;
   on)    rm -f "$FLAG"; load && echo "kill switch: ON" ;;
   off)   disable 0; echo "kill switch: OFF (until 'ks on')" ;;
   pause) min=${2:-5}; [[ "$min" =~ ^[0-9]{1,4}$ ]] || { echo "bad minutes" >&2; exit 1; }
          disable $(( $(date +%s) + min * 60 )); echo "kill switch: paused for $min min" ;;
   set)
     key=${2:-}; val=${3:-}
-    [[ "$key" =~ ^(lan|tailscale|dns)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns 0|1" >&2; exit 1; }
+    [[ "$key" =~ ^(lan|tailscale|dns|direct)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns|direct 0|1" >&2; exit 1; }
     { grep -vE "^$key=" "$SETTINGS" 2>/dev/null; echo "$key=$val"; } > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
     reload_if_on
     ;;
   allow)
     addr=${2:-}
-    [[ "$addr" =~ ^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$ ]] || { echo "Не похоже на адрес: $addr" >&2; exit 1; }
+    valid_addr "$addr" || { echo "Не похоже на адрес: $addr" >&2; exit 1; }
     grep -qxF "$addr" "$ALLOW" 2>/dev/null && exit 0
     { cat "$ALLOW" 2>/dev/null; echo "$addr"; } > "$ALLOW.tmp"
     rules "$ALLOW.tmp" | pfctl -n -a "$ANCHOR" -f - >/dev/null 2>&1 || { rm -f "$ALLOW.tmp"; echo "Не похоже на адрес: $addr" >&2; exit 1; }
@@ -101,6 +168,20 @@ case "${1:-status}" in
   unallow)
     addr=${2:-}
     grep -vxF "$addr" "$ALLOW" > "$ALLOW.tmp" 2>/dev/null; mv "$ALLOW.tmp" "$ALLOW"
+    reload_if_on
+    ;;
+  server-add)
+    addr=${2:-}
+    valid_addr "$addr" || { echo "Не похоже на адрес: $addr" >&2; exit 1; }
+    grep -qxF "$addr" "$SERVERS" 2>/dev/null && exit 0
+    { cat "$SERVERS" 2>/dev/null; echo "$addr"; } > "$SERVERS.tmp"
+    rules "$ALLOW" "$SERVERS.tmp" | pfctl -n -a "$ANCHOR" -f - >/dev/null 2>&1 || { rm -f "$SERVERS.tmp"; echo "Не похоже на адрес: $addr" >&2; exit 1; }
+    mv "$SERVERS.tmp" "$SERVERS"
+    reload_if_on
+    ;;
+  server-remove)
+    addr=${2:-}
+    grep -vxF "$addr" "$SERVERS" > "$SERVERS.tmp" 2>/dev/null; mv "$SERVERS.tmp" "$SERVERS"
     reload_if_on
     ;;
   state)
@@ -114,5 +195,5 @@ case "${1:-status}" in
     [ -f "$FLAG" ] && { u=$(cat "$FLAG"); [ "$u" = 0 ] && echo "disabled by hand" || echo "back on at $(date -r "$u" +%H:%M)"; }
     pfctl -a "$ANCHOR" -s rules 2>/dev/null
     ;;
-  *) sed -n '2,12p' "$0"; exit 1 ;;
+  *) sed -n '2,14p' "$0"; exit 1 ;;
 esac
