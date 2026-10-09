@@ -26,6 +26,7 @@ EVENTS="$DIR/events.log" # corrective actions of the watchdog, world-readable
 HASHF="$DIR/rules.sha256" # hash of the anchor as loaded by us
 WIFI_MARK="$DIR/wifi-off-by-ks" # Wi-Fi was switched off by us at shutdown
 SIGF="$DIR/tunnels"      # tunnel interfaces the loaded rules were built for
+TSRELAYS="$DIR/tsrelays" # Tailscale DERP relays + control plane, root-owned
 ADDR_RE='^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$'
 
 setting() {  # setting <key> <default>
@@ -60,6 +61,9 @@ rules() {  # rules [allow-file] [servers-file]
   local allow_file="${1:-$ALLOW}" servers_file="${2:-$SERVERS}" vpn ts
   vpn=$(vpn_ifaces | paste -sd' ' -)
   ts=$(ts_ifaces | paste -sd' ' -)
+  # tables go before the filter rules
+  [ "$(setting tailscale 1)" = 1 ] && [ -s "$TSRELAYS" ] &&
+    echo "table <ts_relays> const { $(grep -vE '^(#|$)' "$TSRELAYS" | paste -sd, -) }"
   echo "pass out quick on { lo0 awdl0 llw0 $vpn } all"
   [ -s "$servers_file" ] && echo "pass out quick to { $(paste -sd, "$servers_file") } keep state"
   [ "$(setting direct 0)" = 1 ] && echo 'pass out quick proto { tcp udp } user 0 group 80 keep state'
@@ -74,6 +78,12 @@ rules() {  # rules [allow-file] [servers-file]
     # only root's tailscaled; a user process binding port 41641 must not get through
     echo 'pass out quick proto udp from any port 41641 user 0 keep state'
     echo 'pass out quick proto udp to any port 3478 user 0 keep state'
+    # DERP relays and the control plane, for any process: the App Store Tailscale runs as the
+    # user, and away from home it has no other way in. Relays only carry encrypted WireGuard.
+    if [ -s "$TSRELAYS" ]; then
+      echo 'pass out quick proto tcp to <ts_relays> port { 80, 443 } keep state'
+      echo 'pass out quick proto udp to <ts_relays> port 3478 keep state'
+    fi
     # tailnet traffic only, not exit-node traffic
     [ -n "$ts" ] && echo "pass out quick on { $ts } inet to { 100.64.0.0/10 } keep state"
     [ -n "$ts" ] && echo "pass out quick on { $ts } inet6 to { fd7a:115c:a1e0::/48 } keep state"

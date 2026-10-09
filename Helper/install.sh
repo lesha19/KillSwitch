@@ -28,6 +28,7 @@ done
 install -d -o root -g wheel -m 755 "$DIR"
 install -o root -g wheel -m 755 ks "$DIR/ks"
 install -o root -g wheel -m 644 local.killswitch.plist /Library/LaunchDaemons/local.killswitch.plist
+install -o root -g wheel -m 644 tsrelays "$DIR/tsrelays"
 [ -e "$DIR/events.log" ] || install -o root -g wheel -m 644 /dev/null "$DIR/events.log"
 
 SUDOERS=/etc/sudoers.d/killswitch
