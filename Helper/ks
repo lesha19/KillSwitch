@@ -1,0 +1,54 @@
+#!/bin/bash
+# Kill switch control.
+#   ks status         show state and loaded rules
+#   ks state          one word for the app: on | off | paused:<epoch>
+#   ks on             enable (also after reboot)
+#   ks off            disable until "ks on"
+#   ks pause [min]    disable for N minutes (default 5), e.g. for a captive Wi-Fi portal
+#   ks apply          used by the LaunchDaemon: (re)load rules unless disabled
+set -u
+[ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
+
+DIR="/Library/KillSwitch"
+ANCHOR="com.apple/killswitch"
+RULES="$DIR/killswitch.pf.conf"
+FLAG="$DIR/disabled"   # contains epoch when to re-enable, 0 = never
+
+load() {
+  pfctl -a "$ANCHOR" -f "$RULES" 2>/dev/null || { echo "rules failed to load" >&2; return 1; }
+  pfctl -s info 2>/dev/null | grep -q 'Status: Enabled' || pfctl -E >/dev/null 2>&1
+}
+
+loaded() {
+  [ -n "$(pfctl -a "$ANCHOR" -s rules 2>/dev/null)" ] && pfctl -s info 2>/dev/null | grep -q 'Status: Enabled'
+}
+
+disable() {
+  echo "$1" > "$FLAG"
+  pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
+}
+
+case "${1:-status}" in
+  apply)
+    if [ -f "$FLAG" ]; then
+      until=$(cat "$FLAG")
+      [ "$until" != 0 ] && [ "$(date +%s)" -ge "$until" ] && rm -f "$FLAG"
+    fi
+    [ -f "$FLAG" ] || loaded || load
+    ;;
+  on)    rm -f "$FLAG"; load && echo "kill switch: ON" ;;
+  off)   disable 0; echo "kill switch: OFF (until 'ks on')" ;;
+  pause) min=${2:-5}; disable $(( $(date +%s) + min * 60 )); echo "kill switch: paused for $min min" ;;
+  state)
+    if loaded; then echo on
+    elif [ -f "$FLAG" ] && [ "$(cat "$FLAG")" != 0 ]; then echo "paused:$(cat "$FLAG")"
+    else echo off
+    fi
+    ;;
+  status)
+    if loaded; then echo "kill switch: ON"; else echo "kill switch: OFF"; fi
+    [ -f "$FLAG" ] && { u=$(cat "$FLAG"); [ "$u" = 0 ] && echo "disabled by hand" || echo "back on at $(date -r "$u" +%H:%M)"; }
+    pfctl -a "$ANCHOR" -s rules 2>/dev/null
+    ;;
+  *) sed -n '2,9p' "$0"; exit 1 ;;
+esac
