@@ -54,6 +54,7 @@ final class KillSwitchControl {
     private(set) var busy = false
     private(set) var allowLAN = true
     private(set) var allowTailscale = true
+    private(set) var wifiGuard = true
     private(set) var allowRouterDNS = false
     private(set) var exceptions: [String] = []
     private(set) var allowDirect = false
@@ -197,6 +198,7 @@ final class KillSwitchControl {
         }
         allowLAN = (values["lan"] ?? "1") == "1"
         allowTailscale = (values["tailscale"] ?? "1") == "1"
+        wifiGuard = (values["wifiguard"] ?? "1") == "1"
         allowRouterDNS = (values["dns"] ?? "0") == "1"
         allowDirect = (values["direct"] ?? "0") == "1"
         exceptions = Self.readLines("/Library/KillSwitch/allow")
