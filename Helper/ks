@@ -87,6 +87,13 @@ rules() {  # rules [allow-file] [servers-file]
 pf_enabled() { pfctl -s info 2>/dev/null | grep -q 'Status: Enabled'; }
 rules_hash() { pfctl -a "$ANCHOR" -s rules 2>/dev/null | shasum -a 256 | cut -d' ' -f1; }
 
+# Enabled network services bound to a physical port (en*, bridge*), one name per line.
+physical_services() {
+  networksetup -listnetworkserviceorder | awk '
+    /^\([0-9]+\) / { sub(/^\([0-9]+\) /, ""); name = $0 }
+    /Device: (en|bridge)[0-9]+\)/ { if (name != "") print name; name = "" }'
+}
+
 log_event() {
   echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$EVENTS"
   chmod 644 "$EVENTS"
@@ -148,12 +155,15 @@ case "${1:-status}" in
   apply) guard ;;
   watch)
     # Boot window guard (setting wifiguard): pf rules only come up a few seconds after the
-    # network, so Wi-Fi is switched off when the system stops this daemon at shutdown and
-    # switched back on here once the rules are loaded. Only a Wi-Fi we switched off is restored.
-    wifi=$(networksetup -listallhardwareports | awk '/Hardware Port: Wi-Fi/{getline; print $2}')
+    # network, so every network service on a physical port (Wi-Fi, Ethernet, iPhone USB,
+    # Thunderbolt) is disabled when the system stops this daemon at shutdown, and enabled
+    # again here once the rules are loaded. The setting persists across reboot, so nothing
+    # gets an address before the rules exist. Only services we disabled are restored.
     on_term() {
-      if [ -n "$wifi" ] && [ ! -f "$FLAG" ] && [ "$(setting wifiguard 1)" = 1 ]; then
-        networksetup -setairportpower "$wifi" off && touch "$WIFI_MARK" && log_event "shutdown: Wi-Fi off"
+      if [ ! -f "$FLAG" ] && [ "$(setting wifiguard 1)" = 1 ]; then
+        physical_services > "$WIFI_MARK"
+        while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" off; done < "$WIFI_MARK"
+        log_event "shutdown: network off ($(paste -sd, - < "$WIFI_MARK"))"
       fi
       exit 0
     }
@@ -161,9 +171,10 @@ case "${1:-status}" in
     while :; do
       guard
       if [ -f "$WIFI_MARK" ] && { [ -f "$FLAG" ] || loaded; }; then
-        networksetup -setairportpower "$wifi" on && rm -f "$WIFI_MARK" && log_event "rules up: Wi-Fi on"
+        while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" on; done < "$WIFI_MARK"
+        rm -f "$WIFI_MARK"; log_event "rules up: network on"
       fi
-      sleep 3 & wait $!   # wait, unlike a plain sleep, lets the TERM trap run at once
+      sleep 0.5 & wait $!   # wait, unlike a plain sleep, lets the TERM trap run at once
     done
     ;;
   on)    rm -f "$FLAG"; load && echo "kill switch: ON" ;;

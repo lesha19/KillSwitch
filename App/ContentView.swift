@@ -60,7 +60,7 @@ struct ContentView: View {
             .font(.callout)
             .padding(.horizontal, 20).padding(.vertical, 12)
         }
-        .frame(width: 380)
+        .frame(width: 430)
         .animation(.default, value: control.state)
         .confirmationDialog("Удалить защиту?", isPresented: $confirmUninstall) {
             Button("Удалить", role: .destructive) { control.uninstall() }

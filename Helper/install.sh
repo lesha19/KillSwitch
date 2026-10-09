@@ -40,6 +40,8 @@ mv "$SUDOERS.tmp" "$SUDOERS"
 for ip in "$@"; do "$DIR/ks" server-add "$ip"; done
 
 launchctl bootout system/local.killswitch 2>/dev/null || true
+# bootout returns before the old watchdog has finished its shutdown handler
+for _ in $(seq 1 50); do launchctl print system/local.killswitch >/dev/null 2>&1 || break; sleep 0.2; done
 launchctl bootstrap system /Library/LaunchDaemons/local.killswitch.plist
 sleep 1
 "$DIR/ks" on
