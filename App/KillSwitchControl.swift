@@ -56,6 +56,7 @@ final class KillSwitchControl {
     private(set) var allowTailscale = true
     private(set) var allowRouterDNS = false
     private(set) var exceptions: [String] = []
+    private(set) var happServers: [String] = []
     var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
         set {
@@ -89,6 +90,15 @@ final class KillSwitchControl {
         runAsAdmin([helper, "allow", trimmed])
     }
     func removeException(_ address: String) { runAsAdmin([helper, "unallow", address]) }
+
+    /// Lets Happ's servers through. Happ's tunnel runs as the ordinary user, so it cannot be
+    /// told apart from other apps; only the addresses of its servers can be allowed.
+    func allowHappServers() {
+        let missing = happServers.filter { !exceptions.contains($0) }
+        guard !missing.isEmpty else { return }
+        let script = missing.map { "\(helper) allow \($0)" }.joined(separator: " && ")
+        runAsAdmin(["/bin/sh", "-c", script])
+    }
 
     func install() { runBundled("install.sh", [NSUserName()]) }
     func uninstall() { runBundled("uninstall.sh", []) }
@@ -173,6 +183,27 @@ final class KillSwitchControl {
         allowRouterDNS = (values["dns"] ?? "0") == "1"
         let allow = (try? String(contentsOfFile: "/Library/KillSwitch/allow", encoding: .utf8)) ?? ""
         exceptions = allow.split(separator: "\n").map(String.init)
+        happServers = Self.readHappServers()
+    }
+
+    /// Server addresses from Happ's connected Xray config.
+    private static func readHappServers() -> [String] {
+        let path = NSHomeDirectory() + "/Library/Group Containers/group.su.ffg.happ/Library/Preferences/group.su.ffg.happ.plist"
+        guard let prefs = NSDictionary(contentsOfFile: path),
+              let json = (prefs["connectedConfigJson"] as? String)?.data(using: .utf8),
+              let config = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
+              let outbounds = config["outbounds"] as? [[String: Any]] else { return [] }
+        var servers: [String] = []
+        for outbound in outbounds {
+            let settings = outbound["settings"] as? [String: Any] ?? [:]
+            let entries = (settings["vnext"] as? [[String: Any]] ?? []) + (settings["servers"] as? [[String: Any]] ?? [])
+            // Happ's config is user-writable and these go into a root command: plain IPs only.
+            for case let address as String in entries.compactMap({ $0["address"] })
+            where address.wholeMatch(of: /[0-9A-Fa-f:.]{2,45}/) != nil && !servers.contains(address) {
+                servers.append(address)
+            }
+        }
+        return servers
     }
 
     enum Event { case vpnDropped, pauseEnded }

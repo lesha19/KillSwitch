@@ -4,6 +4,7 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             AccessSettings().tabItem { Label("Что пропускать", systemImage: "checklist") }
+            HappSettings().tabItem { Label("Happ", systemImage: "network") }
             ExceptionSettings().tabItem { Label("Исключения", systemImage: "list.bullet") }
             GeneralSettings().tabItem { Label("Общие", systemImage: "gearshape") }
         }
@@ -34,6 +35,41 @@ private struct AccessSettings: View {
             Text(title)
             Text(hint)
         }
+    }
+}
+
+private struct HappSettings: View {
+    @Environment(KillSwitchControl.self) private var control
+
+    var body: some View {
+        Form {
+            Section {
+                if control.happServers.isEmpty {
+                    Text("Серверы Happ не найдены. Подключись в Happ хотя бы раз.").foregroundStyle(.secondary)
+                }
+                ForEach(control.happServers, id: \.self) { server in
+                    HStack {
+                        Text(server).monospaced()
+                        Spacer()
+                        if control.exceptions.contains(server) {
+                            Label("пропускается", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                        } else {
+                            Label("закрыт", systemImage: "xmark.circle.fill").foregroundStyle(.red)
+                        }
+                    }
+                }
+                if control.happServers.contains(where: { !control.exceptions.contains($0) }) {
+                    Button("Пропускать серверы Happ") { control.allowHappServers() }
+                }
+            } header: {
+                Text("Серверы Happ")
+            } footer: {
+                Text("Happ нельзя отличить от других программ, поэтому пропускаются адреса его серверов. Сайты, которые Happ отправляет мимо VPN (российские, Apple, Steam), при включённой защите открываться не будут. Добавление спросит пароль.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .disabled(control.busy || control.state == .notInstalled)
     }
 }
 
