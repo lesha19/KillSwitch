@@ -10,6 +10,12 @@ struct MenuView: View {
         Text(control.state.title)
         Text(control.vpnUp ? "VPN подключён" : "VPN не подключён")
 
+        if control.coreInstalled && control.coreConfigured {
+            Button(control.coreRunning ? "Выключить своё ядро" : "Включить своё ядро") {
+                control.coreRunning ? control.coreOff() : control.coreOn()
+            }
+        }
+
         Divider()
 
         switch control.state {

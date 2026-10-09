@@ -22,9 +22,9 @@ private struct AccessSettings: View {
                 toggle("Домашняя сеть", "Роутер, NAS, принтер, AirPlay.", key: "lan", value: control.allowLAN)
                 toggle("Адреса сайтов через роутер", "Пока VPN выключен, Mac может узнавать адреса сайтов у роутера. Само содержимое не уходит, но видно, куда ходит Mac.", key: "dns", value: control.allowRouterDNS)
                     .disabled(!control.allowLAN)
-                toggle("Сайты мимо VPN через dropweb", "Ядро dropweb сможет выходить на любые адреса, а не только к серверам VPN. Это слабее защиты: любая программа может запустить ядро со своим конфигом и выйти мимо VPN.", key: "direct", value: control.allowDirect)
+                toggle("Сайты мимо VPN через dropweb", "Ядро dropweb сможет выходить на любые адреса, а не только к серверам VPN. Это слабее защиты: любая программа может запустить ядро со своим конфигом и выйти мимо VPN. Безопасная замена — «Своё ядро VPN» в главном окне.", key: "direct", value: control.allowDirect)
                 toggle("Отключать сеть при выключении Mac", "Wi-Fi, кабель и iPhone по USB отключаются при выключении Mac и включаются сами после загрузки, когда защита уже стоит. Так при загрузке ничего не утекает. Не спасает при внезапном выключении (сел аккумулятор, сбой).", key: "wifiguard", value: control.wifiGuard)
-                toggle("Tailscale напрямую", "Прямая связь Tailscale между своими устройствами без VPN. Только для системной службы Tailscale.", key: "tailscale", value: control.allowTailscale)
+                toggle("Tailscale", "Связь между своими устройствами без VPN: напрямую (только системная служба Tailscale) и через ретрансляторы Tailscale вне дома.", key: "tailscale", value: control.allowTailscale)
             } footer: {
                 Text("Каждое изменение спросит пароль.").foregroundStyle(.secondary)
             }

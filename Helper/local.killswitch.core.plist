@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.killswitch.core</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Library/KillSwitch/core/mihomo</string>
+    <string>-d</string>
+    <string>/Library/KillSwitch/core</string>
+  </array>
+  <key>UserName</key>
+  <string>root</string>
+  <key>GroupName</key>
+  <string>_ksvpn</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Library/KillSwitch/core/core.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Library/KillSwitch/core/core.log</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>com.lesha19.KillSwitch</string>
+  </array>
+</dict>
+</plist>

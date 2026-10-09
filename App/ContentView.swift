@@ -22,13 +22,17 @@ struct ContentView: View {
                     Text(subtitle).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
 
-                Label(control.vpnUp ? "VPN dropweb подключён" : "VPN dropweb не подключён",
+                Label(control.vpnUp ? (control.coreRunning ? "VPN подключён (своё ядро)" : "VPN подключён") : "VPN не подключён",
                       systemImage: control.vpnUp ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                     .foregroundStyle(control.vpnUp ? .green : .orange)
                     .font(.callout)
 
                 actions
                     .disabled(control.busy || control.state == .unknown)
+
+                if control.coreInstalled && control.state != .notInstalled {
+                    core.disabled(control.busy)
+                }
 
                 if let error = control.error {
                     Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
@@ -92,6 +96,32 @@ struct ContentView: View {
                 Text("Включить").frame(maxWidth: .infinity)
             }
             .controlSize(.large).buttonStyle(.borderedProminent).tint(.green)
+        }
+    }
+
+    /// Our own VPN core: direct sites of the profile work without trusting dropweb's core.
+    @ViewBuilder private var core: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(control.coreRunning
+                     ? "Своё ядро работает: VPN и сайты напрямую по правилам профиля."
+                     : "VPN своим ядром вместо dropweb. Перед включением отключи VPN в dropweb и Happ.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    if control.coreRunning {
+                        Button("Выключить своё ядро") { control.coreOff() }
+                    } else {
+                        Button("Включить своё ядро") { control.coreOn() }
+                            .disabled(!control.coreConfigured)
+                    }
+                    Spacer()
+                    Button(control.coreConfigured ? "Обновить профиль" : "Взять профиль из dropweb") { control.coreImport() }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            Label("Своё ядро VPN", systemImage: "cpu")
         }
     }
 

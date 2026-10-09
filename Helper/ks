@@ -10,6 +10,8 @@
 #   ks unallow <addr[/n]>
 #   ks server-add <addr>    VPN server: reachable by any process (needed by Happ)
 #   ks server-remove <addr>
+#   ks core on|off|state    our own VPN core (mihomo run by launchd as group _ksvpn)
+#   ks core import <yaml>   take a mihomo profile (e.g. dropweb's) as the core's config
 #   ks apply                (re)load rules once unless disabled
 #   ks watch                used by the LaunchDaemon: apply + tamper checks every 3 s
 set -u
@@ -27,6 +29,9 @@ HASHF="$DIR/rules.sha256" # hash of the anchor as loaded by us
 WIFI_MARK="$DIR/wifi-off-by-ks" # Wi-Fi was switched off by us at shutdown
 SIGF="$DIR/tunnels"      # tunnel interfaces the loaded rules were built for
 TSRELAYS="$DIR/tsrelays" # Tailscale DERP relays + control plane, root-owned
+CORE_DIR="$DIR/core"     # mihomo, config.yaml, geoip.metadb, root-owned
+CORE_GROUP="_ksvpn"      # the core runs with this gid; nothing else can get it
+CORE_JOB="system/local.killswitch.core"
 ADDR_RE='^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$'
 
 setting() {  # setting <key> <default>
@@ -67,6 +72,11 @@ rules() {  # rules [allow-file] [servers-file]
   echo "pass out quick on { lo0 awdl0 llw0 $vpn } all"
   [ -s "$servers_file" ] && echo "pass out quick to { $(paste -sd, "$servers_file") } keep state"
   [ "$(setting direct 0)" = 1 ] && echo 'pass out quick proto { tcp udp } user 0 group 80 keep state'
+  # Our own core: launchd starts it from a root-owned path with a root-owned config and gid
+  # _ksvpn. The group has no members and no setgid binary, so no other process carries it.
+  # Direct sites of the profile work without trusting dropweb's setuid core.
+  dscl . -read "/Groups/$CORE_GROUP" PrimaryGroupID >/dev/null 2>&1 &&
+    echo "pass out quick group $CORE_GROUP keep state"
   echo 'pass out quick inet proto udp from any port 68 to any port 67 keep state'
   echo 'pass out quick inet to { 169.254.0.0/16, 224.0.0.0/4, 255.255.255.255 } keep state'
   echo 'pass out quick inet6 to { fe80::/10, ff00::/8 } keep state'
@@ -157,6 +167,59 @@ guard() {
   load || log_event "reload failed"
 }
 
+# Writes the core config from a mihomo profile. Our keys replace the profile's: no local
+# proxy ports and no controller API (it would let any local program swap the rules).
+core_import() {  # core_import <profile.yaml>
+  local src="$1" tmp="$CORE_DIR/config.yaml.tmp"
+  [ -f "$src" ] || { echo "no such file: $src" >&2; return 1; }
+  awk '
+    /^[A-Za-z0-9_-]+:/ { k=$1; sub(/:.*/, "", k)
+      skip = (k ~ /^(tun|port|socks-port|redir-port|tproxy-port|mixed-port|allow-lan|bind-address|external-controller|external-controller-tls|external-controller-unix|external-controller-pipe|external-ui|external-ui-url|external-ui-name|secret|interface-name|routing-mark|listeners|profile)$/) }
+    !skip' "$src" |
+  # mihomo answers the system's DNS on 127.0.0.1:53 (set by "ks core on"); LAN resolvers are
+  # blocked by the rules and queries to them never reach the tunnel
+  awk '
+    /^[A-Za-z0-9_-]+:/ { indns = ($0 ~ /^dns:/); seen = seen || indns }
+    indns && /^[ \t]+(listen|enable):/ { next }
+    { print }
+    /^dns:/ { print "  enable: true"; print "  listen: 127.0.0.1:53" }
+    END { if (!seen) { print "dns:"; print "  enable: true"; print "  listen: 127.0.0.1:53";
+                       print "  enhanced-mode: fake-ip"; print "  nameserver:"; print "    - https://1.1.1.1/dns-query" } }' > "$tmp"
+  cat >> "$tmp" <<'TUN'
+tun:
+  enable: true
+  stack: system
+  auto-route: true
+  auto-detect-interface: true
+  dns-hijack:
+    - any:53
+TUN
+  chmod 600 "$tmp"
+  "$CORE_DIR/mihomo" -t -d "$CORE_DIR" -f "$tmp" >/dev/null 2>&1 || {
+    "$CORE_DIR/mihomo" -t -d "$CORE_DIR" -f "$tmp" 2>&1 | tail -3 >&2; rm -f "$tmp"; return 1; }
+  mv "$tmp" "$CORE_DIR/config.yaml"
+}
+
+# System DNS -> 127.0.0.1 (the core) on every physical service; previous values are kept
+# in $CORE_DIR/dns-saved and put back by core_dns_restore.
+core_dns_set() {
+  local svc
+  [ -f "$CORE_DIR/dns-saved" ] || physical_services | while IFS= read -r svc; do
+    printf '%s\t%s\n' "$svc" "$(networksetup -getdnsservers "$svc" | grep -E '^[0-9A-Fa-f:.]+$' | paste -sd' ' -)"
+  done > "$CORE_DIR/dns-saved"
+  physical_services | while IFS= read -r svc; do networksetup -setdnsservers "$svc" 127.0.0.1; done
+}
+core_dns_restore() {
+  local svc servers
+  [ -f "$CORE_DIR/dns-saved" ] || return 0
+  while IFS=$'\t' read -r svc servers; do
+    # shellcheck disable=SC2086 # several servers are several arguments
+    networksetup -setdnsservers "$svc" ${servers:-Empty}
+  done < "$CORE_DIR/dns-saved"
+  rm -f "$CORE_DIR/dns-saved"
+}
+core_running() { launchctl print "$CORE_JOB" 2>/dev/null | grep -q 'state = running'; }
+
 valid_addr() {  # a bare name must not reach pfctl, it would be resolved through DNS
   [[ "$1" =~ $ADDR_RE ]] && { [[ "$1" == *:* ]] || [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?$ ]]; }
 }
@@ -224,6 +287,34 @@ case "${1:-status}" in
     addr=${2:-}
     grep -vxF "$addr" "$SERVERS" > "$SERVERS.tmp" 2>/dev/null; mv "$SERVERS.tmp" "$SERVERS"
     reload_if_on
+    ;;
+  core)
+    case "${2:-state}" in
+      on)
+        [ -x "$CORE_DIR/mihomo" ] || { echo "Ядро не установлено" >&2; exit 1; }
+        [ -s "$CORE_DIR/config.yaml" ] || { echo "Нет конфига ядра: сначала «Взять профиль из dropweb»" >&2; exit 1; }
+        # two TUNs fight over routes and DNS: the other VPN has to be off first
+        if ! core_running && { pgrep -x DropwebCore >/dev/null || [ -n "$(vpn_ifaces)" ]; }; then
+          echo "Сначала отключи VPN в dropweb или Happ" >&2; exit 1
+        fi
+        launchctl enable "$CORE_JOB"
+        launchctl bootstrap system /Library/LaunchDaemons/local.killswitch.core.plist 2>/dev/null ||
+          launchctl kickstart "$CORE_JOB"
+        core_dns_set
+        log_event "core on" ;;
+      off)
+        launchctl bootout "$CORE_JOB" 2>/dev/null
+        launchctl disable "$CORE_JOB"
+        core_dns_restore
+        log_event "core off" ;;
+      import)
+        core_import "${3:-}" || exit 1
+        launchctl print "$CORE_JOB" >/dev/null 2>&1 && launchctl kickstart -k "$CORE_JOB"
+        log_event "core config imported" ;;
+      state)
+        if core_running; then echo on; else echo off; fi ;;
+      *) echo "usage: ks core on|off|state|import <yaml>" >&2; exit 1 ;;
+    esac
     ;;
   state)
     if loaded; then echo on

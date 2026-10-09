@@ -65,6 +65,10 @@ final class KillSwitchControl {
     private(set) var leakResults: [LeakResult] = []
     private(set) var externalIP: String?
     private(set) var leakRunning = false
+    /// Our own VPN core (mihomo run by the root daemon), see `ks core`.
+    private(set) var coreInstalled = false
+    private(set) var coreConfigured = false
+    private(set) var coreRunning = false
 
     struct LeakResult: Identifiable {
         let interface: String
@@ -116,6 +120,18 @@ final class KillSwitchControl {
     }
     func removeServer(_ address: String) { runAsAdmin([helper, "server-remove", address]) }
 
+    /// Starting and stopping never widen the rules, so they go without a password.
+    func coreOn() { run(["core", "on"]) }
+    func coreOff() { run(["core", "off"]) }
+    /// The core's config decides what goes around the VPN, so taking a new one asks for the password.
+    func coreImport() {
+        guard let profile = Self.dropwebProfile() else {
+            error = "Не найден профиль dropweb. Обнови подписку в dropweb."
+            return
+        }
+        runAsAdmin([helper, "core", "import", profile])
+    }
+
     /// Also used to upgrade the installed helper: install.sh keeps settings and lists.
     func install() { runBundled("install.sh", [NSUserName()] + foundServers) }
     func uninstall() { runBundled("uninstall.sh", []) }
@@ -129,6 +145,13 @@ final class KillSwitchControl {
         guard FileManager.default.fileExists(atPath: helper) else {
             publish(.notInstalled)
             return
+        }
+        coreInstalled = FileManager.default.fileExists(atPath: "/Library/KillSwitch/core/mihomo")
+        coreConfigured = FileManager.default.fileExists(atPath: "/Library/KillSwitch/core/config.yaml")
+        if coreInstalled {
+            Task { coreRunning = await Self.exec("/usr/bin/sudo", ["-n", helper, "core", "state"]).output == "on" }
+        } else {
+            coreRunning = false
         }
         Task {
             let result = await Self.exec("/usr/bin/sudo", ["-n", helper, "state"])
@@ -217,6 +240,18 @@ final class KillSwitchControl {
             && (text.contains(":") || text.wholeMatch(of: /[0-9]{1,3}(\.[0-9]{1,3}){3}/) != nil)
     }
 
+    /// dropweb's most recently updated profile.
+    private static func dropwebProfile() -> String? {
+        let dir = NSHomeDirectory() + "/Library/Application Support/org.dropweb.vpn/profiles"
+        let files = ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).filter { $0.hasSuffix(".yaml") }
+        let dated = files.map { name -> (String, Date) in
+            let path = dir + "/" + name
+            let date = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date) ?? .distantPast
+            return (path, date)
+        }
+        return dated.max { $0.1 < $1.1 }?.0
+    }
+
     /// `server: <ip>` lines from dropweb's profiles.
     private static func readDropwebServers() -> [String] {
         let dir = NSHomeDirectory() + "/Library/Application Support/org.dropweb.vpn/profiles"
@@ -261,7 +296,7 @@ final class KillSwitchControl {
         case .vpnDropped:
             guard defaults.object(forKey: "notifyVPNDropped") as? Bool ?? true else { return }
             content.title = "VPN отключился"
-            content.body = "Интернет перекрыт, пока dropweb не подключится снова."
+            content.body = "Интернет перекрыт, пока VPN не подключится снова."
         case .pauseEnded:
             guard defaults.object(forKey: "notifyPauseEnded") as? Bool ?? true else { return }
             content.title = "Пауза закончилась"

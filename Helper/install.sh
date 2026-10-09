@@ -7,7 +7,8 @@
 # The installing user may run only "ks state" and "ks on" without a password, so the
 # app can show the state and turn protection back on in one click. Turning it off,
 # pausing and changing what is let through always need the admin password, so a
-# program running as the user cannot silently open a hole.
+# program running as the user cannot silently open a hole. Starting and stopping our own
+# VPN core is passwordless too: it never widens the rules; importing its config is not.
 set -eu
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
 cd "$(dirname "$0")"
@@ -29,10 +30,27 @@ install -d -o root -g wheel -m 755 "$DIR"
 install -o root -g wheel -m 755 ks "$DIR/ks"
 install -o root -g wheel -m 644 local.killswitch.plist /Library/LaunchDaemons/local.killswitch.plist
 install -o root -g wheel -m 644 tsrelays "$DIR/tsrelays"
+# Own VPN core (optional: only if Helper/mihomo is present, see fetch-mihomo.sh).
+if ! dscl . -read /Groups/_ksvpn >/dev/null 2>&1; then
+  for gid in $(seq 450 499); do
+    dscl . -list /Groups PrimaryGroupID | awk '{print $2}' | grep -qx "$gid" || break
+  done
+  dscl . -create /Groups/_ksvpn PrimaryGroupID "$gid"
+  dscl . -create /Groups/_ksvpn RealName "KillSwitch VPN core"
+fi
+install -d -o root -g wheel -m 755 "$DIR/core"
+if [ -f mihomo ]; then
+  install -o root -g wheel -m 755 mihomo "$DIR/core/mihomo"
+  [ -f /Library/LaunchDaemons/local.killswitch.core.plist ] || launchctl disable system/local.killswitch.core
+  install -o root -g wheel -m 644 local.killswitch.core.plist /Library/LaunchDaemons/local.killswitch.core.plist
+  GEOIP="/Users/$USER_NAME/Library/Application Support/org.dropweb.vpn/geoip.metadb"
+  [ -f "$DIR/core/geoip.metadb" ] || [ ! -f "$GEOIP" ] || install -o root -g wheel -m 644 "$GEOIP" "$DIR/core/geoip.metadb"
+  launchctl print system/local.killswitch.core >/dev/null 2>&1 && launchctl kickstart -k system/local.killswitch.core
+fi
 [ -e "$DIR/events.log" ] || install -o root -g wheel -m 644 /dev/null "$DIR/events.log"
 
 SUDOERS=/etc/sudoers.d/killswitch
-echo "$USER_NAME ALL=(root) NOPASSWD: $DIR/ks state, $DIR/ks on" > "$SUDOERS.tmp"
+echo "$USER_NAME ALL=(root) NOPASSWD: $DIR/ks state, $DIR/ks on, $DIR/ks core state, $DIR/ks core on, $DIR/ks core off" > "$SUDOERS.tmp"
 chmod 440 "$SUDOERS.tmp"
 visudo -cf "$SUDOERS.tmp"
 mv "$SUDOERS.tmp" "$SUDOERS"
