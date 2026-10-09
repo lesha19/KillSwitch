@@ -364,7 +364,7 @@ final class KillSwitchControl {
         return .off
     }
 
-    /// dropweb's TUN interface carries the gateway address 198.18.0.1.
+    /// VPN TUN interfaces (dropweb, Happ) use an address in 198.18.0.0/16; the exact one varies.
     private static func dropwebTunnelUp() -> Bool {
         var list: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&list) == 0, let first = list else { return false }
@@ -375,7 +375,7 @@ final class KillSwitchControl {
                   String(cString: ifa.ifa_name).hasPrefix("utun") else { continue }
             var sin = sockaddr_in()
             memcpy(&sin, addr, MemoryLayout<sockaddr_in>.size)
-            if sin.sin_addr.s_addr == inet_addr("198.18.0.1"), ifa.ifa_flags & UInt32(IFF_UP) != 0 {
+            if UInt32(bigEndian: sin.sin_addr.s_addr) & 0xFFFF0000 == 0xC6120000, ifa.ifa_flags & UInt32(IFF_UP) != 0 {
                 return true
             }
         }
