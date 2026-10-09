@@ -295,12 +295,50 @@ final class KillSwitchControl {
             let settings = outbound["settings"] as? [String: Any] ?? [:]
             let entries = (settings["vnext"] as? [[String: Any]] ?? []) + (settings["servers"] as? [[String: Any]] ?? [])
             // Happ's config is user-writable and these go into a root command: plain IPs only.
-            for case let address as String in entries.compactMap({ $0["address"] })
-            where isPlainIP(address) && !servers.contains(address) {
-                servers.append(address)
+            // Subscriptions often give a host name: its current addresses are what the tunnel dials.
+            for case let address as String in entries.compactMap({ $0["address"] }) {
+                for ip in isPlainIP(address) ? [address] : resolve(address)
+                where isPlainIP(ip) && !servers.contains(ip) {
+                    servers.append(ip)
+                }
             }
         }
         return servers
+    }
+
+    /// Last known addresses of each host name. Lookups run off the main thread at most once a
+    /// minute per name: refresh() runs every 3 s and without a network a lookup can hang.
+    private static var resolved: [String: (ips: [String], at: Date)] = [:]
+
+    private static func resolve(_ host: String) -> [String] {
+        let cached = resolved[host]
+        if cached == nil || Date().timeIntervalSince(cached!.at) > 60 {
+            resolved[host] = (cached?.ips ?? [], Date())
+            Task.detached {
+                let ips = lookup(host)
+                await MainActor.run { if !ips.isEmpty { resolved[host] = (ips, Date()) } }
+            }
+        }
+        return cached?.ips ?? []
+    }
+
+    /// Addresses of a host name through the system resolver, without the TUN fake-IP range
+    /// 198.18.0.0/15 (a VPN answering DNS itself would hand those out).
+    nonisolated private static func lookup(_ host: String) -> [String] {
+        var hints = addrinfo(ai_flags: 0, ai_family: AF_UNSPEC, ai_socktype: SOCK_STREAM,
+                             ai_protocol: 0, ai_addrlen: 0, ai_canonname: nil, ai_addr: nil, ai_next: nil)
+        var list: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &list) == 0, let first = list else { return [] }
+        defer { freeaddrinfo(first) }
+        var result: [String] = []
+        for info in sequence(first: first, next: { $0.pointee.ai_next }) {
+            var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(info.pointee.ai_addr, info.pointee.ai_addrlen, &buf, socklen_t(buf.count),
+                              nil, 0, NI_NUMERICHOST) == 0 else { continue }
+            let ip = String(cString: buf)
+            if !ip.hasPrefix("198.18.") && !ip.hasPrefix("198.19.") && !result.contains(ip) { result.append(ip) }
+        }
+        return result
     }
 
     enum Event { case vpnDropped, pauseEnded, daemonOff, macOSUpdated }
