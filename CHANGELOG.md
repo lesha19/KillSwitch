@@ -4,6 +4,32 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [0.8] - 2026-10-10
+
+### Added
+- Russian sites outside the VPN by default on a new install (`coredirect=1`, «Российские сайты —
+  напрямую (мимо VPN)»): split-tunnel rules for private networks, `GEOSITE,category-ru` and `GEOIP,RU`;
+  geodata ships with the app (`Helper/fetch-geodata.sh`, sha256-pinned) and is never auto-updated.
+- Double VPN (multihop): pick an entry server, the selected server is the exit; `ks set multihop`.
+- Split tunnel by app: chosen programs go around the VPN; `ks set splitapps`.
+- Leak test window: IPv4/IPv6 address and DNS resolvers with a verdict.
+- WireGuard: AmneziaWG options and several `[Peer]` sections.
+- Auto-connect on start and on network change, trusted Wi-Fi networks.
+- Automatic updates with Sparkle 2 (EdDSA-signed appcast from `lesha19/KillSwitch-releases`);
+  `scripts/release.sh` builds and signs `appcast.xml` and can publish with `--publish`.
+- New app icon and template menu bar icons.
+- CI on GitHub Actions: build, unit, helper and filter-trust tests.
+- Landing page (`docs/index.html`) with an accurate privacy section, and this changelog.
+
+### Changed
+- Helper hardening: DNS and rule downloads go through `KS-DNS`, a group of the profile's proxies only;
+  server IP rotation re-resolves approved names (never through the LAN's DNS); refresh refuses any change
+  to what goes DIRECT; the system resolver is used only on a first import with no tunnel at all.
+- When every server moved at once, rotation asks DoH directly: pf lets the core group reach 1.1.1.1 and
+  8.8.8.8 on tcp 443 for this only.
+- Subscription User-Agent starts with `mihomo/`; device-limit answers become clear errors.
+- The app hides the helper's `KS-DNS` group from server lists and pickers.
+
 ## [0.7] - 2026-10-10
 
 ### Added

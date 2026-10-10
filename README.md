@@ -199,7 +199,18 @@ addresses found in dropweb and Happ configs are passed to it). After updating th
    «Пароли приложений», затем в Терминале
    `xcrun notarytool store-credentials killswitch-notary --apple-id <Apple ID> --team-id YR58655PJ7`
    и ввести пароль, когда спросит (в командную строку его не писать). Он хранится в связке ключей.
-4. Ядро: `Helper/fetch-mihomo.sh`; геоданные для «российские сайты мимо VPN»: `Helper/fetch-geodata.sh` (сначала закрепить в нём RELEASE и SHA256).
+4. Ядро: `Helper/fetch-mihomo.sh`; геоданные для «российские сайты мимо VPN»: `Helper/fetch-geodata.sh`
+   (выпуск meta-rules-dat и его sha256 уже закреплены в скрипте; без `Helper/geosite.dat` выпуск не соберётся).
+5. Ключ Sparkle: один раз `generate_keys` из `build/spm/artifacts/sparkle/Sparkle/bin/` (появится после
+   первой сборки) — закрытый ключ EdDSA ляжет в связку ключей входа, открытый (`generate_keys -p`) уже
+   записан в `project.yml` как `SUPublicEDKey`.
+6. Резервные копии — без них новые версии выпустить нельзя:
+   - ключ Sparkle: `generate_keys -x <файл>` выгружает закрытый ключ, `generate_keys -f <файл>` возвращает
+     его на другом Mac. Потеряете — уже установленные копии не примут ни одного обновления;
+   - ключ Developer ID: «Связка ключей» → «Мои сертификаты» → «Developer ID Application: … (YR58655PJ7)»
+     → «Экспортировать…» в `.p12` с паролем (сертификат вместе с закрытым ключом). Без закрытого ключа
+     сертификат придётся выпускать заново.
+   Обе копии хранить вне этого Mac (зашифрованный диск или менеджер паролей), не в репозитории.
 
 Выпуск: `scripts/release.sh`. Сначала проверяет всё перечисленное и без этого ничего не собирает
 (`scripts/release.sh --check` — только проверка), затем собирает Release, подписывает изнутри наружу
@@ -208,6 +219,13 @@ addresses found in dropweb and Happ configs are passed to it). After updating th
 подписанный и нотаризованный `build/release/KillSwitch-<версия>.dmg`. `scripts/release.sh --sign-only`
 только собирает и подписывает приложение, без нотаризации. Системное расширение включается, только
 когда приложение лежит в /Applications.
+
+Кроме `.dmg` выпуск делает `build/release/appcast.xml` для Sparkle, подписанный ключом EdDSA.
+`scripts/release.sh --publish` — то же, а затем `gh release create v<версия>` в
+`lesha19/KillSwitch-releases` с `.dmg` и `appcast.xml`; описание берётся из раздела «## <версия>»
+`CHANGELOG.md` (или из файла в `KS_RELEASE_NOTES`). Нужен `gh`, вошедший с доступом к этому
+репозиторию. Приложение читает `releases/latest/download/appcast.xml`, поэтому опубликованный выпуск
+сразу становится обновлением для всех.
 
 ## Emergency off
 
