@@ -227,10 +227,12 @@ func main() {
         w.control.daemonProblem = true
         window("10-window-foreign-vpn-daemon-off", height: 860, w)
     }
-    do { // 11 another app's VPN, ours not running
+    do { // 11 another app's VPN (Happ), ours not running, protection on (ADR 0009)
         let w = World()
         w.subscribe()
         w.control.vpnUp = true
+        w.control.otherVPNName = "Happ"
+        w.control.otherVPNServices = [OtherVPN.Service(id: "AAAAAAAA-0000-4000-8000-000000000001", name: "Happ", provider: "su.ffg.happ", connected: true)]
         window("11-window-other-app-vpn", height: 760, w)
     }
     do { // 12 needs confirmation + needs password + subscription ending
@@ -386,6 +388,19 @@ func main() {
         let w = World(); w.subscribe(); w.connect(); w.control.ownTunnelUp = false; w.control.foreignVPN = "utun6"
         popover("25-popover-foreign-vpn", w)
     }
+    do { // the 0.11 field report: Happ up, protection on, ours not connected (ADR 0009)
+        let w = World(); w.subscribe(); w.control.vpnUp = true
+        w.control.otherVPNName = "Happ"
+        w.control.otherVPNServices = [OtherVPN.Service(id: "AAAAAAAA-0000-4000-8000-000000000001", name: "Happ", provider: "su.ffg.happ", connected: true)]
+        popover("26-popover-other-vpn-happ", w)
+        w.control.otherVPNStopFailed = true
+        w.control.otherVPNApp = URL(fileURLWithPath: "/Applications/Happ.app")
+        popover("27-popover-other-vpn-stop-failed", w)
+    }
+    do { // an unknown VPN without a configuration to stop, protection off
+        let w = World(); w.subscribe(); w.control.vpnUp = true; w.control.state = .off
+        popover("28-popover-other-vpn-unknown", w)
+    }
 
     // MARK: leak test window
 
@@ -437,6 +452,17 @@ func main() {
         w.tester.home = LeakCheck.Direct(ipv4: "5.6.7.112", ipv6: nil, org: "Beltelecom")
         w.tester.homeDate = Date()
         leak("34-leaktest-vpn-off", w, height: 760)
+    }
+    do {
+        let w = World()
+        w.tester.home = LeakCheck.Direct(ipv4: "5.6.7.112", ipv6: nil, org: "Beltelecom")
+        w.tester.homeDate = Date().addingTimeInterval(-3 * 86400)
+        w.tester.result = LeakTester.Result(
+            verdict: LeakCheck.Verdict(findings: [.otherVPN("Happ")]),
+            ipv4: [("api.ipify.org", "1.2.3.14"), ("am.i.mullvad.net", "1.2.3.14")],
+            exit: LeakCheck.Address(ip: "1.2.3.14", country: "Нидерланды", org: "Aeza International"),
+            ipv6: nil, resolvers: [LeakCheck.Resolver(ip: "8.8.4.4", country: "Netherlands", org: "Google")], at: Date())
+        leak("36-leaktest-other-vpn", w, height: 760)
     }
     do { // 35 the direct-exit probe found a hole while protection is on
         let w = World()
