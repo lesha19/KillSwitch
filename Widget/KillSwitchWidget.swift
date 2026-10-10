@@ -78,6 +78,8 @@ struct WidgetView: View {
             }
         }
         .containerBackground(.fill.tertiary, for: .widget)
+        // a click outside the button opens the app's one window at «Главная» (ADR 0008)
+        .widgetURL(URL(string: "killswitch://home"))
     }
 }
 

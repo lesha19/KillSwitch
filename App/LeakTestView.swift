@@ -2,8 +2,6 @@ import SwiftUI
 
 /// «Проверка утечек»: public address over IPv4 and IPv6, DNS resolvers, one verdict.
 struct LeakTestView: View {
-    static let windowID = "leaks"
-
     @Environment(KillSwitchControl.self) private var control
     @Environment(LeakTester.self) private var tester
 
@@ -96,21 +94,6 @@ struct LeakTestView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 480)
-        .frame(minHeight: 420, idealHeight: 620)
-    }
-
-    /// Opens this window from menus and Settings.
-    struct OpenButton: View {
-        var title = "Проверка утечек…"
-        @Environment(\.openWindow) private var openWindow
-
-        var body: some View {
-            Button(title) {
-                openWindow(id: LeakTestView.windowID)
-                NSApp.activate()
-            }
-        }
     }
 
     @ViewBuilder private var verdictHeader: some View {

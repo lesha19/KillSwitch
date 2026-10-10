@@ -4,7 +4,8 @@ import SwiftUI
 /// connecting too: the list then comes from the cached profile and the choice waits for
 /// «Подключить». With «Двойной VPN» on, a segment picks the exit or the entry server.
 struct ServersScreen: View {
-    let back: () -> Void
+    /// «‹ Назад» of the popover; nil in the window, where «Серверы» is a section of the sidebar.
+    let back: (() -> Void)?
 
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
@@ -51,10 +52,14 @@ struct ServersScreen: View {
 
     private var header: some View {
         HStack {
-            Button(action: back) { Label("Назад", systemImage: "chevron.left") }
-                .buttonStyle(.borderless)
-                .keyboardShortcut(.cancelAction)
-                .help("Назад (Esc)")
+            if let back {
+                Button(action: back) { Label("Назад", systemImage: "chevron.left") }
+                    .buttonStyle(.borderless)
+                    .keyboardShortcut(.cancelAction)
+                    .help("Назад (Esc)")
+            } else {
+                Color.clear.frame(width: 60, height: 1)   // keeps the title centred over ⟳
+            }
             Spacer()
             Text(choosingEntry ? "Сервер входа" : "Сервер").font(.headline).accessibilityAddTraits(.isHeader)
             Spacer()
@@ -96,7 +101,7 @@ struct ServersScreen: View {
                     Section("Все") { ForEach(sections.all) { row($0, current: current) } }
                 }
                 .listStyle(.inset)
-                .frame(minHeight: 280, maxHeight: 420)
+                .frame(minHeight: 280, maxHeight: back == nil ? .infinity : 420)
                 .contextMenu(forSelectionType: String.self) { ids in
                     if let id = ids.first {
                         Button(favourites.contains(id) ? "Убрать из избранного" : "Добавить в избранное") { toggleFavourite(id) }
@@ -149,7 +154,7 @@ struct ServersScreen: View {
             control.setMultihop(entry: entry.name)
         } else {
             control.choose(entry)
-            back()
+            back?()
         }
     }
 

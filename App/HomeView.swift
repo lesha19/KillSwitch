@@ -17,30 +17,34 @@ struct HomeView: View {
             if showingServers {
                 ServersScreen(back: { showingServers = false })
             } else {
-                HomeContent(style: style, chooseServer: { showingServers = true })
+                HomeContent(style: style, chooseServer: chooseServer)
             }
         }
-        .frame(width: style == .popover ? 340 : 400)
+        .frame(width: style == .popover ? 340 : nil)
+        .frame(maxWidth: style == .window ? 440 : nil)
         .animation(reduceMotion ? nil : .default, value: showingServers)   // spec §9.7
         // the helper is asked often only while something shows its answers
         .onAppear { control.viewAppeared() }
         .onDisappear { control.viewDisappeared() }
-        .modifier(WidgetRequestAlert(enabled: style == .window))
         // Esc: back from the server list, then closes the popover
         .onExitCommand {
             if showingServers { showingServers = false } else if style == .popover { dismiss() }
         }
     }
+
+    /// The popover shows the list in place; the window has «Серверы» in its sidebar.
+    private func chooseServer() {
+        if style == .popover { showingServers = true } else { Router.shared.go(.section(.servers)) }
+    }
 }
 
 /// The widget's «Выключить» (or a pause) arrives as a Darwin notification, which any program can
 /// post: the main window asks before anything that could bring up the password prompt.
-private struct WidgetRequestAlert: ViewModifier {
-    let enabled: Bool
+struct WidgetRequestAlert: ViewModifier {
     @Environment(KillSwitchControl.self) private var control
 
     func body(content: Content) -> some View {
-        let request = enabled ? control.widgetRequest : nil
+        let request = control.widgetRequest
         content.alert(request == .pause5 ? "Поставить защиту на паузу?" : "Выключить защиту?",
                       isPresented: Binding(get: { request != nil }, set: { if !$0 { control.answerWidgetRequest(nil) } })) {
             Button(request == .pause5 ? "Пауза на 5 минут" : "Выключить", role: .destructive) {
@@ -59,7 +63,6 @@ private struct HomeContent: View {
 
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let status = control.status(client)
@@ -138,9 +141,7 @@ private struct HomeContent: View {
 
     private func perform(_ action: Status.Action) {
         switch action {
-        case .install, .addSubscription:
-            openWindow(id: OnboardingView.windowID)
-            NSApp.activate()
+        case .install, .addSubscription: Router.shared.go(.onboarding)
         case .repair: control.install()
         case .openLoginItems: NSWorkspace.shared.open(SystemSettings.loginItems)
         case .connect: control.coreOn()
@@ -370,8 +371,6 @@ struct ActionsMenu: View {
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
     @Environment(Updater.self) private var updater
-    @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
     @AppStorage("pauseShort") private var pauseShort = 5
     @AppStorage("pauseLong") private var pauseLong = 30
     @State private var confirmTurnOff = false
@@ -389,17 +388,17 @@ struct ActionsMenu: View {
                     .keyboardShortcut("r")
                     .disabled(client.updating)
             }
-            LeakTestView.OpenButton()
+            Button("Проверка утечек…") { Router.shared.go(.leakTest) }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
             Divider()
             if style == .popover {
-                Button("Открыть окно KillSwitch") { openWindow(id: "main"); NSApp.activate() }
+                Button("Открыть окно KillSwitch") { Router.shared.go(.openWindow) }
                     .keyboardShortcut("0")
             }
-            Button("Настройки…") { openSettings(); NSApp.activate() }
+            Button("Настройки…") { Router.shared.go(.settings) }
                 .keyboardShortcut(",")
             Menu("Помощь") {
-                Button("Как это работает") { SettingsTab.open(.help, openSettings) }
+                Button("Как это работает") { Router.shared.go(.help) }
                 Button("Скопировать диагностику") { DiagnosticsCopy.copy(control: control, client: client) }
                 CheckForUpdatesButton(updater: updater)
             }

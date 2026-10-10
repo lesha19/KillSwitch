@@ -9,9 +9,6 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     weak var control: KillSwitchControl?
     weak var client: VPNClient?
-    /// SwiftUI's openWindow, handed over by a view (the menu bar label always exists).
-    var openWindow: ((String) -> Void)?
-
     private var throttle = Throttle(interval: UserNotice.interval)
 
     override private init() {
@@ -50,20 +47,19 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         [.banner, .sound]
     }
 
+    /// Buttons that show something open the one window at their section (Navigation).
     private func perform(_ action: UserNotice.Action?) {
+        let account = client?.status.accountURL
+        if let route = Navigation.route(notification: action, hasAccountURL: account != nil) {
+            Router.shared.go(route)
+            return
+        }
         switch action {
         case .connect: control?.coreOn()
-        case .renew:
-            if let url = client?.status.accountURL { NSWorkspace.shared.open(url) } else { open("main") }
+        case .renew: if let account { NSWorkspace.shared.open(account) }
         case .approve: Task { await client?.confirmNewServers() }
         case .openLoginItems: NSWorkspace.shared.open(SystemSettings.loginItems)
-        case .check: open(LeakTestView.windowID)
-        case .openApp, nil: open("main")
+        case .check, .openApp, nil: break
         }
-    }
-
-    private func open(_ window: String) {
-        openWindow?(window)
-        NSApp.activate()
     }
 }

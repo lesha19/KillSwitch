@@ -2,47 +2,28 @@ import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Which tab Settings opens on; other screens set it before opening Settings.
-enum SettingsTab: String {
-    case general, vpn, protection, advanced, help
-
-    static let key = "settingsTab"
-
-    @MainActor static func open(_ tab: SettingsTab, _ openSettings: OpenSettingsAction) {
-        UserDefaults.standard.set(tab.rawValue, forKey: key)
-        openSettings()
-        NSApp.activate()
-    }
-}
-
-/// Settings (spec §5.4): five tabs, 520 wide, scrolling above 640. Lists and switches that let
+/// «Настройки» (spec §5.4): four panes in the sidebar of the window. Lists and switches that let
 /// traffic around the VPN are edited in a sheet and applied together, behind one password.
-struct SettingsView: View {
-    @AppStorage(SettingsTab.key) private var tab = SettingsTab.general.rawValue
-    @Environment(KillSwitchControl.self) private var control
+struct SettingsPaneView: View {
+    let pane: SettingsPane
 
     var body: some View {
-        TabView(selection: $tab) {
-            GeneralSettings().tabItem { Label("Общие", systemImage: "gearshape") }.tag(SettingsTab.general.rawValue)
-            VPNSettings().tabItem { Label("VPN", systemImage: "network") }.tag(SettingsTab.vpn.rawValue)
-            ProtectionSettings().tabItem { Label("Защита", systemImage: "lock.shield") }.tag(SettingsTab.protection.rawValue)
-            AdvancedSettings().tabItem { Label("Дополнительно", systemImage: "slider.horizontal.3") }.tag(SettingsTab.advanced.rawValue)
-            HelpSettings().tabItem { Label("Помощь", systemImage: "questionmark.circle") }.tag(SettingsTab.help.rawValue)
+        switch pane {
+        case .general: GeneralSettings()
+        case .vpn: VPNSettings()
+        case .protection: ProtectionSettings()
+        case .advanced: AdvancedSettings()
         }
-        .frame(width: 520)
-        .onAppear { control.viewAppeared() }
-        .onDisappear { control.viewDisappeared() }
     }
 }
 
-/// A tab's form: grouped, at most 640 high, scrolling past that.
+/// A section's form: grouped, filling the window, scrolling when it is taller.
 private struct SettingsForm<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
         Form { content }
             .formStyle(.grouped)
-            .frame(minHeight: 320, idealHeight: 560, maxHeight: 640)
     }
 }
 
@@ -646,19 +627,16 @@ private struct ServiceSection: View {
     }
 }
 
-// MARK: Помощь
+// MARK: Журнал защиты, О программе (the «Помощь» tab of 0.10)
 
-private struct HelpSettings: View {
+/// «Журнал защиты»: what the protection did, newest first, and the diagnostics for support.
+struct ProtectionLogView: View {
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
-    @Environment(Updater.self) private var updater
 
     var body: some View {
         SettingsForm {
             Section {
-                LeakTestView.OpenButton()
-            }
-            Section("Журнал защиты") {
                 let entries = control.events.reversed().compactMap(ProtectionLog.entry)
                 if entries.isEmpty {
                     Text("Пусто").foregroundStyle(.secondary)
@@ -666,14 +644,41 @@ private struct HelpSettings: View {
                 ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
                     HStack(alignment: .firstTextBaseline) {
                         Text(entry.time).monospacedDigit().foregroundStyle(.secondary)
-                        Text(entry.text)
+                        Text(entry.text).fixedSize(horizontal: false, vertical: true)
                     }
                     .font(.callout)
                 }
+            } footer: {
+                Text("Что происходило с защитой и VPN, новое сверху.").foregroundStyle(.secondary)
             }
             Section {
                 Button("Скопировать диагностику") { DiagnosticsCopy.copy(control: control, client: client) }
                 Text("Без ссылок, ключей и адресов серверов. Можно отправить в поддержку.").foregroundStyle(.secondary)
+            }
+        }
+        .task { control.refreshEvents() }
+    }
+}
+
+/// «О программе»: the version and updates, and tips on what can get around the protection.
+struct AboutView: View {
+    @Environment(Updater.self) private var updater
+
+    var body: some View {
+        SettingsForm {
+            Section {
+                HStack(spacing: 12) {
+                    Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 48, height: 48)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("KillSwitch").font(.title3.bold())
+                        Text("Версия \(DeviceInfo.appVersion) (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"))")
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
+                    Spacer()
+                    CheckForUpdatesButton(updater: updater)
+                }
             }
             Section("Советы") {
                 LabeledContent("Выключи «Частный узел iCloud»: он может обходить защиту.") {
@@ -681,15 +686,11 @@ private struct HelpSettings: View {
                         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.systempreferences.AppleIDSettings:icloud")!)
                     }
                 }
-                Text("После обновления macOS перезагрузи Mac и запусти проверку утечек.").foregroundStyle(.secondary)
-            }
-            Section {
-                LabeledContent("Версия \(DeviceInfo.appVersion) (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"))") {
-                    CheckForUpdatesButton(updater: updater)
+                LabeledContent("После обновления macOS перезагрузи Mac и запусти проверку утечек.") {
+                    Button("Проверка утечек") { Router.shared.go(.leakTest) }
                 }
             }
         }
-        .task { control.refreshEvents() }
     }
 }
 

@@ -2,12 +2,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 import UserNotifications
 
-/// «Начало работы» (spec §4): a fixed 520×440 window with step dots. Opens by itself on a Mac
-/// without the service and by «Начать настройку…» / «Добавить подписку…»; can be closed anytime.
+/// «Начало работы» (spec §4): a fixed 520×440 sheet of the main window with step dots. Opens by
+/// itself on a Mac without the service and by «Начать настройку…» / «Добавить подписку…»; can be
+/// closed anytime (✕, Esc on the first step).
 struct OnboardingView: View {
-    static let windowID = "onboarding"
-
     @Environment(KillSwitchControl.self) private var control
+    @Environment(\.dismiss) private var dismiss
     @Environment(VPNClient.self) private var client
     @State private var steps: [Onboarding.Step] = []
     @State private var index = 0
@@ -30,6 +30,16 @@ struct OnboardingView: View {
             dots.padding(.bottom, 16)
         }
         .frame(width: 520, height: 440)
+        .overlay(alignment: .topTrailing) {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark.circle.fill").font(.title3).foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .padding(10)
+            .help("Закрыть. Настройку можно продолжить кнопкой на главном экране.")
+            .accessibilityLabel("Закрыть")
+        }
+        .onExitCommand { dismiss() }
         .onAppear(perform: start)
     }
 
@@ -343,7 +353,7 @@ private struct DoneStep: View {
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
     @Environment(AutoConnector.self) private var auto
-    @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.dismiss) private var dismiss
     @State private var autoConnect = true
     @State private var launchAtLogin = true
     @State private var notifications = true
@@ -392,6 +402,6 @@ private struct DoneStep: View {
         if notifications {
             Task { _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) }
         }
-        dismissWindow(id: OnboardingView.windowID)
+        dismiss()
     }
 }

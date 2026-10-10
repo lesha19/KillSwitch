@@ -34,7 +34,6 @@ struct ErrorBanner: View {
 struct TopErrorBanner<Fallback: View>: View {
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
-    @Environment(\.openSettings) private var openSettings
     @State private var dismissed: String?
     /// «Выбрать другой сервер…» opens the server picker of the view that shows the banner.
     var chooseServer: () -> Void = {}
@@ -79,7 +78,7 @@ struct TopErrorBanner<Fallback: View>: View {
         case .repair: control.install()
         case .restartVPN: control.restartCore()
         case .openLoginItems: NSWorkspace.shared.open(SystemSettings.loginItems)
-        case .editSubscription: openSettings()
+        case .editSubscription: Navigation.route(error: action).map(Router.shared.go)
         case .openAccount: if let url = client.status.accountURL { NSWorkspace.shared.open(url) }
         case .approveServers: Task { await client.confirmNewServers() }
         case .recheck: Task { await control.testAllDelays() }

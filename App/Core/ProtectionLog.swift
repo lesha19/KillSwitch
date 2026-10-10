@@ -1,6 +1,6 @@
 import Foundation
 
-/// «Журнал защиты» (Settings → Помощь): the helper's events.log (`YYYY-MM-DD HH:MM:SS message`,
+/// «Журнал защиты» (a section of the window): the helper's events.log (`YYYY-MM-DD HH:MM:SS message`,
 /// English, for support) in plain words. A line it does not know stays as it is.
 enum ProtectionLog {
     struct Entry: Equatable {

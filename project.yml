@@ -51,6 +51,10 @@ targets:
         SUPublicEDKey: c9ZEz2ibLJRVCYpynZHOd4UQ5t3u9uWKh7bVULDOD0E=  # gitleaks:allow (public key)
         SUEnableAutomaticChecks: true
         SUScheduledCheckInterval: 86400
+        # killswitch://home, killswitch://settings/vpn …: only open a section of the window (ADR 0008)
+        CFBundleURLTypes:
+          - CFBundleURLName: com.lesha19.KillSwitch
+            CFBundleURLSchemes: [killswitch]
     entitlements:
       path: App/KillSwitch.entitlements
       properties:

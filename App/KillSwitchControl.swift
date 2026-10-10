@@ -1037,8 +1037,7 @@ final class KillSwitchControl {
         guard command.needsConfirmation else { turnOn(); return }
         // the main window asks first (HomeView); a click there may then bring the password prompt
         widgetRequest = command
-        Notifier.shared.openWindow?("main")
-        NSApp.activate()
+        Router.shared.go(.window)
     }
 
     /// Off or pause asked by the widget, waiting for «Выключить» / «Пауза» in the app.
