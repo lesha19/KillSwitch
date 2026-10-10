@@ -328,7 +328,7 @@ private struct NoticeBanner: View {
             filterIncomplete: filterIncomplete, filterDismissed: filterDismissed, now: Date(),
             serversDown: control.serversDown, networkCause: control.networkCause,
             filterUpdateWaiting: control.filter.updateWaitingForApproval,
-            helperApproval: control.helperApprovalBanner && control.helperAvailability == .needsApproval))
+            helperApproval: control.helperApprovalBanner && [.needsApproval, .needsRegistration].contains(control.helperAvailability)))
         if let notice {
             switch notice {
             case .otherVPN:

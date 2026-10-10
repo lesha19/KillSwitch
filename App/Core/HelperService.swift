@@ -13,12 +13,15 @@ enum HelperService {
         case unavailable
     }
 
-    static func availability(_ status: SMAppService.Status) -> Availability {
+    /// `daemonBundled`: the app carries the daemon's plist (Contents/Library/LaunchDaemons). A daemon
+    /// that was never registered can read `.notFound` rather than `.notRegistered` (seen in 0.14.1:
+    /// it was then never registered); with the plist in the bundle that only means "register it".
+    static func availability(_ status: SMAppService.Status, daemonBundled: Bool) -> Availability {
         switch status {
         case .enabled: .ready
         case .notRegistered: .needsRegistration
         case .requiresApproval: .needsApproval
-        case .notFound: .unavailable
+        case .notFound: daemonBundled ? .needsRegistration : .unavailable
         @unknown default: .unavailable
         }
     }
@@ -34,9 +37,10 @@ enum HelperService {
 
     static let approvalBannerInterval: TimeInterval = 86400
 
-    /// The banner asking for the switch in Login Items: not more often than once a day.
+    /// The banner asking for the switch in Login Items: not more often than once a day. Also while
+    /// the daemon is still not registered (the launch registration did not take): never a password.
     static func showApprovalBanner(helperInstalled: Bool, availability: Availability, lastShown: Date?, now: Date) -> Bool {
-        guard helperInstalled, availability == .needsApproval else { return false }
+        guard helperInstalled, availability == .needsApproval || availability == .needsRegistration else { return false }
         guard let lastShown else { return true }
         return now.timeIntervalSince(lastShown) >= approvalBannerInterval
     }

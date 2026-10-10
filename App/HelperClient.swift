@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import ServiceManagement
+import os
 
 /// The app's side of the privileged daemon (ADR 0010): its SMAppService registration, the XPC
 /// connection (to our signed daemon only) and the authorization right. Commands that widen the
@@ -11,13 +12,26 @@ final class HelperClient {
     private var connection: NSXPCConnection?
     private let authorization = AppAuthorization()
 
-    var availability: HelperService.Availability { HelperService.availability(service.status) }
+    var availability: HelperService.Availability {
+        HelperService.availability(service.status, daemonBundled: Self.daemonBundled)
+    }
+
+    static let log = Logger(subsystem: "com.lesha19.KillSwitch", category: "helper")
+
+    /// The daemon's launchd plist is in this app (Contents/Library/LaunchDaemons).
+    private static let daemonBundled = FileManager.default.fileExists(
+        atPath: Bundle.main.bundleURL.appending(path: "Contents/Library/LaunchDaemons/\(HelperIdentity.plistName)").path)
 
     /// Registers the daemon; macOS then wants it switched on in Login Items (`needsApproval`).
     @discardableResult
     func register() -> HelperService.Availability {
-        do { try service.register() } catch {
+        let before = service.status.rawValue
+        do {
+            try service.register()
+            Self.log.notice("daemon register: status \(before, privacy: .public) -> \(self.service.status.rawValue, privacy: .public)")
+        } catch {
             // "Operation not permitted" while it waits for approval: the status says the rest
+            Self.log.error("daemon register failed (status \(before, privacy: .public) -> \(self.service.status.rawValue, privacy: .public)): \(error.localizedDescription, privacy: .public)")
         }
         return availability
     }

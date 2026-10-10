@@ -86,10 +86,19 @@ final class HelperDaemonTests: XCTestCase {
     // MARK: SMAppService states
 
     func testServiceStates() {
-        XCTAssertEqual(HelperService.availability(.enabled), .ready)
-        XCTAssertEqual(HelperService.availability(.notRegistered), .needsRegistration)
-        XCTAssertEqual(HelperService.availability(.requiresApproval), .needsApproval)
-        XCTAssertEqual(HelperService.availability(.notFound), .unavailable)
+        XCTAssertEqual(HelperService.availability(.enabled, daemonBundled: true), .ready)
+        XCTAssertEqual(HelperService.availability(.notRegistered, daemonBundled: true), .needsRegistration)
+        XCTAssertEqual(HelperService.availability(.requiresApproval, daemonBundled: true), .needsApproval)
+        XCTAssertEqual(HelperService.availability(.notFound, daemonBundled: false), .unavailable)
+    }
+
+    /// 0.14.1 on the owner's Mac: a daemon that was never registered can read `.notFound`, not
+    /// `.notRegistered`, so it was taken for a build without the daemon and never registered. With
+    /// the plist in the bundle, `.notFound` means "register it".
+    func testNotFoundWithTheDaemonInTheBundleNeedsRegistration() {
+        let availability = HelperService.availability(.notFound, daemonBundled: true)
+        XCTAssertEqual(availability, .needsRegistration)
+        XCTAssertEqual(HelperService.launchStep(helperInstalled: true, availability: availability), .register)
     }
 
     // MARK: answers

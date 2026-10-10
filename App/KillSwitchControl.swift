@@ -130,7 +130,9 @@ final class KillSwitchControl {
     /// registration lost) gets it registered once, so Touch ID and the passwordless upgrade work.
     private func registerHelperAtLaunch() {
         let installed = FileManager.default.fileExists(atPath: helper)
-        if HelperService.launchStep(helperInstalled: installed, availability: helperClient.availability) == .register {
+        let availability = helperClient.availability
+        HelperClient.log.notice("launch: helper installed \(installed, privacy: .public), daemon \(String(describing: availability), privacy: .public)")
+        if HelperService.launchStep(helperInstalled: installed, availability: availability) == .register {
             helperClient.register()
         }
         updateHelperAvailability()

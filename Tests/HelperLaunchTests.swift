@@ -25,8 +25,15 @@ final class HelperLaunchTests: XCTestCase {
                                                        lastShown: now.addingTimeInterval(-86400), now: now))
     }
 
+    /// The registration at launch did not take (still not registered): the banner too, never a password.
+    func testBannerWhileTheDaemonIsStillNotRegistered() {
+        XCTAssertTrue(HelperService.showApprovalBanner(helperInstalled: true, availability: .needsRegistration, lastShown: nil, now: now))
+        XCTAssertFalse(HelperService.showApprovalBanner(helperInstalled: true, availability: .needsRegistration,
+                                                        lastShown: now.addingTimeInterval(-3600), now: now))
+    }
+
     func testApprovalBannerOnlyWhileApprovalIsMissing() {
-        for availability in [HelperService.Availability.ready, .needsRegistration, .unavailable] {
+        for availability in [HelperService.Availability.ready, .unavailable] {
             XCTAssertFalse(HelperService.showApprovalBanner(helperInstalled: true, availability: availability, lastShown: nil, now: now))
         }
         XCTAssertFalse(HelperService.showApprovalBanner(helperInstalled: false, availability: .needsApproval, lastShown: nil, now: now))
