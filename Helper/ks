@@ -202,6 +202,12 @@ guard() {
       rm -f "$FLAG"; log_event "pause ended"; mode=full
     else
       if [ "$until" = 0 ]; then PROT=off; else PROT="paused:$until"; fi
+      # "ks off" flushes after writing the flag, but a reload that checked the flag just before
+      # can still land after that flush: rules loaded while off are flushed again here.
+      if [ "$mode" = full ] && [ -n "$(pfctl -a "$ANCHOR" -s rules 2>/dev/null)" ] && [ -f "$FLAG" ]; then
+        pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
+        log_event "rules found loaded while off: flushed"
+      fi
       return 0
     fi
   fi

@@ -77,6 +77,28 @@ passes 15 15
 [[ "$(st protection)" =~ ^paused:[0-9]+$ ]] && ok "pause: state follows" || bad "pause: $(cat "$STATEF")"
 grep -qE 'DNS|token|password|server' "$STATEF" && bad "state file carries more than the state" || ok "state file holds no settings or secrets"
 
+# --- "ks off" raced with a reload: rules loaded although off
+echo 0 > "$FLAG"; rules > "$tmp/anchor"; : > "$EVENTS"
+passes 16 17
+[ ! -s "$tmp/anchor" ] && ok "off by hand, rules found loaded: flushed within 2 passes" || bad "rules stay loaded while off"
+grep -q 'loaded while off' "$EVENTS" && ok "  logged" || bad "  not logged"
+: > "$tmp/calls"; passes 18 19
+[ "$(count 'pfctl -a')" -le 1 ] && ok "  while off: one anchor check every 2 passes" || bad "  while off: $(count 'pfctl -a') anchor calls"
+echo $(( $(date +%s) + 300 )) > "$FLAG"; rules > "$tmp/anchor"
+passes 20 21
+[ ! -s "$tmp/anchor" ] && ok "paused, rules found loaded: flushed too" || bad "rules stay loaded while paused"
+
+# --- a pause ends by itself
+echo $(( $(date +%s) - 1 )) > "$FLAG"; : > "$EVENTS"
+passes 22 22
+[ ! -e "$FLAG" ] && grep -q 'utun4' "$tmp/anchor" && [ "$(st protection)" = on ] && ok "pause expired: flag gone, rules back, state on, in one pass" ||
+  bad "pause expiry: flag $([ -e "$FLAG" ] && echo kept), $(cat "$STATEF")"
+grep -q 'pause ended' "$EVENTS" && ok "  logged" || bad "  not logged"
+echo $(( $(date +%s) + 300 )) > "$FLAG"; : > "$tmp/anchor"
+passes 23 23
+[ -e "$FLAG" ] && [ ! -s "$tmp/anchor" ] && ok "pause not yet over: nothing loaded" || bad "pause ended early"
+rm -f "$FLAG"
+
 # --- the boot-window guard at TERM: shutdown vs. being switched off in Login Items
 rm -f "$FLAG"
 networksetup() { echo "networksetup $*" >> "$tmp/net"; }
