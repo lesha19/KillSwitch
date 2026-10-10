@@ -84,6 +84,29 @@ sigof "$tmp/p.json" pauto
 grep -q '^provider-proxy	other	auto$' "$tmp/pauto.direct" && ok "providers: any proxy set by the profile is in the signature" ||
   bad "providers: proxy auto: $(cat "$tmp/pauto.direct")"
 grep -q 'provider-proxy	ru-blocked' "$tmp/full.direct" && bad "providers: our own KS-DNS proxy in the signature" || ok "providers: our KS-DNS default stays out"
+# direct_sig on its own: an http provider with no proxy at all is a direct download
+echo '[]' > "$tmp/g.json"; echo '["MATCH,a"]' > "$tmp/r.json"
+echo '{"np":{"type":"http","url":"https://example.com/np.txt"},"il":{"type":"inline","payload":["a.com"]}}' > "$tmp/rp.json"
+[ "$(direct_sig "$tmp/g.json" "$tmp/r.json" "$tmp/rp.json")" = "provider-proxy	np	DIRECT" ] &&
+  ok "providers: http provider without proxy = DIRECT download, in the signature" ||
+  bad "providers: no proxy: $(direct_sig "$tmp/g.json" "$tmp/r.json" "$tmp/rp.json")"
+# the generator never leaves one without: KS-DNS goes in, and the signature stays empty
+profile "{\"proxies\":[{\"name\":\"a\",\"server\":\"198.51.100.1\",$SS}],
+  \"rule-providers\":{\"np\":{\"type\":\"http\",\"behavior\":\"domain\",\"url\":\"https://example.com/np.txt\",\"path\":\"/etc/x\"},
+                      \"il\":{\"type\":\"inline\",\"behavior\":\"domain\",\"payload\":[\"+.example.net\"],\"path\":\"/etc/y\"}},
+  \"rules\":[\"RULE-SET,np,a\",\"RULE-SET,il,a\",\"MATCH,a\"]}"
+if gen "$tmp/p.json"; then
+  [ "$(val rule-providers.np.proxy "$tmp/c")" = KS-DNS ] && [ ! -s "$tmp/c.direct" ] &&
+    ok "providers: KS-DNS added, nothing direct" || bad "providers: np proxy $(val rule-providers.np.proxy "$tmp/c"), direct: $(cat "$tmp/c.direct")"
+  plutil -type rule-providers.np.path "$tmp/c" >/dev/null 2>&1 || plutil -type rule-providers.il.path "$tmp/c" >/dev/null 2>&1 &&
+    bad "providers: path kept" || ok "providers: path dropped from http and inline"
+else bad "providers: refused: $(cat "$tmp/err")"; fi
+# a provider name with a line break was missed by the old listing of names and copied unchecked
+profile "{\"proxies\":[{\"name\":\"a\",\"server\":\"198.51.100.1\",$SS}],
+  \"rule-providers\":{\"ok\":{\"type\":\"inline\",\"behavior\":\"domain\",\"payload\":[\"+.example.net\"]},
+                      \"x\\ny\":{\"type\":\"http\",\"behavior\":\"domain\",\"url\":\"https://example.com/x.txt\",\"proxy\":\"DIRECT\"}},
+  \"rules\":[\"RULE-SET,ok,a\",\"MATCH,a\"]}"
+gen "$tmp/p.json" && bad "providers: name with a line break accepted" || ok "providers: name with a line break refused ($(cat "$tmp/err"))"
 edit '$j->{rules}[1] = "AND,((RULE-SET,local-inline),(NETWORK,TCP)),DIRECT"' < "$fx/ok-full.json" > "$tmp/p.json"
 sigof "$tmp/p.json" logical
 grep -q '^provider	.*"local-inline"' "$tmp/logical.direct" && ok "providers: provider inside a logical DIRECT rule in the signature" ||

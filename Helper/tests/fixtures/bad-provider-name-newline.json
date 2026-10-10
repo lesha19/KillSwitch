@@ -1,0 +1,4 @@
+{"proxies": [{"name": "x", "type": "ss", "server": "198.51.100.7", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}],
+ "rule-providers": {"ok": {"type": "inline", "behavior": "domain", "payload": ["+.example.net"]},
+                    "evil\nname": {"type": "file", "behavior": "domain", "path": "/etc/hosts"}},
+ "rules": ["RULE-SET,ok,x", "MATCH,x"]}

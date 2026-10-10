@@ -1,0 +1,3 @@
+{"proxies": [{"name": "x", "type": "ss", "server": "198.51.100.7", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}],
+ "rule-providers": {"../x": {"type": "inline", "behavior": "domain", "payload": ["+.example.net"]}},
+ "rules": ["MATCH,x"]}
