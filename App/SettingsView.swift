@@ -204,6 +204,71 @@ private struct GeneralSettings: View {
     }
 }
 
+/// «Раздельный туннель»: chosen programs go around the VPN (`ks set splitapps`). Works only with
+/// «Российские сайты — напрямую», which lets the core reach addresses outside the tunnel.
+private struct SplitTunnelSection: View {
+    @Environment(KillSwitchControl.self) private var control
+    /// Process name → app bundle path, to show the app's name and icon; local, not a setting.
+    @AppStorage("splitAppPaths") private var pathsData = Data()
+
+    var body: some View {
+        let paths = (try? JSONDecoder().decode([String: String].self, from: pathsData)) ?? [:]
+        Section {
+            if !control.coreDirect {
+                Label("Включи «Российские сайты — напрямую» выше: без него ядру VPN закрыт выход мимо туннеля.", systemImage: "info.circle")
+                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if control.splitApps.isEmpty {
+                Text("Пусто").foregroundStyle(.secondary)
+            }
+            ForEach(control.splitApps, id: \.self) { name in
+                HStack {
+                    if let path = paths[name] {
+                        Image(nsImage: NSWorkspace.shared.icon(forFile: path)).resizable().frame(width: 18, height: 18)
+                        Text(FileManager.default.displayName(atPath: path))
+                        Text(name).font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Image(systemName: "app").frame(width: 18)
+                        Text(name)
+                    }
+                    Spacer()
+                    Button("Убрать", role: .destructive) {
+                        control.setSplitApps(control.splitApps.filter { $0 != name })
+                    }
+                }
+            }
+            Button("Добавить программы…", action: pick)
+        } header: {
+            Text("Раздельный туннель")
+        } footer: {
+            Text("Эти программы ходят в интернет напрямую, мимо VPN; остальные — через VPN. Программа узнаётся по имени процесса, поэтому её вспомогательные процессы (например, «Google Chrome Helper») могут идти через VPN. Каждое изменение спросит пароль.")
+                .foregroundStyle(.secondary)
+        }
+        .disabled(control.busy || control.state == .notInstalled || !control.coreDirect)
+    }
+
+    private func pick() {
+        let panel = NSOpenPanel()
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.allowedContentTypes = [.application]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.prompt = "Добавить"
+        panel.message = "Программы, которые будут ходить в интернет мимо VPN"
+        guard panel.runModal() == .OK else { return }
+        var paths = (try? JSONDecoder().decode([String: String].self, from: pathsData)) ?? [:]
+        var names: [String] = []
+        for url in panel.urls {
+            guard let info = Bundle(url: url)?.infoDictionary, let name = SplitApps.processName(infoPlist: info) else { continue }
+            names.append(name)
+            paths[name] = url.path
+        }
+        pathsData = (try? JSONEncoder().encode(paths)) ?? pathsData
+        let list = SplitApps.adding(names, to: control.splitApps)
+        if list != control.splitApps { control.setSplitApps(list) }
+    }
+}
+
 /// «Запускать при входе», «Подключаться автоматически» and trusted Wi-Fi networks.
 private struct AutoConnectSection: View {
     @Bindable var control: KillSwitchControl
@@ -413,6 +478,8 @@ private struct VPNSettings: View {
             } header: {
                 Text("Маршрутизация")
             }
+
+            SplitTunnelSection()
         }
         .formStyle(.grouped)
         .fileImporter(isPresented: $importingWireGuard,

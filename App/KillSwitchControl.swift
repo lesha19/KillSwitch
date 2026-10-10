@@ -84,6 +84,10 @@ final class KillSwitchControl {
     private(set) var coreRunning = false
     /// «Российские сайты — напрямую (мимо VPN)»: the core sends Russian sites around the tunnel.
     private(set) var coreDirect = false
+    /// «Раздельный туннель»: process names that go around the VPN (only with coreDirect).
+    private(set) var splitApps: [String] = []
+    /// «Двойной VPN»: the entry server; the exit is the selected one. Nil = off.
+    private(set) var multihopEntry: String?
     /// Set while another VPN's TUN is up next to our core (see `foreignVPNFile`).
     private(set) var foreignVPN: String?
     /// Groups and servers of the running core, from `ks core proxies`.
@@ -141,6 +145,11 @@ final class KillSwitchControl {
         runAsAdmin([helper, "allow", trimmed])
     }
     func removeException(_ address: String) { runAsAdmin([helper, "unallow", address]) }
+
+    /// Always a click: the list decides what goes around the VPN.
+    func setSplitApps(_ names: [String]) { runAsAdmin([helper, "set", "splitapps", SplitApps.argument(names)]) }
+    /// `entry` nil turns «Двойной VPN» off. Always a click.
+    func setMultihop(entry: String?) { runAsAdmin([helper, "set", "multihop", entry ?? Multihop.off]) }
 
     /// VPN servers are reachable by any process (Happ's tunnel runs as the ordinary user and
     /// cannot be told apart from other apps), so only these addresses are let out.
@@ -474,6 +483,8 @@ final class KillSwitchControl {
         allowRouterDNS = (values["dns"] ?? "0") == "1"
         allowDirect = (values["direct"] ?? "0") == "1"
         coreDirect = (values["coredirect"] ?? "0") == "1"
+        splitApps = SplitApps.parse(setting: values["splitapps"])
+        multihopEntry = Multihop.entry(setting: values["multihop"])
         exceptions = Self.readLines("/Library/KillSwitch/allow")
         servers = Self.readLines("/Library/KillSwitch/servers")
         let dropweb = Self.readDropwebServers()
