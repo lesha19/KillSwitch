@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// «Трафик» (spec §5.7, ADR 0013): where traffic goes and why. The routing is the subscription's;
+/// «Трафик» (spec §5.6, ADR 0013): where traffic goes and why. The routing is the subscription's;
 /// the window shows its rules as the core has them, the live connections and a check of one address.
 struct TrafficView: View {
     enum Tab: String, CaseIterable, Identifiable {

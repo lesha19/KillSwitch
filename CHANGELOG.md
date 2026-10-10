@@ -4,6 +4,44 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+Routing comes only from the subscription, and the app shows where traffic goes (ADR 0013, #8).
+
+### Added
+- «Трафик» in the window's sidebar (`killswitch://traffic`), three tabs:
+  - «Правила»: every rule of the subscription in its order, grouped by where it sends traffic
+    («Напрямую», a server or group, «Блок»), searchable; rule sets expand to their source host,
+    size, update time and (inline) entries; what was not taken from the subscription and why;
+    «Добавлено KillSwitch» with the reason for each item; the sniffer and DNS taken from the
+    subscription with their values.
+  - «Соединения»: the core's open connections with program and icon, host, rule, route
+    (flag + server), bytes and duration; filter direct / VPN / blocked, search, pause, a bar of
+    direct vs VPN traffic. Polled once a second only while the tab is on screen.
+  - «Проверить адрес»: which rule a site or address meets and where it goes, walked locally
+    over the rules and the shipped geodata; what cannot be told here is listed as approximate.
+- `ks core connections` (passwordless, also over the daemon): the open connections without
+  source addresses, ports or uid, plus rule-provider sizes and update times.
+- `core/routing.json` (world-readable, no secrets): what the generator took, left out and added.
+- The subscription's `sniffer` and `dns` policy (`fake-ip-filter`, `nameserver-policy`,
+  `direct-nameserver`, `respect-rules`) are taken, validated. Without a sniffer, a routing-only
+  default (TLS/HTTP/QUIC, destination not overridden) is enabled and listed as KillSwitch's.
+
+### Changed
+- pf lets the core reach addresses outside the tunnel only when the subscription has DIRECT
+  rules or a DNS policy with outside servers, or programs without VPN are chosen
+  (`core/egress`); before, only with «Российские сайты напрямую», so a subscription's own
+  DIRECT rules were silently cut without it.
+- A rule mihomo cannot take (unknown type, missing target or rule set, `SUB-RULE`, `IP-ASN`,
+  GEOSITE/GEOIP without geodata) is left out with a reason instead of failing the import.
+- «Программы без VPN» works on its own.
+- The core always records the program of a connection (`find-process-mode: always`).
+
+### Removed
+- «Российские сайты напрямую» (`coredirect`): the setting, its switches on the main screen and
+  in Settings, and the app's own RU/private-network rules. The setting is dropped on upgrade;
+  geodata stays for the subscription's GEOSITE/GEOIP rules and ad blocking.
+
 ## [0.14.1] - 2026-10-10
 
 ### Fixed

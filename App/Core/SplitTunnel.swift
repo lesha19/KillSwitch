@@ -2,7 +2,7 @@ import Foundation
 
 /// «Раздельный туннель»: programs that go around the VPN, by the app bundle's path (every process
 /// inside it) or, in lists from before 0.9.1, by process name.
-/// Helper contract: `ks set splitapps <comma list>` (requires coredirect=1); the current list is
+/// Helper contract: `ks set splitapps <comma list>` (ADR 0013: the user's own addition); the current list is
 /// `splitapps=` in /Library/KillSwitch/settings.
 enum SplitApps {
     /// The main executable of an app bundle: what the core matches by process name.

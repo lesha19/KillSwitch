@@ -65,6 +65,7 @@ final class NavigationTests: XCTestCase {
         func route(_ link: String) -> Route? { Navigation.route(url: URL(string: link)!) }
         XCTAssertEqual(route("killswitch://home"), .section(.home))
         XCTAssertEqual(route("killswitch://servers"), .section(.servers))
+        XCTAssertEqual(route("killswitch://traffic"), .section(.traffic))
         XCTAssertEqual(route("killswitch://leaks"), .section(.leakTest))
         XCTAssertEqual(route("killswitch://log"), .section(.log))
         XCTAssertEqual(route("killswitch://about"), .section(.about))

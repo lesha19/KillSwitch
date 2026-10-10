@@ -60,7 +60,7 @@ minutes, switch keys; ks checks again) and maps it to fixed arguments.
 | Without the right (what sudoers allowed) | Behind the right (what asked for the password) |
 | --- | --- |
 | `state`, `probe`, `on`, `netrestore` | `off`, `pause <min>` |
-| `core state\|on\|off\|proxies\|traffic` | `set <switch> 0\|1`, `set splitapps`, `set multihop` |
+| `core state\|on\|off\|proxies\|traffic\|connections` | `set <switch> 0\|1`, `set splitapps`, `set multihop` |
 | `core select <group> <proxy>`, `core delay <name>` | `allow`, `unallow`, `server-add`, `server-remove` |
 | `core refresh <profile>` (ks refuses new servers, exit 3) | `core import <profile>` |
 | | install / repair (`install.sh`), removal (`uninstall.sh`) |
