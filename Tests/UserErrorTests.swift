@@ -135,6 +135,19 @@ final class UserErrorTests: XCTestCase {
         XCTAssertTrue(error.message.contains("Объектах входа"), "says where the service is switched back on")
     }
 
+    /// #17: damaged settings files block everything; «Сбросить настройки» runs `ks repair`, which
+    /// opens the defaults again, so it needs the right like any other widening change.
+    func testSettingsDamaged() {
+        let error = UserError.settingsDamaged
+        XCTAssertEqual(error.title, "Настройки защиты повреждены")
+        XCTAssertEqual(error.action, .resetSettings)
+        XCTAssertEqual(UserError.Action.resetSettings.title, "Сбросить настройки")
+        XCTAssertTrue(error.message.contains("интернет заблокирован"), "says why nothing works")
+        XCTAssertTrue(HelperCommand.repair.needsAuthorization)
+        XCTAssertEqual(HelperCommand(ks: ["repair"]), .repair)
+        XCTAssertNil(HelperCommand(ks: ["repair", "x"]))
+    }
+
     func testDamagedApp() {
         XCTAssertEqual(UserError.damagedApp.title, "Программа повреждена")
         XCTAssertTrue(UserError.damagedApp.message.contains("Скачай программу заново"))

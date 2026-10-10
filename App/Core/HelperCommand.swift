@@ -35,6 +35,8 @@ enum HelperCommand: Equatable, Sendable {
     /// right. The daemon runs it only with a helper not older than the installed one
     /// (HelperUpgrade); it keeps the sudoers user and the protection state and never drops the VPN.
     case upgrade
+    /// «Сбросить настройки» (#17): damaged settings files, which block everything, back to the defaults.
+    case repair
 
     enum Program: Equatable, Sendable { case ks, install, uninstall, upgrade }
 
@@ -93,13 +95,14 @@ enum HelperCommand: Equatable, Sendable {
         case .install(let user, let servers): [user] + servers
         case .uninstall: []
         case .upgrade: ["--upgrade"]
+        case .repair: ["repair"]
         }
     }
 
     var isValid: Bool {
         switch self {
         case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic, .coreConnections,
-             .protectionOff, .uninstall, .upgrade:
+             .protectionOff, .uninstall, .upgrade, .repair:
             true
         case .coreSelect(let group, let proxy): Self.isName(group) && Self.isName(proxy)
         case .coreDelay(let name): Self.isName(name)
@@ -148,6 +151,7 @@ enum HelperCommand: Equatable, Sendable {
         case ["probe"]: command = .probe
         case ["on"]: command = .protectionOn
         case ["netrestore"]: command = .netRestore
+        case ["repair"]: command = .repair
         case ["off"]: command = .protectionOff
         case ["core", "state"]: command = .coreState
         case ["core", "on"]: command = .coreOn

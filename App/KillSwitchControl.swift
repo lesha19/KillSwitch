@@ -43,6 +43,8 @@ final class KillSwitchControl {
     private(set) var servers: [String] = []          // /Library/KillSwitch/servers
     private(set) var manualServers: [String] = []    // /Library/KillSwitch/servers-manual
     private(set) var daemonProblem = false
+    /// A settings file of the service is damaged and protection blocks everything (#17): «Сбросить настройки».
+    private(set) var settingsDamaged = false
     /// The service is gone and left the network services off (its boot guard): «Включить сеть».
     private(set) var networkLeftOff = false
     /// `sudo -n ks state` wants a password: the helper was installed by an older app.
@@ -922,6 +924,8 @@ final class KillSwitchControl {
         let changed = new != state || defaults?.bool(forKey: Shared.vpnKey) != ownTunnelUp
         if case .paused = state, new == .on { notify(.pauseEnded) }
         state = new
+        settingsDamaged = !DaemonState.lockdown(invalid: try? String(contentsOfFile: DaemonState.invalidPath, encoding: .utf8),
+                                                protection: new).isEmpty
         syncFilter()
         guard changed else { return }
         defaults?.set(new.stored, forKey: Shared.stateKey)
@@ -1130,6 +1134,8 @@ final class KillSwitchControl {
     /// «Включить сеть»: `ks netrestore` turns back on the network services the stopped service
     /// had turned off. Passwordless since 0.9.1; an older sudoers falls back to the prompt.
     func restoreNetwork() { run(["netrestore"], userInitiated: true) }
+    /// «Сбросить настройки»: `ks repair` (#17), behind the password like any change that opens something.
+    func resetSettings() { runAsAdmin([helper, "repair"]) }
 
     /// «Перезапустить VPN»: the core is running but its API does not answer.
     func restartCore() {

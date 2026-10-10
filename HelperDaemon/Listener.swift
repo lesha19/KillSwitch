@@ -49,6 +49,9 @@ final class Endpoint: NSObject, HelperProtocol, Sendable {
         Executor.perform(.coreRefresh(profile: Executor.profilePlaceholder), profile: profile, reply: reply)
     }
 
+    func repair(authorization: Data, reply: @escaping Reply) {
+        Executor.perform(.repair, authorization: authorization, reply: reply)
+    }
     func protectionOff(authorization: Data, reply: @escaping Reply) {
         Executor.perform(.protectionOff, authorization: authorization, reply: reply)
     }

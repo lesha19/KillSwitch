@@ -10,7 +10,7 @@ Rules are loaded at boot, before login.
 - `Helper/ks` — root helper: generates the pf rules from settings and loads them into anchor
   `com.apple/killswitch` (`/etc/pf.conf` untouched). `status | state | on | off | pause [min] |
   set lan|tailscale|dns|direct|wifiguard|adblock 0|1 | allow <addr> | unallow <addr> | server-add <ip> |
-  server-remove <ip> | core … | apply | watch`. Tests (no root, nothing on the system changes):
+  server-remove <ip> | core … | apply | repair | watch`. Tests (no root, nothing on the system changes):
   `for t in Helper/tests/*.sh; do bash "$t"; done`.
 - `Helper/local.killswitch.plist` — LaunchDaemon: runs `ks watch` (RunAtLoad + KeepAlive), so rules
   are loaded at boot, before login, and checked every 2 s (tunnels every second). `AssociatedBundleIdentifiers` makes it
@@ -65,7 +65,8 @@ Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale
 `allow` (addresses reachable by any process), `servers-manual` (VPN server IPs added by `server-add`
 and install.sh, reachable by any process), `servers-core` (proxy addresses of the imported core
 profile, rewritten on every import, reachable only by our core), `servers` (both merged),
-`rules.sha256` and `tunnels` (state of the last load, for tamper checks), `events.log`
+`rules.sha256`, `rules.files` and `tunnels` (state of the last load, for tamper checks), `invalid`
+(world-readable: damaged files that made the last load block everything, ADR 0015), `events.log`
 (world-readable, last 500 corrective actions).
 
 ## Security model

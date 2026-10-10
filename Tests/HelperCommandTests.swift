@@ -26,6 +26,7 @@ final class HelperCommandTests: XCTestCase {
             (.serverAdd("2001:db8::1"), ["server-add", "2001:db8::1"]),
             (.serverRemove("192.0.2.1"), ["server-remove", "192.0.2.1"]),
             (.coreImport(profile: "/private/tmp/p.json"), ["core", "import", "/private/tmp/p.json"]),
+            (.repair, ["repair"]),
         ]
         for (command, arguments) in cases {
             XCTAssertEqual(command.program, .ks, "\(command)")
@@ -108,7 +109,7 @@ final class HelperCommandTests: XCTestCase {
             .protectionOff, .pause(minutes: 5), .setSwitch("lan", true), .setSwitch("adblock", true), .setSplitApps([]),
             .setMultihop(nil),
             .allow("192.0.2.1"), .unallow("192.0.2.1"), .serverAdd("192.0.2.1"), .serverRemove("192.0.2.1"),
-            .coreImport(profile: "/tmp/p.json"), .install(user: "alex", servers: []), .uninstall,
+            .coreImport(profile: "/tmp/p.json"), .install(user: "alex", servers: []), .uninstall, .repair,
         ]
         for command in all {
             let words = command.program == .ks ? command.arguments.prefix(command.arguments.first == "core" ? 2 : 1)

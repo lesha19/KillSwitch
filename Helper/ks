@@ -24,6 +24,7 @@
 #   ks core connections     the core's live connections and rule providers, JSON (the «Трафик» window)
 #   ks probe                "link=0|1 ru=0|1 foreign=0|1": why nothing works (ADR 0006)
 #   ks apply                (re)load rules once unless disabled
+#   ks repair               damaged settings files, which block everything, back to the defaults
 #   ks watch                used by the LaunchDaemon: tunnels every second, pf every 2 s, the core every 2 s
 
 # Root runs this through passwordless sudo: nothing of the caller's environment may steer it.
@@ -62,6 +63,8 @@ SERVERS_CORE="$DIR/servers-core"     # servers of the imported core profile, rew
 EVENTS="$DIR/events.log" # corrective actions of the watchdog, world-readable
 STATEF="$DIR/daemon-state" # the watchdog's view for the app, world-readable (publish_state)
 HASHF="$DIR/rules.sha256" # hash of the anchor as loaded by us
+FILESF="$DIR/rules.files" # the files below as they were when the rules were loaded (root_files_sig)
+INVALIDF="$DIR/invalid"   # world-readable: what made the last load block everything (#17), absent when fine
 WIFI_MARK="$DIR/wifi-off-by-ks" # Wi-Fi was switched off by us at shutdown
 SIGF="$DIR/tunnels"      # tunnel interfaces the loaded rules were built for
 TSRELAYS="$DIR/tsrelays" # Tailscale DERP relays + control plane, root-owned
@@ -91,6 +94,48 @@ setting() {  # setting <key> <default>
   v=$(grep -E "^$1=" "$SETTINGS" 2>/dev/null | tail -1 | cut -d= -f2-)
   echo "${v:-$2}"
 }
+
+# Fail closed (#17, like Mullvad's lockdown on invalid settings): the files the rules are built
+# from must be ours (a regular file owned by whoever runs ks, that is root, not writable by group
+# or others) and hold only lines ks itself writes. A missing file means the defaults. Anything
+# else and rules() blocks everything but loopback until «Сбросить настройки» (ks repair): a
+# switch read wrong could open the home network or leave the boot window open.
+OWNER_UID=$EUID
+ADDR_LINE='[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?|[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*(/[0-9]{1,3})?'   # valid_addr
+settings_lines_ok() {
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ""|lan=[01]|tailscale=[01]|dns=[01]|direct=[01]|wifiguard=[01]|adblock=[01]) ;;
+      coredirect=[01]) ;;   # until 0.14 (ADR 0013): ignored, install.sh drops it
+      splitapps=*) splitapps_parse "${line#*=}" >/dev/null 2>&1 || return 1 ;;
+      multihop=*) [ "${line#*=}" = off ] || valid_name "${line#*=}" || return 1 ;;
+      *) return 1 ;;
+    esac
+  done < "$1" 2>/dev/null
+}
+root_file_ok() {  # root_file_ok <file> settings|addrs|relays|any
+  local m
+  [ -e "$1" ] || [ -L "$1" ] || return 0
+  [ -f "$1" ] && [ ! -L "$1" ] && m=$(stat -f '%u %Lp' "$1") || return 1
+  [ "${m% *}" = "$OWNER_UID" ] && (( (8#${m#* } & 8#022) == 0 )) || return 1
+  case "$2" in
+    settings) settings_lines_ok "$1" ;;
+    addrs) ! grep -qvE "^($ADDR_LINE)\$" "$1" ;;
+    relays) ! grep -qvE "^(#.*|$ADDR_LINE)?\$" "$1" ;;
+  esac
+}
+root_files_bad() {  # root_files_bad [allow-file] [servers-file] [manual-servers-file]: the bad ones' names
+  root_file_ok "$SETTINGS" settings || echo settings
+  root_file_ok "${1:-$ALLOW}" addrs || echo allow
+  root_file_ok "${2:-$SERVERS}" addrs || echo servers
+  root_file_ok "${3:-$SERVERS_MANUAL}" addrs || echo servers-manual
+  root_file_ok "$TSRELAYS" relays || echo tsrelays
+  root_file_ok "$CORE_EGRESS" any || echo egress
+}
+# what guard compares to notice a file changed behind ks's back (nanosecond times)
+root_files_sig() { stat -f '%N %i %Fm %z %u %Lp' "$SETTINGS" "$ALLOW" "$SERVERS" "$SERVERS_MANUAL" "$TSRELAYS" "$CORE_EGRESS" 2>/dev/null; }
+lockdown() { echo 'pass out quick on lo0 all flags any'; echo 'block drop out quick all'; }
 
 # "interface address" for every utun that has an IPv4 address, sorted.
 utun_addrs() {
@@ -124,6 +169,7 @@ tunnel_sig() {
 rules() {  # rules [allow-file] [servers-file] [manual-servers-file]
   local allow_file="${1:-$ALLOW}" servers_file="${2:-$SERVERS}" manual_file="${3:-$SERVERS_MANUAL}" vpn ts
   [ -e "$manual_file" ] || manual_file=$servers_file   # before the first servers_migrate
+  if [ -n "$(root_files_bad "$allow_file" "$servers_file" "$manual_file")" ]; then lockdown; return 0; fi
   vpn=$(vpn_ifaces | paste -sd' ' -)
   ts=$(ts_ifaces | paste -sd' ' -)
   # tables go before the filter rules
@@ -205,13 +251,27 @@ log_event() {
   fi
 }
 
+# Rules pf refuses (an address the check let through, 999.1.1.1) block everything too, instead
+# of leaving the old rules or, at boot, none. Either way $INVALIDF tells the app why.
 load() {  # load [tunnel_sig, if the caller has it]
   [ -f "$FLAG" ] && return 0   # a switch-off raced with the watchdog
   pf_enabled || pfctl -E >/dev/null 2>&1   # enable first: loading can take a moment
-  local sig=${1:-}
+  local sig=${1:-} files bad
   [ -n "$sig" ] || sig=$(tunnel_sig)
-  rules | pfctl -a "$ANCHOR" -f - 2>/dev/null || { echo "rules failed to load" >&2; return 1; }
+  files=$(root_files_sig)
+  bad=$(root_files_bad | paste -sd, -)
+  if ! rules | pfctl -a "$ANCHOR" -f - 2>/dev/null; then
+    lockdown | pfctl -a "$ANCHOR" -f - 2>/dev/null || { echo "rules failed to load" >&2; return 1; }
+    bad=rules
+  fi
+  if [ -n "$bad" ]; then
+    log_event "invalid $bad: everything blocked until repaired"
+    echo "$bad" > "$INVALIDF.tmp" && chmod 644 "$INVALIDF.tmp" && mv "$INVALIDF.tmp" "$INVALIDF"
+  else
+    rm -f "$INVALIDF"
+  fi
   echo "$sig" > "$SIGF"
+  echo "$files" > "$FILESF"
   rules_hash > "$HASHF"
 }
 
@@ -235,8 +295,11 @@ guard() {
   local until why="" mode=${1:-full}
   TSIG=$(tunnel_sig)
   if [ -f "$FLAG" ]; then
-    until=$(cat "$FLAG")
-    if [ "$until" != 0 ] && [ "$(date +%s)" -ge "$until" ]; then
+    until=$(cat "$FLAG" 2>/dev/null)
+    if ! [[ "$until" =~ ^[0-9]{1,12}$ ]]; then
+      # damaged: off for ever would be the opposite of failing closed
+      rm -f "$FLAG"; log_event "off/pause flag unreadable: protection back on"; mode=full
+    elif [ "$until" != 0 ] && [ "$(date +%s)" -ge "$until" ]; then
       rm -f "$FLAG"; log_event "pause ended"; mode=full
     else
       if [ "$until" = 0 ]; then PROT=off; else PROT="paused:$until"; fi
@@ -256,6 +319,7 @@ guard() {
   elif ! pfctl -s rules 2>/dev/null | grep -q 'anchor "com.apple/\*"'; then
     why="anchor missing from main ruleset"
     restore_main_ruleset
+  elif [ "$(root_files_sig)" != "$(cat "$FILESF" 2>/dev/null)" ]; then why="settings files changed"
   elif [ "$(rules_hash)" != "$(cat "$HASHF" 2>/dev/null)" ]; then why="rules were changed or flushed"
   fi
   if [ -z "$why" ]; then PROT=on; return 0; fi
@@ -320,7 +384,8 @@ watch_pass() {
 watch_disabled() { launchctl print-disabled system 2>/dev/null | grep -qE "\"${WATCH_JOB#system/}\" => (disabled|true)"; }
 shutdown_guard() {
   local svc
-  [ ! -f "$FLAG" ] && [ "$(setting wifiguard 1)" = 1 ] || return 0
+  # damaged settings saying wifiguard=0 are not believed
+  [ ! -f "$FLAG" ] && { [ "$(setting wifiguard 1)" = 1 ] || ! root_file_ok "$SETTINGS" settings; } || return 0
   if watch_disabled; then
     log_event "watchdog switched off (Login Items): network left on"
     return 0
@@ -1420,6 +1485,31 @@ core_reload() {
   [ "$rc" = 0 ] || launchctl kickstart -k "$CORE_JOB"
 }
 
+# "ks repair" («Сбросить настройки», #17): whatever root_files_bad names, back to what ks writes.
+# Damaged settings become the defaults (the old file kept root-only as settings.bad, for support);
+# the lists keep their good lines; all end up ours and not writable by others. Then the rules
+# load as usual and the core's config follows the settings.
+repair() {
+  local bad f
+  bad=$(root_files_bad | paste -sd, -)
+  [ -n "$bad" ] || { echo "nothing to repair"; return 0; }
+  if ! root_file_ok "$SETTINGS" settings; then
+    rm -rf "$SETTINGS.bad"; mv "$SETTINGS" "$SETTINGS.bad"
+    [ -L "$SETTINGS.bad" ] || chmod -R go-rwx "$SETTINGS.bad"
+  fi
+  for f in "$ALLOW" "$SERVERS_MANUAL" "$SERVERS_CORE" "$TSRELAYS"; do
+    root_file_ok "$f" relays && root_file_ok "$f" addrs && continue
+    { [ -f "$f" ] && [ ! -L "$f" ] && grep -E "^($ADDR_LINE)\$" "$f"; } > "$f.tmp"
+    if [ "$f" = "$SERVERS_CORE" ]; then chmod 600 "$f.tmp"; else chmod 644 "$f.tmp"; fi
+    rm -rf "$f"; mv "$f.tmp" "$f"
+  done
+  if ! root_file_ok "$CORE_EGRESS" any; then rm -rf "$CORE_EGRESS"; fi   # the next config writes it again
+  servers_merge > "$SERVERS.tmp"; chmod 644 "$SERVERS.tmp"; rm -rf "$SERVERS"; mv "$SERVERS.tmp" "$SERVERS"
+  log_event "repaired: $bad"
+  reload_if_on
+  if [[ ",$bad," == *,settings,* ]]; then core_apply_settings; fi
+}
+
 # Server IP rotation: the host names approved at the last import are resolved again (never
 # through the LAN's DNS); a name whose pinned address is no longer among its answers is
 # re-pinned and the config, servers and pf follow. A failed lookup keeps the old address.
@@ -1866,17 +1956,18 @@ passwordless_args_ok() {
 # reads nothing but this file: no root needed
 [ "${1:-}" = version ] && { ks_version "$0"; exit 0; }
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
-passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,27p' "$0" >&2; exit 1; }
+passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,28p' "$0" >&2; exit 1; }
 
 # Everything that writes the core's config runs under one lock (the watchdog's rotation skips
 # its turn while it is held).
 case "${1:-}:${2:-}" in
-  core:import|core:refresh|set:splitapps|set:multihop|set:adblock|_regen:)
+  core:import|core:refresh|set:splitapps|set:multihop|set:adblock|_regen:|repair:)
     [ -n "${KS_LOCKED:-}" ] || [ ! -d "$CORE_DIR" ] || KS_LOCKED=1 exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@" ;;
 esac
 
 case "${1:-status}" in
   apply) guard ;;
+  repair) repair ;;
   _rotate) core_rotate ;;  # internal, under the lock, started by the watchdog
   _regen) core_regen ;;    # internal, under the lock, run by install.sh after an upgrade
   _dns)  # internal, under the lock of dns_locked
@@ -2002,5 +2093,5 @@ case "${1:-status}" in
     [ -f "$FLAG" ] && { u=$(cat "$FLAG"); [ "$u" = 0 ] && echo "disabled by hand" || echo "back on at $(date -r "$u" +%H:%M)"; }
     pfctl -a "$ANCHOR" -s rules 2>/dev/null
     ;;
-  *) sed -n '2,27p' "$0"; exit 1 ;;
+  *) sed -n '2,28p' "$0"; exit 1 ;;
 esac

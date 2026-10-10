@@ -44,7 +44,7 @@ check "no network: nothing probed" "$(net_probe)" "link=0 ru=0 foreign=0"
 check "no network: no requests" "$(wc -l < "$tmp/urls" | tr -d ' ')" 0
 
 # the pf exception that lets the probe out: tcp 443, the core's group, these addresses only
-SETTINGS="$tmp/settings"; ALLOW="$tmp/allow"; TSRELAYS="$tmp/none"
+SETTINGS="$tmp/settings"; ALLOW="$tmp/allow"; TSRELAYS="$tmp/none"; CORE_EGRESS="$tmp/none"
 SERVERS="$tmp/servers"; SERVERS_MANUAL="$tmp/servers-manual"; : > "$SERVERS"; : > "$SERVERS_MANUAL"
 vpn_ifaces() { :; }; ts_ifaces() { :; }; dscl() { return 0; }
 rules > "$tmp/rules"

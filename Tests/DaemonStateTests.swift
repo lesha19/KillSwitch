@@ -25,6 +25,18 @@ final class DaemonStateTests: XCTestCase {
         XCTAssertNil(DaemonState(text: "pid=12\n"))
     }
 
+    /// #17: ks leaves the names of damaged files in `invalid` when it blocked everything because
+    /// of them; that only matters while protection is on (off, the rules are not loaded at all).
+    func testLockdown() {
+        XCTAssertEqual(DaemonState.lockdown(invalid: "settings\n", protection: .on), ["settings"])
+        XCTAssertEqual(DaemonState.lockdown(invalid: "settings,allow", protection: .on), ["settings", "allow"])
+        XCTAssertEqual(DaemonState.lockdown(invalid: nil, protection: .on), [])
+        XCTAssertEqual(DaemonState.lockdown(invalid: " \n", protection: .on), [])
+        XCTAssertEqual(DaemonState.lockdown(invalid: "settings", protection: .off), [])
+        XCTAssertEqual(DaemonState.lockdown(invalid: "settings", protection: .paused(until: .distantFuture)), [])
+        XCTAssertEqual(DaemonState.invalidPath, "/Library/KillSwitch/invalid")
+    }
+
     func testHelperWord() {
         XCTAssertEqual(DaemonState.protection("on\n"), .on)
         XCTAssertEqual(DaemonState.protection("off"), .off)

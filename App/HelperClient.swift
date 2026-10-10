@@ -133,6 +133,7 @@ final class HelperClient {
             case .coreDelay(let name): helper.coreDelay(name: name, reply: reply)
             case .coreRefresh: helper.coreRefresh(profile: profile!, reply: reply)
             case .protectionOff: helper.protectionOff(authorization: form, reply: reply)
+            case .repair: helper.repair(authorization: form, reply: reply)
             case .pause(let minutes): helper.pause(minutes: minutes, authorization: form, reply: reply)
             case .setSwitch(let key, let on): helper.setSwitch(key: key, on: on, authorization: form, reply: reply)
             case .setSplitApps(let names): helper.setSplitApps(names: names, authorization: form, reply: reply)

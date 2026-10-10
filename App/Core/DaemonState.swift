@@ -37,6 +37,17 @@ struct DaemonState: Equatable {
         return .off
     }
 
+    /// Written by Helper/ks `load` (world-readable) when it blocked everything because of damaged
+    /// files (#17): their names, comma separated, or "rules" when pf refused them; absent otherwise.
+    static let invalidPath = "/Library/KillSwitch/invalid"
+
+    /// The damaged files that keep everything blocked; empty unless protection is on.
+    static func lockdown(invalid text: String?, protection: Protection) -> [String] {
+        guard protection == .on, let text else { return [] }
+        return text.split(whereSeparator: { $0 == "," || $0.isNewline }).map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
     /// Whether a process with this pid exists. The daemon runs as root, so signal 0 from the user
     /// is refused with EPERM: that still means it is there.
     static func alive(_ pid: pid_t) -> Bool {

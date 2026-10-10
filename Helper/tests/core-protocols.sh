@@ -13,7 +13,7 @@ MIHOMO=${MIHOMO:-/Library/KillSwitch/core/mihomo}; [ -x "$MIHOMO" ] || [ ! -x "$
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/home"
 SETTINGS="$tmp/settings"
-CORE_DIR="$tmp/core"; mkdir "$CORE_DIR"
+CORE_DIR="$tmp/core"; mkdir "$CORE_DIR"; CORE_EGRESS="$CORE_DIR/egress"
 resolve_host() {
   case "$1" in
     de.example.com) echo 203.0.113.20 ;;

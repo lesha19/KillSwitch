@@ -5,7 +5,7 @@ import Foundation
 struct UserError: Equatable {
     enum Action: Equatable {
         case repair, restartVPN, openLoginItems, editSubscription, openAccount, retry, approveServers, recheck
-        case chooseServer, copyDiagnostics, restoreNetwork
+        case chooseServer, copyDiagnostics, restoreNetwork, resetSettings
 
         var title: String {
             switch self {
@@ -20,6 +20,7 @@ struct UserError: Equatable {
             case .chooseServer: String(localized: "Выбрать другой сервер…")
             case .copyDiagnostics: String(localized: "Скопировать диагностику")
             case .restoreNetwork: String(localized: "Включить сеть")
+            case .resetSettings: String(localized: "Сбросить настройки")
             }
         }
     }
@@ -73,6 +74,13 @@ struct UserError: Equatable {
         title: String(localized: "Сеть выключена"),
         message: String(localized: "Служба защиты остановлена и не включила Wi-Fi и другие сети обратно. Включи их здесь, а службу — в Объектах входа."),
         action: .restoreNetwork)
+
+    /// #17: a settings file of the service is damaged, so protection blocks everything (Helper/ks
+    /// root_files_bad); `ks repair` puts the defaults back.
+    static let settingsDamaged = UserError(
+        title: String(localized: "Настройки защиты повреждены"),
+        message: String(localized: "Их не удалось прочитать, поэтому интернет заблокирован полностью — так безопаснее. Сброс вернёт обычные настройки защиты."),
+        action: .resetSettings)
 
     /// The app bundle failed its signature check (BundleSignature): nothing from it runs as root.
     static let damagedApp = UserError(
