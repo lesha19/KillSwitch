@@ -2,11 +2,16 @@
 # Removes everything install.sh put in place and lifts the rules.
 set -u
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
+# A stopped watchdog disables the physical network services unless protection is off (the
+# shutdown guard), so it is switched off first; then wait until the old watchdog is gone.
+if [ -x /Library/KillSwitch/ks ]; then /Library/KillSwitch/ks off >/dev/null 2>&1
+elif [ -d /Library/KillSwitch ]; then echo 0 > /Library/KillSwitch/disabled; fi
 launchctl bootout system/local.killswitch 2>/dev/null
+for _ in $(seq 1 50); do launchctl print system/local.killswitch >/dev/null 2>&1 || break; sleep 0.2; done
 # stops our core and gives the network services their DNS back
 [ -x /Library/KillSwitch/ks ] && /Library/KillSwitch/ks core off >/dev/null 2>&1
 launchctl enable system/local.killswitch.core
-# the watchdog disables network services when stopped; give them back
+# services disabled at an earlier shutdown, or by a watchdog that raced the switch-off
 if [ -f /Library/KillSwitch/wifi-off-by-ks ]; then
   while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" on; done < /Library/KillSwitch/wifi-off-by-ks
 fi

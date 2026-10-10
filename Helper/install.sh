@@ -8,7 +8,8 @@
 # app can show the state and turn protection back on in one click. Turning it off,
 # pausing and changing what is let through always need the admin password, so a
 # program running as the user cannot silently open a hole. Starting and stopping our own
-# VPN core is passwordless too: it never widens the rules; importing its config is not.
+# VPN core, listing and switching its servers and refreshing its profile with known server
+# addresses are passwordless too: they never widen the rules; importing a new profile is not.
 set -eu
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
 cd "$(dirname "$0")"
@@ -52,7 +53,10 @@ fi
 [ -e "$DIR/events.log" ] || install -o root -g wheel -m 644 /dev/null "$DIR/events.log"
 
 SUDOERS=/etc/sudoers.d/killswitch
-echo "$USER_NAME ALL=(root) NOPASSWD: $DIR/ks state, $DIR/ks on, $DIR/ks core state, $DIR/ks core on, $DIR/ks core off" > "$SUDOERS.tmp"
+# "core refresh" (subscription auto-update) is refused by ks if it brings new server addresses;
+# "core import" may add servers the core can reach, so it keeps asking for the password.
+echo "$USER_NAME ALL=(root) NOPASSWD: $DIR/ks state, $DIR/ks on, $DIR/ks core state, $DIR/ks core on, $DIR/ks core off," \
+  "$DIR/ks core proxies, $DIR/ks core select *, $DIR/ks core delay *, $DIR/ks core refresh *" > "$SUDOERS.tmp"
 chmod 440 "$SUDOERS.tmp"
 visudo -cf "$SUDOERS.tmp"
 mv "$SUDOERS.tmp" "$SUDOERS"
