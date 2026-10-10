@@ -61,7 +61,10 @@ struct ServersScreen: View {
                 Color.clear.frame(width: 60, height: 1)   // keeps the title centred over ⟳
             }
             Spacer()
-            Text(choosingEntry ? "Сервер входа" : "Сервер").font(.headline).accessibilityAddTraits(.isHeader)
+            // the window titles the section «Серверы» already
+            if back != nil || choosingEntry {
+                Text(choosingEntry ? "Сервер входа" : "Сервер").font(.headline).accessibilityAddTraits(.isHeader)
+            }
             Spacer()
             Button {
                 Task { await control.testAllDelays() }

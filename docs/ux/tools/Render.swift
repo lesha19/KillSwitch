@@ -82,7 +82,7 @@ func snapshot<V: View>(_ name: String, width: CGFloat, height: CGFloat? = nil, t
             .environment(\.colorScheme, dark ? .dark : .light)
         let hosting = NSHostingView(rootView: content)
         let window = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: width, height: height ?? 600),
-                              styleMask: title == nil ? [.borderless] : [.titled, .closable, .miniaturizable],
+                              styleMask: title == nil ? [.borderless] : [.titled, .closable, .miniaturizable, .fullSizeContentView],
                               backing: .buffered, defer: false)
         window.appearance = appearance
         window.title = title ?? ""
@@ -124,17 +124,21 @@ func main() {
     }
     try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
-    /// The main window sizes itself to its content (no scrolling), as in the app.
-    func window(_ name: String, height: CGFloat = 0, _ world: World) {
-        snapshot(name, width: 400, title: "KillSwitch") {
-            HomeView(style: .window).environment(world.control).environment(world.client).environment(Updater())
+    /// The one window (ADR 0008) at a section: sidebar on the left, the section on the right.
+    /// `height` is the window's content height; the default is its size on first launch.
+    func shot(_ name: String, _ section: AppSection, height: CGFloat = 640, _ world: World) {
+        Router.shared.section = section
+        snapshot(name, width: 860, height: height, title: "KillSwitch") {
+            mainWindow(world)
         }
     }
 
+    func window(_ name: String, height: CGFloat = 640, _ world: World) {
+        shot(name, .home, height: min(max(height, 640), 760), world)
+    }
+
     func picker(_ name: String, _ world: World) {
-        snapshot(name, width: 400, title: "KillSwitch") {
-            ServersScreen(back: {}).environment(world.control).environment(world.client).environment(Updater())
-        }
+        shot(name, .servers, world)
     }
 
     // MARK: main window
@@ -298,10 +302,31 @@ func main() {
 
     // MARK: first-run wizard
 
+    /// The wizard is a sheet of the window: drawn alone (a sheet has no title bar), and once over
+    /// the window it belongs to (59).
     func wizard(_ name: String, _ step: Onboarding.Step, installed: Bool = false, _ w: World) {
         renderOnboarding = (step, installed)
-        snapshot(name, width: 520, height: 440, title: "Начало работы") {
+        snapshot(name, width: 520, height: 440) {
             OnboardingView().environment(w.control).environment(w.client).environment(w.tester).environment(w.auto)
+        }
+    }
+
+    do {
+        let w = World()
+        w.control.state = .notInstalled
+        w.control.coreInstalled = false
+        w.control.coreConfigured = false
+        renderOnboarding = (.welcome, false)
+        Router.shared.section = .home
+        snapshot("59-window-wizard-sheet", width: 860, height: 640, title: "KillSwitch") {
+            ZStack(alignment: .top) {
+                mainWindow(w)
+                Color.black.opacity(0.18)
+                OnboardingView().environment(w.control).environment(w.client).environment(w.tester).environment(w.auto)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .shadow(radius: 18, y: 6)
+            }
         }
     }
 
@@ -364,10 +389,8 @@ func main() {
 
     // MARK: leak test window
 
-    func leak(_ name: String, _ w: World, height: CGFloat = 620) {
-        snapshot(name, width: 480, height: height, title: "Проверка утечек") {
-            LeakTestView().environment(w.control).environment(w.tester)
-        }
+    func leak(_ name: String, _ w: World, height: CGFloat = 640) {
+        shot(name, .leakTest, height: max(height, 640), w)
     }
     do {
         let w = World()
@@ -427,15 +450,14 @@ func main() {
         leak("35-leaktest-direct-exit", w, height: 820)
     }
 
-    // MARK: settings tabs (each tab drawn on its own; the real window shows them as toolbar tabs)
+    // MARK: «Настройки» panes, «Журнал защиты», «О программе»: sections of the same window
 
-    func settings<V: View>(_ name: String, height: CGFloat = 640, _ w: World, @ViewBuilder _ tab: () -> V) {
-        snapshot(name, width: 520, height: height, title: "Настройки") {
-            tab().environment(w.control).environment(w.client).environment(w.auto).environment(Updater())
-        }
+    func settings(_ name: String, height: CGFloat = 640, _ w: World, _ section: AppSection) {
+        shot(name, section, height: height, w)
     }
+    /// A batch sheet drawn alone (a sheet has no title bar).
     func sheet<V: View>(_ name: String, _ w: World, @ViewBuilder _ content: () -> V) {
-        snapshot(name, width: 460, title: "Настройки") {
+        snapshot(name, width: 460) {
             content().environment(w.control).environment(w.client).environment(w.auto)
         }
     }
@@ -447,11 +469,11 @@ func main() {
         w.auto.trusted = ["Zhuravel_Home_5G"]
         w.auto.ssid = "Cafe Free WiFi"
         w.auto.lastAction = "Подключился сам 09:41"
-        settings("40-settings-general", w) { GeneralSettings() }
+        settings("40-settings-general", w, .settings(.general))
     }
     do {
         let w = World(); w.control.coreConfigured = false
-        settings("41-settings-vpn-empty", w) { VPNSettings() }
+        settings("41-settings-vpn-empty", w, .settings(.vpn))
     }
     do {
         let w = World(); w.subscribe(); w.connect(selected: "🇳🇱 Нидерланды")
@@ -460,15 +482,15 @@ func main() {
         w.control.coreDirect = true
         w.control.multihopEntry = "🇱🇹 Литва"
         w.control.splitApps = ["Telegram", "zoom.us"]
-        settings("42-settings-vpn-full", w) { VPNSettings() }
+        settings("42-settings-vpn-full", w, .settings(.vpn))
     }
     do {
         let w = World()
         w.control.filter.status = .waitingForApproval
-        settings("43-settings-protection", w) { ProtectionSettings() }
+        settings("43-settings-protection", w, .settings(.protection))
         w.control.filter.status = .failed("Расширение не подписано для этого Mac")
         w.control.state = .paused(until: Date().addingTimeInterval(25 * 60))
-        settings("43b-settings-protection-paused-filter-error", w) { ProtectionSettings() }
+        settings("43b-settings-protection-paused-filter-error", w, .settings(.protection))
     }
     do {
         let w = World()
@@ -479,7 +501,7 @@ func main() {
             Transport.Server(name: "🇩🇪 Германия", canFingerprint: false, canMux: true, fingerprint: nil, mux: nil),
         ]
         w.client.transportOverrides = ["🇱🇹 Литва": Transport.Override(fingerprint: "firefox", mux: nil)]
-        settings("44-settings-advanced", height: 760, w) { AdvancedSettings() }
+        settings("44-settings-advanced", height: 760, w, .settings(.advanced))
     }
     do {
         let w = World()
@@ -487,7 +509,8 @@ func main() {
                             "2026-10-10 08:01:11 pf was disabled: reloading",
                             "2026-10-10 09:12:45 tunnels changed (utun4 utun6): reloading",
                             "2026-10-10 09:12:46 core: 🚀 Выбор сервера -> 🇱🇹 Литва"]
-        settings("45-settings-help", w) { HelpSettings() }
+        settings("45-window-log", w, .log)
+        settings("45c-window-about", w, .about)
     }
     do {
         let w = World()
@@ -509,6 +532,11 @@ func main() {
     }
 
     UserDefaults.standard.removePersistentDomain(forName: Bundle.main.bundleIdentifier ?? "UXRender")
+}
+
+/// The app's main window with every object it reads from the environment.
+@MainActor func mainWindow(_ w: World) -> some View {
+    MainWindow().environment(w.control).environment(w.client).environment(w.tester).environment(w.auto).environment(Updater())
 }
 
 /// Every summary status (spec §2) with its template icon from Assets.xcassets, as on a light and
