@@ -5,11 +5,13 @@ struct KillSwitchApp: App {
     @State private var control: KillSwitchControl
     @State private var client: VPNClient
     @State private var leakTester = LeakTester()
+    @State private var autoConnector: AutoConnector
 
     init() {
         let control = KillSwitchControl()
         _control = State(initialValue: control)
         _client = State(initialValue: VPNClient(control: control))
+        _autoConnector = State(initialValue: AutoConnector(control: control))
     }
 
     var body: some Scene {
@@ -44,6 +46,7 @@ struct KillSwitchApp: App {
             SettingsView()
                 .environment(control)
                 .environment(client)
+                .environment(autoConnector)
         }
 
         MenuBarExtra {

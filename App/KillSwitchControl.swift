@@ -156,6 +156,26 @@ final class KillSwitchControl {
     func coreOn() { run(["core", "on"]) }
     func coreOff() { run(["core", "off"]) }
 
+    /// «Подключаться автоматически»: like coreOn, but never shows the password prompt; if the
+    /// helper wants a password, a notification says so instead. True when the core was started.
+    func coreOnAutomatically() async -> Bool {
+        guard !busy else { return false }
+        busy = true
+        defer { busy = false; refresh() }
+        switch await callHelper(["core", "on"], interactive: false) {
+        case .ok:
+            error = nil
+            return true
+        case .needsPassword:
+            notify(.autoConnectNeedsPassword)
+        case .failed(let message):
+            error = message.isEmpty ? "Не получилось подключиться автоматически" : message
+        case .cancelled:
+            break
+        }
+        return false
+    }
+
     enum ImportResult: Equatable { case ok, cancelled, needsPassword, failed(String) }
 
     /// Hands a profile (JSON: proxies, proxy-groups, rules, rule-providers) to the helper, which
@@ -554,7 +574,7 @@ final class KillSwitchControl {
         return result
     }
 
-    enum Event { case vpnDropped, pauseEnded, daemonOff, macOSUpdated }
+    enum Event { case vpnDropped, pauseEnded, daemonOff, macOSUpdated, autoConnectNeedsPassword }
 
     private func notify(_ event: Event) {
         let defaults = UserDefaults.standard
@@ -574,6 +594,9 @@ final class KillSwitchControl {
         case .macOSUpdated:
             content.title = "macOS обновилась"
             content.body = "Перезагрузи Mac и проверь утечки в KillSwitch"
+        case .autoConnectNeedsPassword:
+            content.title = "VPN не подключился сам"
+            content.body = "Для этого нужен пароль. Подключись в KillSwitch вручную или нажми там «Обновить защиту»."
         }
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         Task {

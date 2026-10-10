@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -196,12 +197,82 @@ private struct GeneralSettings: View {
                 Toggle("VPN отключился, интернет перекрыт", isOn: $notifyVPNDropped)
                 Toggle("Пауза закончилась", isOn: $notifyPauseEnded)
             }
-            Section {
-                Toggle("Запускать при входе", isOn: $control.launchAtLogin)
-            }
+            AutoConnectSection(control: control)
             FilterSection(filter: control.filter)
         }
         .formStyle(.grouped)
+    }
+}
+
+/// «Запускать при входе», «Подключаться автоматически» and trusted Wi-Fi networks.
+private struct AutoConnectSection: View {
+    @Bindable var control: KillSwitchControl
+    @Environment(AutoConnector.self) private var auto
+    @State private var newNetwork = ""
+
+    var body: some View {
+        @Bindable var auto = auto
+        Section {
+            Toggle(isOn: $control.launchAtLogin) {
+                Text("Запускать при входе")
+                if SMAppService.mainApp.status == .requiresApproval {
+                    Text("Разреши KillSwitch в Системных настройках → Основные → Объекты входа.")
+                }
+            }
+            Toggle(isOn: $auto.enabled) {
+                Text("Подключаться автоматически")
+                Text("При запуске программы и при смене сети. Пароль не спрашивается: если он нужен, придёт уведомление. Ручное «Отключить» действует до следующей смены сети.")
+            }
+            .disabled(!control.coreConfigured)
+            Toggle(isOn: $auto.skipTrusted) {
+                Text("Не подключаться в доверенных сетях Wi-Fi")
+                Text("Например, дома. В остальных сетях VPN подключается всегда.")
+            }
+            .disabled(!auto.enabled)
+            if auto.enabled && auto.skipTrusted {
+                if !auto.locationAllowed {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("macOS называет сеть Wi-Fi только программам с доступом к геопозиции. Пока доступа нет, все сети считаются недоверенными и VPN подключается всегда. Само местоположение KillSwitch не использует.", systemImage: "location.slash")
+                            .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                        if auto.location == .notDetermined {
+                            Button("Разрешить…") { auto.requestLocation() }
+                        } else {
+                            Button("Открыть настройки геопозиции") {
+                                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices")!)
+                            }
+                        }
+                    }
+                }
+                ForEach(auto.trusted, id: \.self) { name in
+                    HStack {
+                        Label(name, systemImage: "wifi")
+                        Spacer()
+                        Button("Убрать", role: .destructive) { auto.removeTrusted(name) }
+                    }
+                }
+                if let ssid = auto.ssid, !auto.trusted.contains(ssid) {
+                    Button("Добавить текущую сеть «\(ssid)»") { auto.addTrusted(ssid) }
+                }
+                HStack {
+                    TextField("Имя сети Wi-Fi", text: $newNetwork).onSubmit(add)
+                    Button("Добавить", action: add).disabled(newNetwork.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            if let last = auto.lastAction {
+                Text(last).font(.caption).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Автоподключение")
+        } footer: {
+            if !control.coreConfigured {
+                Text("Сначала добавь подписку или сервер.").foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func add() {
+        auto.addTrusted(newNetwork)
+        newNetwork = ""
     }
 }
 
