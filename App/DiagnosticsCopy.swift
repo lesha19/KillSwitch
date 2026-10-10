@@ -32,7 +32,7 @@ enum DiagnosticsCopy {
             ("Туннель поднят", yes(control.vpnUp)),
             ("Наш туннель (198.18.128.1)", yes(control.ownTunnelUp)),
             ("VPN другой программы", control.foreignVPN ?? "нет"),
-            ("Прямой выход для российских сайтов", yes(control.coreDirect)),
+            ("Российские сайты — напрямую", yes(control.coreDirect)),
             ("Групп серверов", "\(control.proxies?.groups.count ?? 0)"),
             ("Подписка", client.hasURL ? "есть" : "нет"),
             ("Обновлена", date(client.status.lastUpdate)),

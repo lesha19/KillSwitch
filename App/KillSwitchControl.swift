@@ -82,7 +82,7 @@ final class KillSwitchControl {
     private(set) var coreInstalled = false
     private(set) var coreConfigured = false
     private(set) var coreRunning = false
-    /// "Прямой выход для российских сайтов": the core sends Russian sites around the tunnel.
+    /// «Российские сайты — напрямую (мимо VPN)»: the core sends Russian sites around the tunnel.
     private(set) var coreDirect = false
     /// Set while another VPN's TUN is up next to our core (see `foreignVPNFile`).
     private(set) var foreignVPN: String?

@@ -406,8 +406,8 @@ private struct VPNSettings: View {
 
             Section {
                 Toggle(isOn: Binding(get: { control.coreDirect }, set: { control.set("coredirect", $0) })) {
-                    Text("Прямой выход для российских сайтов")
-                    Text("Российские сайты и адреса открываются напрямую, без VPN: быстрее и без капч, но провайдер видит, что ты на них заходишь. Остальное — через VPN. Спросит пароль.")
+                    Text("Российские сайты — напрямую (мимо VPN)")
+                    Text("Банки и Госуслуги открываются как без VPN; остальное — через VPN. Провайдер видит, что ты на них заходишь. Спросит пароль.")
                 }
                 .disabled(control.busy || control.state == .notInstalled)
             } header: {
