@@ -723,7 +723,7 @@ final class KillSwitchControl {
         if wasVPNUp && !vpnUp && state == .on && !manual && !stoppingOtherVPN { notify(.vpnDropped(protected: true)) }
         readSettings()
         readOtherTunnels()
-        defer { scheduleTimer(); readOtherVPN() }
+        defer { scheduleTimer(); readOtherVPN(); syncSpeed() }
         guard FileManager.default.fileExists(atPath: helper) else {
             daemonProblem = false; networkLeftOff = false
             daemonStateLive = false
@@ -786,6 +786,7 @@ final class KillSwitchControl {
         let modified = (try? FileManager.default.attributesOfItem(atPath: helper))?[.modificationDate] as? Date
         guard modified != helperComparedAt else { return }
         helperComparedAt = modified
+        speedUnavailable = false   // another helper may allow `core traffic`
         let bundled = Bundle.main.path(forResource: "ks", ofType: nil, inDirectory: "Helper").flatMap(FileManager.default.contents(atPath:))
         helperOutdated = HelperVersion.matches(installed: FileManager.default.contents(atPath: helper), bundled: bundled) == false
     }
@@ -1145,6 +1146,52 @@ final class KillSwitchControl {
             if let kind = TunnelAddress.kind(octets.map(String.init).joined(separator: ".")) { result.append(kind) }
         }
         return result
+    }
+
+    // MARK: speed in the menu bar (TrafficSpeed)
+
+    /// «Скорость в строке меню» (Settings › Общие), off by default.
+    static let speedKey = "menuBarSpeed"
+    /// ↓/↑ while connected and the setting is on; nil otherwise.
+    private(set) var speed: TrafficSpeed.Speed?
+    /// The installed helper does not let `ks core traffic` run without a password.
+    private(set) var speedUnavailable = false
+    private var speedMeter = TrafficSpeed()
+    private var speedTimer: Timer?
+    private var readingSpeed = false
+
+    /// Asks the core once a second, only while the setting is on and our VPN is connected.
+    func syncSpeed() {
+        let wanted = UserDefaults.standard.bool(forKey: Self.speedKey) && connection == .connected && !speedUnavailable
+        if wanted, speedTimer == nil {
+            speedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.readSpeed() }
+            }
+            readSpeed()
+        } else if !wanted, let timer = speedTimer {
+            timer.invalidate()
+            speedTimer = nil
+            speed = nil
+            speedMeter = TrafficSpeed()
+        }
+    }
+
+    private func readSpeed() {
+        guard !readingSpeed else { return }
+        readingSpeed = true
+        Task {
+            // never the password prompt: a timer asks
+            switch await callHelper(["core", "traffic"], interactive: false) {
+            case .ok(let output):
+                if let totals = TrafficSpeed.Totals(output), let value = speedMeter.add(totals, at: Date()) { speed = value }
+            case .needsPassword:
+                speedUnavailable = true
+                syncSpeed()
+            case .failed, .cancelled:
+                break
+            }
+            readingSpeed = false
+        }
     }
 
     /// Another VPN's tunnels beyond the 198.18 address (OtherVPN.tunnels): `netstat -rn` as the

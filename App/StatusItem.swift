@@ -126,6 +126,12 @@ private struct MenuBarLabel: View {
                 button.toolTip = status.accessibilityLabel
                 button.setAccessibilityLabel(status.accessibilityLabel)
             }
+            .onChange(of: control.speed, initial: true) { _, speed in
+                // «Скорость в строке меню»: small digits that keep their width
+                button.attributedTitle = NSAttributedString(
+                    string: speed.map { " " + TrafficSpeed.label($0) } ?? "",
+                    attributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)])
+            }
             .onChange(of: status.title) { _, title in
                 guard throttle.allow("status", now: Date()) else { return }
                 AccessibilityNotification.Announcement("KillSwitch: " + title).post()

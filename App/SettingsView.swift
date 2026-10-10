@@ -68,6 +68,7 @@ private struct GeneralSettings: View {
                 Toggle("Пауза защиты закончилась", isOn: $notifyPauseEnded)
                 Toggle("Защита или служба выключены", isOn: $notifyServiceOff)
             }
+            SpeedSection()
             Section("Пауза защиты") {
                 Stepper("Короткая: \(pauseShort) мин", value: $pauseShort, in: 1...60)
                 Stepper("Длинная: \(pauseLong) мин", value: $pauseLong, in: 5...240, step: 5)
@@ -77,6 +78,26 @@ private struct GeneralSettings: View {
 }
 
 /// «Запускать при входе», «Подключаться автоматически» and trusted Wi-Fi networks.
+/// «Скорость в строке меню»: off by default; asks the core once a second only while connected.
+private struct SpeedSection: View {
+    @Environment(KillSwitchControl.self) private var control
+    @AppStorage(KillSwitchControl.speedKey) private var showSpeed = false
+
+    var body: some View {
+        Section("Строка меню") {
+            Toggle(isOn: $showSpeed) {
+                Text("Скорость VPN в строке меню")
+                Text("↓ загрузка и ↑ отдача через VPN, раз в секунду, пока VPN подключён.")
+            }
+            .onChange(of: showSpeed) { control.syncSpeed() }
+            if showSpeed && control.speedUnavailable {
+                Label("Служба на этом Mac не отдаёт скорость без пароля, поэтому её не видно.", systemImage: "info.circle")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 private struct LaunchSection: View {
     @Bindable var control: KillSwitchControl
     @Environment(AutoConnector.self) private var auto

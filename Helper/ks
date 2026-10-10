@@ -20,6 +20,7 @@
 #                           addresses or changes what goes DIRECT
 #   ks core proxies         groups and proxies of the running core (JSON)
 #   ks core select <group> <proxy> | delay <group|proxy>
+#   ks core traffic         "up=<bytes> down=<bytes>" through the core so far (the menu bar speed)
 #   ks probe                "link=0|1 ru=0|1 foreign=0|1": why nothing works (ADR 0006)
 #   ks apply                (re)load rules once unless disabled
 #   ks watch                used by the LaunchDaemon: tunnels every second, pf every 2 s, the core every 2 s
@@ -1228,6 +1229,16 @@ core_delay() {  # core_delay <group|proxy>: latency test through it, JSON
   if grep -q '"all":' <<<"$info"; then core_api GET "/group/$name/delay?$q"
   else core_api GET "/proxies/$name/delay?$q"; fi
 }
+# core_traffic: the totals of /connections and nothing else of it (no hosts, addresses or
+# processes leave ks); the app takes the speed from two readings.
+core_traffic() {
+  local j up down
+  j=$(core_api GET /connections) || return 1
+  up=$(sed -nE 's/.*"uploadTotal":([0-9]+).*/\1/p' <<<"$j")
+  down=$(sed -nE 's/.*"downloadTotal":([0-9]+).*/\1/p' <<<"$j")
+  [ -n "$up" ] && [ -n "$down" ] || { echo "Ядро не сказало, сколько передано" >&2; return 1; }
+  echo "up=$up down=$down"
+}
 valid_name() { [ -n "$1" ] && [ "${#1}" -le 256 ] && [[ "$1" != *[[:cntrl:]]* ]]; }
 
 # splitapps_parse <comma list>: apps one per line (trimmed, deduplicated), each an app bundle's
@@ -1394,7 +1405,10 @@ case "${1:-status}" in
       delay)
         [ $# -eq 3 ] && valid_name "$3" || { echo "usage: ks core delay <group|proxy>" >&2; exit 1; }
         core_delay "$3" || exit 1 ;;
-      *) echo "usage: ks core on|off|state|import <json>|refresh <json>|proxies|select <group> <proxy>|delay <name>" >&2; exit 1 ;;
+      traffic)
+        [ $# -eq 2 ] || { echo "usage: ks core traffic" >&2; exit 1; }
+        core_traffic || exit 1 ;;
+      *) echo "usage: ks core on|off|state|import <json>|refresh <json>|proxies|select <group> <proxy>|delay <name>|traffic" >&2; exit 1 ;;
     esac
     ;;
   probe) net_probe ;;
@@ -1409,5 +1423,5 @@ case "${1:-status}" in
     [ -f "$FLAG" ] && { u=$(cat "$FLAG"); [ "$u" = 0 ] && echo "disabled by hand" || echo "back on at $(date -r "$u" +%H:%M)"; }
     pfctl -a "$ANCHOR" -s rules 2>/dev/null
     ;;
-  *) sed -n '2,24p' "$0"; exit 1 ;;
+  *) sed -n '2,25p' "$0"; exit 1 ;;
 esac

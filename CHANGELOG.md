@@ -15,6 +15,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   (WireGuard, IKEv2, L2TP…) that takes the default route or splits it, IPv4 or IPv6, both by the
   app (`netstat -rn`) and by the watchdog (`core/foreign-vpn`). Ours and Tailscale's (100.64/10,
   fd7a:115c:a1e0::/48, exit node included) are not counted. What pf lets through is unchanged.
+- «Скорость VPN в строке меню» in Settings › Общие (off by default): ↓/↑ next to the icon, read
+  once a second only while it is on and our VPN is connected, through the new passwordless-safe
+  `ks core traffic` (only the totals of mihomo's /connections leave the helper). It needs
+  `ks core traffic` in the helper's sudoers list; without it the app says so and never prompts.
 - «Блокировать рекламу и трекеры» in Settings › Дополнительно (off by default): the core refuses
   `GEOSITE,category-ads-all` of the shipped, sha256-pinned geosite.dat (nothing is downloaded).
   REJECT sends nothing anywhere, so the DIRECT signature and pf are unchanged. Helper setting
