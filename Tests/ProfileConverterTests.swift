@@ -40,9 +40,16 @@ final class ProfileConverterTests: XCTestCase {
         port: 1080
     """
 
-    func testKeepsOnlyTheFourKeys() throws {
+    func testKeepsOnlyTheRoutingKeys() throws {
         let profile = try ProfileConverter.profile(fromSubscription: yaml)
-        XCTAssertEqual(Set(profile.keys), ["proxies", "proxy-groups", "rules", "rule-providers"])
+        // sniffer and dns go to the helper, which takes from them what it validates (ADR 0013)
+        XCTAssertEqual(Set(profile.keys), ["proxies", "proxy-groups", "rules", "rule-providers", "dns"])
+    }
+
+    func testNamesWhatItLeavesOut() throws {
+        let read = try ProfileConverter.read(subscription: yaml)
+        XCTAssertEqual(read.leftOut, ["external-controller", "listeners", "mixed-port", "secret", "tun"])
+        XCTAssertEqual(try ProfileConverter.read(subscription: "vless://u@h:443#a").leftOut, [])
     }
 
     func testJSONRoundTripsAndKeepsTypes() throws {
