@@ -1,5 +1,6 @@
 import Foundation
 import NetworkExtension
+import os
 
 /// Second layer under the pf rules: a socket-flow content filter.
 ///
@@ -51,16 +52,42 @@ final class FilterDataProvider: NEFilterDataProvider {
     /// by path. dropweb's core is ad-hoc signed, so the filter cannot tell it from a copy and
     /// does not trust it, "direct" or not; pf's direct rule still applies to it.
     private static func isTrusted(_ token: Data, config: [String: Any]) -> Bool {
-        switch TrustedCode.program(auditToken: token) {
+        switch trustedProgram(token) {
         case .core: return true
         case .tailscale: return config["tailscale"] as? Bool ?? true
         case nil: return false
         }
     }
 
+    // MARK: - Caches: a burst of flows asks the same questions
+
+    /// Signature checks per process: the audit token holds the pid and its version, so a new
+    /// process with a reused pid is a new key. Ten seconds, then SecCodeCheckValidity again (it
+    /// also catches code changed in a running process). Nil (not trusted) is cached too.
+    private static let trustCache = OSAllocatedUnfairLock(
+        initialState: ExpiringCache<Data, TrustedCode.Program?>(lifetime: 10, capacity: 512))
+    /// Whether a VPN tunnel is up, for a second: pf does the exact filtering meanwhile.
+    private static let tunnelCache = OSAllocatedUnfairLock(initialState: ExpiringCache<Int, Bool>(lifetime: 1, capacity: 1))
+
+    private static func trustedProgram(_ token: Data) -> TrustedCode.Program? {
+        let now = Date()
+        if let cached = trustCache.withLock({ $0.value(for: token, now: now) }) { return cached }
+        let program = TrustedCode.program(auditToken: token)
+        trustCache.withLock { $0.set(program, for: token, now: now) }
+        return program
+    }
+
+    private static func vpnTunnelUp() -> Bool {
+        let now = Date()
+        if let cached = tunnelCache.withLock({ $0.value(for: 0, now: now) }) { return cached }
+        let up = vpnTunnelUpNow()
+        tunnelCache.withLock { $0.set(up, for: 0, now: now) }
+        return up
+    }
+
     /// VPN TUN interfaces carry an address in 198.18.0.0/16: our core's 198.18.128.1, dropweb's and
     /// Happ's 198.18.0.1. Any of them counts: pf decides what may enter which tunnel.
-    private static func vpnTunnelUp() -> Bool {
+    private static func vpnTunnelUpNow() -> Bool {
         var list: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&list) == 0, let first = list else { return false }
         defer { freeifaddrs(list) }

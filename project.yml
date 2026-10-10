@@ -90,8 +90,8 @@ targets:
   KillSwitchFilter:
     type: system-extension
     platform: macOS
-    # AddressMatch: the filter's address decisions, in App/Core so the unit tests reach them
-    sources: [Filter, App/Core/AddressMatch.swift]
+    # AddressMatch, ExpiringCache: the filter's logic, in App/Core so the unit tests reach it
+    sources: [Filter, App/Core/AddressMatch.swift, App/Core/ExpiringCache.swift]
     entitlements:
       path: Filter/KillSwitchFilter.entitlements
       properties:
