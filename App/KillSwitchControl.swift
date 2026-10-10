@@ -39,6 +39,7 @@ final class KillSwitchControl {
     private(set) var allowDirect = false
     private(set) var servers: [String] = []          // /Library/KillSwitch/servers
     private(set) var foundServers: [String] = []     // from dropweb profiles and Happ's config
+    private(set) var manualServers: [String] = []    // /Library/KillSwitch/servers-manual
     private(set) var daemonProblem = false
     /// `sudo -n ks state` wants a password: the helper was installed by an older app.
     private(set) var needsRepair = false
@@ -138,27 +139,28 @@ final class KillSwitchControl {
     }
 
     func set(_ key: String, _ on: Bool) { runAsAdmin([helper, "set", key, on ? "1" : "0"]) }
-    func addException(_ address: String) {
-        let trimmed = address.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        runAsAdmin([helper, "allow", trimmed])
+
+    /// «Что можно без VPN»: the switches of the sheet, all changes behind one password.
+    var switches: [String: Bool] {
+        ["lan": allowLAN, "tailscale": allowTailscale, "dns": allowRouterDNS, "wifiguard": wifiGuard]
     }
-    func removeException(_ address: String) { runAsAdmin([helper, "unallow", address]) }
+    func setSwitches(_ values: [String: Bool]) { runAsAdmin(batch: Batch.settings(helper: helper, old: switches, new: values)) }
+    /// «Адреса без VPN»: the edited list, one password.
+    func setExceptions(_ list: [String]) {
+        runAsAdmin(batch: Batch.list(helper: helper, add: "allow", remove: "unallow", old: exceptions, new: list))
+    }
 
     /// Always a click: the list decides what goes around the VPN.
     func setSplitApps(_ names: [String]) { runAsAdmin([helper, "set", "splitapps", SplitApps.argument(names)]) }
     /// `entry` nil turns «Двойной VPN» off. Always a click.
     func setMultihop(entry: String?) { runAsAdmin([helper, "set", "multihop", entry ?? Multihop.off]) }
 
-    /// VPN servers are reachable by any process (Happ's tunnel runs as the ordinary user and
-    /// cannot be told apart from other apps), so only these addresses are let out.
-    func allowFoundServers() {
-        let missing = foundServers.filter { !servers.contains($0) }
-        guard !missing.isEmpty else { return }
-        let script = missing.map { "\(helper) server-add \($0)" }.joined(separator: " && ")
-        runAsAdmin(["/bin/sh", "-c", script])
+    /// «Адреса серверов для других VPN-программ»: VPN servers are reachable by any process (Happ's
+    /// tunnel runs as the ordinary user and cannot be told apart from other apps), so only these
+    /// addresses are let out. The edited list, one password.
+    func setManualServers(_ list: [String]) {
+        runAsAdmin(batch: Batch.list(helper: helper, add: "server-add", remove: "server-remove", old: manualServers, new: list))
     }
-    func removeServer(_ address: String) { runAsAdmin([helper, "server-remove", address]) }
 
     /// Starting and stopping never widen the rules, so they go without a password.
     /// Connects, then applies the server chosen while disconnected.
@@ -532,9 +534,15 @@ final class KillSwitchControl {
 
     /// Runs a command as root; macOS asks for the admin password every time.
     private func runAsAdmin(_ command: [String], context: UserError.Context = .helper) {
+        runAsAdmin(batch: [command], context: context)
+    }
+
+    /// Several commands behind one password; the first failure stops the rest.
+    private func runAsAdmin(batch commands: [[String]], context: UserError.Context = .helper) {
+        guard !commands.isEmpty else { return }
         busy = true
         Task {
-            switch await adminRun([command]) {
+            switch await adminRun(commands) {
             case .ok: error = nil
             case .cancelled: break
             case .failed(let message): error = UserError.from(raw: message, context: context)
@@ -589,6 +597,7 @@ final class KillSwitchControl {
         multihopEntry = Multihop.entry(setting: values["multihop"])
         exceptions = Self.readLines("/Library/KillSwitch/allow")
         servers = Self.readLines("/Library/KillSwitch/servers")
+        manualServers = Self.readLines("/Library/KillSwitch/servers-manual")
         let dropweb = Self.readDropwebServers()
         foundServers = dropweb + Self.readHappServers().filter { !dropweb.contains($0) }
     }

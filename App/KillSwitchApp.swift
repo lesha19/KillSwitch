@@ -51,6 +51,7 @@ struct KillSwitchApp: App {
                 .environment(control)
                 .environment(client)
                 .environment(autoConnector)
+                .environment(updater)
         }
 
         MenuBarExtra {

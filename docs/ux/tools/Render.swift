@@ -432,51 +432,15 @@ func main() {
 
     // MARK: settings tabs (each tab drawn on its own; the real window shows them as toolbar tabs)
 
-    func settings<V: View>(_ name: String, height: CGFloat, _ w: World, @ViewBuilder _ tab: () -> V) {
-        snapshot(name, width: 480, height: height, title: "Настройки") {
-            tab().environment(w.control).environment(w.client).environment(w.auto)
+    func settings<V: View>(_ name: String, height: CGFloat = 640, _ w: World, @ViewBuilder _ tab: () -> V) {
+        snapshot(name, width: 520, height: height, title: "Настройки") {
+            tab().environment(w.control).environment(w.client).environment(w.auto).environment(Updater())
         }
     }
-    do {
-        let w = World(); w.control.coreConfigured = false
-        settings("40-settings-vpn-empty", height: 900, w) { VPNSettings() }
-    }
-    do {
-        let w = World(); w.subscribe(); w.connect(selected: "🇳🇱 Нидерланды")
-        w.client.manual = [VPNClient.ManualServer(link: "vless://x", name: "🇵🇱 Варшава (свой)"),
-                           VPNClient.ManualServer(link: "wireguard://x", name: "Дом WireGuard")]
-        w.control.coreDirect = true
-        w.control.multihopEntry = "🇱🇹 Литва"
-        w.control.splitApps = ["Telegram", "zoom.us"]
-        settings("41-settings-vpn-full", height: 1360, w) { VPNSettings() }
-    }
-    do {
-        let w = World(); w.subscribe(); w.connect()
-        settings("42-settings-vpn-routing-off", height: 1300, w) { VPNSettings() }
-    }
-    do {
-        let w = World()
-        settings("43-settings-access", height: 560, w) { AccessSettings() }
-    }
-    do {
-        let w = World()
-        w.control.foundServers = ["1.2.3.10", "1.2.3.14", "1.2.3.200"]
-        w.control.servers = ["1.2.3.10", "1.2.3.14", "1.2.3.17"]
-        settings("44-settings-servers", height: 460, w) { ServerSettings() }
-    }
-    do {
-        let w = World()
-        w.control.exceptions = ["1.2.3.46", "10.8.0.0/24"]
-        settings("45-settings-exceptions", height: 340, w) { ExceptionSettings() }
-    }
-    do {
-        let w = World()
-        w.control.leakResults = [.init(interface: "en0", leaked: false), .init(interface: "en7", leaked: true)]
-        w.control.externalIP = "1.2.3.10"
-        w.control.events = ["2026-10-09 22:14:03 rules reloaded: anchor hash mismatch",
-                            "2026-10-10 08:01:11 pf was disabled, enabled again",
-                            "2026-10-10 09:12:45 tunnels changed: utun4 -> utun4 utun6"]
-        settings("46-settings-check", height: 820, w) { CheckSettings() }
+    func sheet<V: View>(_ name: String, _ w: World, @ViewBuilder _ content: () -> V) {
+        snapshot(name, width: 460, title: "Настройки") {
+            content().environment(w.control).environment(w.client).environment(w.auto)
+        }
     }
     do {
         let w = World()
@@ -486,14 +450,55 @@ func main() {
         w.auto.trusted = ["Zhuravel_Home_5G"]
         w.auto.ssid = "Cafe Free WiFi"
         w.auto.lastAction = "Подключился сам 09:41"
-        w.control.filter.status = .waitingForApproval
-        settings("47-settings-general", height: 1080, w) { GeneralSettings() }
+        settings("40-settings-general", w) { GeneralSettings() }
+    }
+    do {
+        let w = World(); w.control.coreConfigured = false
+        settings("41-settings-vpn-empty", w) { VPNSettings() }
+    }
+    do {
+        let w = World(); w.subscribe(); w.connect(selected: "🇳🇱 Нидерланды")
+        w.client.manual = [VPNClient.ManualServer(link: "vless://x", name: "🇵🇱 Варшава (свой)"),
+                           VPNClient.ManualServer(link: "wireguard://x", name: "Дом WireGuard")]
+        w.control.coreDirect = true
+        w.control.multihopEntry = "🇱🇹 Литва"
+        w.control.splitApps = ["Telegram", "zoom.us"]
+        settings("42-settings-vpn-full", w) { VPNSettings() }
     }
     do {
         let w = World()
+        w.control.filter.status = .waitingForApproval
+        settings("43-settings-protection", w) { ProtectionSettings() }
         w.control.filter.status = .failed("Расширение не подписано для этого Mac")
-        w.control.coreConfigured = false
-        settings("48-settings-general-filter-error", height: 760, w) { GeneralSettings() }
+        w.control.state = .paused(until: Date().addingTimeInterval(25 * 60))
+        settings("43b-settings-protection-paused-filter-error", w) { ProtectionSettings() }
+    }
+    do {
+        let w = World()
+        w.control.exceptions = ["1.2.3.46", "10.8.0.0/24"]
+        w.control.manualServers = ["1.2.3.10"]
+        settings("44-settings-advanced", w) { AdvancedSettings() }
+    }
+    do {
+        let w = World()
+        w.control.leakResults = [.init(interface: "en0", leaked: false), .init(interface: "en7", leaked: true)]
+        w.control.events = ["2026-10-09 22:14:03 rules were changed or flushed: reloading",
+                            "2026-10-10 08:01:11 pf was disabled: reloading",
+                            "2026-10-10 09:12:45 tunnels changed (utun4 utun6): reloading",
+                            "2026-10-10 09:12:46 core: 🚀 Выбор сервера -> 🇱🇹 Литва"]
+        settings("45-settings-help", w) { HelpSettings() }
+    }
+    do {
+        let w = World()
+        w.control.manualServers = ["1.2.3.10"]
+        w.control.foundServers = ["1.2.3.10", "1.2.3.14"]
+        sheet("46-settings-sheet-addresses", w) {
+            ListSheet(title: "Адреса серверов для других VPN-программ",
+                      note: "К этим адресам сможет подключиться любая программа. Серверы подписки сюда добавлять не нужно.",
+                      placeholder: "Адрес сервера", original: w.control.manualServers,
+                      suggestions: w.control.foundServers, apply: { _ in })
+        }
+        sheet("47-settings-sheet-access", w) { AccessSheet() }
     }
 
     // MARK: menu bar icons: one per summary status
