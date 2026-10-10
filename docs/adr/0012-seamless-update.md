@@ -137,3 +137,54 @@ agent may not run the helper or the app against the system).
   `PUT /configs?force=true` not recreating the TUN; a silent Sparkle install while the app is in
   the background, and the prompt for a root-owned bundle; how long a core restart takes when
   `mihomo` changes.
+
+## Addendum (0.14.1): the filter extension and the daemon after an update
+
+Measured on the owner's Mac after 0.14: the app, `ks` and the core were 0.14, but
+`systemextensionsctl list` still showed `com.lesha19.KillSwitch.Filter (0.6/6) [activated enabled]`,
+and `launchctl print system` had no `com.lesha19.KillSwitch.helper`. macOS keeps the extension it
+activated until the app asks again, and the app asked only when the user turned the filter on; the
+daemon was registered only by the wizard, «Восстановить службу…» or a password action.
+
+### Filter
+
+- At launch (Sparkle relaunches the app after an update, so this covers updates too) `FilterControl`
+  submits `OSSystemExtensionRequest.propertiesRequest`: it asks the user nothing. `FilterUpgrade.decide`
+  compares the activated (enabled, not uninstalling) entries with the bundled extension's
+  `CFBundleVersion` (then `CFBundleShortVersionString`): only a newer bundled one is submitted as an
+  `activationRequest`, and the delegate answers `.replace`. Same version, nothing activated (the user
+  never turned it on or removed it), or a newer extension active (an older app copy): no request.
+- The launch requests do not touch `status` or the `NEFilterManager` preferences: the filter's
+  configuration names the extension by bundle id and stays enabled across the swap.
+- `requestNeedsUserApproval`: the old extension keeps running; a non-blocking notice «Разреши
+  обновление фильтра KillSwitch» with «Открыть Системные настройки». A replacement already waiting
+  is not submitted again (`awaitingApproval`), the notice shows. A failure leaves the old one.
+
+Why replacing it cannot leak: the filter is the second layer. The first is the pf anchor
+`com.apple/killswitch`, loaded in the kernel and kept by `ks watch`; nothing on this path touches
+pf, DNS or the watchdog. While macOS stops the old provider and starts the new one (derived: well
+under a second; not measured) sockets are not inspected by the filter, but pf still drops
+everything that is not the tunnel, the servers or the user's exceptions, exactly as with the filter
+switched off in Settings. The replacement can only make the second layer briefly absent, never
+open anything pf blocks.
+
+### Daemon
+
+- At launch `KillSwitchControl` calls `SMAppService.register()` once when `/Library/KillSwitch/ks`
+  exists and the status is `.notRegistered` (`HelperService.launchStep`). It needs no password; it
+  does not install anything as root, it only lets launchd start the bundled, signature-checked
+  daemon of ADR 0010. Without the helper the wizard does it, as before.
+- `.requiresApproval` (also right after that register): a dismissible notice «Разреши KillSwitch в
+  Объектах входа, чтобы не вводить пароль каждый раз» with «Открыть Объекты входа», at most once a
+  day (`helperApprovalShown` in the user defaults, `HelperService.showApprovalBanner`).
+
+### Needs a real Mac
+
+- With 0.6 activated: launch 0.14.1 → `systemextensionsctl list` shows 0.14.1/17 activated
+  enabled, old one gone (or `terminated waiting to uninstall on reboot`), no dialog; a continuous
+  `ping` through the tunnel and a direct connection attempt outside it during the swap (expect
+  the direct one blocked throughout).
+- Relaunch → no request (`log stream --predicate 'subsystem == "com.apple.sx"'` quiet), no dialog.
+- If macOS asks for approval of the replacement: the notice, the old version still listed active.
+- Daemon not registered: launch → `launchctl print system/com.lesha19.KillSwitch.helper` present,
+  the notice when it waits for Login Items; dismiss it → not again within a day.
