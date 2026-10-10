@@ -429,6 +429,17 @@ func main() {
         w.tester.homeDate = Date()
         leak("34-leaktest-vpn-off", w, height: 760)
     }
+    do { // 35 the direct-exit probe found a hole while protection is on
+        let w = World()
+        w.tester.home = LeakCheck.Direct(ipv4: "5.6.7.112", ipv6: nil, org: "Beltelecom")
+        w.tester.result = LeakTester.Result(
+            verdict: LeakCheck.Verdict(findings: [.directExit(["en0"])]),
+            ipv4: [("api.ipify.org", "1.2.3.10"), ("am.i.mullvad.net", "1.2.3.10")],
+            exit: LeakCheck.Address(ip: "1.2.3.10", country: "Литва", org: "UAB Cherry Servers"),
+            ipv6: nil, resolvers: [LeakCheck.Resolver(ip: "162.158.180.12", country: "Lithuania", org: "Cloudflare")],
+            at: Date())
+        leak("35-leaktest-direct-exit", w, height: 820)
+    }
 
     // MARK: settings tabs (each tab drawn on its own; the real window shows them as toolbar tabs)
 
@@ -481,7 +492,6 @@ func main() {
     }
     do {
         let w = World()
-        w.control.leakResults = [.init(interface: "en0", leaked: false), .init(interface: "en7", leaked: true)]
         w.control.events = ["2026-10-09 22:14:03 rules were changed or flushed: reloading",
                             "2026-10-10 08:01:11 pf was disabled: reloading",
                             "2026-10-10 09:12:45 tunnels changed (utun4 utun6): reloading",

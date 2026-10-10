@@ -41,10 +41,17 @@ final class LeakTester {
     }
 
     /// `vpnConnected`: read when the check starts (any VPN tunnel up, ours or another client's).
-    func run(vpnConnected: Bool) async {
+    /// `probe`: the direct-exit check (KillSwitchControl.probeDirectExits), passed only while
+    /// protection is on — then nothing may get out around the VPN.
+    func run(vpnConnected: Bool, probe: (() async -> [String])? = nil) async {
         guard !running else { return }
         running = true
         defer { running = false; step = "" }
+        var directExits: [String] = []
+        if let probe {
+            step = "Проверяю выход мимо VPN…"
+            directExits = await probe()
+        }
         let session = URLSession(configuration: Self.configuration)
         defer { session.finishTasksAndInvalidate() }
 
@@ -61,7 +68,7 @@ final class LeakTester {
         let exit = exit4 ?? report?.exit
 
         let input = LeakCheck.Input(vpnConnected: vpnConnected, ipv4: [ipv4a, exit4?.ip], exit: exit, ipv6: ipv6,
-                                    resolvers: report?.resolvers ?? [], direct: home)
+                                    resolvers: report?.resolvers ?? [], direct: home, directExits: directExits)
         let verdict = LeakCheck.verdict(input)
         if let learnt = verdict.home { saveHome(learnt) }
         result = Result(verdict: verdict, ipv4: [("ipify.org", ipv4a), ("mullvad.net", exit4?.ip)], exit: exit,

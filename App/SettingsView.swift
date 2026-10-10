@@ -602,13 +602,6 @@ private struct HelpSettings: View {
         SettingsForm {
             Section {
                 LeakTestView.OpenButton()
-                Button(control.leakRunning ? "Проверяю…" : "Проверить выход мимо VPN") { control.checkLeak() }
-                    .disabled(control.leakRunning)
-                ForEach(control.leakResults) { result in
-                    Label(result.leaked ? "\(result.interface): утечка, интернет идёт мимо VPN" : "\(result.interface): защищено",
-                          systemImage: result.leaked ? "xmark.octagon.fill" : "checkmark.circle.fill")
-                        .foregroundStyle(result.leaked ? .red : .green)
-                }
             }
             Section("Журнал защиты") {
                 let entries = control.events.reversed().compactMap(ProtectionLog.entry)

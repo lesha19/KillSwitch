@@ -143,4 +143,23 @@ final class LeakCheckTests: XCTestCase {
             XCTAssertFalse(finding.text.contains("http"))
         }
     }
+
+    /// spec С9: the direct-exit probe of the old «Проверка» tab is part of the one verdict.
+    func testDirectExitIsALeak() {
+        var data = input()
+        data.directExits = ["en0"]
+        let verdict = LeakCheck.verdict(data)
+        XCTAssertEqual(verdict.findings, [.directExit(["en0"])])
+        XCTAssertFalse(verdict.clean)
+        XCTAssertEqual(LeakCheck.Finding.directExit(["en0"]).text,
+                       "Программы могут выйти в интернет мимо VPN (en0): защита пропускает их напрямую.")
+    }
+
+    func testDirectExitWithoutVPNIsStillALeak() {
+        var data = input(connected: false)
+        data.directExits = ["en0", "en7"]
+        let verdict = LeakCheck.verdict(data)
+        XCTAssertEqual(verdict.findings, [.directExit(["en0", "en7"]), .vpnOff])
+        XCTAssertEqual(verdict.title, "Есть утечки")
+    }
 }

@@ -13,7 +13,10 @@ struct LeakTestView: View {
                 VStack(spacing: 12) {
                     verdictHeader
                     Button {
-                        Task { await tester.run(vpnConnected: control.vpnUp) }
+                        Task {
+                            await tester.run(vpnConnected: control.vpnUp,
+                                             probe: control.state == .on ? { await control.probeDirectExits() } : nil)
+                        }
                     } label: {
                         Text(tester.running ? "Проверяю…" : "Проверить").frame(maxWidth: .infinity)
                     }
@@ -127,7 +130,7 @@ struct LeakTestView: View {
             Image(systemName: "shield.lefthalf.filled").font(.system(size: 44)).foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             Text("Проверка утечек").font(.title2.bold())
-            Text("Проверит, какой адрес видят сайты по IPv4 и IPv6 и кто узнаёт для тебя адреса сайтов.")
+            Text("Проверит, может ли что-то выйти мимо VPN, какой адрес видят сайты и кто узнаёт для тебя адреса сайтов.")
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }

@@ -95,9 +95,13 @@ enum LeakCheck {
         var ipv6: Address?
         var resolvers: [Resolver]
         var direct: Direct?
+        /// Physical interfaces through which an ordinary program reached the internet directly
+        /// while protection was on (LeakTester probes them only then).
+        var directExits: [String] = []
     }
 
     enum Finding: Equatable {
+        case directExit([String])
         case realIPv4
         case ipv4Mismatch([String])
         case ipv6Leak(String)
@@ -109,13 +113,14 @@ enum LeakCheck {
 
         var isLeak: Bool {
             switch self {
-            case .realIPv4, .ipv4Mismatch, .ipv6Leak, .dnsLeak: true
+            case .directExit, .realIPv4, .ipv4Mismatch, .ipv6Leak, .dnsLeak: true
             case .ipv6Unexpected, .dnsUnknown, .offline, .vpnOff: false
             }
         }
 
         var text: String {
             switch self {
+            case .directExit(let names): "Программы могут выйти в интернет мимо VPN (\(names.joined(separator: ", "))): защита пропускает их напрямую."
             case .realIPv4: "Сайты видят твой настоящий адрес, а не адрес VPN."
             case .ipv4Mismatch(let ips): "Два сервиса видят разные адреса (\(ips.joined(separator: ", "))): часть трафика идёт другим путём."
             case .ipv6Leak(let ip): "IPv6 идёт мимо VPN: сайты видят адрес твоей сети \(ip)."
@@ -148,16 +153,17 @@ enum LeakCheck {
     static func verdict(_ input: Input) -> Verdict {
         var seen: [String] = []
         for case let ip? in input.ipv4 where !seen.contains(ip) { seen.append(ip) }
+        let exits: [Finding] = input.directExits.isEmpty ? [] : [.directExit(input.directExits)]
         if seen.isEmpty, input.exit == nil, input.ipv6 == nil, input.resolvers.isEmpty {
-            return Verdict(findings: [.offline])
+            return Verdict(findings: exits + [.offline])
         }
         guard input.vpnConnected else {
             let home = Direct(ipv4: seen.first ?? input.exit?.ip, ipv6: input.ipv6?.ip,
                               org: input.exit?.org ?? input.ipv6?.org)
-            return Verdict(findings: [.vpnOff], home: home)
+            return Verdict(findings: exits + [.vpnOff], home: home)
         }
         let direct = input.direct
-        var findings: [Finding] = []
+        var findings = exits
         if let home = direct?.ipv4, seen.contains(home) || input.exit?.ip == home { findings.append(.realIPv4) }
         if seen.count > 1 { findings.append(.ipv4Mismatch(seen)) }
 

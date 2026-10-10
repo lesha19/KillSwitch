@@ -48,9 +48,6 @@ final class KillSwitchControl {
     /// Moves on with every refresh while connecting, so «Подключение затянулось» shows up in time.
     private(set) var clock = Date()
     private(set) var events: [String] = []
-    private(set) var leakResults: [LeakResult] = []
-    private(set) var externalIP: String?
-    private(set) var leakRunning = false
     /// Our own VPN core (mihomo run by the root daemon), see `ks core`.
     private(set) var coreInstalled = false
     private(set) var coreConfigured = false
@@ -76,11 +73,6 @@ final class KillSwitchControl {
     private(set) var testing: Set<String> = []
     static let allGroupsKey = "\u{0}all"
 
-    struct LeakResult: Identifiable {
-        let interface: String
-        let leaked: Bool
-        var id: String { interface }
-    }
     var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
         set {
@@ -773,28 +765,21 @@ final class KillSwitchControl {
         events = Array(Self.readLines("/Library/KillSwitch/events.log").suffix(15))
     }
 
-    /// Tries to reach 1.1.1.1 straight through the physical interfaces, as an ordinary user.
-    /// A reply means the filter has a hole.
-    func checkLeak() {
-        guard !leakRunning else { return }
-        leakRunning = true
-        leakResults = []
-        Task {
-            var interfaces = ["en0"]
-            let route = await Self.exec("/sbin/route", ["-n", "get", "default"]).output
-            if let match = route.firstMatch(of: /interface:[ \t]*([A-Za-z0-9]+)/) {
-                let name = String(match.1)
-                if !name.hasPrefix("utun") && !interfaces.contains(name) { interfaces.append(name) }
-            }
-            for name in interfaces {
-                let result = await Self.exec("/usr/bin/curl", ["-s", "-m", "6", "-o", "/dev/null", "--interface", name, "https://1.1.1.1"])
-                leakResults.append(LeakResult(interface: name, leaked: result.status == 0))
-            }
-            let ip = await Self.exec("/usr/bin/curl", ["-s", "-m", "6", "https://api.ipify.org"]).output
-            externalIP = Self.isPlainIP(ip) ? ip : nil
-            refreshEvents()
-            leakRunning = false
+    /// Part of «Проверка утечек» while protection is on: tries to reach 1.1.1.1 straight through
+    /// the physical interfaces, as an ordinary program. The interfaces that answered are a hole.
+    func probeDirectExits() async -> [String] {
+        var interfaces = ["en0"]
+        let route = await Self.exec("/sbin/route", ["-n", "get", "default"]).output
+        if let match = route.firstMatch(of: /interface:[ \t]*([A-Za-z0-9]+)/) {
+            let name = String(match.1)
+            if !name.hasPrefix("utun") && !interfaces.contains(name) { interfaces.append(name) }
         }
+        var open: [String] = []
+        for name in interfaces {
+            let result = await Self.exec("/usr/bin/curl", ["-s", "-m", "6", "-o", "/dev/null", "--interface", name, "https://1.1.1.1"])
+            if result.status == 0 { open.append(name) }
+        }
+        return open
     }
 
     private func listenForWidget() {
