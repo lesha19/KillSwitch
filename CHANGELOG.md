@@ -42,6 +42,18 @@ Routing comes only from the subscription, and the app shows where traffic goes (
   in Settings, and the app's own RU/private-network rules. The setting is dropped on upgrade;
   geodata stays for the subscription's GEOSITE/GEOIP rules and ad blocking.
 
+### Fixed
+- 0.14.2: «Службу нужно обновить» could not be fixed — the passwordless upgrade and «Восстановить
+  службу…» both ended with «Программа KillSwitch повреждена или подписана не нами» on an intact
+  app. The daemon looked for its app through `Bundle.main`, which is not reliable for a daemon
+  launchd starts as the relative `Contents/MacOS/KillSwitchHelper`; it now takes its path from
+  the kernel (`proc_pidpath`) with the same checks, and its «exit once the app was replaced»
+  timer uses the same path. Only a failed signature check says the app is damaged; any other
+  failure of the daemon's verified copy is logged with its step and the app falls back to the
+  password prompt (only on a click) instead of a dead end. Updating from 0.14.2: the app sees the
+  older daemon (build 18), sends its reads through sudo so it goes idle and leaves (≤ 2.5 min),
+  and launchd starts the fixed daemon for the passwordless upgrade (ADR 0012).
+
 ## [0.14.2] - 2026-10-10
 
 ### Fixed
