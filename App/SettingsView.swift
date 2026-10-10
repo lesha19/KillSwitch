@@ -603,7 +603,7 @@ private struct TransportSection: View {
                 Text("В подписке нет серверов, у которых это можно менять.").foregroundStyle(.secondary)
             } else {
                 let server = servers.first { $0.name == selected } ?? servers[0]
-                let override = client.transportOverrides[server.name] ?? .init()
+                let override = client.transportOverride(for: server.name) ?? .init()
                 Picker("Сервер", selection: Binding(get: { server.name }, set: { selected = $0 })) {
                     ForEach(servers) { Text(ServerName.display($0.name)).tag($0.name) }
                 }

@@ -41,6 +41,12 @@ final class VPNClient {
     private(set) var transportOverrides = Transport.decode(UserDefaults.standard.data(forKey: Transport.storeKey))
     /// Servers of the cached profile whose transport can be changed, with the subscription's values.
     private(set) var transportServers: [Transport.Server] = []
+    /// Server name → identity (ServerIdentity) in the cached profile: what per-server settings
+    /// are kept under, so they survive a rename.
+    private(set) var serverKeys: [String: String] = [:]
+
+    /// «Избранные» of the server list, by identity (names for servers not seen yet).
+    static let favouritesKey = "favouriteServers"
 
     /// Hours between automatic updates; 0 = what the subscription asks for.
     var intervalHours = UserDefaults.standard.integer(forKey: "subscriptionIntervalHours") {
@@ -187,7 +193,9 @@ final class VPNClient {
     /// Saves the choice and hands the profile to the core by a passwordless refresh: the servers
     /// stay the same. Not connected yet: the next import takes it.
     func setTransport(_ override: Transport.Override, for server: String) async {
-        transportOverrides[server] = override.isEmpty ? nil : override
+        let key = serverKeys[server] ?? server
+        transportOverrides[server] = nil
+        transportOverrides[key] = override.isEmpty ? nil : override
         UserDefaults.standard.set(Transport.encode(transportOverrides), forKey: Transport.storeKey)
         guard control.coreConfigured, !updating else { return }
         updating = true
@@ -402,6 +410,26 @@ final class VPNClient {
         let profile = ProfileMerger.merge(subscription: Self.cachedSubscription(), manual: manual.compactMap(Self.proxy))
         profileProxies = profile.map(CoreProxies.init(profile:))
         transportServers = profile.map(Transport.servers) ?? []
+        serverKeys = profile.map(ServerIdentity.keys) ?? [:]
+        migrateToServerKeys()
+    }
+
+    /// The override for a server of the list, by its identity (or, not migrated yet, its name).
+    func transportOverride(for server: String) -> Transport.Override? {
+        serverKeys[server].flatMap { transportOverrides[$0] } ?? transportOverrides[server]
+    }
+
+    /// Settings kept by server name before 0.13 move to the server's identity once it is known.
+    private func migrateToServerKeys() {
+        guard !serverKeys.isEmpty else { return }
+        let overrides = ServerIdentity.migrate(transportOverrides, keys: serverKeys)
+        if overrides != transportOverrides {
+            transportOverrides = overrides
+            UserDefaults.standard.set(Transport.encode(overrides), forKey: Transport.storeKey)
+        }
+        let stored = (UserDefaults.standard.string(forKey: Self.favouritesKey) ?? "").split(separator: "\n").map(String.init)
+        let favourites = ServerIdentity.migrate(stored, keys: serverKeys)
+        if favourites != stored { UserDefaults.standard.set(favourites.joined(separator: "\n"), forKey: Self.favouritesKey) }
     }
 
     private func imported(_ profile: Profile, hash: String) {

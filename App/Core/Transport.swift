@@ -56,10 +56,13 @@ enum Transport {
 
     /// The profile for the helper, with the overrides that still apply: a server gone from the
     /// subscription or a value the helper would refuse is left out, so the import never fails on it.
+    /// Overrides are kept by server identity (ServerIdentity), so they follow a rename; the helper
+    /// gets them by the current name. A name key (before 0.13, not migrated yet) still counts.
     static func adding(_ overrides: [String: Override], to profile: Profile) -> Profile {
         var hint: [String: [String: Any]] = [:]
+        let keys = ServerIdentity.keys(profile)
         for server in servers(profile) {
-            guard let o = overrides[server.name] else { continue }
+            guard let o = keys[server.name].flatMap({ overrides[$0] }) ?? overrides[server.name] else { continue }
             var entry: [String: Any] = [:]
             if server.canFingerprint, let fp = o.fingerprint, fingerprints.contains(fp) { entry["client-fingerprint"] = fp }
             if server.canMux, let mux = o.mux {

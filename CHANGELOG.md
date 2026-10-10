@@ -28,6 +28,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   загрузки» tells how to check it and the Developer ID signature.
 
 ### Changed
+- Favourites and «Подключение к серверу» overrides are kept by a server's identity (type, address,
+  port and a hash of its uuid/password; the secret itself is not stored), not by its name, so a
+  rename in the subscription keeps them. Name-keyed data from earlier versions is moved over once
+  the server is in the profile.
 - `Helper/fetch-geodata.sh` takes geosite.dat from our own releases first (`scripts/release.sh
   --publish` now uploads the pinned file and its sha256 to lesha19/KillSwitch-releases) and from
   the pinned meta-rules-dat commit only when that copy is missing or of another pin, so a

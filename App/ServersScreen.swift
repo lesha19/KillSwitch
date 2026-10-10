@@ -11,7 +11,7 @@ struct ServersScreen: View {
     @Environment(VPNClient.self) private var client
     @AppStorage("sortByLatency") private var sortByPing = false
     @AppStorage("showProfileGroups") private var showProfileGroups = false
-    @AppStorage("favouriteServers") private var favouritesText = ""
+    @AppStorage(VPNClient.favouritesKey) private var favouritesText = ""
     @State private var query = ""
     @State private var highlighted: String?
     @State private var choosingEntry = false
@@ -173,11 +173,15 @@ struct ServersScreen: View {
         return result
     }
 
-    private var favourites: Set<String> { Set(favouritesText.split(separator: "\n").map(String.init)) }
+    /// Names of the favourites now: they are kept by server identity, so a rename keeps them.
+    private var favourites: Set<String> {
+        ServerIdentity.names(favouritesText.split(separator: "\n").map(String.init), keys: client.serverKeys)
+    }
 
     private func toggleFavourite(_ name: String) {
+        let key = client.serverKeys[name] ?? name
         var list = favouritesText.split(separator: "\n").map(String.init)
-        if let index = list.firstIndex(of: name) { list.remove(at: index) } else { list.append(name) }
+        if list.contains(key) || list.contains(name) { list.removeAll { $0 == key || $0 == name } } else { list.append(key) }
         favouritesText = list.joined(separator: "\n")
     }
 }
