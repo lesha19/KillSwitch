@@ -444,8 +444,7 @@ final class KillSwitchControl {
     private enum AdminResult { case ok(String), cancelled, failed(String) }
 
     private func adminRun(_ command: [String]) async -> AdminResult {
-        let quoted = command.map { "quoted form of \"\($0)\"" }.joined(separator: " & \" \" & ")
-        let source = "do shell script \(quoted) with administrator privileges"
+        let source = AdminScript.source([command])
         var info: NSDictionary?
         let output = NSAppleScript(source: source)?.executeAndReturnError(&info)
         if let info {
