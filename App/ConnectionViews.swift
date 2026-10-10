@@ -273,6 +273,9 @@ struct SubscriptionSummary: View {
             if let last = client.status.lastUpdate {
                 Text("Обновлено \(last.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary)
             }
+            if let source = client.status.source {
+                Text("Откуда: \(source.label)").font(.caption).foregroundStyle(.secondary)
+            }
             if client.needsConfirmation {
                 HStack {
                     StatusLabel("Нужно подтверждение: в подписке новые серверы",

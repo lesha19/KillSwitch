@@ -23,6 +23,16 @@ final class Updater {
             Task { @MainActor in self?.canCheck = value }
         }
         automaticallyUpdates = controller.updater.automaticallyDownloadsUpdates
+        // #11: a check that could not reach the appcast goes again through the VPN once it connects
+        NotificationCenter.default.addObserver(forName: UpdateRetry.vpnConnected, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.retryAfterNetworkFailure() }
+        }
+    }
+
+    private func retryAfterNetworkFailure() {
+        guard installer.lastCheckFailed, controller.updater.canCheckForUpdates else { return }
+        installer.lastCheckFailed = false
+        controller.updater.checkForUpdatesInBackground()
     }
 
     func check() { controller.updater.checkForUpdates() }
@@ -41,6 +51,12 @@ final class Updater {
 /// not the active app, checked every minute: nobody has to quit it or drag anything.
 final class QuietInstaller: NSObject, SPUUpdaterDelegate {
     @MainActor private var install: (() -> Void)?
+    /// The last check ended without reaching the appcast (UpdateRetry).
+    @MainActor var lastCheckFailed = false
+
+    func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
+        MainActor.assumeIsolated { lastCheckFailed = UpdateRetry.isNetworkFailure(error) }
+    }
     @MainActor private var timer: Timer?
 
     func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem,

@@ -31,7 +31,7 @@ top_keys() { plutil -convert xml1 -o - "$1" | sed -n 's/^	<key>\(.*\)<\/key>$/\1
 
 check_config() {  # check_config <name> <config> <servers>
   local name=$1 c=$2 s=$3 n i want got
-  want="dns external-controller-unix find-process-mode geo-auto-update ipv6 log-level mode allow-lan proxies proxy-groups rule-providers rules sniffer tun"
+  want="dns external-controller-unix find-process-mode geo-auto-update ipv6 log-level mode allow-lan listeners proxies proxy-groups rule-providers rules sniffer tun"
   want=$(tr ' ' '\n' <<<"$want" | sort | paste -sd' ' -)
   got=$(top_keys "$c")
   [ "$got" = "$want" ] && ok "$name: top-level keys" || bad "$name: top-level keys: $got"
@@ -46,6 +46,11 @@ check_config() {  # check_config <name> <config> <servers>
   for a in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10; do
     grep -q "\"$a\"" "$c" || bad "$name: $a not excluded from the TUN routes"
   done
+  # #11: the app fetches the subscription through the VPN when the direct way fails: one HTTP
+  # listener on loopback whose every connection goes to KS-DNS (the profile's proxies, never DIRECT)
+  [ "$(val listeners "$c")" = 1 ] && [ "$(val listeners.0.type "$c")" = http ] && [ "$(val listeners.0.listen "$c")" = 127.0.0.1 ] &&
+    [ "$(val listeners.0.port "$c")" = "$FETCH_PORT" ] && [ "$(val listeners.0.proxy "$c")" = KS-DNS ] && [ "$FETCH_PORT" = 47890 ] &&
+    ok "$name: fetch listener on 127.0.0.1:47890, through KS-DNS only" || bad "$name: listeners $(plutil -extract listeners json -o - "$c" 2>&1)"
   [ "$(val log-level "$c")" = warning ] && ok "$name: log-level warning (no visited domains in core.log)" || bad "$name: log-level $(val log-level "$c")"
   n=$(val proxies "$c"); i=0
   while [ "$i" -lt "$n" ]; do

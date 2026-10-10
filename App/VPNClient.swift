@@ -21,10 +21,14 @@ final class VPNClient {
         var lastUpdate: Date?
         /// The service's page (`profile-web-page-url` or `support-url`), for «Открыть кабинет».
         var accountURL: URL?
+        /// Which link and way the last fetched profile came from (#11); nil before 0.16.
+        var source: SubscriptionSource?
     }
 
     private(set) var hasURL = false
     private(set) var maskedURL: String?
+    /// #11: the person's backup link, asked when the main one fails; keychain, never logged.
+    private(set) var maskedBackupURL: String?
     private(set) var status = Status()
     private(set) var manual: [ManualServer] = []
     private(set) var updating = false
@@ -73,6 +77,7 @@ final class VPNClient {
     }
 
     private static let urlAccount = "subscription-url"
+    private static let backupAccount = "subscription-url-backup"
     private static let linksAccount = "manual-links"
     private static let statusKey = "subscriptionStatus"
     private static let importedKey = "importedProfileHash"
@@ -82,6 +87,14 @@ final class VPNClient {
         if let url = Self.storedURL() {
             hasURL = true
             maskedURL = SubscriptionHeaders.masked(url)
+        }
+        maskedBackupURL = Self.storedBackupURL().map(SubscriptionHeaders.masked)
+        // #11: a fetch that failed while the VPN was off goes again as soon as it connects
+        NotificationCenter.default.addObserver(forName: UpdateRetry.vpnConnected, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.hasURL, self.retryAt != nil, !self.updating else { return }
+                Task { await self.update(interactive: false) }
+            }
         }
         if let data = Keychain.read(Self.linksAccount), let saved = try? JSONDecoder().decode([ManualServer].self, from: data) {
             manual = saved
@@ -109,10 +122,36 @@ final class VPNClient {
         await update(interactive: true)
     }
 
+    /// Shown only on request in Settings; never logged.
+    func revealBackupURL() -> String? { Self.storedBackupURL() }
+
+    /// «Резервная ссылка» (#11): kept like the main one, asked only when the main one fails.
+    func setBackupURL(_ text: String) {
+        let url = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Self.isSubscriptionLink(url) else { lastError = Self.notALink; return }
+        guard Keychain.write(Self.backupAccount, Data(url.utf8)) else {
+            lastError = UserError(title: String(localized: "Ссылка не сохранилась"), message: String(localized: "Не получилось сохранить ссылку в связке ключей."))
+            return
+        }
+        maskedBackupURL = SubscriptionHeaders.masked(url)
+    }
+
+    func removeBackupURL() {
+        Keychain.delete(Self.backupAccount)
+        maskedBackupURL = nil
+    }
+
+    private static func isSubscriptionLink(_ url: String) -> Bool {
+        guard let components = URLComponents(string: url) else { return false }
+        return components.scheme?.lowercased() == "https" && components.host?.isEmpty == false
+    }
+
+    private static let notALink = UserError(title: String(localized: "Это не ссылка на подписку"), message: String(localized: "Нужна ссылка вида https://…"))
+
     /// Keeps a subscription link in the keychain; the status starts over.
     private func store(_ url: String) -> Bool {
-        guard let components = URLComponents(string: url), components.scheme?.lowercased() == "https", components.host?.isEmpty == false else {
-            lastError = UserError(title: String(localized: "Это не ссылка на подписку"), message: String(localized: "Нужна ссылка вида https://…"))
+        guard Self.isSubscriptionLink(url) else {
+            lastError = Self.notALink
             return false
         }
         guard Keychain.write(Self.urlAccount, Data(url.utf8)) else {
@@ -227,28 +266,40 @@ final class VPNClient {
 
     /// Downloads and caches the subscription, without handing it to the helper. The cache is what
     /// «Разрешить…» (confirmNewServers) and manual servers build on, so it is the last fetched
-    /// profile, applied or not.
+    /// profile, applied or not. A failed fetch, or one without servers, leaves the cache and the
+    /// core's config alone. #11: tried in SubscriptionSource.order; the first error is shown.
     private func fetchProfile(_ url: URL) async -> Profile? {
-        do {
-            let (body, headers) = try await Self.fetch(url)
-            let (profile, leftOut) = try ProfileConverter.read(subscription: body)
-            UserDefaults.standard.set(leftOut, forKey: RoutingReport.leftOutKey)
-            status.title = SubscriptionHeaders.title(headers["profile-title"]) ?? status.title ?? url.host
-            status.usage = SubscriptionUsage(header: headers["subscription-userinfo"])
-            status.serverInterval = SubscriptionHeaders.updateInterval(headers["profile-update-interval"])
-            status.accountURL = [headers["profile-web-page-url"], headers["support-url"]].lazy
-                .compactMap { $0.flatMap(URL.init(string:)) }.first { $0.scheme == "https" }
-            saveStatus()
-            Self.cache(profile)
-            reloadProfileProxies()
-            noticeLimits()
-            return profile
-        } catch {
-            let raw = Self.describe(error)
-            schedule.record(.fetchFailed(offline: raw.hasPrefix("offline")), now: Date())
-            lastError = UserError.from(raw: raw, context: .subscription)
-            return nil
+        let backup = Self.storedBackupURL().flatMap(URL.init(string:))
+        var firstError: String?
+        for source in SubscriptionSource.order(hasBackup: backup != nil, vpnRunning: control.coreRunning) {
+            guard let link = source.usesBackup ? backup : url else { continue }
+            do {
+                return try await fetchProfile(link, source: source, title: url.host)
+            } catch {
+                firstError = firstError ?? Self.describe(error)
+            }
         }
+        let raw = firstError ?? "empty"
+        schedule.record(.fetchFailed(offline: raw.hasPrefix("offline")), now: Date())
+        lastError = UserError.from(raw: raw, context: .subscription)
+        return nil
+    }
+
+    private func fetchProfile(_ url: URL, source: SubscriptionSource, title: String?) async throws -> Profile {
+        let (body, headers) = try await Self.fetch(url, viaVPN: source.viaVPN)
+        let (profile, leftOut) = try ProfileConverter.read(subscription: body)
+        UserDefaults.standard.set(leftOut, forKey: RoutingReport.leftOutKey)
+        status.title = SubscriptionHeaders.title(headers["profile-title"]) ?? status.title ?? title
+        status.source = source
+        status.usage = SubscriptionUsage(header: headers["subscription-userinfo"])
+        status.serverInterval = SubscriptionHeaders.updateInterval(headers["profile-update-interval"])
+        status.accountURL = [headers["profile-web-page-url"], headers["support-url"]].lazy
+            .compactMap { $0.flatMap(URL.init(string:)) }.first { $0.scheme == "https" }
+        saveStatus()
+        Self.cache(profile)
+        reloadProfileProxies()
+        noticeLimits()
+        return profile
     }
 
     /// «Подписка кончается» at 3 days and at 1 day, «Трафик почти закончился» past 90 %: once per
@@ -454,13 +505,16 @@ final class VPNClient {
 
     // MARK: network
 
-    private static func fetch(_ url: URL) async throws -> (String, [String: String]) {
+    /// `viaVPN`: through the core's loopback listener (SubscriptionSource.proxy), not the TUN's rules.
+    private static func fetch(_ url: URL, viaVPN: Bool) async throws -> (String, [String: String]) {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         for (name, value) in SubscriptionHeaders.request(appVersion: DeviceInfo.appVersion, hwid: DeviceInfo.hwid, osVersion: DeviceInfo.osVersion, model: DeviceInfo.model) {
             request.setValue(value, forHTTPHeaderField: name)
         }
         // ephemeral: the URL and the profile must not land in a disk cache or cookie store
-        let session = URLSession(configuration: .ephemeral)
+        let configuration = URLSessionConfiguration.ephemeral
+        if viaVPN { configuration.connectionProxyDictionary = SubscriptionSource.proxy }
+        let session = URLSession(configuration: configuration)
         defer { session.finishTasksAndInvalidate() }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw FetchError.status(0, nil) }
@@ -510,6 +564,10 @@ final class VPNClient {
 
     private static func storedURL() -> String? {
         Keychain.read(urlAccount).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    private static func storedBackupURL() -> String? {
+        Keychain.read(backupAccount).flatMap { String(data: $0, encoding: .utf8) }
     }
 
     private func saveManual() {

@@ -788,6 +788,7 @@ final class KillSwitchControl {
             }
             disconnecting = false
         } else if !wasOwnUp && ownTunnelUp {
+            NotificationCenter.default.post(name: UpdateRetry.vpnConnected, object: nil)
             if dropped { notify(.reconnected(server: lastServer.map(ServerName.display))) }
             dropped = false
             disconnecting = false

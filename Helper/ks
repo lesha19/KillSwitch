@@ -78,6 +78,7 @@ CORE_TUN_ADDR="198.18.128.1" # our TUN's address (start of the core's fake-ip-ra
 DOH_IPS="1.1.1.1, 8.8.8.8"   # DoH resolvers the core group may reach directly (rules, resolve_direct)
 PROBE_RU="77.88.8.8, 77.88.8.1" # Yandex DNS: open in the mobile «white lists» (ks probe, rules)
 KS_DNS="KS-DNS"          # our group for DNS and rule downloads: the profile's proxies, never DIRECT
+FETCH_PORT=47890         # 127.0.0.1: the app's subscription fetch through the VPN (#11), always to KS-DNS
 DNS_STATE="$CORE_DIR/dns-state" # system DNS keys pointed at the core, with their originals
 DNS_OURS="127.0.0.1"
 CORE_PROFILE="$CORE_DIR/profile.json"       # last accepted profile, root-only: rebuilds start from it
@@ -1139,6 +1140,11 @@ core_generate() (
     printf '{"mode":"rule","log-level":"warning","ipv6":false,"allow-lan":false,"geo-auto-update":false,'
     printf '"find-process-mode":"always",'
     printf '"external-controller-unix":"ctl/mihomo.sock",'
+    # #11: when the subscription's host does not answer directly (blocked, or the profile sends it
+    # DIRECT), the app asks again through this proxy: on loopback only, every connection to KS-DNS,
+    # so it never leaves outside the tunnel. Any local program could use it; it only gets the VPN,
+    # which it already has through the TUN.
+    printf '"listeners":[{"name":"ks-fetch","type":"http","listen":"127.0.0.1","port":%s,"proxy":"%s"}],' "$FETCH_PORT" "$KS_DNS"
     printf '"tun":{"enable":true,"stack":"gvisor","auto-route":true,"auto-detect-interface":true,'
     printf '"dns-hijack":["any:53"],"route-exclude-address":[%s]},' "$excl"
     # answers the system's DNS on 127.0.0.1:53; our resolvers are reached through the tunnel,
