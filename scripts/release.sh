@@ -6,7 +6,8 @@
 #   scripts/release.sh --check   only check that certificates, profiles and the notary profile exist
 #   scripts/release.sh --sign-only   build and sign build/release/KillSwitch.app, no notarization
 #   scripts/release.sh --publish     full release, then `gh release create v<version>` in
-#                                    lesha19/KillSwitch-releases with the .dmg and appcast.xml
+#                                    lesha19/KillSwitch-releases with the .dmg, appcast.xml and
+#                                    geosite.dat (+ .sha256)
 #
 # What it needs (found automatically, nothing secret is printed):
 #   - certificate + private key "Developer ID Application: … (YR58655PJ7)" in the login keychain
@@ -20,11 +21,22 @@
 #   - Helper/mihomo (Helper/fetch-mihomo.sh): the core is signed here as com.lesha19.KillSwitch.core.
 #   - Helper/geosite.dat (Helper/fetch-geodata.sh): Russian sites outside the VPN (coredirect=1).
 #     Shipped like mihomo, in the app's Resources/Helper; install.sh copies it to /Library/KillSwitch/core.
+#     It must be the pinned file: --publish uploads it (with its sha256) as the copy that
+#     fetch-geodata.sh asks first, in case the pinned meta-rules-dat commit disappears.
 #   - Sparkle EdDSA private key in the login keychain (Sparkle's generate_keys, run once; only the
 #     public key is in project.yml as SUPublicEDKey). generate_appcast signs the .dmg with it.
 #   - --publish only: gh logged in with access to lesha19/KillSwitch-releases, and release notes:
 #     the "## <version>" section of CHANGELOG.md or a file given in KS_RELEASE_NOTES.
 # The widget has no restricted entitlements (its app group is team-prefixed) and needs no profile.
+
+# geosite_pinned <dir>: <dir>/geosite.dat has the sha256 pinned in <dir>/fetch-geodata.sh.
+geosite_pinned() {
+  local pin
+  pin=$(sed -nE 's/^SHA256="([0-9a-f]{64})".*/\1/p' "$1/fetch-geodata.sh")
+  [ -n "$pin" ] && [ -f "$1/geosite.dat" ] && [ "$(shasum -a 256 < "$1/geosite.dat" | cut -d' ' -f1)" = "$pin" ]
+}
+
+[ "${BASH_SOURCE[0]}" = "$0" ] || return 0   # sourced by Helper/tests
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -95,8 +107,11 @@ HOWTO_PROFILES="Скачать: Xcode → Settings → Accounts → $TEAM → Do
     $HOWTO_PROFILES"
 
 [ -f Helper/mihomo ] || problem "Нет Helper/mihomo (ядро VPN): запустите Helper/fetch-mihomo.sh."
-[ -f Helper/geosite.dat ] ||
+if [ ! -f Helper/geosite.dat ]; then
   problem "Нет Helper/geosite.dat (российские сайты мимо VPN): запустите Helper/fetch-geodata.sh."
+elif ! geosite_pinned Helper; then
+  problem "Helper/geosite.dat не тот, что закреплён в Helper/fetch-geodata.sh (другой sha256): запустите его снова."
+fi
 
 # Existence only: nothing is read out of the keychain item.
 security find-generic-password -s https://sparkle-project.org -a ed25519 >/dev/null 2>&1 ||
@@ -231,11 +246,15 @@ cp "$DMG" "$OUT/appcast/"
 rm -rf "$OUT/appcast"
 grep -q 'sparkle:edSignature=' "$OUT/appcast.xml" || { echo "appcast.xml без подписи EdDSA" >&2; exit 1; }
 
+# The copy of the pinned geodata that Helper/fetch-geodata.sh asks first (see there).
+cp Helper/geosite.dat "$OUT/geosite.dat"
+(cd "$OUT" && shasum -a 256 geosite.dat > geosite.dat.sha256)
+
 echo "Готово: $DMG, $OUT/appcast.xml"
 shasum -a 256 "$DMG"
 
 if [ "$MODE" = --publish ]; then
   gh release create "v$VERSION" --repo "$RELEASES_REPO" --title "KillSwitch $VERSION" \
-    --notes-file "$NOTES" "$DMG" "$OUT/appcast.xml"
+    --notes-file "$NOTES" "$DMG" "$OUT/appcast.xml" "$OUT/geosite.dat" "$OUT/geosite.dat.sha256"
   echo "Опубликовано: https://github.com/$RELEASES_REPO/releases/tag/v$VERSION"
 fi

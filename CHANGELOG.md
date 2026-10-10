@@ -12,6 +12,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   app (`netstat -rn`) and by the watchdog (`core/foreign-vpn`). Ours and Tailscale's (100.64/10,
   fd7a:115c:a1e0::/48, exit node included) are not counted. What pf lets through is unchanged.
 
+### Changed
+- `Helper/fetch-geodata.sh` takes geosite.dat from our own releases first (`scripts/release.sh
+  --publish` now uploads the pinned file and its sha256 to lesha19/KillSwitch-releases) and from
+  the pinned meta-rules-dat commit only when that copy is missing or of another pin, so a
+  force-push upstream no longer breaks the build. Both are checked against the pinned sha256;
+  `release.sh` refuses a Helper/geosite.dat that is not the pinned one.
+
 ### Fixed
 - `xcodebuild test` from a fresh DerivedData no longer fails with «Unable to find module
   dependency: 'KillSwitch'»: the test target depends on the app (built first, not hosted).

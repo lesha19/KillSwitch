@@ -213,6 +213,9 @@ addresses found in dropweb and Happ configs are passed to it). After updating th
    и ввести пароль, когда спросит (в командную строку его не писать). Он хранится в связке ключей.
 4. Ядро: `Helper/fetch-mihomo.sh`; геоданные для «российские сайты мимо VPN»: `Helper/fetch-geodata.sh`
    (выпуск meta-rules-dat и его sha256 уже закреплены в скрипте; без `Helper/geosite.dat` выпуск не соберётся).
+   Скрипт сначала берёт копию файла из последнего выпуска `lesha19/KillSwitch-releases` (её кладёт туда
+   `--publish`), а закреплённый коммит meta-rules-dat — только если копии нет или она другого sha256:
+   meta-rules-dat переписывает ветку `release`, и старый коммит может исчезнуть.
 5. Ключ Sparkle: один раз `generate_keys` из `build/spm/artifacts/sparkle/Sparkle/bin/` (появится после
    первой сборки) — закрытый ключ EdDSA ляжет в связку ключей входа, открытый (`generate_keys -p`) уже
    записан в `project.yml` как `SUPublicEDKey`.
@@ -234,7 +237,7 @@ addresses found in dropweb and Happ configs are passed to it). After updating th
 
 Кроме `.dmg` выпуск делает `build/release/appcast.xml` для Sparkle, подписанный ключом EdDSA.
 `scripts/release.sh --publish` — то же, а затем `gh release create v<версия>` в
-`lesha19/KillSwitch-releases` с `.dmg` и `appcast.xml`; описание берётся из раздела «## <версия>»
+`lesha19/KillSwitch-releases` с `.dmg`, `appcast.xml` и копией `geosite.dat` (с `geosite.dat.sha256`); описание берётся из раздела «## <версия>»
 `CHANGELOG.md` (или из файла в `KS_RELEASE_NOTES`). Нужен `gh`, вошедший с доступом к этому
 репозиторию. Приложение читает `releases/latest/download/appcast.xml`, поэтому опубликованный выпуск
 сразу становится обновлением для всех.
