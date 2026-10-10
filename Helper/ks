@@ -1306,8 +1306,6 @@ ks_version() { echo "$KS_VERSION $(shasum -a 256 < "$1" | cut -d' ' -f1)"; }
 # reads nothing but this file: no root needed
 [ "${1:-}" = version ] && { ks_version "$0"; exit 0; }
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
-# root's temporary files (mktemp) in a root-only directory of ours
-[ -d "$DIR" ] && [ ! -L "$DIR/tmp" ] && install -d -o root -g wheel -m 700 "$DIR/tmp" && export TMPDIR="$DIR/tmp"
 
 # Everything that writes the core's config runs under one lock (the watchdog's rotation skips
 # its turn while it is held).

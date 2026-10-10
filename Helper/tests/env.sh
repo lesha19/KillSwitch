@@ -53,9 +53,11 @@ BASH_ENV="$tmp/benv.sh" "$tmp/priv"
 
 # --- every curl of ks starts with -q: no ~/.curlrc, whatever HOME is
 check "every curl in ks is curl -q" "$(grep -nE 'curl -' "$KS" | grep -v 'curl -q ' | head -3)" ""
-# root's own temporary directory once root
-grep -q 'install -d -o root -g wheel -m 700 "$DIR/tmp" && export TMPDIR="$DIR/tmp"' "$KS" &&
-  check "root's mktemp goes to a root-only directory" yes yes || check "root's mktemp goes to a root-only directory" no yes
+# mktemp (every temporary file of ks) takes the per-user directory of macOS, root-only for root,
+# never TMPDIR: a TMPDIR the caller names cannot place them
+d=$(TMPDIR="$tmp/home" mktemp -d); f=$(TMPDIR="$tmp/home" mktemp)
+case "$d $f" in "$tmp/home"*|*" $tmp/home"*) check "mktemp ignores TMPDIR" no yes ;; *) check "mktemp ignores TMPDIR" yes yes ;; esac
+rm -rf "$d" "$f"
 for s in install.sh uninstall.sh; do
   grep -q '^PATH=/usr/bin:/bin:/usr/sbin:/sbin; export PATH$' "$here/../$s" && grep -q '^unset CURL_HOME BASH_ENV ENV CDPATH$' "$here/../$s" &&
     check "$s cleans its environment" yes yes || check "$s cleans its environment" no yes
