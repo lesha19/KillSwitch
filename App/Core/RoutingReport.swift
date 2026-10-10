@@ -243,6 +243,7 @@ extension RoutingReport.Added {
         case "splitapps": String(localized: "Программы без VPN — твой выбор")
         case "multihop": String(localized: "Двойной VPN — твой выбор")
         case "default-rule": String(localized: "Правило по умолчанию")
+        case "loop-guard": String(localized: "Защита от петли")
         default: kind
         }
     }
@@ -276,6 +277,8 @@ extension RoutingReport.Added {
             String(localized: "Выбрано на главном экране: все серверы подключаются через входной.")
         case "default-rule":
             String(localized: "В подписке нет правил: всё идёт через её первую группу, а не напрямую, как сделало бы ядро.")
+        case "loop-guard":
+            String(localized: "Адреса, которые VPN выдаёт программам вместо настоящих, никуда не ведут. Если программа помнит такой адрес с прошлого запуска, соединение отклоняется, а не ходит по кругу внутри VPN.")
         default: ""
         }
     }

@@ -188,10 +188,10 @@ mv "$tmp/ah" "$APPROVED_HOSTS"
 
 # --- settings that rebuild the config from the kept profile (no DNS)
 : > "$tmp/dns"
-set_splitapps "Telegram, Safari" 2>"$tmp/err" && [ "$(val rules.0 "$cfg")" = "PROCESS-NAME,Telegram,DIRECT" ] &&
+set_splitapps "Telegram, Safari" 2>"$tmp/err" && [ "$(val rules.1 "$cfg")" = "PROCESS-NAME,Telegram,DIRECT" ] &&
   grep -qx "splitapps=Telegram,Safari" "$SETTINGS" && ok "splitapps: stored and applied (no other switch needed)" || bad "splitapps: $(cat "$tmp/err")"
 [ "$(paste -sd, - < "$CORE_EGRESS")" = rules,splitapps ] && ok "splitapps: in the egress reasons" || bad "splitapps egress: $(cat "$CORE_EGRESS")"
-set_splitapps "" && [ -z "$(setting splitapps "")" ] && [ "$(val rules.0 "$cfg")" != "PROCESS-NAME,Telegram,DIRECT" ] && ok "splitapps: cleared" || bad "splitapps clear"
+set_splitapps "" && [ -z "$(setting splitapps "")" ] && [ "$(val rules.1 "$cfg")" != "PROCESS-NAME,Telegram,DIRECT" ] && ok "splitapps: cleared" || bad "splitapps clear"
 [ "$(cat "$CORE_EGRESS")" = rules ] && ok "splitapps cleared: out of the egress reasons" || bad "egress after clear: $(cat "$CORE_EGRESS")"
 set_splitapps "a,,b" 2>/dev/null && bad "bad list accepted" || ok "bad splitapps list refused"
 set_multihop "NL reality" 2>"$tmp/err" && [ "$(setting multihop off)" = "NL reality" ] && [ "$(cat "$SERVERS_CORE")" = 203.0.113.10 ] &&

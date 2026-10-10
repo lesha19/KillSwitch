@@ -29,24 +29,25 @@ gen "$fx/ok-routing.json" || bad "ok-routing refused: $(cat "$tmp/err")"
 
 # --- rules: the subscription's, in its order; what the core cannot take left out with the reason
 [ "$(q 'join "|", map { $_->{from} . ":" . ($_->{index} // "") } @{ $r->{rules} }')" = \
-  "subscription:0|subscription:1|subscription:2|subscription:3|subscription:4|subscription:10|subscription:11|subscription:12|subscription:13" ] &&
+  "killswitch:|subscription:0|subscription:1|subscription:2|subscription:3|subscription:4|subscription:10|subscription:11|subscription:12|subscription:13" ] &&
   ok "report: every rule from the subscription with its index, in order" || bad "report rules: $(q '$r->{rules}')"
 [ "$(q 'join "|", map { "$_->{index}=$_->{reason}" } grep { $_->{section} eq "rules" } @{ $r->{dropped} }')" = \
   "5=type:FOO|6=target:NoSuchGroup|7=provider:nope|8=sub-rule|9=geodata:asn" ] &&
   ok "report: unknown type, missing group, missing provider, SUB-RULE, IP-ASN left out with reasons" ||
   bad "dropped rules: $(q '[grep { $_->{section} eq "rules" } @{ $r->{dropped} }]')"
-[ "$(val rules.5 "$tmp/c")" = "GEOSITE,category-ru,DIRECT" ] && ok "config: the rest of the subscription still there" || bad "config rules"
+[ "$(val rules.6 "$tmp/c")" = "GEOSITE,category-ru,DIRECT" ] && ok "config: the rest of the subscription still there" || bad "config rules"
 [ "$(q 'join ",", map { $_->{item} } grep { $_->{section} eq "profile" } @{ $r->{dropped} }')" = mixed-port ] &&
   ok "report: a section the config does not take (mixed-port)" || bad "profile sections: $(q '$r->{dropped}')"
 
-# --- sniffer: the subscription's own, key by key
-[ "$(val sniffer.parse-pure-ip "$tmp/c")" = true ] && [ "$(val sniffer.sniff.HTTP.override-destination "$tmp/c")" = true ] &&
+# --- sniffer: the subscription's own, key by key; never plain HTTP nor connections to bare
+# addresses (field report 2026-10-10: half of port 80 and many IP-only flows hung while sniffed)
+[ "$(val sniffer.parse-pure-ip "$tmp/c")" = false ] && ! plutil -type sniffer.sniff.HTTP "$tmp/c" >/dev/null 2>&1 &&
   [ "$(val sniffer.force-domain.0 "$tmp/c")" = "+.v2ex.com" ] && ! plutil -type sniffer.sniff.SSH "$tmp/c" >/dev/null 2>&1 &&
   ! plutil -type sniffer.skip-src-address "$tmp/c" >/dev/null 2>&1 && ok "sniffer: taken from the subscription, unknown parts left out" ||
   bad "sniffer: $(plutil -extract sniffer json -o - "$tmp/c")"
 [ "$(q '$r->{sniffer}{from}')" = subscription ] && ok "report: sniffer from the subscription" || bad "report sniffer: $(q '$r->{sniffer}')"
 [ "$(q 'join "|", map { "$_->{item}=$_->{reason}" } grep { $_->{section} eq "sniffer" } @{ $r->{dropped} }')" = \
-  "skip-domain: Mijia Cloud=bad-value|skip-domain: rule-set:missing=provider:missing|skip-src-address=not-allowed|sniff.SSH=not-allowed" ] &&
+  "parse-pure-ip=managed|skip-domain: Mijia Cloud=bad-value|skip-domain: rule-set:missing=provider:missing|skip-src-address=not-allowed|sniff.HTTP=managed|sniff.SSH=not-allowed" ] &&
   ok "report: sniffer parts left out with reasons" || bad "sniffer dropped: $(q '[grep { $_->{section} eq "sniffer" } @{ $r->{dropped} }]')"
 
 # --- dns: our resolvers through the tunnel, the subscription's policy on top
@@ -85,10 +86,10 @@ gen "$tmp/p.json" || bad "dns only: refused: $(cat "$tmp/err")"
 [ "$(cat "$tmp/c.egress")" = dns ] && [ "$(grep -c . "$tmp/c.direct")" = 1 ] && ok "dns only: egress dns, one signature line" ||
   bad "dns only: egress $(cat "$tmp/c.egress"), sig $(cat "$tmp/c.direct")"
 [ "$(val sniffer.enable "$tmp/c")" = true ] && [ "$(val sniffer.override-destination "$tmp/c")" = false ] &&
-  [ "$(val sniffer.parse-pure-ip "$tmp/c")" = true ] && [ "$(val sniffer.sniff.QUIC.ports.0 "$tmp/c")" = 443 ] &&
-  [ "$(val sniffer.sniff.HTTP.ports.1 "$tmp/c")" = 8080-8880 ] && [ "$(val sniffer.sniff.TLS.ports.1 "$tmp/c")" = 8443 ] &&
+  [ "$(val sniffer.parse-pure-ip "$tmp/c")" = false ] && [ "$(val sniffer.sniff.QUIC.ports.0 "$tmp/c")" = 443 ] &&
+  ! plutil -type sniffer.sniff.HTTP "$tmp/c" >/dev/null 2>&1 && [ "$(val sniffer.sniff.TLS.ports.1 "$tmp/c")" = 8443 ] &&
   ok "no sniffer in the subscription: ours, routing only (override-destination false)" || bad "default sniffer: $(plutil -extract sniffer json -o - "$tmp/c")"
-[ "$(q '$r->{sniffer}{from}')" = killswitch ] && [ "$(q 'join ",", map { $_->{kind} } @{ $r->{added} }')" = "dns-group,dns-servers,pinning,sniffer" ] &&
+[ "$(q '$r->{sniffer}{from}')" = killswitch ] && [ "$(q 'join ",", map { $_->{kind} } @{ $r->{added} }')" = "dns-group,dns-servers,pinning,sniffer,loop-guard" ] &&
   ok "report: our sniffer, DNS group and servers, pinning under «Добавлено KillSwitch»" || bad "added: $(q '$r->{added}')"
 # nothing direct at all: the core stays in the tunnel
 /usr/bin/perl -MJSON::PP -e 'local $/; my $j = JSON::PP->new->decode(<STDIN>); delete $j->{dns}; print JSON::PP->new->encode($j)' < "$tmp/p.json" > "$tmp/p2.json"
@@ -98,9 +99,9 @@ gen "$tmp/p2.json" && [ ! -s "$tmp/c.egress" ] && [ ! -s "$tmp/c.direct" ] && ok
 # --- the app's additions are named as such, the rest is the subscription's
 printf 'adblock=1\nsplitapps=Telegram\n' > "$SETTINGS"
 gen "$fx/ok-full.json" || bad "ok-full refused: $(cat "$tmp/err")"
-[ "$(q 'join "|", map { $_->{from} } @{ $r->{rules} }[0..3]')" = "killswitch|killswitch|killswitch|subscription" ] &&
+[ "$(q 'join "|", map { $_->{from} } @{ $r->{rules} }[0..4]')" = "killswitch|killswitch|killswitch|killswitch|subscription" ] &&
   ok "report: ad block and apps outside the VPN marked as KillSwitch's" || bad "report from: $(q '$r->{rules}')"
-[ "$(q 'join ",", map { $_->{kind} } @{ $r->{added} }')" = "dns-group,dns-servers,pinning,unbound,provider-path,provider-proxy,sniffer,adblock,splitapps" ] &&
+[ "$(q 'join ",", map { $_->{kind} } @{ $r->{added} }')" = "dns-group,dns-servers,pinning,unbound,provider-path,provider-proxy,sniffer,loop-guard,adblock,splitapps" ] &&
   ok "report: everything KillSwitch added or changed, by kind" || bad "added: $(q '[map { $_->{kind} } @{ $r->{added} }]')"
 [ "$(q 'join ",", map { "$_->{name}:$_->{from}" } @{ $r->{groups} }')" = "Bad#name:subscription,🚀 Выбор сервера:subscription,auto:subscription,KS-DNS:killswitch" ] &&
   ok "report: groups with where they come from" || bad "groups: $(q '$r->{groups}')"
@@ -115,9 +116,19 @@ rm -f "$SETTINGS"
 
 # --- a rule the generator itself adds when the subscription has none
 gen "$fx/ok-minimal.json"
-[ "$(q '$r->{rules}[0]{rule} . " " . $r->{rules}[0]{from}')" = "MATCH,only killswitch" ] &&
-  [ "$(q 'join ",", map { $_->{kind} } @{ $r->{added} }')" = "dns-group,dns-servers,default-rule,sniffer" ] &&
+[ "$(q '$r->{rules}[1]{rule} . " " . $r->{rules}[1]{from}')" = "MATCH,only killswitch" ] &&
+  [ "$(q 'join ",", map { $_->{kind} } @{ $r->{added} }')" = "dns-group,dns-servers,default-rule,sniffer,loop-guard" ] &&
   ok "report: the default rule of a profile without rules is KillSwitch's" || bad "default rule: $(q '$r->{rules}') $(q '$r->{added}')"
+
+# --- a literal 198.18 address (our TUN, another tunnel) is never sent DIRECT back into our TUN
+# (ADR 0019): the first rule, KillSwitch's
+gen "$fx/ok-minimal.json"
+[ "$(val rules.0 "$tmp/c")" = "IP-CIDR,198.18.0.0/16,REJECT,no-resolve" ] && [ "$(q '$r->{rules}[0]{from}')" = killswitch ] &&
+  [ "$(q 'join ",", map { @{ $_->{items} } } grep { $_->{kind} eq "loop-guard" } @{ $r->{added} }')" = "IP-CIDR,198.18.0.0/16,REJECT,no-resolve" ] &&
+  ok "loop guard: own fake-ip range refused first, named in the report" || bad "loop guard: $(val rules.0 "$tmp/c") $(q '$r->{added}')"
+[ ! -s "$tmp/c.direct" ] && ok "loop guard: not a DIRECT target, no signature change" || bad "loop guard in direct_sig: $(cat "$tmp/c.direct")"
+# find-process-mode strict: the program is looked up only for rules that need it («Программы без VPN»)
+[ "$(val find-process-mode "$tmp/c")" = strict ] && ok "find-process-mode strict" || bad "find-process-mode $(val find-process-mode "$tmp/c")"
 
 # --- split_rule reads rules as mihomo does
 sr() { /usr/bin/perl -MJSON::PP -e "$KS_RULES_PL"'print join "|", split_rule($ARGV[0])' "$1"; }

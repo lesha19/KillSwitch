@@ -945,13 +945,17 @@ core_generate() (
         $sn = {};
         for my $k (sort keys %$s) {
           my $v = $s->{$k};
-          if ($k =~ /\A(enable|parse-pure-ip|override-destination|force-dns-mapping)\z/) {
+          if ($k eq "parse-pure-ip") {
+            # never: KillSwitch keeps it off (below)
+            $drop->("sniffer", $k, "managed") if ref $v || $v;
+          } elsif ($k =~ /\A(enable|override-destination|force-dns-mapping)\z/) {
             if ($bool->($v)) { $sn->{$k} = $v } else { $drop->("sniffer", $k, "bad-value") }
           } elsif ($k eq "sniff") {
             if (ref $v ne "HASH") { $drop->("sniffer", $k, "bad-value"); next }
             for my $p (sort keys %$v) {
               my $o = $v->{$p};
-              unless ($p =~ /\A(HTTP|TLS|QUIC)\z/ && ref $o eq "HASH") { $drop->("sniffer", "sniff.$p", "not-allowed"); next }
+              if ($p eq "HTTP") { $drop->("sniffer", "sniff.$p", "managed"); next }
+              unless ($p =~ /\A(TLS|QUIC)\z/ && ref $o eq "HASH") { $drop->("sniffer", "sniff.$p", "not-allowed"); next }
               my %t;
               for my $ok (sort keys %$o) {
                 my $ov = $o->{$ok};
@@ -975,10 +979,13 @@ core_generate() (
     }
     if ($sn) { push @notes, "sniffer-taken\t" }
     else {
-      $sn = { enable => JSON::PP::true, "parse-pure-ip" => JSON::PP::true, "override-destination" => JSON::PP::false,
-              sniff => { TLS => { ports => [443, 8443] }, HTTP => { ports => [80, "8080-8880"] }, QUIC => { ports => [443] } } };
+      $sn = { enable => JSON::PP::true, "override-destination" => JSON::PP::false,
+              sniff => { TLS => { ports => [443, 8443] }, QUIC => { ports => [443] } } };
       push @notes, "sniffer-default\t";
     }
+    # Field report 2026-10-10: with plain HTTP (port 80) and connections to bare addresses sniffed,
+    # a large share of them never got a byte back. mihomo sniffs bare addresses unless told not to.
+    $sn->{"parse-pure-ip"} = JSON::PP::false;
 
     # --- dns: our resolvers through the tunnel, plus the subscription'"'"'s policy
     my @ns = map { "https://$_/dns-query#$ENV{KS_DNS}" } qw(1.1.1.1 8.8.8.8);
@@ -1103,6 +1110,11 @@ core_generate() (
   # any program can take a name.
   apps=$(setting splitapps "" | tr ',' '\n')
   : > "$w/ours"
+  # Nothing real lives in 198.18/16 (benchmark range, our fake-ip range and TUN): a connection to
+  # a literal address there that a DIRECT rule would take goes straight back into our own TUN.
+  # Known fake-ips are names again before the rules (no-resolve keeps this rule off them). ADR 0019.
+  echo "IP-CIDR,198.18.0.0/16,REJECT,no-resolve" >> "$w/ours"
+  note loop-guard "IP-CIDR,198.18.0.0/16,REJECT,no-resolve"
   # Ads and trackers (adblock=1): refused before anything else, from the shipped geosite.dat only
   # (never downloaded). REJECT sends nothing anywhere, so the DIRECT signature and pf are as before.
   if [ "$(setting adblock 0)" = 1 ] && [ -s "$CORE_DIR/geosite.dat" ]; then
@@ -1148,9 +1160,10 @@ core_generate() (
     # 198.18.0.1, so the watchdog can tell the tunnels apart.
     # The controller is a unix socket in a root-only directory; the app reaches it via ks.
     # log-level warning: at info mihomo writes every connection's domain into core.log.
-    # find-process-mode always: the «Трафик» window names the program of every connection.
+    # find-process-mode strict: the program is looked up only when a rule needs it («Программы
+    # без VPN»); "always" looked up every connection, the «Трафик» window names it when known.
     printf '{"mode":"rule","log-level":"warning","ipv6":false,"allow-lan":false,"geo-auto-update":false,'
-    printf '"find-process-mode":"always",'
+    printf '"find-process-mode":"strict",'
     printf '"external-controller-unix":"ctl/mihomo.sock",'
     # #11: when the subscription's host does not answer directly (blocked, or the profile sends it
     # DIRECT), the app asks again through this proxy: on loopback only, every connection to KS-DNS,

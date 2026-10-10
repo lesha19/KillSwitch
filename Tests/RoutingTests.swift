@@ -58,7 +58,8 @@ final class RoutingReportTests: XCTestCase {
      "added":[{"kind":"dns-group","name":"KS-DNS","items":["LT","DE"]},
               {"kind":"pinning","items":[{"host":"de.example.com","address":"203.0.113.20"}]},
               {"kind":"unbound","items":["LT"]},
-              {"kind":"adblock","items":["GEOSITE,category-ads-all,REJECT"]}],
+              {"kind":"adblock","items":["GEOSITE,category-ads-all,REJECT"]},
+              {"kind":"loop-guard","items":["IP-CIDR,198.18.0.0/16,REJECT,no-resolve"]}],
      "sniffer":{"from":"subscription","value":{"enable":true,"sniff":{"TLS":{"ports":[443,8443]}}}},
      "dns":{"servers":["https://1.1.1.1/dns-query#KS-DNS"],
             "taken":{"direct-nameserver":["77.88.8.8"],"respect-rules":true,"nameserver-policy":{"+.ru":["https://dns.yandex.ru/..."]}}},
@@ -78,12 +79,13 @@ final class RoutingReportTests: XCTestCase {
 
     func testAddedSplitsTidyingAndPins() throws {
         let report = try RoutingReport(data: Self.sample)
-        XCTAssertEqual(report.additions.map(\.kind), ["dns-group", "pinning", "adblock"])
+        XCTAssertEqual(report.additions.map(\.kind), ["dns-group", "pinning", "adblock", "loop-guard"])
         XCTAssertEqual(report.tidied.map(\.kind), ["unbound"])
         XCTAssertEqual(report.additions[1].lines, ["de.example.com → 203.0.113.20"])
         XCTAssertEqual(report.additions[0].lines, ["LT", "DE"])
         for added in report.added { XCTAssertFalse(added.why.isEmpty, added.kind) }
         XCTAssertEqual(report.additions[2].title, "Блокировка рекламы — твой выбор")
+        XCTAssertEqual(report.additions[3].title, "Защита от петли")
     }
 
     func testDroppedReasonsInWords() throws {

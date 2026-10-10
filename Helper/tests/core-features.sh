@@ -115,30 +115,30 @@ grep -q '^provider	.*"local-inline"' "$tmp/logical.direct" && ok "providers: pro
 # --- splitapps
 put splitapps "Telegram,Google Chrome"
 gen "$fx/ok-full.json"
-[ "$(val rules.0 "$tmp/c")" = "PROCESS-NAME,Telegram,DIRECT" ] && [ "$(val rules.1 "$tmp/c")" = "PROCESS-NAME,Google Chrome,DIRECT" ] &&
-  [ "$(val rules.2 "$tmp/c")" = 'PROCESS-NAME-REGEX,^Telegram Helper.*$,DIRECT' ] &&
-  [ "$(val rules.3 "$tmp/c")" = 'PROCESS-NAME-REGEX,^Google Chrome Helper.*$,DIRECT' ] &&
-  [ "$(val rules.4 "$tmp/c")" = "RULE-SET,ru-blocked,🚀 Выбор сервера" ] &&
-  ok "splitapps: PROCESS-NAME and their helpers, then the subscription's own rules" || bad "splitapps: $(val rules.0 "$tmp/c") | $(val rules.4 "$tmp/c")"
+[ "$(val rules.1 "$tmp/c")" = "PROCESS-NAME,Telegram,DIRECT" ] && [ "$(val rules.2 "$tmp/c")" = "PROCESS-NAME,Google Chrome,DIRECT" ] &&
+  [ "$(val rules.3 "$tmp/c")" = 'PROCESS-NAME-REGEX,^Telegram Helper.*$,DIRECT' ] &&
+  [ "$(val rules.4 "$tmp/c")" = 'PROCESS-NAME-REGEX,^Google Chrome Helper.*$,DIRECT' ] &&
+  [ "$(val rules.5 "$tmp/c")" = "RULE-SET,ru-blocked,🚀 Выбор сервера" ] &&
+  ok "splitapps: PROCESS-NAME and their helpers, then the subscription's own rules" || bad "splitapps: $(val rules.1 "$tmp/c") | $(val rules.5 "$tmp/c")"
 cmp -s "$tmp/c.direct" "$tmp/full.direct" && ok "splitapps rules stay out of the DIRECT signature" || bad "splitapps in signature"
 mt "splitapps" "$tmp/c"
 put splitapps 'a.b (x)+[y]'
 gen "$fx/ok-minimal.json"
-[ "$(val rules.1 "$tmp/c")" = 'PROCESS-NAME-REGEX,^a\.b \(x\)\+\[y\] Helper.*$,DIRECT' ] && ok "splitapps: helper regex quotes the name" ||
-  bad "splitapps regex: $(val rules.1 "$tmp/c")"
+[ "$(val rules.2 "$tmp/c")" = 'PROCESS-NAME-REGEX,^a\.b \(x\)\+\[y\] Helper.*$,DIRECT' ] && ok "splitapps: helper regex quotes the name" ||
+  bad "splitapps regex: $(val rules.2 "$tmp/c")"
 mt "splitapps regex" "$tmp/c"
 # apps by bundle path: every process inside the bundle, wherever its name came from
 put splitapps "/Applications/Telegram.app,Steam"
 gen "$fx/ok-minimal.json"
-[ "$(val rules.0 "$tmp/c")" = 'PROCESS-PATH-REGEX,^/Applications/Telegram\.app/,DIRECT' ] &&
-  [ "$(val rules.1 "$tmp/c")" = "PROCESS-NAME,Steam,DIRECT" ] && [ "$(val rules.2 "$tmp/c")" = 'PROCESS-NAME-REGEX,^Steam Helper.*$,DIRECT' ] &&
+[ "$(val rules.1 "$tmp/c")" = 'PROCESS-PATH-REGEX,^/Applications/Telegram\.app/,DIRECT' ] &&
+  [ "$(val rules.2 "$tmp/c")" = "PROCESS-NAME,Steam,DIRECT" ] && [ "$(val rules.3 "$tmp/c")" = 'PROCESS-NAME-REGEX,^Steam Helper.*$,DIRECT' ] &&
   ok "splitapps: a bundle path matches its processes by path; old names keep working" ||
-  bad "splitapps paths: $(val rules.0 "$tmp/c") | $(val rules.1 "$tmp/c") | $(val rules.2 "$tmp/c")"
+  bad "splitapps paths: $(val rules.1 "$tmp/c") | $(val rules.2 "$tmp/c") | $(val rules.3 "$tmp/c")"
 mt "splitapps by path" "$tmp/c"
 put splitapps "/Applications/Google Chrome (beta)+.app"
 gen "$fx/ok-minimal.json"
-[ "$(val rules.0 "$tmp/c")" = 'PROCESS-PATH-REGEX,^/Applications/Google Chrome \(beta\)\+\.app/,DIRECT' ] &&
-  ok "splitapps: path quoted for the regex" || bad "splitapps path regex: $(val rules.0 "$tmp/c")"
+[ "$(val rules.1 "$tmp/c")" = 'PROCESS-PATH-REGEX,^/Applications/Google Chrome \(beta\)\+\.app/,DIRECT' ] &&
+  ok "splitapps: path quoted for the regex" || bad "splitapps path regex: $(val rules.1 "$tmp/c")"
 rm -f "$SETTINGS"
 
 valid_apps() { splitapps_parse "$1" >/dev/null 2>&1; }
@@ -184,7 +184,8 @@ rm -f "$SETTINGS"
 
 # --- ADR 0013: KillSwitch writes no routing of its own. With every old switch on and the geodata
 # in place, the config holds the subscription's rules exactly, in its order, and nothing else.
-rules_of() { local i=0 out=""; while r=$(val "rules.$i" "$1"); do out+="$r|"; i=$((i + 1)); done; echo "${out%|}"; }
+# from rules.1: rules.0 is always the loop guard (core-routing.sh)
+rules_of() { local i=1 out=""; while r=$(val "rules.$i" "$1"); do out+="$r|"; i=$((i + 1)); done; echo "${out%|}"; }
 for f in geoip.metadb geosite.dat; do
   if [ -r "$here/../$f" ]; then cp "$here/../$f" "$CORE_DIR/$f"; else echo fake > "$CORE_DIR/$f"; fi
 done

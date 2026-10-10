@@ -135,7 +135,7 @@ if [ -f "$c" ]; then
   [ "$(val proxies.1.name "$c")" = 'DE trojan "q"' ] && ok "ok-full: quotes in names" || bad "ok-full: name"
 fi
 c="$tmp/ok-minimal.json.config"
-[ -f "$c" ] && { [ "$(val rules.0 "$c")" = "MATCH,only" ] && ok "ok-minimal: default rule goes to the proxy, not DIRECT" ||
+[ -f "$c" ] && { [ "$(val rules.1 "$c")" = "MATCH,only" ] && ok "ok-minimal: default rule goes to the proxy, not DIRECT" ||
   bad "ok-minimal: default rule"; }
 c="$tmp/ok-wg-peers.json.config"
 [ -f "$c" ] && { [ "$(val proxies.0.peers.0.server "$c")" = 203.0.113.20 ] && [ "$(val proxies.0.peers.1.server "$c")" = 203.0.113.40 ] &&
