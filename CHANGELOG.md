@@ -4,6 +4,49 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [0.9.1] - 2026-10-10
+
+Fixes from the 0.9 review. Needs «Восстановить службу…» once: the helper, its sudoers entry and
+the core's plist changed.
+
+### Security
+- A passwordless subscription refresh can no longer widen what goes outside the VPN through a
+  rule provider: the url or payload of a provider used by a DIRECT rule, and any provider's own
+  download proxy (e.g. `proxy: DIRECT`), are part of what needs the admin's approval. The first
+  refresh after the update may ask once for profiles with such providers.
+- The widget's «Выключить» and pause open the app with a question instead of the password
+  prompt: its notifications can be posted by any program. «Включить» still works directly.
+- Before install.sh / uninstall.sh run as root, the app checks its own signature (nested code and
+  sealed resources, our team); a damaged bundle shows «Программа повреждена» and runs nothing.
+- Split tunnel matches an app by its bundle's path (all its processes, helpers included), not by a
+  process name any program could take. Lists from older versions keep working.
+- The core logs at warning level (info wrote every visited domain); core.log is root-only, the core
+  directory is not listable, and the log is capped at 2 MB with one older copy.
+- A switch-off that raced the watchdog could leave the rules loaded while «off»; the watchdog now
+  flushes them.
+
+### Fixed
+- A service switched off in Login Items no longer leaves Wi-Fi and Ethernet off with nothing to
+  turn them back on; if that happened before, the app shows «Сеть выключена» with
+  «Включить сеть» (new passwordless `ks netrestore`).
+- The UI no longer freezes while the password prompt is up or install.sh runs.
+- A subscription the helper did not take (password needed, new servers, an error) no longer counts
+  as updated: «Обновлено» moves only when the profile is in the VPN; otherwise again in an hour.
+- The app notices a service from another version (`ks version`, file comparison) and offers
+  «Восстановить службу…».
+- An empty address in the filter's list could crash the system extension.
+
+### Changed
+- Much less polling: the watchdog runs once a second (tunnels every pass, pf every 2 s, the DNS
+  lock only when DNS has to be rewritten) and publishes `/Library/KillSwitch/daemon-state`; the
+  app watches that file instead of running sudo and launchctl every 3 s, and polls only while its
+  popover, window or Settings is open. The content filter caches tunnel state (1 s) and signature
+  checks (10 s per process).
+- The watchdog reloads `/etc/pf.conf` (when another program dropped Apple's anchor point) only if
+  that file has the anchor point, and logs it.
+- ⇧⌘L opens the leak test; Reduce Motion turns off the slide to the server list.
+- Plain words in «Журнал защиты» for the new events.
+
 ## [0.9] - 2026-10-10
 
 Interface rework after the UX audit (`docs/ux/audit.md`, `docs/ux/spec.md`).
