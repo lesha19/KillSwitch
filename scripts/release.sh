@@ -25,6 +25,9 @@
 #   - --publish only: gh logged in with access to lesha19/KillSwitch-releases, and release notes:
 #     the "## <version>" section of CHANGELOG.md or a file given in KS_RELEASE_NOTES.
 # The widget has no restricted entitlements (its app group is team-prefixed) and needs no profile.
+# The privileged daemon (ADR 0010) is Contents/MacOS/KillSwitchHelper, signed as
+# com.lesha19.KillSwitch.helper with the hardened runtime before the app; the app and the daemon
+# check each other's designated requirement, so both are verified against it at the end.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -32,6 +35,10 @@ TEAM=YR58655PJ7
 NOTARY_PROFILE=killswitch-notary
 APP_ID=com.lesha19.KillSwitch
 FILTER_ID=com.lesha19.KillSwitch.Filter
+HELPER_ID=com.lesha19.KillSwitch.helper
+HELPER_PLIST=HelperDaemon/LaunchDaemons/$HELPER_ID.plist
+# what the daemon asks of the app and the app of the daemon (App/Core/HelperProtocol.swift)
+requirement() { echo "anchor apple generic and identifier \"$1\" and certificate leaf[subject.OU] = \"$TEAM\""; }
 NE_VALUE=content-filter-provider-systemextension   # Developer ID form of content-filter-provider
 OUT=build/release
 SPM=build/spm   # SwiftPM checkouts + Sparkle's binary tools (generate_appcast), kept between releases
@@ -94,6 +101,16 @@ HOWTO_PROFILES="Скачать: Xcode → Settings → Accounts → $TEAM → Do
   problem "Нет профиля Developer ID для $FILTER_ID с $NE_VALUE (на портале: «KillSwitch Filter Developer ID»).
     $HOWTO_PROFILES"
 
+# The daemon trusts the app by its signature: without the hardened runtime other code could be
+# injected into the app and inherit its connection.
+grep -qE '^ +ENABLE_HARDENED_RUNTIME: YES' project.yml ||
+  problem "В project.yml нет ENABLE_HARDENED_RUNTIME: YES (ADR 0010)."
+if ! plutil -lint -s "$HELPER_PLIST" ||
+   [ "$(plutil -extract BundleProgram raw "$HELPER_PLIST" 2>/dev/null)" != Contents/MacOS/KillSwitchHelper ] ||
+   [ "$(plutil -extract Label raw "$HELPER_PLIST" 2>/dev/null)" != "$HELPER_ID" ]; then
+  problem "$HELPER_PLIST: нет файла или в нём не BundleProgram Contents/MacOS/KillSwitchHelper и Label $HELPER_ID."
+fi
+
 [ -f Helper/mihomo ] || problem "Нет Helper/mihomo (ядро VPN): запустите Helper/fetch-mihomo.sh."
 [ -f Helper/geosite.dat ] ||
   problem "Нет Helper/geosite.dat (российские сайты мимо VPN): запустите Helper/fetch-geodata.sh."
@@ -143,6 +160,9 @@ APP="$OUT/KillSwitch.app"
 ditto "$OUT/KillSwitch.xcarchive/Products/Applications/KillSwitch.app" "$APP"
 SYSEXT="$APP/Contents/Library/SystemExtensions/$FILTER_ID.systemextension"
 WIDGET="$APP/Contents/PlugIns/KillSwitchWidget.appex"
+HELPER="$APP/Contents/MacOS/KillSwitchHelper"
+[ -f "$HELPER" ] && [ -f "$APP/Contents/Library/LaunchDaemons/$HELPER_ID.plist" ] ||
+  { echo "В приложении нет службы $HELPER_ID (Contents/MacOS, Contents/Library/LaunchDaemons)" >&2; exit 1; }
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist")
 for f in mihomo geosite.dat; do
   cmp -s "Helper/$f" "$APP/Contents/Resources/Helper/$f" || { echo "В приложении нет Helper/$f" >&2; exit 1; }
@@ -168,6 +188,7 @@ sign() { codesign --force --sign "$IDENTITY" --options runtime --timestamp "$@";
 
 echo "Подпись…"
 scripts/sign-core.sh "$APP/Contents/Resources/Helper/mihomo" "$IDENTITY"
+sign --identifier "$HELPER_ID" "$HELPER"
 sign --entitlements Widget/KillSwitchWidget.entitlements "$WIDGET"
 entitlements Filter/KillSwitchFilter.entitlements "$PROFILE_FILTER" "$OUT/filter.entitlements"
 cp "$PROFILE_FILTER" "$SYSEXT/Contents/embedded.provisionprofile"
@@ -184,6 +205,13 @@ entitlements App/KillSwitch.entitlements "$PROFILE_APP" "$OUT/app.entitlements"
 cp "$PROFILE_APP" "$APP/Contents/embedded.provisionprofile"
 sign --entitlements "$OUT/app.entitlements" "$APP"
 codesign --verify --deep --strict "$APP"
+# each side only talks to the other if these hold (and the daemon runs with the hardened runtime)
+codesign --verify --strict -R="$(requirement "$HELPER_ID")" "$HELPER"
+codesign --verify --strict -R="$(requirement "$APP_ID")" "$APP"
+case "$(codesign -d --verbose "$HELPER" 2>&1)" in   # not `| grep -q`: pipefail and SIGPIPE
+  *'flags=0x10000(runtime)'*) ;;
+  *) echo "$HELPER подписан без hardened runtime" >&2; exit 1 ;;
+esac
 [ "$MODE" = --sign-only ] && { echo "Подписано (без нотаризации): $APP"; exit 0; }
 
 # Fails with notarytool's log unless Apple accepts the file.
