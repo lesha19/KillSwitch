@@ -5,7 +5,7 @@ import Foundation
 struct UserError: Equatable {
     enum Action: Equatable {
         case repair, restartVPN, openLoginItems, editSubscription, openAccount, retry, approveServers, recheck
-        case chooseServer, copyDiagnostics
+        case chooseServer, copyDiagnostics, restoreNetwork
 
         var title: String {
             switch self {
@@ -19,6 +19,7 @@ struct UserError: Equatable {
             case .recheck: "Проверить ещё раз"
             case .chooseServer: "Выбрать другой сервер…"
             case .copyDiagnostics: "Скопировать диагностику"
+            case .restoreNetwork: "Включить сеть"
             }
         }
     }
@@ -65,6 +66,13 @@ struct UserError: Equatable {
                       action: .openLoginItems)
         }
     }
+
+    /// The service was stopped after it had turned the network off for the boot window
+    /// (wifi-off-by-ks is there) and nothing will turn it back on: `ks netrestore`.
+    static let networkLeftOff = UserError(
+        title: "Сеть выключена",
+        message: "Служба защиты остановлена и не включила Wi-Fi и другие сети обратно. Включи их здесь, а службу — в Объектах входа.",
+        action: .restoreNetwork)
 
     private static func classify(_ text: String, context: Context) -> UserError {
         let lower = text.lowercased()

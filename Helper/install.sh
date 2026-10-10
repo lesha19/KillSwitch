@@ -63,7 +63,9 @@ fi
 SUDOERS=/etc/sudoers.d/killswitch
 # "core refresh" (subscription auto-update) is refused by ks if it brings new server addresses;
 # "core import" may add servers the core can reach, so it keeps asking for the password.
-echo "$USER_NAME ALL=(root) NOPASSWD: $DIR/ks state, $DIR/ks on, $DIR/ks core state, $DIR/ks core on, $DIR/ks core off," \
+# "netrestore" only turns back on the network services ks itself turned off, and refuses while the
+# watchdog runs without its rules.
+echo "$USER_NAME ALL=(root) NOPASSWD: $DIR/ks state, $DIR/ks on, $DIR/ks netrestore, $DIR/ks core state, $DIR/ks core on, $DIR/ks core off," \
   "$DIR/ks core proxies, $DIR/ks core select *, $DIR/ks core delay *, $DIR/ks core refresh *" > "$SUDOERS.tmp"
 chmod 440 "$SUDOERS.tmp"
 visudo -cf "$SUDOERS.tmp"

@@ -127,6 +127,14 @@ final class UserErrorTests: XCTestCase {
         XCTAssertEqual(UserError.problem(.vpnMissing).message, "В службе не хватает VPN — так бывает после старой версии.")
     }
 
+    func testNetworkLeftOffByAStoppedService() {
+        let error = UserError.networkLeftOff
+        XCTAssertEqual(error.title, "Сеть выключена")
+        XCTAssertEqual(error.action, .restoreNetwork)
+        XCTAssertEqual(UserError.Action.restoreNetwork.title, "Включить сеть")
+        XCTAssertTrue(error.message.contains("Объектах входа"), "says where the service is switched back on")
+    }
+
     func testHWIDHeaderNames() {
         XCTAssertEqual(SubscriptionHeaders.hwidProblem(headers: ["x-hwid-max-devices-reached": "true", "x-hwid-active": "true"]),
                        "x-hwid-max-devices-reached")

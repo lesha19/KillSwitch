@@ -59,6 +59,7 @@ struct TopErrorBanner<Fallback: View>: View {
     }
 
     private var top: (error: UserError, source: Source)? {
+        if control.networkLeftOff { return (.networkLeftOff, .helper) }
         if let error = control.error { return (error, .helper) }
         if control.coreRunning, let error = control.proxiesError { return (error, .serverList) }
         if let error = control.coreError { return (error, .latency) }
@@ -84,6 +85,7 @@ struct TopErrorBanner<Fallback: View>: View {
         case .recheck: Task { await control.testAllDelays() }
         case .chooseServer: chooseServer()
         case .copyDiagnostics: DiagnosticsCopy.copy(control: control, client: client)
+        case .restoreNetwork: control.restoreNetwork()
         case .retry:
             switch source {
             case .subscription: Task { await client.update(interactive: true) }

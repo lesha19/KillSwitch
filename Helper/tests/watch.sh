@@ -77,5 +77,48 @@ passes 15 15
 [[ "$(st protection)" =~ ^paused:[0-9]+$ ]] && ok "pause: state follows" || bad "pause: $(cat "$STATEF")"
 grep -qE 'DNS|token|password|server' "$STATEF" && bad "state file carries more than the state" || ok "state file holds no settings or secrets"
 
+# --- the boot-window guard at TERM: shutdown vs. being switched off in Login Items
+rm -f "$FLAG"
+networksetup() { echo "networksetup $*" >> "$tmp/net"; }
+physical_services() { printf 'Wi-Fi\nUSB 10/100/1000 LAN\n'; }
+JOB=loaded; DISABLED='	"local.killswitch" => enabled'
+launchctl() {
+  case "$*" in
+    "print-disabled system") printf '{\n%s\n}\n' "$DISABLED" ;;
+    "print system/local.killswitch") [ "$JOB" = loaded ] ;;
+    *) return 0 ;;
+  esac
+}
+: > "$tmp/net"; shutdown_guard
+[ "$(paste -sd'|' "$WIFI_MARK")" = "Wi-Fi|USB 10/100/1000 LAN" ] && [ "$(grep -c ' off$' "$tmp/net")" = 2 ] &&
+  ok "shutdown: physical services off, remembered" || bad "shutdown: $(cat "$tmp/net")"
+rm -f "$WIFI_MARK"; : > "$tmp/net"
+DISABLED='	"local.killswitch" => disabled'
+shutdown_guard
+[ ! -e "$WIFI_MARK" ] && [ ! -s "$tmp/net" ] && ok "switched off in Login Items: network left alone (nothing would turn it back on)" ||
+  bad "disabled job turned the network off"
+grep -q 'switched off .*network left on' "$EVENTS" && ok "  logged" || bad "  not logged"
+DISABLED='	"local.killswitch" => true'
+shutdown_guard
+[ ! -e "$WIFI_MARK" ] && ok "launchctl disable (=> true) counts too" || bad "=> true"
+DISABLED='	"local.killswitch" => enabled'; echo 0 > "$FLAG"; : > "$tmp/net"
+shutdown_guard
+[ ! -s "$tmp/net" ] && ok "off by hand: network left alone" || bad "off by hand"
+rm -f "$FLAG"
+
+# --- ks netrestore: the network back on when the watchdog cannot do it
+printf 'Wi-Fi\n' > "$WIFI_MARK"; : > "$tmp/net"; : > "$tmp/anchor"
+JOB=loaded
+net_restore 2>/dev/null && bad "netrestore while the watchdog runs and the rules are not up" ||
+  { [ -e "$WIFI_MARK" ] && [ ! -s "$tmp/net" ] && ok "netrestore refused while the watchdog will do it after the rules"; }
+JOB=unloaded
+net_restore >/dev/null && [ ! -e "$WIFI_MARK" ] && grep -qx 'networksetup -setnetworkserviceenabled Wi-Fi on' "$tmp/net" &&
+  ok "netrestore: watchdog gone, the services ks turned off are on again" || bad "netrestore: $(cat "$tmp/net")"
+grep -q 'network turned back on' "$EVENTS" && ok "  logged" || bad "  not logged"
+printf 'Wi-Fi\n' > "$WIFI_MARK"; JOB=loaded; PF=on; rules > "$tmp/anchor"
+net_restore >/dev/null && [ ! -e "$WIFI_MARK" ] && ok "netrestore: watchdog runs, rules loaded: allowed" || bad "netrestore with rules"
+: > "$tmp/net"
+net_restore >/dev/null && [ ! -s "$tmp/net" ] && ok "netrestore without the mark: nothing to do" || bad "netrestore without mark"
+
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

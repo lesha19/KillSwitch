@@ -5,6 +5,7 @@
 #   ks on                   enable (also after reboot)
 #   ks off                  disable until "ks on"
 #   ks pause [min]          disable for N minutes (default 5), e.g. for a captive Wi-Fi portal
+#   ks netrestore           network services turned off at shutdown back on (if the watchdog is gone)
 #   ks set <key> <0|1>      lan, tailscale, dns, direct, coredirect (see rules() below)
 #   ks set splitapps <a,b>  apps outside the VPN (coredirect=1 only); "" clears
 #   ks set multihop <proxy>|off  double VPN: every other proxy is reached through this one
@@ -40,6 +41,7 @@ TSRELAYS="$DIR/tsrelays" # Tailscale DERP relays + control plane, root-owned
 CORE_DIR="$DIR/core"     # mihomo, config.yaml, geoip.metadb, root-owned
 CORE_GROUP="_ksvpn"      # the core runs with this gid; nothing else can get it
 CORE_JOB="system/local.killswitch.core"
+WATCH_JOB="system/local.killswitch" # the watchdog, "ks watch"
 CORE_CTL="$CORE_DIR/ctl/mihomo.sock" # the core's API; ctl/ is root-only
 CORE_TUN_ADDR="198.18.128.1"
 DOH_IPS="1.1.1.1, 8.8.8.8"   # DoH resolvers the core group may reach directly (rules, resolve_direct)
@@ -243,6 +245,38 @@ watch_pass() {
     rm -f "$WIFI_MARK"; log_event "rules up: network on"
   fi
   publish_state
+}
+
+# Boot window guard, run when launchd stops the watchdog (see "ks watch"). A watchdog switched
+# off in Login Items (or by launchctl disable) is stopped the same way, but nothing would start it
+# again to turn the network back on: then the network is left alone. launchd marks the job
+# disabled before it stops it.
+watch_disabled() { launchctl print-disabled system 2>/dev/null | grep -qE "\"${WATCH_JOB#system/}\" => (disabled|true)"; }
+shutdown_guard() {
+  local svc
+  [ ! -f "$FLAG" ] && [ "$(setting wifiguard 1)" = 1 ] || return 0
+  if watch_disabled; then
+    log_event "watchdog switched off (Login Items): network left on"
+    return 0
+  fi
+  physical_services > "$WIFI_MARK"
+  while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" off; done < "$WIFI_MARK"
+  log_event "shutdown: network off ($(paste -sd, - < "$WIFI_MARK"))"
+}
+
+# "ks netrestore" (passwordless): the services the boot guard turned off, on again, for when the
+# watchdog that would do it is gone. While it runs it does that itself once the rules are up, so
+# before that this refuses: the boot window stays closed.
+net_restore() {
+  local svc
+  [ -f "$WIFI_MARK" ] || return 0
+  if launchctl print "$WATCH_JOB" >/dev/null 2>&1 && [ ! -f "$FLAG" ] && ! loaded; then
+    echo "Сеть включит служба защиты, как только загрузит правила" >&2
+    return 1
+  fi
+  while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" on; done < "$WIFI_MARK"
+  rm -f "$WIFI_MARK"
+  log_event "network turned back on by hand"
 }
 
 # The core config is generated, not filtered: from the profile only proxies, proxy-groups,
@@ -1061,11 +1095,7 @@ case "${1:-status}" in
     # again here once the rules are loaded. The setting persists across reboot, so nothing
     # gets an address before the rules exist. Only services we disabled are restored.
     on_term() {
-      if [ ! -f "$FLAG" ] && [ "$(setting wifiguard 1)" = 1 ]; then
-        physical_services > "$WIFI_MARK"
-        while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" off; done < "$WIFI_MARK"
-        log_event "shutdown: network off ($(paste -sd, - < "$WIFI_MARK"))"
-      fi
+      shutdown_guard
       rm -f "$STATEF"   # the app falls back to asking ks
       exit 0
     }
@@ -1076,6 +1106,7 @@ case "${1:-status}" in
       sleep 1 & wait $!   # wait, unlike a plain sleep, lets the TERM trap run at once
     done
     ;;
+  netrestore) net_restore || exit 1 ;;
   on)    rm -f "$FLAG"; load && echo "kill switch: ON" ;;
   off)   disable 0; echo "kill switch: OFF (until 'ks on')" ;;
   pause) min=${2:-5}; [[ "$min" =~ ^[0-9]{1,4}$ ]] || { echo "bad minutes" >&2; exit 1; }
@@ -1185,5 +1216,5 @@ case "${1:-status}" in
     [ -f "$FLAG" ] && { u=$(cat "$FLAG"); [ "$u" = 0 ] && echo "disabled by hand" || echo "back on at $(date -r "$u" +%H:%M)"; }
     pfctl -a "$ANCHOR" -s rules 2>/dev/null
     ;;
-  *) sed -n '2,22p' "$0"; exit 1 ;;
+  *) sed -n '2,23p' "$0"; exit 1 ;;
 esac

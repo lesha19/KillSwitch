@@ -7,7 +7,7 @@ import WidgetKit
 
 /// Talks to the root helper `/Library/KillSwitch/ks`.
 /// Reading the state, turning protection on and driving the core go through passwordless sudo
-/// (Helper/install.sh grants `ks state`, `ks on`, `ks core on|off|state|proxies|select|delay|refresh`);
+/// (Helper/install.sh grants `ks state`, `ks on`, `ks netrestore`, `ks core on|off|state|proxies|select|delay|refresh`);
 /// everything that loosens protection asks for the admin password, so another program running
 /// as the user cannot do it silently. The password prompt only ever follows a click: calls made
 /// by timers pass `interactive: false` and give up instead (see `callHelper`).
@@ -41,6 +41,8 @@ final class KillSwitchControl {
     private(set) var foundServers: [String] = []     // from dropweb profiles and Happ's config
     private(set) var manualServers: [String] = []    // /Library/KillSwitch/servers-manual
     private(set) var daemonProblem = false
+    /// The service is gone and left the network services off (its boot guard): «Включить сеть».
+    private(set) var networkLeftOff = false
     /// `sudo -n ks state` wants a password: the helper was installed by an older app.
     private(set) var needsRepair = false
     /// When the current connection attempt started; nil unless connecting.
@@ -535,7 +537,7 @@ final class KillSwitchControl {
         readSettings()
         defer { scheduleTimer() }
         guard FileManager.default.fileExists(atPath: helper) else {
-            daemonProblem = false
+            daemonProblem = false; networkLeftOff = false
             daemonStateLive = false
             publish(.notInstalled)
             return
@@ -830,6 +832,7 @@ final class KillSwitchControl {
 
     private func daemonRuns(_ runs: Bool) {
         daemonProblem = !runs
+        networkLeftOff = !runs && FileManager.default.fileExists(atPath: "/Library/KillSwitch/wifi-off-by-ks")
         let defaults = UserDefaults.standard
         if daemonProblem {
             if !defaults.bool(forKey: "daemonWarned") {
@@ -846,6 +849,10 @@ final class KillSwitchControl {
     }
 
     func dismissError() { error = nil }
+
+    /// «Включить сеть»: `ks netrestore` turns back on the network services the stopped service
+    /// had turned off. Passwordless since 0.9.1; an older sudoers falls back to the prompt.
+    func restoreNetwork() { run(["netrestore"]) }
 
     /// «Перезапустить VPN»: the core is running but its API does not answer.
     func restartCore() {
