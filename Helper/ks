@@ -21,7 +21,7 @@
 #   ks core proxies         groups and proxies of the running core (JSON)
 #   ks core select <group> <proxy> | delay <group|proxy>
 #   ks apply                (re)load rules once unless disabled
-#   ks watch                used by the LaunchDaemon: apply + tamper checks every 3 s
+#   ks watch                used by the LaunchDaemon: tunnels every second, pf every 2 s, the core every 2 s
 set -u
 umask 022
 
@@ -46,9 +46,9 @@ CORE_JOB="system/local.killswitch.core"
 WATCH_JOB="system/local.killswitch" # the watchdog, "ks watch"
 CORE_CTL="$CORE_DIR/ctl/mihomo.sock" # the core's API; ctl/ is root-only
 CORE_LOG_MAX=2000000 # bytes of core/core.log (launchd's StandardOutPath), see core_log_tidy
-CORE_TUN_ADDR="198.18.128.1"
+CORE_TUN_ADDR="198.18.128.1" # our TUN's address (start of the core's fake-ip-range)
 DOH_IPS="1.1.1.1, 8.8.8.8"   # DoH resolvers the core group may reach directly (rules, resolve_direct)
-KS_DNS="KS-DNS"          # our group for DNS and rule downloads: the profile's proxies, never DIRECT # our TUN's address (start of the core's fake-ip-range)
+KS_DNS="KS-DNS"          # our group for DNS and rule downloads: the profile's proxies, never DIRECT
 DNS_STATE="$CORE_DIR/dns-state" # system DNS keys pointed at the core, with their originals
 DNS_OURS="127.0.0.1"
 CORE_PROFILE="$CORE_DIR/profile.json"       # last accepted profile, root-only: rebuilds start from it

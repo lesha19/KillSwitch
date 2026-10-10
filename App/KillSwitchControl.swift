@@ -755,9 +755,9 @@ final class KillSwitchControl {
             && (text.contains(":") || text.wholeMatch(of: /[0-9]{1,3}(\.[0-9]{1,3}){3}/) != nil)
     }
 
-    /// ASSUMPTION (helper contract, written in parallel): while our core runs and another VPN's
-    /// TUN is up, the helper keeps a world-readable file naming it (e.g. "utun5"), and removes it
-    /// otherwise. Same pattern as the other state files in /Library/KillSwitch.
+    /// Written by the watchdog (Helper/ks tun_guard, world-readable): while our core runs and another
+    /// VPN's TUN takes a default or wide route next to it, the names of those utuns ("utun5"); removed
+    /// otherwise.
     static let foreignVPNFile = "/Library/KillSwitch/core/foreign-vpn"
 
     private static func readForeignVPN() -> String? {
@@ -805,7 +805,7 @@ final class KillSwitchControl {
     }
 
     /// Last known addresses of each host name. Lookups run off the main thread at most once a
-    /// minute per name: refresh() runs every 3 s and without a network a lookup can hang.
+    /// minute per name: refresh() runs every few seconds and without a network a lookup can hang.
     private static var resolved: [String: (ips: [String], at: Date)] = [:]
 
     private static func resolve(_ host: String) -> [String] {

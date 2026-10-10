@@ -13,7 +13,7 @@ Rules are loaded at boot, before login.
   server-remove <ip> | core … | apply | watch`. Tests (no root, nothing on the system changes):
   `for t in Helper/tests/*.sh; do bash "$t"; done`.
 - `Helper/local.killswitch.plist` — LaunchDaemon: runs `ks watch` (RunAtLoad + KeepAlive), so rules
-  are loaded at boot, before login, and checked every 3 s. `AssociatedBundleIdentifiers` makes it
+  are loaded at boot, before login, and checked every 2 s (tunnels every second). `AssociatedBundleIdentifiers` makes it
   show up under the app's name in System Settings → Login Items & Extensions.
 - `Helper/install.sh [user] [server-ip ...]` / `uninstall.sh` — put everything into root-owned
   `/Library/KillSwitch`. install.sh is safe to re-run: it upgrades the helper in place and keeps
@@ -165,7 +165,7 @@ profile, rewritten on every import, reachable only by our core), `servers` (both
   state|on|off|proxies`, `ks core select|delay …` and `ks core refresh …` (refused if it brings new
   server names or addresses or changes what goes DIRECT), none of which can widen the rules; turning off, pausing, `ks core import` and
   every setting change ask for the admin password.
-- Watchdog (`ks watch`, every 3 s, honours off / pause): checks that pf is enabled, that the main
+- Watchdog (`ks watch`, pf every 2 s and tunnels every second, honours off / pause): checks that pf is enabled, that the main
   ruleset still references the `com.apple/*` anchor (otherwise reloads `/etc/pf.conf`), that the
   sha256 of the loaded anchor equals the hash saved right after our load, and that the set of tunnel
   interfaces did not change. Any mismatch reloads the rules and is written to `events.log`.
