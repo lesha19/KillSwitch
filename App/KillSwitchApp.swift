@@ -22,7 +22,7 @@ struct KillSwitchApp: App {
         ShortcutTarget.control = control
         ShortcutTarget.client = client
         // spec §5.1, Р3: the menu bar icon; a click opens the main screen as a popover, a right
-        // click a compact menu (ADR 0010)
+        // click a compact menu (ADR 0011)
         DispatchQueue.main.async { StatusItem.install(control: control, client: client, updater: updater) }
     }
 

@@ -1,6 +1,6 @@
 import Foundation
 
-/// The menu bar icon (ADR 0010): a click opens the main screen as a popover, a right click (or
+/// The menu bar icon (ADR 0011): a click opens the main screen as a popover, a right click (or
 /// ⌃-click) a compact menu of the few things done most often.
 enum MenuBarMenu {
     enum Click: Equatable { case popover, menu }

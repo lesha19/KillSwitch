@@ -1,4 +1,4 @@
-# ADR 0010: the menu bar icon is an AppKit status item with a right-click menu
+# ADR 0011: the menu bar icon is an AppKit status item with a right-click menu
 
 - Status: accepted (0.13)
 - Date: 2026-10-10

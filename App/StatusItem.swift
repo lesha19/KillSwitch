@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The menu bar icon (spec §5.1, ADR 0010). MenuBarExtra has no right click, so it is an AppKit
+/// The menu bar icon (spec §5.1, ADR 0011). MenuBarExtra has no right click, so it is an AppKit
 /// status item: a click opens the main screen (`HomeView`) in a popover, a right click or ⌃-click
 /// the compact menu (MenuBarMenu). Everything that shows more goes to the one window (Router).
 @MainActor

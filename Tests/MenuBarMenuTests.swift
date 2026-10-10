@@ -1,7 +1,7 @@
 import XCTest
 
 final class MenuBarMenuTests: XCTestCase {
-    /// A click opens the popover; the right button or ⌃-click opens the compact menu (ADR 0010).
+    /// A click opens the popover; the right button or ⌃-click opens the compact menu (ADR 0011).
     func testWhichClickOpensWhat() {
         XCTAssertEqual(MenuBarMenu.click(rightButton: false, controlKey: false), .popover)
         XCTAssertEqual(MenuBarMenu.click(rightButton: true, controlKey: false), .menu)
