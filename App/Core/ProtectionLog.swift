@@ -45,6 +45,8 @@ enum ProtectionLog {
             ("pause ended", "Пауза защиты закончилась"),
             ("reload failed", "Не получилось обновить защиту"),
             ("rules found loaded while off", "Защита осталась включённой после выключения — снята"),
+            ("main ruleset reloaded from", "Другая программа заменила правила macOS — они загружены заново"),
+            ("/etc/pf.conf has no com.apple anchor", "Защита не действует: в /etc/pf.conf нет правил macOS"),
             ("rules up: network on", "Защита включилась после загрузки — сеть включена"),
             ("shutdown: network off", "Mac выключается — сеть отключена"),
             ("watchdog switched off", "Службу выключили в Объектах входа — сеть не отключалась"),

@@ -219,12 +219,33 @@ guard() {
   elif ! pf_enabled; then why="pf was disabled"
   elif ! pfctl -s rules 2>/dev/null | grep -q 'anchor "com.apple/\*"'; then
     why="anchor missing from main ruleset"
-    pfctl -f /etc/pf.conf >/dev/null 2>&1
+    restore_main_ruleset
   elif [ "$(rules_hash)" != "$(cat "$HASHF" 2>/dev/null)" ]; then why="rules were changed or flushed"
   fi
   if [ -z "$why" ]; then PROT=on; return 0; fi
   log_event "$why: reloading"
   if load "$TSIG"; then PROT=on; else PROT=off; log_event "reload failed"; fi
+}
+
+# Someone loaded a main ruleset without Apple's anchor point, so ours is not evaluated at all.
+# The system's own /etc/pf.conf is the only file that brings it back; it replaces whatever main
+# ruleset is loaded (anchors, ours included, keep their rules). Pointless, and so skipped, when
+# pf.conf itself lacks the anchor point. Restored every time (the kill switch must hold), logged
+# at most once a minute so a program fighting over the ruleset does not flood the log.
+PF_CONF="/etc/pf.conf"
+PFCONF_LOGGED=0
+restore_main_ruleset() {
+  local now msg
+  if grep -q '^[[:space:]]*anchor "com.apple/\*"' "$PF_CONF" 2>/dev/null; then
+    pfctl -f "$PF_CONF" >/dev/null 2>&1
+    msg="main ruleset reloaded from $PF_CONF"
+  else
+    msg="$PF_CONF has no com.apple anchor: main ruleset not reloaded, rules are not in effect"
+  fi
+  now=$(date +%s)
+  [ $((now - PFCONF_LOGGED)) -ge 60 ] || return 0
+  PFCONF_LOGGED=$now
+  log_event "$msg"
 }
 
 # The state for the app (world-readable, nothing secret): what "ks state" and "ks core state"

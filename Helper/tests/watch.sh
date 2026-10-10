@@ -55,6 +55,22 @@ PF=off
 passes 7 8
 [ "$PF" = on ] && ok "pf disabled: enabled again within 2 passes" || bad "pf disabled not caught"
 
+# --- someone loaded a main ruleset without Apple's anchor point: ours is not evaluated at all
+echo 'pass out all' > "$tmp/main"; : > "$EVENTS"; : > "$tmp/calls"
+passes 30 31
+grep -q "pfctl -f $PF_CONF" "$tmp/calls" && grep -q 'com.apple' "$tmp/main" && ok "anchor missing: main ruleset reloaded from pf.conf within 2 passes" ||
+  bad "anchor missing: $(cat "$tmp/calls")"
+grep -q 'anchor missing from main ruleset: reloading' "$EVENTS" && grep -q "main ruleset reloaded from $PF_CONF" "$EVENTS" &&
+  ok "  logged, with the file it came from" || bad "  log: $(cat "$EVENTS")"
+for i in 1 2 3; do echo 'pass out all' > "$tmp/main"; passes $((30 + 2 * i)) $((31 + 2 * i)); done
+[ "$(grep -c "main ruleset reloaded" "$EVENTS")" = 1 ] && ok "  a program fighting over it: restored every time, logged once a minute" ||
+  bad "  logged $(grep -c "main ruleset reloaded" "$EVENTS") times"
+echo 'pass out all' > "$tmp/main"; : > "$PF_CONF"; : > "$tmp/calls"; : > "$EVENTS"; PFCONF_LOGGED=0
+passes 40 41
+grep -q "pfctl -f $PF_CONF" "$tmp/calls" && bad "pf.conf without the anchor reloaded anyway" || ok "pf.conf without Apple's anchor: not reloaded (it would not help)"
+grep -q "has no com.apple anchor" "$EVENTS" && ok "  logged" || bad "  not logged: $(cat "$EVENTS")"
+echo 'anchor "com.apple/*"' > "$PF_CONF"; echo 'anchor "com.apple/*" all' > "$tmp/main"
+
 # --- a new tunnel is let in on the very next pass, whichever it is
 ADDRS="utun4 198.18.0.1
 utun7 198.18.128.1"

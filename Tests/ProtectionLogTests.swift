@@ -18,6 +18,10 @@ final class ProtectionLogTests: XCTestCase {
         XCTAssertEqual(text("2026-10-10 14:03:22 initial load: reloading"), "Защита включилась")
         XCTAssertEqual(text("2026-10-10 14:03:22 reload failed"), "Не получилось обновить защиту")
         XCTAssertEqual(text("2026-10-10 14:03:22 rules found loaded while off: flushed"), "Защита осталась включённой после выключения — снята")
+        XCTAssertEqual(text("2026-10-10 14:03:22 main ruleset reloaded from /etc/pf.conf"),
+                       "Другая программа заменила правила macOS — они загружены заново")
+        XCTAssertEqual(text("2026-10-10 14:03:22 /etc/pf.conf has no com.apple anchor: main ruleset not reloaded, rules are not in effect"),
+                       "Защита не действует: в /etc/pf.conf нет правил macOS")
     }
 
     func testVPNEvents() {
