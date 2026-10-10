@@ -4,9 +4,20 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
-## [Unreleased]
+## [0.13] - 2026-10-10
+
+The helper changed (new passwordless `ks core traffic`, `ks set adblock`), so «Восстановить
+службу…» is asked once: it also rewrites the sudoers entry.
 
 ### Added
+- Privileged helper daemon `KillSwitchHelper` (ADR 0010): a root daemon inside the app, registered
+  with SMAppService and reached over XPC only by our signed app (code-signing requirement both
+  ways). Changes that widen the rules ask for the authorization right
+  `com.lesha19.KillSwitch.widen` (an admin's password or Touch ID, valid 300 s) instead of a
+  password per change. It runs `/Library/KillSwitch/ks` and the bundle's `install.sh` /
+  `uninstall.sh` from a verified copy, with typed, checked commands, `bash -p` and only the system
+  `PATH` in its environment. Until it is allowed in System Settings › Login Items the password
+  prompt works as before. Hardened runtime is on for every target.
 - Shortcuts, Spotlight and Siri (App Intents): «Подключить VPN», «Отключить VPN», «Сменить
   страну» (a server of the «Серверы» list, searchable in Russian) and «Статус VPN» (also returns
   the text), with Russian phrases. They do what the menu does and say back what needs the window.
@@ -25,16 +36,18 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   (or the folder it sits in) can be changed without the admin password, since everything run from
   that path goes around the VPN.
 - «Скорость VPN в строке меню» in Settings › Общие (off by default): ↓/↑ next to the icon, read
-  once a second only while it is on and our VPN is connected, through the new passwordless-safe
-  `ks core traffic` (only the totals of mihomo's /connections leave the helper). It needs
-  `ks core traffic` in the helper's sudoers list; without it the app says so and never prompts.
+  once a second only while it is on and our VPN is connected, through the new passwordless
+  `ks core traffic` (only the totals of mihomo's /connections leave the helper; in sudoers and
+  the daemon's passwordless commands, exact arguments). With an older helper the app says so and
+  never prompts.
 - «Блокировать рекламу и трекеры» in Settings › Дополнительно (off by default): the core refuses
   `GEOSITE,category-ads-all` of the shipped, sha256-pinned geosite.dat (nothing is downloaded).
   REJECT sends nothing anywhere, so the DIRECT signature and pf are unchanged. Helper setting
-  `ks set adblock 0|1` (needs the updated helper).
-- Release transparency: every release carries `SHA256SUMS` of the .dmg, appcast.xml and
-  geosite.dat (`scripts/release.sh` writes it and `--publish` uploads it); README «Проверка
-  загрузки» tells how to check it and the Developer ID signature.
+  `ks set adblock 0|1` (needs the updated helper); like every `set` it asks for the admin
+  password or the daemon's right.
+- Release transparency: every release carries `SHA256SUMS` of the .dmg, appcast.xml,
+  geosite.dat and geoip.metadb (`scripts/release.sh` writes it and `--publish` uploads it); README
+  «Проверка загрузки» tells how to check it and the Developer ID signature.
 
 ### Changed
 - The string catalog is complete: the texts built in code (status, errors, notifications, the
@@ -45,11 +58,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   port and a hash of its uuid/password; the secret itself is not stored), not by its name, so a
   rename in the subscription keeps them. Name-keyed data from earlier versions is moved over once
   the server is in the profile.
-- `Helper/fetch-geodata.sh` takes geosite.dat from our own releases first (`scripts/release.sh
-  --publish` now uploads the pinned file and its sha256 to lesha19/KillSwitch-releases) and from
-  the pinned meta-rules-dat commit only when that copy is missing or of another pin, so a
-  force-push upstream no longer breaks the build. Both are checked against the pinned sha256;
-  `release.sh` refuses a Helper/geosite.dat that is not the pinned one.
+- `Helper/fetch-geodata.sh` takes geosite.dat and geoip.metadb from our own releases first
+  (`scripts/release.sh --publish` now uploads the pinned files and their sha256 to
+  lesha19/KillSwitch-releases) and from the pinned meta-rules-dat commit only when a copy is
+  missing or of another pin, so a force-push upstream no longer breaks the build. Each is checked
+  against its pinned sha256; `release.sh` refuses either file if it is not the pinned one.
+- `scripts/release.sh` signs the daemon with the hardened runtime and checks the app's and the
+  daemon's designated requirements.
 
 ### Fixed
 - `xcodebuild test` from a fresh DerivedData no longer fails with «Unable to find module

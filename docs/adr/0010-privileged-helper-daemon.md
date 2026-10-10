@@ -26,8 +26,11 @@ service; it exits after two idle minutes, so after an update the next message st
 binary.
 
 **`ks` stays the implementation.** The daemon runs `/Library/KillSwitch/ks` with an argument vector
-(`Process`, no shell, `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, cwd `/`) and the bundled
-`install.sh` / `uninstall.sh` for install, repair and removal. The rules, the core config generator
+(`Process`, no shell, cwd `/`, and `HelperCommand.environment` as its whole environment:
+`PATH=/usr/bin:/bin:/usr/sbin:/sbin` only, the same as the password prompt's since 0.12.1) and the
+bundled `install.sh` / `uninstall.sh` with `/bin/bash -p` for install, repair and removal. ks then
+resets the rest itself (`ks_clean_env`, `#!/bin/bash -p`) and checks the arguments of the
+passwordless commands once more (`passwordless_args_ok`). The rules, the core config generator
 and their 12 test suites (`Helper/tests`) are untouched; moving that logic to Swift would be a
 rewrite of the product's core without a reason in Р2. The daemon is a thin, typed, authenticated
 gate in front of it. Before it runs `ks` it checks that `/Library/KillSwitch` and `ks` are root's,
@@ -57,12 +60,14 @@ minutes, switch keys; ks checks again) and maps it to fixed arguments.
 | Without the right (what sudoers allowed) | Behind the right (what asked for the password) |
 | --- | --- |
 | `state`, `probe`, `on`, `netrestore` | `off`, `pause <min>` |
-| `core state\|on\|off\|proxies` | `set <switch> 0\|1`, `set splitapps`, `set multihop` |
+| `core state\|on\|off\|proxies\|traffic` | `set <switch> 0\|1`, `set splitapps`, `set multihop` |
 | `core select <group> <proxy>`, `core delay <name>` | `allow`, `unallow`, `server-add`, `server-remove` |
 | `core refresh <profile>` (ks refuses new servers, exit 3) | `core import <profile>` |
 | | install / repair (`install.sh`), removal (`uninstall.sh`) |
 
-A test reads the sudoers line of `install.sh` and fails if the two columns stop matching it.
+A test reads the sudoers line of `install.sh` and fails if the two columns stop matching it, in
+either direction; `Helper/tests/args.sh` holds ks's own check to the same list. `set adblock`
+(0.13) is a switch like the others: it changes what the core refuses, so it stays behind the right.
 
 - **Profiles** come as a file handle the app opened; the daemon copies at most 20 000 001 bytes of
   a regular file into a fresh 0700 directory of root's and gives ks that copy. Root never opens a

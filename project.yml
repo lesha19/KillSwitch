@@ -18,8 +18,8 @@ settings:
     DEVELOPMENT_TEAM: YR58655PJ7
     CODE_SIGN_STYLE: Automatic
     CODE_SIGN_IDENTITY: "Apple Development"
-    MARKETING_VERSION: "0.12.1"
-    CURRENT_PROJECT_VERSION: "14"
+    MARKETING_VERSION: "0.13"
+    CURRENT_PROJECT_VERSION: "15"
     # on for every target (ADR 0010): the root daemon trusts the app by its signature, so no other
     # process may inject code into it; release.sh signs with --options runtime as well
     ENABLE_HARDENED_RUNTIME: YES
