@@ -18,4 +18,17 @@ final class HelperClientTests: XCTestCase {
             XCTAssertTrue(line.contains("{ @Sendable"), "XPC block not @Sendable: \(line.trimmingCharacters(in: .whitespaces))")
         }
     }
+
+    /// KVO calls its handler on the thread that changed the value; Sparkle's `canCheckForUpdates`
+    /// is not promised to change on the main thread, so the handler hops there instead of
+    /// asserting it (`MainActor.assumeIsolated` traps off main, the 0.15 crash class).
+    func testKeyValueObservationsHopToTheMainActor() throws {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: repo.appendingPathComponent("App/Updater.swift"), encoding: .utf8)
+        let lines = source.split(separator: "\n").map(String.init)
+        let start = try XCTUnwrap(lines.firstIndex { $0.contains(".observe(") })
+        let handler = lines[start...].prefix { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("}") }
+        XCTAssertFalse(handler.contains { $0.contains("assumeIsolated") }, handler.joined(separator: "\n"))
+        XCTAssertTrue(handler.contains { $0.contains("@MainActor in") }, handler.joined(separator: "\n"))
+    }
 }

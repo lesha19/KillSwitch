@@ -19,7 +19,8 @@ final class Updater {
         controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: installer, userDriverDelegate: nil)
         observation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
             let value = updater.canCheckForUpdates
-            MainActor.assumeIsolated { self?.canCheck = value }
+            // KVO calls back on the thread that changed the value, not necessarily the main one
+            Task { @MainActor in self?.canCheck = value }
         }
         automaticallyUpdates = controller.updater.automaticallyDownloadsUpdates
     }
