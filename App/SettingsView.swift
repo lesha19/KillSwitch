@@ -114,8 +114,8 @@ private struct LaunchSection: View {
             }
             Toggle(isOn: $auto.enabled) {
                 Text("Подключаться автоматически")
-                Text(control.coreConfigured ? "В любой сети, после включения Mac и при смене сети. Пароль не спрашивается."
-                                            : "Сначала добавь подписку или сервер.")
+                Text(control.coreConfigured ? String(localized: "В любой сети, после включения Mac и при смене сети. Пароль не спрашивается.")
+                                            : String(localized: "Сначала добавь подписку или сервер."))
             }
             .disabled(!control.coreConfigured)
             Toggle(isOn: $auto.skipTrusted) {
@@ -126,8 +126,8 @@ private struct LaunchSection: View {
             if auto.enabled && auto.skipTrusted {
                 if auto.trustedNeedsLocation {
                     VStack(alignment: .leading, spacing: 6) {
-                        Footnote(text: "Без доступа к геопозиции macOS не называет сеть Wi-Fi, и все сети считаются недоверенными.",
-                                 more: "Поэтому VPN подключается в любой сети. Само местоположение KillSwitch не использует и никуда не отправляет.")
+                        Footnote(text: String(localized: "Без доступа к геопозиции macOS не называет сеть Wi-Fi, и все сети считаются недоверенными."),
+                                 more: String(localized: "Поэтому VPN подключается в любой сети. Само местоположение KillSwitch не использует и никуда не отправляет."))
                         if auto.location == .notDetermined {
                             Button("Разрешить…") { auto.requestLocation() }
                         } else {
@@ -193,7 +193,7 @@ private struct VPNSettings: View {
                             .lineLimit(revealed == nil ? 1 : nil)
                     }
                     HStack {
-                        Button(revealed == nil ? "Показать" : "Скрыть") {
+                        Button(revealed == nil ? String(localized: "Показать") : String(localized: "Скрыть")) {
                             revealed = revealed == nil ? client.revealURL() : nil
                         }
                         Button("Изменить…") { editing = true; revealed = nil }
@@ -239,7 +239,7 @@ private struct VPNSettings: View {
                     Button("Изменить…") { editingApps = true }
                 } label: {
                     Text("Программы без VPN")
-                    Text(control.splitApps.isEmpty ? "Нет" : control.splitApps.joined(separator: ", "))
+                    Text(control.splitApps.isEmpty ? String(localized: "Нет") : control.splitApps.joined(separator: ", "))
                 }
                 if let warning = SplitApps.writableWarning(SplitApps.userWritable(control.splitApps,
                                                                                   isWritable: FileManager.default.isWritableFile)) {
@@ -286,7 +286,7 @@ private struct MultihopRows: View {
         }
         .disabled(entry == nil && candidates.isEmpty)
         if candidates.isEmpty && entry == nil {
-            Text(control.coreRunning ? "Нужно хотя бы два сервера." : "Подключись, чтобы выбрать сервер входа.")
+            Text(control.coreRunning ? String(localized: "Нужно хотя бы два сервера.") : String(localized: "Подключись, чтобы выбрать сервер входа."))
                 .font(.caption).foregroundStyle(.secondary)
         } else {
             Picker("Сервер входа", selection: Binding(
@@ -393,10 +393,10 @@ private struct ProtectionSettings: View {
             .disabled(control.busy || control.state == .notInstalled)
 
             Section {
-                accessRow("Доступ к домашней сети (роутер, NAS, принтер, AirPlay)", control.allowLAN)
+                accessRow(String(localized: "Доступ к домашней сети (роутер, NAS, принтер, AirPlay)"), control.allowLAN)
                 accessRow("Tailscale", control.allowTailscale)
-                accessRow("Адреса сайтов через роутер, пока VPN выключен", control.allowRouterDNS)
-                accessRow("Отключать сеть при выключении Mac", control.wifiGuard)
+                accessRow(String(localized: "Адреса сайтов через роутер, пока VPN выключен"), control.allowRouterDNS)
+                accessRow(String(localized: "Отключать сеть при выключении Mac"), control.wifiGuard)
             } header: {
                 HStack {
                     Text("Что можно без VPN")
@@ -420,11 +420,11 @@ private struct ProtectionSettings: View {
 
     private var statusText: String {
         switch control.state {
-        case .on: "Включена"
-        case .off: "Выключена"
-        case .paused(let until): "Пауза до \(until.formatted(date: .omitted, time: .shortened))"
-        case .notInstalled: "Не установлена"
-        case .unknown: "Проверяю…"
+        case .on: String(localized: "Включена")
+        case .off: String(localized: "Выключена")
+        case .paused(let until): String(localized: "Пауза до \(until.formatted(date: .omitted, time: .shortened))")
+        case .notInstalled: String(localized: "Не установлена")
+        case .unknown: String(localized: "Проверяю…")
         }
     }
 
@@ -432,7 +432,7 @@ private struct ProtectionSettings: View {
         LabeledContent(title) {
             Image(systemName: on ? "checkmark" : "minus")
                 .foregroundStyle(on ? Color.green : Color.secondary)
-                .accessibilityLabel(on ? "можно" : "нельзя")
+                .accessibilityLabel(on ? String(localized: "можно") : String(localized: "нельзя"))
         }
     }
 }
@@ -443,14 +443,14 @@ private struct AccessSheet: View {
     @State private var draft: [String: Bool] = [:]
 
     var body: some View {
-        BatchSheet(title: "Что можно без VPN", changed: !draft.isEmpty && draft != control.switches,
+        BatchSheet(title: String(localized: "Что можно без VPN"), changed: !draft.isEmpty && draft != control.switches,
                    apply: { control.setSwitches(draft) }) {
             Form {
-                toggle("lan", "Доступ к домашней сети", "Роутер, NAS, принтер, AirPlay — без VPN. AirDrop работает и без этого.")
-                toggle("dns", "Адреса сайтов через роутер", "Пока VPN выключен, роутер видит, какие сайты открывает Mac.")
+                toggle("lan", String(localized: "Доступ к домашней сети"), String(localized: "Роутер, NAS, принтер, AirPlay — без VPN. AirDrop работает и без этого."))
+                toggle("dns", String(localized: "Адреса сайтов через роутер"), String(localized: "Пока VPN выключен, роутер видит, какие сайты открывает Mac."))
                     .disabled(draft["lan"] == false)
-                toggle("tailscale", "Tailscale", "Связь между своими устройствами без VPN.")
-                toggle("wifiguard", "Отключать сеть при выключении Mac", "Wi-Fi и кабель включаются после загрузки, когда защита уже стоит.")
+                toggle("tailscale", "Tailscale", String(localized: "Связь между своими устройствами без VPN."))
+                toggle("wifiguard", String(localized: "Отключать сеть при выключении Mac"), String(localized: "Wi-Fi и кабель включаются после загрузки, когда защита уже стоит."))
             }
             .formStyle(.grouped)
         }
@@ -486,8 +486,8 @@ private struct FilterSection: View {
                     EmptyView()
                 }
             }
-            Footnote(text: "Второй уровень: macOS сама не выпустит программы мимо VPN.",
-                     more: "Даже если основную защиту кто-то снимет, macOS пропустит без VPN только домашнюю сеть, серверы VPN, Tailscale и адреса без VPN. Программы узнаются по подписи разработчика, а не по пути. Включается и выключается вместе с защитой. Видна в Системных настройках → Сеть → Фильтры.")
+            Footnote(text: String(localized: "Второй уровень: macOS сама не выпустит программы мимо VPN."),
+                     more: String(localized: "Даже если основную защиту кто-то снимет, macOS пропустит без VPN только домашнюю сеть, серверы VPN, Tailscale и адреса без VPN. Программы узнаются по подписи разработчика, а не по пути. Включается и выключается вместе с защитой. Видна в Системных настройках → Сеть → Фильтры."))
         } header: {
             Text("Защита macOS")
         }
@@ -500,11 +500,11 @@ private struct FilterSection: View {
 
     private var statusText: String {
         switch filter.status {
-        case .unknown: "Проверяю…"
-        case .notInstalled: "Не включена"
-        case .waitingForApproval: "Ждёт разрешения в Системных настройках"
-        case .off, .on: "Работает"
-        case .failed: "Не получилось включить"
+        case .unknown: String(localized: "Проверяю…")
+        case .notInstalled: String(localized: "Не включена")
+        case .waitingForApproval: String(localized: "Ждёт разрешения в Системных настройках")
+        case .off, .on: String(localized: "Работает")
+        case .failed: String(localized: "Не получилось включить")
         }
     }
 
@@ -535,7 +535,7 @@ private struct AdvancedSettings: View {
     var body: some View {
         SettingsForm {
             Section {
-                Text(control.exceptions.isEmpty ? "Нет" : control.exceptions.joined(separator: ", "))
+                Text(control.exceptions.isEmpty ? String(localized: "Нет") : control.exceptions.joined(separator: ", "))
                     .monospaced().foregroundStyle(.secondary).lineLimit(3)
             } header: {
                 HStack {
@@ -547,7 +547,7 @@ private struct AdvancedSettings: View {
             .disabled(control.busy || control.state == .notInstalled)
 
             Section {
-                Text(control.manualServers.isEmpty ? "Нет" : control.manualServers.joined(separator: ", "))
+                Text(control.manualServers.isEmpty ? String(localized: "Нет") : control.manualServers.joined(separator: ", "))
                     .monospaced().foregroundStyle(.secondary).lineLimit(3)
                 Text("Нужны, только если ты пользуешься Happ или dropweb вместе с KillSwitch.").foregroundStyle(.secondary)
             } header: {
@@ -565,8 +565,8 @@ private struct AdvancedSettings: View {
                     Text("Только пока подключён VPN KillSwitch.")
                 }
                 .disabled(control.busy || control.state == .notInstalled)
-                Footnote(text: "Если какой-то сайт перестал работать, выключи и проверь снова.",
-                         more: "Адреса рекламы и трекеров берутся из списка, который лежит в самой программе (category-ads-all), и обновляются вместе с ней: VPN ничего не скачивает сам. Заблокированное не уходит никуда — ни через VPN, ни мимо него.")
+                Footnote(text: String(localized: "Если какой-то сайт перестал работать, выключи и проверь снова."),
+                         more: String(localized: "Адреса рекламы и трекеров берутся из списка, который лежит в самой программе (category-ads-all), и обновляются вместе с ней: VPN ничего не скачивает сам. Заблокированное не уходит никуда — ни через VPN, ни мимо него."))
             }
 
             TransportSection()
@@ -576,21 +576,21 @@ private struct AdvancedSettings: View {
                     Text("Пускать dropweb мимо VPN (слабее защиты)")
                 }
                 .disabled(control.busy || control.state == .notInstalled)
-                Footnote(text: "Только если вместо KillSwitch подключается dropweb.",
-                         more: "dropweb сможет выходить на любые адреса, и любая программа может этим воспользоваться. Защита macOS ему не доверяет: пока его VPN не поднят, он доходит только до серверов VPN. Встроенному VPN это не нужно.")
+                Footnote(text: String(localized: "Только если вместо KillSwitch подключается dropweb."),
+                         more: String(localized: "dropweb сможет выходить на любые адреса, и любая программа может этим воспользоваться. Защита macOS ему не доверяет: пока его VPN не поднят, он доходит только до серверов VPN. Встроенному VPN это не нужно."))
             }
 
             ServiceSection()
         }
         .sheet(isPresented: $editingExceptions) {
-            ListSheet(title: "Адреса без VPN", note: "Программы смогут ходить на эти адреса без VPN.",
-                      placeholder: "Адрес, например 1.2.3.46 или 10.8.0.0/24", original: control.exceptions,
+            ListSheet(title: String(localized: "Адреса без VPN"), note: String(localized: "Программы смогут ходить на эти адреса без VPN."),
+                      placeholder: String(localized: "Адрес, например 1.2.3.46 или 10.8.0.0/24"), original: control.exceptions,
                       apply: control.setExceptions)
         }
         .sheet(isPresented: $editingServers) {
-            ListSheet(title: "Адреса серверов для других VPN-программ",
-                      note: "К этим адресам сможет подключиться любая программа. Серверы подписки сюда добавлять не нужно.",
-                      placeholder: "Адрес сервера", original: control.manualServers,
+            ListSheet(title: String(localized: "Адреса серверов для других VPN-программ"),
+                      note: String(localized: "К этим адресам сможет подключиться любая программа. Серверы подписки сюда добавлять не нужно."),
+                      placeholder: String(localized: "Адрес сервера"), original: control.manualServers,
                       suggestions: control.foundServers, apply: control.setManualServers)
         }
     }
@@ -631,8 +631,8 @@ private struct TransportSection: View {
                         ForEach(Transport.muxProtocols, id: \.self) { Text($0).tag(String?.some($0)) }
                     }
                 }
-                Footnote(text: "Меняй, только если сервер перестал подключаться. Трафик всё равно идёт только через VPN.",
-                         more: "Отпечаток TLS — каким браузером представляется подключение; иногда другой отпечаток проходит блокировку. Мультиплексирование работает, только если его поддерживает сервер (sing-mux): иначе сервер не подключится — верни «Как в подписке». Фрагментации TLS в ядре mihomo нет.")
+                Footnote(text: String(localized: "Меняй, только если сервер перестал подключаться. Трафик всё равно идёт только через VPN."),
+                         more: String(localized: "Отпечаток TLS — каким браузером представляется подключение; иногда другой отпечаток проходит блокировку. Мультиплексирование работает, только если его поддерживает сервер (sing-mux): иначе сервер не подключится — верни «Как в подписке». Фрагментации TLS в ядре mihomo нет."))
             }
         } header: {
             Text("Подключение к серверу")
@@ -648,7 +648,7 @@ private struct ServiceSection: View {
 
     var body: some View {
         Section("Служба KillSwitch") {
-            LabeledContent((control.daemonProblem ? "Выключена" : "Работает") + " · версия \(DeviceInfo.appVersion)") {
+            LabeledContent((control.daemonProblem ? String(localized: "Выключена") : String(localized: "Работает")) + String(localized: " · версия \(DeviceInfo.appVersion)")) {
                 Button("Восстановить службу…") { control.install() }
             }
             Button("Удалить KillSwitch из системы…", role: .destructive) { confirmUninstall = true }
@@ -830,7 +830,7 @@ private struct SplitAppsSheet: View {
 
     var body: some View {
         let paths = (try? JSONDecoder().decode([String: String].self, from: pathsData)) ?? [:]
-        BatchSheet(title: "Программы без VPN", changed: draft != control.splitApps,
+        BatchSheet(title: String(localized: "Программы без VPN"), changed: draft != control.splitApps,
                    apply: { control.setSplitApps(draft) }) {
             if !control.coreDirect {
                 Label("Сначала включи «Российские сайты напрямую»: без него VPN не может выпустить программы мимо себя.",
@@ -860,8 +860,8 @@ private struct SplitAppsSheet: View {
                 Spacer()
             }
             .disabled(!control.coreDirect)
-            Footnote(text: "Эти программы ходят в интернет мимо VPN, остальные — через VPN.",
-                     more: "Программа узнаётся по месту, где она лежит: мимо VPN идут все её процессы, включая вспомогательные. Если программу перенести в другую папку, добавь её заново.")
+            Footnote(text: String(localized: "Эти программы ходят в интернет мимо VPN, остальные — через VPN."),
+                     more: String(localized: "Программа узнаётся по месту, где она лежит: мимо VPN идут все её процессы, включая вспомогательные. Если программу перенести в другую папку, добавь её заново."))
         }
         .onAppear { draft = control.splitApps }
     }
@@ -872,8 +872,8 @@ private struct SplitAppsSheet: View {
         panel.allowedContentTypes = [.application]
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        panel.prompt = "Добавить"
-        panel.message = "Программы, которые будут ходить в интернет мимо VPN"
+        panel.prompt = String(localized: "Добавить")
+        panel.message = String(localized: "Программы, которые будут ходить в интернет мимо VPN")
         guard panel.runModal() == .OK else { return }
         var paths = (try? JSONDecoder().decode([String: String].self, from: pathsData)) ?? [:]
         var names: [String] = []

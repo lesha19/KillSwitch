@@ -51,13 +51,13 @@ final class LeakTester {
         defer { running = false; step = "" }
         var directExits: [String] = []
         if let probe {
-            step = "Проверяю выход мимо VPN…"
+            step = String(localized: "Проверяю выход мимо VPN…")
             directExits = await probe()
         }
         let session = URLSession(configuration: Self.configuration)
         defer { session.finishTasksAndInvalidate() }
 
-        step = "Узнаю адрес IPv4 и IPv6…"
+        step = String(localized: "Узнаю адрес IPv4 и IPv6…")
         async let ipify = Self.text(session, "https://api.ipify.org")
         async let mullvad4 = Self.data(session, "https://ipv4.am.i.mullvad.net/json")
         async let mullvad6 = Self.data(session, "https://ipv6.am.i.mullvad.net/json")
@@ -65,7 +65,7 @@ final class LeakTester {
         let exit4 = await mullvad4.flatMap(LeakCheck.mullvad)
         let ipv6 = await mullvad6.flatMap(LeakCheck.mullvad).flatMap { $0.ip.contains(":") ? $0 : nil }
 
-        step = "Проверяю DNS…"
+        step = String(localized: "Проверяю DNS…")
         let report = await Self.dnsReport(session)
         let exit = exit4 ?? report?.exit
 

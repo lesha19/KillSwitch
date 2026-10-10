@@ -3,11 +3,11 @@ import SwiftUI
 extension Connection {
     var title: String {
         switch self {
-        case .unavailable: "VPN не установлен"
-        case .disconnected: "Отключено"
-        case .connecting: "Подключение…"
-        case .connected: "Подключено"
-        case .otherApp: "VPN другой программы"
+        case .unavailable: String(localized: "VPN не установлен")
+        case .disconnected: String(localized: "Отключено")
+        case .connecting: String(localized: "Подключение…")
+        case .connected: String(localized: "Подключено")
+        case .otherApp: String(localized: "VPN другой программы")
         }
     }
 
@@ -41,11 +41,11 @@ extension Protection {
 
     var title: String {
         switch self {
-        case .on: "Защита включена"
-        case .off: "Без защиты"
-        case .paused: "Пауза защиты"
-        case .notInstalled: "Защита не установлена"
-        case .unknown: "Проверяю…"
+        case .on: String(localized: "Защита включена")
+        case .off: String(localized: "Без защиты")
+        case .paused: String(localized: "Пауза защиты")
+        case .notInstalled: String(localized: "Защита не установлена")
+        case .unknown: String(localized: "Проверяю…")
         }
     }
 }
@@ -167,7 +167,7 @@ struct ServerList: View {
                 HStack {
                     Text(group.name).font(.headline)
                     if !group.selectable {
-                        Text(group.type == "URLTest" ? "сам выбирает быстрый" : "автоматически")
+                        Text(group.type == "URLTest" ? String(localized: "сам выбирает быстрый") : String(localized: "автоматически"))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -228,11 +228,11 @@ struct ServerList: View {
             .disabled(!group.selectable || control.busy)
             .accessibilityElement(children: .combine)
             .accessibilityLabel(label.title.isEmpty ? name : label.title)
-            .accessibilityValue([current ? "выбран" : nil,
-                                 control.delay(of: name).map { "\($0) миллисекунд" },
-                                 control.timedOut(name) ? "не ответил" : nil].compactMap { $0 }.joined(separator: ", "))
+            .accessibilityValue([current ? String(localized: "выбран") : nil,
+                                 control.delay(of: name).map { String(localized: "\($0) миллисекунд") },
+                                 control.timedOut(name) ? String(localized: "не ответил") : nil].compactMap { $0 }.joined(separator: ", "))
             .accessibilityAddTraits(current ? .isSelected : [])
-            .accessibilityHint(group.selectable && !current ? "Подключиться через этот сервер" : "")
+            .accessibilityHint(group.selectable && !current ? String(localized: "Подключиться через этот сервер") : "")
         }
     }
 }
@@ -244,7 +244,7 @@ struct SubscriptionSummary: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(client.status.title ?? "Подписка").font(.headline)
+                Text(client.status.title ?? String(localized: "Подписка")).font(.headline)
                 Spacer()
                 Button {
                     Task { await client.update(interactive: true) }
@@ -254,7 +254,7 @@ struct SubscriptionSummary: View {
                 .buttonStyle(.borderless)
                 .disabled(client.updating || !client.hasURL)
                 .help("Обновить подписку (⌘R)")
-                .accessibilityLabel(client.updating ? "Подписка обновляется" : "Обновить подписку")
+                .accessibilityLabel(client.updating ? String(localized: "Подписка обновляется") : String(localized: "Обновить подписку"))
             }
             if let usage = client.status.usage {
                 if let total = usage.total {
@@ -265,8 +265,8 @@ struct SubscriptionSummary: View {
                     Text("Трафик: \(Self.bytes(usage.used)), без ограничения").font(.caption).foregroundStyle(.secondary)
                 }
                 if let expire = usage.expire {
-                    Text(expire < Date() ? "Подписка закончилась \(expire.formatted(date: .long, time: .omitted))"
-                                         : "Действует до \(expire.formatted(date: .long, time: .omitted))")
+                    Text(expire < Date() ? String(localized: "Подписка закончилась \(expire.formatted(date: .long, time: .omitted))")
+                                         : String(localized: "Действует до \(expire.formatted(date: .long, time: .omitted))"))
                         .font(.caption).foregroundStyle(expire.timeIntervalSinceNow < 3 * 86400 ? .orange : .secondary)
                 }
             }

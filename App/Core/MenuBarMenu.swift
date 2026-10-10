@@ -23,19 +23,19 @@ enum MenuBarMenu {
         let connection: Entry
         switch status.primary {
         case .disconnect, .cancel:
-            connection = Entry(item: .disconnect, title: "Отключить", enabled: !busy)
+            connection = Entry(item: .disconnect, title: String(localized: "Отключить"), enabled: !busy)
         default:
-            connection = Entry(item: .connect, title: "Подключить",
+            connection = Entry(item: .connect, title: String(localized: "Подключить"),
                                enabled: status.primary == .connect && status.primaryEnabled && coreConfigured && !busy)
         }
         return [
             connection,
             Entry(item: .fastest, title: ServerPicker.fastestTitle, enabled: fastestAvailable && !busy),
             nil,
-            Entry(item: .openApp, title: "Открыть KillSwitch"),
-            Entry(item: .leakTest, title: "Проверка утечек"),
+            Entry(item: .openApp, title: String(localized: "Открыть KillSwitch")),
+            Entry(item: .leakTest, title: String(localized: "Проверка утечек")),
             nil,
-            Entry(item: .quit, title: "Выход"),
+            Entry(item: .quit, title: String(localized: "Выход")),
         ]
     }
 }

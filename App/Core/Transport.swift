@@ -84,12 +84,12 @@ enum Transport {
     }
 
     static func fingerprintTitle(_ value: String?, subscription: String?) -> String {
-        value ?? "Как в подписке (\(subscription ?? "нет"))"
+        value ?? String(localized: "Как в подписке (\(subscription ?? String(localized: "нет")))")
     }
 
     static func muxTitle(_ value: String?, subscription: String?) -> String {
-        func name(_ v: String) -> String { v == off ? "выкл." : v }
-        if let value { return value == off ? "Выкл." : value }
-        return "Как в подписке (\(name(subscription ?? off)))"
+        func name(_ v: String) -> String { v == off ? String(localized: "выкл.") : v }
+        if let value { return value == off ? String(localized: "Выкл.") : value }
+        return String(localized: "Как в подписке (\(name(subscription ?? off)))")
     }
 }

@@ -14,10 +14,10 @@ enum ProfileError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .html: "Сервер вернул веб-страницу вместо списка серверов. Проверь ссылку подписки."
-        case .notAProfile: "Ответ не похож на подписку mihomo/Clash."
-        case .noProxies: "В подписке нет ни одного сервера."
-        case .badYAML(let detail): "Не получилось разобрать подписку: \(detail)"
+        case .html: String(localized: "Сервер вернул веб-страницу вместо списка серверов. Проверь ссылку подписки.")
+        case .notAProfile: String(localized: "Ответ не похож на подписку mihomo/Clash.")
+        case .noProxies: String(localized: "В подписке нет ни одного сервера.")
+        case .badYAML(let detail): String(localized: "Не получилось разобрать подписку: \(detail)")
         }
     }
 }

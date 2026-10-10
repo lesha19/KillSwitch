@@ -34,12 +34,12 @@ enum UserNotice: Equatable {
 
         var title: String {
             switch self {
-            case .connect: "Подключить"
-            case .openApp: "Открыть KillSwitch"
-            case .renew: "Продлить…"
-            case .approve: "Разрешить…"
-            case .openLoginItems: "Открыть"
-            case .check: "Проверить"
+            case .connect: String(localized: "Подключить")
+            case .openApp: String(localized: "Открыть KillSwitch")
+            case .renew: String(localized: "Продлить…")
+            case .approve: String(localized: "Разрешить…")
+            case .openLoginItems: String(localized: "Открыть")
+            case .check: String(localized: "Проверить")
             }
         }
     }
@@ -86,18 +86,18 @@ enum UserNotice: Equatable {
 
     var title: String {
         switch self {
-        case .vpnDropped: "VPN оборвался"
-        case .reconnected: "VPN снова работает"
-        case .serverSwitched: "VPN переключился на другой сервер"
-        case .serversDown(let country): "Серверы «\(country)» не отвечают"
-        case .autoConnectNeedsPassword: "VPN не подключился сам"
+        case .vpnDropped: String(localized: "VPN оборвался")
+        case .reconnected: String(localized: "VPN снова работает")
+        case .serverSwitched: String(localized: "VPN переключился на другой сервер")
+        case .serversDown(let country): String(localized: "Серверы «\(country)» не отвечают")
+        case .autoConnectNeedsPassword: String(localized: "VPN не подключился сам")
         case .otherVPN(let name): OtherVPN.title(name: name)
-        case .subscriptionEnding(let days, _, _): "Подписка кончается через " + Russian.plural(days, "день", "дня", "дней")
-        case .trafficLow: "Трафик почти закончился"
-        case .newServers: "В подписке новые серверы"
-        case .pauseEnded: "Защита снова включена"
-        case .serviceOff: "Служба KillSwitch выключена"
-        case .macOSUpdated: "macOS обновилась"
+        case .subscriptionEnding(let days, _, _): String(localized: "Подписка кончается через ") + Russian.plural(days, String(localized: "день"), String(localized: "дня"), String(localized: "дней"))
+        case .trafficLow: String(localized: "Трафик почти закончился")
+        case .newServers: String(localized: "В подписке новые серверы")
+        case .pauseEnded: String(localized: "Защита снова включена")
+        case .serviceOff: String(localized: "Служба KillSwitch выключена")
+        case .macOSUpdated: String(localized: "macOS обновилась")
         }
     }
 
@@ -106,20 +106,20 @@ enum UserNotice: Equatable {
     func body(calendar: Calendar) -> String {
         switch self {
         case .vpnDropped(let protected):
-            protected ? "Интернет закрыт, пока VPN не подключится. Ничего не утекает."
-                      : "Защита выключена — программы идут в интернет напрямую."
-        case .reconnected(let server): server ?? "Интернет снова идёт через VPN."
-        case .serverSwitched(let from, let to): "«\(from)» не отвечал. Теперь — «\(to)»."
-        case .serversDown: "Выбери другую страну или «Самый быстрый»."
-        case .autoConnectNeedsPassword: "Службу нужно обновить."
-        case .otherVPN: "KillSwitch не подключился сам, чтобы не выключать его без спроса. Переключиться можно в KillSwitch."
+            protected ? String(localized: "Интернет закрыт, пока VPN не подключится. Ничего не утекает.")
+                      : String(localized: "Защита выключена — программы идут в интернет напрямую.")
+        case .reconnected(let server): server ?? String(localized: "Интернет снова идёт через VPN.")
+        case .serverSwitched(let from, let to): String(localized: "«\(from)» не отвечал. Теперь — «\(to)».")
+        case .serversDown: String(localized: "Выбери другую страну или «Самый быстрый».")
+        case .autoConnectNeedsPassword: String(localized: "Службу нужно обновить.")
+        case .otherVPN: String(localized: "KillSwitch не подключился сам, чтобы не выключать его без спроса. Переключиться можно в KillSwitch.")
         case .subscriptionEnding(_, let title, let expire):
-            "\(title ?? "Подписка") до \(Self.day(expire, calendar: calendar))."
+            String(localized: "\(title ?? String(localized: "Подписка")) до \(Self.day(expire, calendar: calendar)).")
         case .trafficLow(let used, let total): Russian.traffic(used: used, total: total) + "."
-        case .newServers: "Разреши их, чтобы обновление применилось."
-        case .pauseEnded: "Пауза закончилась."
-        case .serviceOff: "Включи её в Объектах входа."
-        case .macOSUpdated: "Перезагрузи Mac и запусти проверку утечек."
+        case .newServers: String(localized: "Разреши их, чтобы обновление применилось.")
+        case .pauseEnded: String(localized: "Пауза закончилась.")
+        case .serviceOff: String(localized: "Включи её в Объектах входа.")
+        case .macOSUpdated: String(localized: "Перезагрузи Mac и запусти проверку утечек.")
         }
     }
 

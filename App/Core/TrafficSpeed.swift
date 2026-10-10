@@ -29,10 +29,10 @@ struct TrafficSpeed {
     /// «64 КБ/с», «1,2 МБ/с», «13 МБ/с».
     static func format(_ bytesPerSecond: Double) -> String {
         let kb = bytesPerSecond / 1024
-        if kb < 1000 { return "\(Int(kb.rounded(.down))) КБ/с" }
+        if kb < 1000 { return String(localized: "\(Int(kb.rounded(.down))) КБ/с") }
         let mb = kb / 1024
-        if mb < 10 { return String(format: "%.1f", (mb * 10).rounded(.down) / 10).replacingOccurrences(of: ".", with: ",") + " МБ/с" }
-        return "\(Int(mb.rounded())) МБ/с"
+        if mb < 10 { return String(format: "%.1f", (mb * 10).rounded(.down) / 10).replacingOccurrences(of: ".", with: ",") + String(localized: " МБ/с") }
+        return String(localized: "\(Int(mb.rounded())) МБ/с")
     }
 
     static func label(_ speed: Speed) -> String {

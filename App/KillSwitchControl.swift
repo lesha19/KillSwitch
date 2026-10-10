@@ -87,7 +87,7 @@ final class KillSwitchControl {
             do {
                 if newValue { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             } catch {
-                self.error = UserError(title: "Не получилось изменить запуск при входе", message: error.localizedDescription,
+                self.error = UserError(title: String(localized: "Не получилось изменить запуск при входе"), message: error.localizedDescription,
                                        details: error.localizedDescription)
             }
         }
@@ -469,7 +469,7 @@ final class KillSwitchControl {
         case .needsPassword:
             notify(.autoConnectNeedsPassword)
         case .failed(let message):
-            error = UserError.from(raw: message.isEmpty ? "Не получилось подключиться автоматически" : message, context: .helper)
+            error = UserError.from(raw: message.isEmpty ? String(localized: "Не получилось подключиться автоматически") : message, context: .helper)
         case .cancelled:
             break
         }
@@ -489,7 +489,7 @@ final class KillSwitchControl {
         case .ok: measured = [:]; return .ok
         case .needsPassword: return .needsPassword
         case .cancelled: return .cancelled
-        case .failed(let message): return .failed(message.isEmpty ? "Не получилось" : message)
+        case .failed(let message): return .failed(message.isEmpty ? String(localized: "Не получилось") : message)
         }
     }
 

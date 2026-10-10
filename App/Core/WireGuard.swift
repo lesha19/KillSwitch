@@ -27,10 +27,10 @@ enum WireGuard {
             default: continue
             }
         }
-        guard !peers.isEmpty else { throw ProxyLinkError.malformed("нет раздела [Peer]") }
+        guard !peers.isEmpty else { throw ProxyLinkError.malformed(String(localized: "нет раздела [Peer]")) }
         let first = peers[0]
         guard let endpoint = first["endpoint"], let (host, port) = splitEndpoint(endpoint) else {
-            throw ProxyLinkError.malformed("нет адреса сервера (Endpoint)")
+            throw ProxyLinkError.malformed(String(localized: "нет адреса сервера (Endpoint)"))
         }
         var proxy = try build(
             name: name, host: host, port: port,
@@ -52,17 +52,17 @@ enum WireGuard {
     /// `wireguard://<private key>@host:port?publickey=…&address=…&mtu=…&reserved=…#name`
     /// (v2rayN/sing-box style; `wg://` and the usual spellings of the keys are accepted).
     static func parse(link: String) throws -> [String: Any] {
-        guard let schemeEnd = link.range(of: "://") else { throw ProxyLinkError.malformed("нет схемы") }
+        guard let schemeEnd = link.range(of: "://") else { throw ProxyLinkError.malformed(String(localized: "нет схемы")) }
         let body = link[schemeEnd.upperBound...]
         // the key is base64 and may come unencoded with "/" in it: split it off by hand
-        guard let at = body.firstIndex(of: "@") else { throw ProxyLinkError.malformed("нет сервера") }
+        guard let at = body.firstIndex(of: "@") else { throw ProxyLinkError.malformed(String(localized: "нет сервера")) }
         let userinfo = String(body[..<at])
         guard let components = URLComponents(string: "wg://x@" + body[body.index(after: at)...]) else {
-            throw ProxyLinkError.malformed("не разбирается как адрес")
+            throw ProxyLinkError.malformed(String(localized: "не разбирается как адрес"))
         }
-        guard var host = components.host, !host.isEmpty else { throw ProxyLinkError.malformed("нет сервера") }
+        guard var host = components.host, !host.isEmpty else { throw ProxyLinkError.malformed(String(localized: "нет сервера")) }
         if host.hasPrefix("[") && host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
-        guard let port = components.port, (1...65535).contains(port) else { throw ProxyLinkError.malformed("нет порта") }
+        guard let port = components.port, (1...65535).contains(port) else { throw ProxyLinkError.malformed(String(localized: "нет порта")) }
         var query: [String: String] = [:]
         for item in components.queryItems ?? [] {
             query[item.name.lowercased().replacingOccurrences(of: "_", with: "").replacingOccurrences(of: "-", with: "")] = item.value ?? ""
@@ -83,14 +83,14 @@ enum WireGuard {
     private static func build(name: String?, host: String, port: Int, privateKey: String?, publicKey: String?,
                               presharedKey: String?, address: String?, allowedIPs: String?, mtu: String?,
                               reserved: String?, keepalive: String?) throws -> [String: Any] {
-        guard let privateKey, isKey(privateKey) else { throw ProxyLinkError.malformed("нет закрытого ключа или он неверный") }
-        guard let publicKey, isKey(publicKey) else { throw ProxyLinkError.malformed("нет открытого ключа сервера или он неверный") }
+        guard let privateKey, isKey(privateKey) else { throw ProxyLinkError.malformed(String(localized: "нет закрытого ключа или он неверный")) }
+        guard let publicKey, isKey(publicKey) else { throw ProxyLinkError.malformed(String(localized: "нет открытого ключа сервера или он неверный")) }
         var proxy: [String: Any] = [
             "name": name ?? "WireGuard \(host)", "type": "wireguard", "server": host, "port": port,
             "private-key": privateKey, "public-key": publicKey, "udp": true,
         ]
         if let presharedKey, !presharedKey.isEmpty {
-            guard isKey(presharedKey) else { throw ProxyLinkError.malformed("неверный общий ключ (PresharedKey)") }
+            guard isKey(presharedKey) else { throw ProxyLinkError.malformed(String(localized: "неверный общий ключ (PresharedKey)")) }
             proxy["pre-shared-key"] = presharedKey
         }
         // mihomo takes bare addresses; the prefix of a wg-quick Address is the tunnel's own
@@ -98,7 +98,7 @@ enum WireGuard {
             let ip = String(item.split(separator: "/").first ?? "")
             if ip.contains(":") { if proxy["ipv6"] == nil { proxy["ipv6"] = ip } } else if proxy["ip"] == nil { proxy["ip"] = ip }
         }
-        guard proxy["ip"] != nil || proxy["ipv6"] != nil else { throw ProxyLinkError.malformed("в файле нет адреса (Address)") }
+        guard proxy["ip"] != nil || proxy["ipv6"] != nil else { throw ProxyLinkError.malformed(String(localized: "в файле нет адреса (Address)")) }
         let allowed = list(allowedIPs ?? "")
         proxy["allowed-ips"] = allowed.isEmpty ? ["0.0.0.0/0", "::/0"] : allowed
         if let mtu = mtu.flatMap(Int.init), mtu > 0 { proxy["mtu"] = mtu }
@@ -115,21 +115,21 @@ enum WireGuard {
     /// which peer a packet goes to.
     private static func peer(_ fields: [String: String], number: Int) throws -> [String: Any] {
         guard let endpoint = fields["endpoint"], let (host, port) = splitEndpoint(endpoint) else {
-            throw ProxyLinkError.malformed("нет адреса сервера (Endpoint) у [Peer] №\(number)")
+            throw ProxyLinkError.malformed(String(localized: "нет адреса сервера (Endpoint) у [Peer] №\(number)"))
         }
         guard let publicKey = fields["publickey"], isKey(publicKey) else {
-            throw ProxyLinkError.malformed("нет открытого ключа или он неверный у [Peer] №\(number)")
+            throw ProxyLinkError.malformed(String(localized: "нет открытого ключа или он неверный у [Peer] №\(number)"))
         }
         let allowed = list(fields["allowedips"] ?? "")
-        guard !allowed.isEmpty else { throw ProxyLinkError.malformed("нет AllowedIPs у [Peer] №\(number)") }
+        guard !allowed.isEmpty else { throw ProxyLinkError.malformed(String(localized: "нет AllowedIPs у [Peer] №\(number)")) }
         var peer: [String: Any] = ["server": host, "port": port, "public-key": publicKey, "allowed-ips": allowed]
         if let presharedKey = fields["presharedkey"], !presharedKey.isEmpty {
-            guard isKey(presharedKey) else { throw ProxyLinkError.malformed("неверный общий ключ (PresharedKey) у [Peer] №\(number)") }
+            guard isKey(presharedKey) else { throw ProxyLinkError.malformed(String(localized: "неверный общий ключ (PresharedKey) у [Peer] №\(number)")) }
             peer["pre-shared-key"] = presharedKey
         }
         if let reserved = fields["reserved"], !reserved.isEmpty {
             // mihomo reads a peer's reserved only as 3 bytes
-            guard let bytes = reservedBytes(reserved) else { throw ProxyLinkError.malformed("неверное Reserved у [Peer] №\(number)") }
+            guard let bytes = reservedBytes(reserved) else { throw ProxyLinkError.malformed(String(localized: "неверное Reserved у [Peer] №\(number)")) }
             peer["reserved"] = bytes
         }
         return peer
@@ -151,7 +151,7 @@ enum WireGuard {
         var option: [String: Any] = [:]
         for (key, title) in numbers {
             guard let value = interface[key] else { continue }
-            guard let number = Int(value), number >= 0 else { throw ProxyLinkError.malformed("неверное значение \(title) (AmneziaWG)") }
+            guard let number = Int(value), number >= 0 else { throw ProxyLinkError.malformed(String(localized: "неверное значение \(title) (AmneziaWG)")) }
             option[key] = number
         }
         for key in texts {

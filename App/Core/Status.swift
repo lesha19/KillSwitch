@@ -124,16 +124,16 @@ enum Status: Equatable {
 
         var title: String {
             switch self {
-            case .install: "Начать настройку…"
-            case .repair: "Восстановить службу…"
-            case .openLoginItems: "Открыть Объекты входа"
-            case .addSubscription: "Добавить подписку…"
-            case .connect: "Подключить"
-            case .cancel: "Отменить"
-            case .disconnect: "Отключить"
-            case .chooseServer: "Выбрать другой сервер…"
-            case .enableProtection: "Включить защиту"
-            case .resumeProtection: "Возобновить защиту"
+            case .install: String(localized: "Начать настройку…")
+            case .repair: String(localized: "Восстановить службу…")
+            case .openLoginItems: String(localized: "Открыть Объекты входа")
+            case .addSubscription: String(localized: "Добавить подписку…")
+            case .connect: String(localized: "Подключить")
+            case .cancel: String(localized: "Отменить")
+            case .disconnect: String(localized: "Отключить")
+            case .chooseServer: String(localized: "Выбрать другой сервер…")
+            case .enableProtection: String(localized: "Включить защиту")
+            case .resumeProtection: String(localized: "Возобновить защиту")
             case .replaceOtherVPN: OtherVPN.buttonTitle(.stop, name: nil)
             }
         }
@@ -157,17 +157,17 @@ enum Status: Equatable {
 
     var title: String {
         switch self {
-        case .checking: "Проверка…"
-        case .notInstalled: "KillSwitch не установлен"
-        case .broken: "Нужна починка"
-        case .needsSetup: "Добавь подписку"
-        case .otherVPN: "Работает другой VPN"
-        case .connecting: "Подключение…"
-        case .stuck: "Подключение затянулось"
-        case .protected: "Защищено"
-        case .connectedUnprotected: "Подключено без защиты"
-        case .blocked: "Интернет заблокирован"
-        case .unprotected: "Без VPN и без защиты"
+        case .checking: String(localized: "Проверка…")
+        case .notInstalled: String(localized: "KillSwitch не установлен")
+        case .broken: String(localized: "Нужна починка")
+        case .needsSetup: String(localized: "Добавь подписку")
+        case .otherVPN: String(localized: "Работает другой VPN")
+        case .connecting: String(localized: "Подключение…")
+        case .stuck: String(localized: "Подключение затянулось")
+        case .protected: String(localized: "Защищено")
+        case .connectedUnprotected: String(localized: "Подключено без защиты")
+        case .blocked: String(localized: "Интернет заблокирован")
+        case .unprotected: String(localized: "Без VPN и без защиты")
         }
     }
 
@@ -184,20 +184,20 @@ enum Status: Equatable {
     func line(_ detail: Detail) -> String {
         switch self {
         case .checking: ""
-        case .notInstalled: "Установка займёт минуту и попросит пароль один раз."
+        case .notInstalled: String(localized: "Установка займёт минуту и попросит пароль один раз.")
         case .broken(let problem): UserError.problem(problem).message
-        case .needsSetup: "Без неё VPN не к чему подключаться."
+        case .needsSetup: String(localized: "Без неё VPN не к чему подключаться.")
         case .otherVPN(let blocksDirect):
-            blocksDirect ? "KillSwitch не подключён. Сайты, которые тот VPN пускает напрямую (часто российские), защита блокирует."
-                         : "KillSwitch не подключён: два VPN не работают вместе."
+            blocksDirect ? String(localized: "KillSwitch не подключён. Сайты, которые тот VPN пускает напрямую (часто российские), защита блокирует.")
+                         : String(localized: "KillSwitch не подключён: два VPN не работают вместе.")
         case .connecting: detail.server ?? ""
-        case .stuck: "Сервер не отвечает. Попробуй другой."
+        case .stuck: String(localized: "Сервер не отвечает. Попробуй другой.")
         case .protected:
-            [detail.server, detail.ping.map { "\($0) мс" }].compactMap { $0 }.joined(separator: " · ")
-        case .connectedUnprotected: "Если VPN оборвётся, программы пойдут в интернет напрямую."
-        case .blocked: "VPN не подключён, поэтому интернет закрыт. Ничего не утекает."
+            [detail.server, detail.ping.map { String(localized: "\($0) мс") }].compactMap { $0 }.joined(separator: " · ")
+        case .connectedUnprotected: String(localized: "Если VPN оборвётся, программы пойдут в интернет напрямую.")
+        case .blocked: String(localized: "VPN не подключён, поэтому интернет закрыт. Ничего не утекает.")
         case .unprotected(let until):
-            "Программы ходят в интернет напрямую." + (until.map { " Пауза до \(Self.time($0))." } ?? "")
+            String(localized: "Программы ходят в интернет напрямую.") + (until.map { String(localized: " Пауза до \(Self.time($0)).") } ?? "")
         }
     }
 
@@ -211,10 +211,10 @@ enum Status: Equatable {
     func homeLine(_ detail: Detail) -> String {
         switch self {
         case .protected:
-            "Интернет только через VPN" + (detail.switched.map {
-                ". В \(Self.time($0.at)) «\($0.from)» перестал отвечать — переключились на «\($0.to)»."
+            String(localized: "Интернет только через VPN") + (detail.switched.map {
+                String(localized: ". В \(Self.time($0.at)) «\($0.from)» перестал отвечать — переключились на «\($0.to)».")
             } ?? "")
-        case .connecting: "Сервер скоро ответит"
+        case .connecting: String(localized: "Сервер скоро ответит")
         case .otherVPN where detail.otherVPNStopFailed: OtherVPN.stopFailed(name: detail.otherVPN)
         default: line(detail)
         }

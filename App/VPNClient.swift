@@ -112,11 +112,11 @@ final class VPNClient {
     /// Keeps a subscription link in the keychain; the status starts over.
     private func store(_ url: String) -> Bool {
         guard let components = URLComponents(string: url), components.scheme?.lowercased() == "https", components.host?.isEmpty == false else {
-            lastError = UserError(title: "Это не ссылка на подписку", message: "Нужна ссылка вида https://…")
+            lastError = UserError(title: String(localized: "Это не ссылка на подписку"), message: String(localized: "Нужна ссылка вида https://…"))
             return false
         }
         guard Keychain.write(Self.urlAccount, Data(url.utf8)) else {
-            lastError = UserError(title: "Ссылка не сохранилась", message: "Не получилось сохранить ссылку в связке ключей.")
+            lastError = UserError(title: String(localized: "Ссылка не сохранилась"), message: String(localized: "Не получилось сохранить ссылку в связке ключей."))
             return false
         }
         hasURL = true
@@ -159,7 +159,7 @@ final class VPNClient {
                 let proxy = try ProxyLink.parse(link)
                 added.append(ManualServer(link: link, name: name ?? proxy["name"] as? String ?? "Сервер"))
             } catch {
-                lastError = UserError(title: "Не получилось добавить сервер", message: error.localizedDescription,
+                lastError = UserError(title: String(localized: "Не получилось добавить сервер"), message: error.localizedDescription,
                                       details: error.localizedDescription)
                 return nil
             }
@@ -174,11 +174,11 @@ final class VPNClient {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
               (attributes[.size] as? Int ?? 0) < 64 * 1024,
               let text = try? String(contentsOf: url, encoding: .utf8) else {
-            lastError = UserError(title: "Не получилось добавить сервер", message: "Не получилось прочитать файл WireGuard.")
+            lastError = UserError(title: String(localized: "Не получилось добавить сервер"), message: String(localized: "Не получилось прочитать файл WireGuard."))
             return
         }
         guard ProxyLink.isWireGuardConf(text) else {
-            lastError = UserError(title: "Не получилось добавить сервер", message: "Это не файл WireGuard: в нём нет раздела [Interface].")
+            lastError = UserError(title: String(localized: "Не получилось добавить сервер"), message: String(localized: "Это не файл WireGuard: в нём нет раздела [Interface]."))
             return
         }
         await addLink(text, name: url.deletingPathExtension().lastPathComponent)

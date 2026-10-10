@@ -124,9 +124,9 @@ private struct WelcomeStep: View {
     private var items: [String] {
         later.compactMap {
             switch $0 {
-            case .subscription: "Ссылка на подписку"
-            case .install: "Установка (пароль Mac — один раз)"
-            case .filter: "Защита macOS (по желанию)"
+            case .subscription: String(localized: "Ссылка на подписку")
+            case .install: String(localized: "Установка (пароль Mac — один раз)")
+            case .filter: String(localized: "Защита macOS (по желанию)")
             case .welcome, .done: nil
             }
         }
@@ -147,7 +147,7 @@ private struct SubscriptionStep: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            StepHeader(title: "Ссылка на подписку", text: "Её даёт VPN-сервис: в боте или личном кабинете.")
+            StepHeader(title: String(localized: "Ссылка на подписку"), text: String(localized: "Её даёт VPN-сервис: в боте или личном кабинете."))
             if let found, found.ready {
                 HStack {
                     Text(client.maskedURL ?? "").monospaced().lineLimit(1).truncationMode(.middle)
@@ -247,11 +247,11 @@ private struct InstallStep: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             if installed {
-                StepHeader(title: "Подключение", text: "KillSwitch загрузит серверы подписки и подключит VPN.")
+                StepHeader(title: String(localized: "Подключение"), text: String(localized: "KillSwitch загрузит серверы подписки и подключит VPN."))
                 Text("macOS попросит пароль администратора.")
             } else {
-                StepHeader(title: "Установка",
-                           text: "KillSwitch поставит фоновую службу. Она работает от системы ещё до входа в учётную запись и следит, чтобы ничего не шло мимо VPN.")
+                StepHeader(title: String(localized: "Установка"),
+                           text: String(localized: "KillSwitch поставит фоновую службу. Она работает от системы ещё до входа в учётную запись и следит, чтобы ничего не шло мимо VPN."))
                 Text("macOS попросит пароль администратора — один раз.")
                 Text("После установки macOS покажет уведомление «Добавлен фоновый объект» — это KillSwitch.")
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -259,7 +259,7 @@ private struct InstallStep: View {
             if running {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text(installed ? "Загружаю серверы…" : "Устанавливаю службу и загружаю серверы…").foregroundStyle(.secondary)
+                    Text(installed ? String(localized: "Загружаю серверы…") : String(localized: "Устанавливаю службу и загружаю серверы…")).foregroundStyle(.secondary)
                 }
             } else if let error = control.error ?? client.lastError {
                 InlineError(error: error)
@@ -268,7 +268,7 @@ private struct InstallStep: View {
             HStack {
                 Spacer()
                 Button("Назад", action: back).keyboardShortcut(.cancelAction).disabled(running)
-                Button(failed ? "Повторить" : installed ? "Подключить…" : "Установить…", action: install)
+                Button(failed ? String(localized: "Повторить") : installed ? String(localized: "Подключить…") : String(localized: "Установить…"), action: install)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
                     .disabled(running)
@@ -303,9 +303,9 @@ private struct FilterStep: View {
     var body: some View {
         let filter = control.filter
         VStack(alignment: .leading, spacing: 14) {
-            StepHeader(title: "Защита macOS",
-                       text: "Второй уровень: macOS сама не выпустит программы мимо VPN, даже если основную защиту кто-то снимет.",
-                       badge: "Рекомендуем")
+            StepHeader(title: String(localized: "Защита macOS"),
+                       text: String(localized: "Второй уровень: macOS сама не выпустит программы мимо VPN, даже если основную защиту кто-то снимет."),
+                       badge: String(localized: "Рекомендуем"))
             VStack(alignment: .leading, spacing: 6) {
                 Text("1. Нажми «Включить…» — macOS откроет Системные настройки.")
                 Text("2. В разделе «Сетевые расширения» включи KillSwitch.")
@@ -368,7 +368,7 @@ private struct DoneStep: View {
                 .accessibilityHidden(true)
             Text(status.title).font(.title2.bold()).accessibilityAddTraits(.isHeader)
             if let server = control.currentServer {
-                Text(ServerName.display(server) + (control.delay(of: server).map { " · \($0) мс" } ?? ""))
+                Text(ServerName.display(server) + (control.delay(of: server).map { String(localized: " · \($0) мс") } ?? ""))
                     .foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 10) {

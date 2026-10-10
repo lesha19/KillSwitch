@@ -37,6 +37,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   загрузки» tells how to check it and the Developer ID signature.
 
 ### Changed
+- The string catalog is complete: the texts built in code (status, errors, notifications, the
+  protection log, leak test findings, menus, settings rows…) go through `String(localized:)` and
+  are in `Localizable.xcstrings` (224 → 596 keys); `StatusLabel` takes a literal as a catalog key.
+  A test keeps App/Core free of texts outside the catalog.
 - Favourites and «Подключение к серверу» overrides are kept by a server's identity (type, address,
   port and a hash of its uuid/password; the secret itself is not stored), not by its name, so a
   rename in the subscription keeps them. Name-keyed data from earlier versions is moved over once

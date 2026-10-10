@@ -10,19 +10,19 @@ enum NetworkHints {
 
         var title: String {
             switch self {
-            case .privateRelay: "Включён «Частный узел iCloud»"
-            case .overlay(let name): "Работает \(name)"
+            case .privateRelay: String(localized: "Включён «Частный узел iCloud»")
+            case .overlay(let name): String(localized: "Работает \(name)")
             }
         }
 
         var text: String {
             switch self {
             case .privateRelay:
-                "Safari и часть запросов системы идут через серверы Apple, а не через VPN. При включённой защите они могут не открываться, а без защиты — обходят VPN. Лучше выключить его в настройках iCloud."
+                String(localized: "Safari и часть запросов системы идут через серверы Apple, а не через VPN. При включённой защите они могут не открываться, а без защиты — обходят VPN. Лучше выключить его в настройках iCloud.")
             case .overlay("Tailscale"):
-                "Сеть Tailscale (100.64.0.0/10) идёт мимо VPN — так задумано (Защита › Что можно без VPN). Выходной узел Tailscale защита не пропускает."
+                String(localized: "Сеть Tailscale (100.64.0.0/10) идёт мимо VPN — так задумано (Защита › Что можно без VPN). Выходной узел Tailscale защита не пропускает.")
             case .overlay(let name):
-                "Сеть \(name) идёт мимо VPN, только если её адреса разрешены в «Адреса без VPN» (Дополнительно) или это домашняя сеть. Остальное идёт только через VPN."
+                String(localized: "Сеть \(name) идёт мимо VPN, только если её адреса разрешены в «Адреса без VPN» (Дополнительно) или это домашняя сеть. Остальное идёт только через VPN.")
             }
         }
     }

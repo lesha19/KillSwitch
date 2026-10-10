@@ -17,7 +17,7 @@ struct LeakTestView: View {
                                              probe: control.state == .on ? { await control.probeDirectExits() } : nil)
                         }
                     } label: {
-                        Text(tester.running ? "Проверяю…" : "Проверить").frame(maxWidth: .infinity)
+                        Text(tester.running ? String(localized: "Проверяю…") : String(localized: "Проверить")).frame(maxWidth: .infinity)
                     }
                     .controlSize(.large).buttonStyle(.borderedProminent)
                     .disabled(tester.running)
@@ -43,7 +43,7 @@ struct LeakTestView: View {
                 Section("Адрес в интернете") {
                     ForEach(result.ipv4, id: \.source) { row in
                         LabeledContent("IPv4 (\(row.source))") {
-                            Text(row.ip ?? "нет ответа").monospaced().textSelection(.enabled)
+                            Text(row.ip ?? String(localized: "нет ответа")).monospaced().textSelection(.enabled)
                         }
                     }
                     if let exit = result.exit, exit.country != nil || exit.org != nil {

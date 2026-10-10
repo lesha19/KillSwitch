@@ -19,7 +19,7 @@ enum RefreshOutcome: Equatable {
             self = .needsPassword
         } else {
             let message = output.trimmingCharacters(in: .whitespacesAndNewlines)
-            self = .failed(message.isEmpty ? "Не получилось" : message)
+            self = .failed(message.isEmpty ? String(localized: "Не получилось") : message)
         }
     }
 

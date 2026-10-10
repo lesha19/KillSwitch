@@ -51,7 +51,7 @@ enum SplitApps {
     static func writableWarning(_ paths: [String]) -> String? {
         guard !paths.isEmpty else { return nil }
         let names = paths.map { (($0 as NSString).lastPathComponent as NSString).deletingPathExtension }.joined(separator: ", ")
-        return "\(names) можно изменить без пароля администратора, и всё, что запустится из \(paths.count == 1 ? "него" : "них"), пойдёт мимо VPN."
+        return String(localized: "\(names) можно изменить без пароля администратора, и всё, что запустится из \(paths.count == 1 ? String(localized: "него") : String(localized: "них")), пойдёт мимо VPN.")
     }
 
     /// What the helper accepts: no list separator or control characters, and either an absolute
@@ -79,7 +79,7 @@ enum Multihop {
 
     /// «Вход: 🇩🇪 … → Выход: 🇱🇹 …»
     static func chain(entry: String, exit: String?) -> String {
-        "Вход: \(label(entry)) → Выход: \(exit.map(label) ?? "?")"
+        String(localized: "Вход: \(label(entry)) → Выход: \(exit.map(label) ?? "?")")
     }
 
     /// Servers that may be the entry: not the exit, and names the helper accepts.

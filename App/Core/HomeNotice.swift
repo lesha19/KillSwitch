@@ -50,26 +50,26 @@ enum HomeNotice: Equatable {
 
     var title: String {
         switch self {
-        case .otherVPN: "Работает другой VPN."
+        case .otherVPN: String(localized: "Работает другой VPN.")
         case .network(let cause): cause.title + "."
-        case .serversDown(let country): "Серверы «\(country)» не отвечают."
-        case .expired: "Подписка закончилась."
-        case .ending(let days): "Подписка кончается через \(Russian.plural(days, "день", "дня", "дней"))."
-        case .trafficLow(let used, let total): "Трафик почти закончился: \(Russian.traffic(used: used, total: total))."
-        case .newServers: "В подписке новые серверы."
-        case .filterOff: "Защита неполная."
+        case .serversDown(let country): String(localized: "Серверы «\(country)» не отвечают.")
+        case .expired: String(localized: "Подписка закончилась.")
+        case .ending(let days): String(localized: "Подписка кончается через \(Russian.plural(days, String(localized: "день"), String(localized: "дня"), String(localized: "дней"))).")
+        case .trafficLow(let used, let total): String(localized: "Трафик почти закончился: \(Russian.traffic(used: used, total: total)).")
+        case .newServers: String(localized: "В подписке новые серверы.")
+        case .filterOff: String(localized: "Защита неполная.")
         }
     }
 
     var message: String {
         switch self {
-        case .otherVPN: "Отключи его: два VPN мешают друг другу."
+        case .otherVPN: String(localized: "Отключи его: два VPN мешают друг другу.")
         case .network(let cause): cause.message
-        case .serversDown: "Другие страны KillSwitch сам не включает: выбери страну или «Самый быстрый»."
-        case .expired: "VPN работает со старыми серверами, пока они пускают."
+        case .serversDown: String(localized: "Другие страны KillSwitch сам не включает: выбери страну или «Самый быстрый».")
+        case .expired: String(localized: "VPN работает со старыми серверами, пока они пускают.")
         case .ending, .trafficLow: ""
-        case .newServers: "Разреши им работать при включённой защите."
-        case .filterOff: "Защита macOS выключена. Рекомендуем включить второй уровень."
+        case .newServers: String(localized: "Разреши им работать при включённой защите.")
+        case .filterOff: String(localized: "Защита macOS выключена. Рекомендуем включить второй уровень.")
         }
     }
 }
@@ -87,7 +87,7 @@ enum Russian {
     static func traffic(used: Int64, total: Int64?) -> String {
         guard let total else { return bytes(used) }
         let unit = Self.unit(for: max(used, total))
-        return "\(number(used, unit)) из \(number(total, unit)) \(unit.name)"
+        return String(localized: "\(number(used, unit)) из \(number(total, unit)) \(unit.name)")
     }
 
     static func bytes(_ count: Int64) -> String {
@@ -96,8 +96,8 @@ enum Russian {
     }
 
     private static func unit(for count: Int64) -> (name: String, size: Double) {
-        let units: [(String, Double)] = [("ТБ", 0x1p40), ("ГБ", 0x1p30), ("МБ", 0x1p20), ("КБ", 0x1p10)]
-        return units.first { Double(count) >= $0.1 } ?? ("Б", 1)
+        let units: [(String, Double)] = [(String(localized: "ТБ"), 0x1p40), (String(localized: "ГБ"), 0x1p30), (String(localized: "МБ"), 0x1p20), (String(localized: "КБ"), 0x1p10)]
+        return units.first { Double(count) >= $0.1 } ?? (String(localized: "Б"), 1)
     }
 
     /// One decimal under 100, none above; a comma, as in Russian.

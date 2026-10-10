@@ -134,19 +134,19 @@ enum OtherVPN {
     }
 
     static func title(name: String?) -> String {
-        "Работает другой VPN" + (name.map { " (\($0))" } ?? "")
+        String(localized: "Работает другой VPN") + (name.map { " (\($0))" } ?? "")
     }
 
     static func buttonTitle(_ remedy: Remedy, name: String?) -> String {
         switch remedy {
-        case .stop: "Отключить \(name ?? "другой VPN") и подключить KillSwitch"
-        case .openApp: "Открыть \(name ?? "программу VPN")"
-        case .none: "Подключить"
+        case .stop: String(localized: "Отключить \(name ?? String(localized: "другой VPN")) и подключить KillSwitch")
+        case .openApp: String(localized: "Открыть \(name ?? String(localized: "программу VPN"))")
+        case .none: String(localized: "Подключить")
         }
     }
 
     static func stopFailed(name: String?) -> String {
-        if let name { return "Не получилось отключить \(name) отсюда. Отключи его в самом \(name), потом нажми «Подключить»." }
-        return "Не получилось отключить другой VPN отсюда. Отключи его в его программе, потом нажми «Подключить»."
+        if let name { return String(localized: "Не получилось отключить \(name) отсюда. Отключи его в самом \(name), потом нажми «Подключить».") }
+        return String(localized: "Не получилось отключить другой VPN отсюда. Отключи его в его программе, потом нажми «Подключить».")
     }
 }
