@@ -33,6 +33,8 @@ enum DiagnosticsCopy {
             ("Наш туннель (198.18.128.1)", yes(control.ownTunnelUp)),
             ("VPN другой программы", control.foreignVPN ?? "нет"),
             ("Российские сайты — напрямую", yes(control.coreDirect)),
+            ("Двойной VPN", yes(control.multihopEntry != nil)),
+            ("Программ мимо VPN", "\(control.splitApps.count)"),
             ("Групп серверов", "\(control.proxies?.groups.count ?? 0)"),
             ("Подписка", client.hasURL ? "есть" : "нет"),
             ("Обновлена", date(client.status.lastUpdate)),

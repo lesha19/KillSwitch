@@ -204,6 +204,52 @@ private struct GeneralSettings: View {
     }
 }
 
+/// «Двойной VPN»: traffic enters through the chosen server and leaves through the selected one
+/// (`ks set multihop <entry>|off`, admin prompt).
+private struct MultihopSection: View {
+    @Environment(KillSwitchControl.self) private var control
+    @State private var pending: String?
+
+    var body: some View {
+        let exit = control.currentServer
+        let candidates = Multihop.candidates(control.proxies?.servers ?? [], exit: exit)
+        let entry = control.multihopEntry
+        Section {
+            Toggle(isOn: Binding(get: { entry != nil },
+                                 set: { on in control.setMultihop(entry: on ? (pending ?? candidates.first) : nil) })) {
+                Text("Двойной VPN")
+                Text("Трафик идёт через два сервера: сервер входа видит твой адрес, но не сайты; сервер выхода — сайты, но не твой адрес. Медленнее. Спросит пароль.")
+            }
+            .disabled(entry == nil && candidates.isEmpty)
+            if candidates.isEmpty && entry == nil {
+                Text(control.coreRunning ? "Нужно хотя бы два сервера." : "Подключись, чтобы выбрать сервер входа.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Picker("Сервер входа", selection: Binding(
+                    get: { entry ?? pending ?? candidates.first ?? "" },
+                    set: { new in
+                        pending = new
+                        if entry != nil, new != entry { control.setMultihop(entry: new) }
+                    })) {
+                    if let entry, !candidates.contains(entry) { Text(entry).tag(entry) }
+                    ForEach(candidates, id: \.self) { ServerLabel(name: $0).tag($0) }
+                }
+            }
+            if let entry {
+                Text(Multihop.chain(entry: entry, exit: exit)).font(.callout)
+                if entry == exit {
+                    Text("Вход и выход — один и тот же сервер: выбери другой сервер входа.").font(.caption).foregroundStyle(.orange)
+                }
+            }
+        } header: {
+            Text("Двойной VPN")
+        } footer: {
+            Text("Сервер выхода — тот, что выбран в списке серверов.").foregroundStyle(.secondary)
+        }
+        .disabled(control.busy || control.state == .notInstalled)
+    }
+}
+
 /// «Раздельный туннель»: chosen programs go around the VPN (`ks set splitapps`). Works only with
 /// «Российские сайты — напрямую», which lets the core reach addresses outside the tunnel.
 private struct SplitTunnelSection: View {
@@ -479,6 +525,7 @@ private struct VPNSettings: View {
                 Text("Маршрутизация")
             }
 
+            MultihopSection()
             SplitTunnelSection()
         }
         .formStyle(.grouped)

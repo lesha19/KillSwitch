@@ -32,6 +32,11 @@ final class CoreProxiesTests: XCTestCase {
         XCTAssertEqual(state.mainGroup?.name, "PROXY")
     }
 
+    func testServers() throws {
+        // real servers only, in group order: no groups, no DIRECT
+        XCTAssertEqual(try CoreProxies(data: Data(json.utf8)).servers, ["🇩🇪 Германия", "🇳🇱 NL"])
+    }
+
     func testOrderHint() throws {
         let state = try CoreProxies(data: Data(json.utf8), order: ["Auto", "PROXY"])
         XCTAssertEqual(state.groups.map(\.name), ["Auto", "PROXY"])

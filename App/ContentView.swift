@@ -70,6 +70,11 @@ struct ContentView: View {
                     DelayBadge(delay: control.delay(of: server))
                 }
             }
+            if connection == .connected || connection == .connecting, let entry = control.multihopEntry {
+                Label(Multihop.chain(entry: entry, exit: control.currentServer), systemImage: "arrow.triangle.branch")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .accessibilityLabel("Двойной VPN. \(Multihop.chain(entry: entry, exit: control.currentServer))")
+            }
             Text(protectionLine).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
 
             switch connection {

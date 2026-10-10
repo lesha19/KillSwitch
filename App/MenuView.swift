@@ -15,6 +15,9 @@ struct MenuView: View {
             let delay = control.delay(of: server).map { " · \($0) мс" } ?? ""
             Text("\(name.flag ?? "🌐") \(name.title.isEmpty ? server : name.title)\(delay)")
         }
+        if connection == .connected || connection == .connecting, let entry = control.multihopEntry {
+            Text(Multihop.chain(entry: entry, exit: control.currentServer))
+        }
         if control.foreignVPN != nil {
             Text("⚠︎ Работает VPN другой программы")
         }
