@@ -4,6 +4,41 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [0.9] - 2026-10-10
+
+Interface rework after the UX audit (`docs/ux/audit.md`, `docs/ux/spec.md`).
+
+### Added
+- First-run wizard «Начало работы»: subscription first (checked while the internet still works),
+  then install, server import and connecting as one admin command — one password, and protection
+  never comes up without a VPN; an optional «Защита macOS» step; auto-connect, launch at login and
+  notifications on the last step. The leak test learns the provider's address on the way.
+- Menu bar popover with the main screen instead of the menu; one summary status drives the icon
+  (eleven states, ten distinct icons) and the VoiceOver label, changes are announced.
+- Server choice: a flat list of countries with «Самый быстрый», search (also by country in
+  Russian), favourites, sort by ping, ping as bars and words; a server chosen while disconnected is
+  used by the next «Подключить». Subscription groups stay behind a switch in Settings → VPN.
+- Notifications per event with buttons (connect, renew, approve servers…), at most once in
+  10 minutes, each switchable in Settings → Общие: «VPN снова работает» after a drop, the
+  subscription at 3 days and 1 day left and past 90 % of traffic.
+- «Журнал защиты» in plain words; the leak test also probes for a direct exit while protection is on.
+- `docs/adr/0001-fewer-password-prompts.md`: batching now, privileged daemon with Touch ID planned.
+- `App/Localizable.xcstrings` (source language ru) for proofreading.
+
+### Changed
+- Errors in plain words with one action each; raw text under «Подробнее» and in diagnostics.
+- Settings in five tabs (Общие, VPN, Защита, Дополнительно, Помощь); lists and switches that let
+  traffic around the VPN are edited in a sheet and applied with one password.
+- Protection is an always-on mode: the main button is «Подключить / Отключить»; pause and off live
+  in «⋯» and Settings → Защита. «Обновить защиту» is now «Восстановить службу…».
+- One dictionary for words on screen: no core, tunnel, pf or filter.
+
+### Fixed
+- Arguments of admin commands are AppleScript string literals: a server or address name can no
+  longer escape into the root shell.
+- The entry-server picker of double VPN showed only the flag; names with their own emoji got an
+  extra 🌐.
+
 ## [0.8] - 2026-10-10
 
 ### Added
