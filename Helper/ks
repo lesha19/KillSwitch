@@ -7,8 +7,8 @@
 #   ks off                  disable until "ks on"
 #   ks pause [min]          disable for N minutes (default 5), e.g. for a captive Wi-Fi portal
 #   ks netrestore           network services turned off at shutdown back on (if the watchdog is gone)
-#   ks set <key> <0|1>      lan, tailscale, dns, direct, coredirect (see rules() below), adblock
-#   ks set splitapps <a,b>  apps outside the VPN (coredirect=1 only); "" clears
+#   ks set <key> <0|1>      lan, tailscale, dns, direct (see rules() below), wifiguard, adblock
+#   ks set splitapps <a,b>  apps outside the VPN; "" clears
 #   ks set multihop <proxy>|off  double VPN: every other proxy is reached through this one
 #   ks allow <addr[/n]>     always let this address or network out without VPN
 #   ks unallow <addr[/n]>
@@ -21,6 +21,7 @@
 #   ks core proxies         groups and proxies of the running core (JSON)
 #   ks core select <group> <proxy> | delay <group|proxy>
 #   ks core traffic         "up=<bytes> down=<bytes>" through the core so far (the menu bar speed)
+#   ks core connections     the core's live connections and rule providers, JSON (the «Трафик» window)
 #   ks probe                "link=0|1 ru=0|1 foreign=0|1": why nothing works (ADR 0006)
 #   ks apply                (re)load rules once unless disabled
 #   ks watch                used by the LaunchDaemon: tunnels every second, pf every 2 s, the core every 2 s
@@ -81,6 +82,8 @@ PINS="$CORE_DIR/pins"                       # "host<TAB>address" the config's se
 APPROVED_HOSTS="$CORE_DIR/approved-hosts"   # server host names of the last "ks core import"
 APPROVED_DIRECT="$CORE_DIR/approved-direct" # its DIRECT rules and groups (direct_sig)
 FOREIGN_VPN="$CORE_DIR/foreign-vpn" # world-readable: other VPN tunnels up next to our core
+CORE_EGRESS="$CORE_DIR/egress"      # world-readable: why the core may leave the tunnel (ADR 0013), empty = never
+REPORT="$CORE_DIR/routing.json"     # world-readable: what the config took, dropped and added (no secrets)
 ADDR_RE='^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$'
 
 setting() {  # setting <key> <default>
@@ -131,13 +134,14 @@ rules() {  # rules [allow-file] [servers-file] [manual-servers-file]
   [ "$(setting direct 0)" = 1 ] && echo 'pass out quick proto { tcp udp } user 0 group 80 keep state'
   # Our own core: launchd starts it from a root-owned path with a root-owned config and gid
   # _ksvpn. The group has no members and no setgid binary, so no other process carries it.
-  # The core may only reach the VPN servers, so a DIRECT rule or proxy in a profile cannot leak
-  # past the tunnel.
-  # coredirect=1 is the explicit split-tunnel switch: direct sites of the profile then work
-  # without trusting dropweb's setuid core. "flags any" as above: connections that predate
-  # the load must survive.
+  # The core may only reach the VPN servers, unless the accepted config itself sends something
+  # outside the tunnel (ADR 0013): the subscription's DIRECT rules, a provider downloaded directly,
+  # its direct DNS servers, or apps the admin put outside the VPN. Then core_commit leaves the
+  # reasons in $CORE_EGRESS and the core's group may go anywhere: what goes direct is decided by
+  # the rules the admin approved at import (approved-direct), not by pf. "flags any" as above:
+  # connections that predate the load must survive.
   if dscl . -read "/Groups/$CORE_GROUP" PrimaryGroupID >/dev/null 2>&1; then
-    if [ "$(setting coredirect 0)" = 1 ]; then
+    if [ -s "$CORE_EGRESS" ]; then
       echo "pass out quick group $CORE_GROUP flags any keep state"
     else
       [ -s "$servers_file" ] &&
@@ -484,6 +488,9 @@ core_generate() (
   n=$(plutil -extract proxies raw -o - "$in")
   [ "$n" -gt 0 ] 2>/dev/null || fail "В профиле нет proxies"
   : > "$w/servers"; : > "$w/pins"; : > "$w/names"
+  # What the report (core_report) says besides the sections: "<kind>\t<text>" per line.
+  : > "$w/notes"
+  note() { printf '%s\t%s\n' "$1" "${2//[[:cntrl:]]/?}" >> "$w/notes"; }
   # pf works on addresses, so a server given by name is pinned to the address we let through
   # (one per name, also when several proxies share it); TLS and Reality still see the name.
   # With KS_PINS set (a rebuild) the addresses come from that file only, no DNS.
@@ -510,8 +517,8 @@ core_generate() (
       direct|dns|reject|reject-drop|pass|compatible) fail "Прокси «$name»: тип «$t» не допускается" ;;
     esac
     [[ "$t" =~ ^($PROXY_TYPES)$ ]] || fail "Прокси «$name»: неизвестный тип «$t»"
-    plutil -remove "$i.interface-name" "$P" >/dev/null 2>&1
-    plutil -remove "$i.routing-mark" "$P" >/dev/null 2>&1
+    plutil -remove "$i.interface-name" "$P" >/dev/null 2>&1 && note unbound "$name"
+    plutil -remove "$i.routing-mark" "$P" >/dev/null 2>&1 && note unbound "$name"
     : > "$w/ips.$i"
     if [ "$t" = wireguard ] && has "$i.peers" "$P"; then
       # several peers: mihomo ignores the top-level server then, so it is dropped
@@ -617,8 +624,8 @@ core_generate() (
       name=$(str "$i.name" "$G")
       [ -n "$name" ] || fail "proxy-groups[$i]: нет имени"
       has "$i.use" "$G" && fail "Группа «$name»: proxy-providers не поддерживаются"
-      plutil -remove "$i.interface-name" "$G" >/dev/null 2>&1
-      plutil -remove "$i.routing-mark" "$G" >/dev/null 2>&1
+      plutil -remove "$i.interface-name" "$G" >/dev/null 2>&1 && note unbound "$name"
+      plutil -remove "$i.routing-mark" "$G" >/dev/null 2>&1 && note unbound "$name"
       [[ "$name" == *[\#\&]* ]] || [ -n "${first_group:-}" ] || first_group=$name
       echo "$name" >> "$w/names"
       i=$((i + 1))
@@ -637,6 +644,7 @@ core_generate() (
     plutil -extract rules json -o "$R" "$in"
   else
     echo "[$(jstr "MATCH,$tunnel")]" > "$R"   # mihomo's default is DIRECT
+    note default-rule "MATCH,$tunnel"
   fi
 
   RP="$w/providers.json"
@@ -647,9 +655,10 @@ core_generate() (
     # (a line break in it) would be copied unchecked. Only http (downloaded through KS-DNS unless
     # the profile names a proxy, which direct_sig records) and inline, never a file of ours; known
     # fields only; no path, mihomo picks its own in its directory.
-    KS_DNS=$KS_DNS json_edit "$RP" '
+    NOTES="$w/notes" KS_DNS=$KS_DNS json_edit "$RP" '
       die "rule-providers: не объект\n" unless ref $j eq "HASH";
       my %field = map { ($_ => 1) } qw(type behavior format url interval proxy size-limit payload path);
+      open my $notes, ">>", $ENV{NOTES} or die;
       for my $n (sort keys %$j) {
         my $shown = $n =~ s/[\x00-\x1f\x7f]/?/gr;
         die "rule-provider «$shown»: плохое имя\n" unless $n =~ /\A[A-Za-z0-9_-]{1,64}\z/;
@@ -659,9 +668,11 @@ core_generate() (
         my $t = $p->{type};
         die "rule-provider «$n»: тип «" . (ref $t ? "?" : ($t // "") =~ s/[\x00-\x1f\x7f]/?/gr) . "» не допускается (только http и inline)\n"
           unless defined $t && !ref $t && $t =~ /\A(http|inline)\z/;
+        print $notes "provider-path\t$n\n" if exists $p->{path};
         delete $p->{path};
         if ($t eq "http") {
           die "rule-provider «$n»: url не http(s)\n" unless defined $p->{url} && !ref $p->{url} && $p->{url} =~ m{\Ahttps?://[^\x00-\x20\x7f]+\z};
+          print $notes "provider-proxy\t$n\n" unless defined $p->{proxy};
           $p->{proxy} //= $ENV{KS_DNS};
           die "rule-provider «$n»: proxy не имя\n" if ref $p->{proxy} || $p->{proxy} =~ /[\x00-\x1f\x7f]/;
         }
@@ -670,8 +681,169 @@ core_generate() (
     echo '{"_":0}' > "$RP"; plutil -remove _ "$RP"
   fi
 
+  # Rules: mihomo refuses the whole config for one rule it cannot take, so such a rule is left out
+  # here instead, with the reason for the report, and the rest of the subscription works (ADR
+  # 0013): an unknown type, a target or rule provider the profile lacks, SUB-RULE (no sub-rules
+  # section is taken), a database we do not carry (IP-ASN) or GEOSITE/GEOIP without the shipped
+  # geodata (the core must never download it). Leaving a rule out never widens what goes direct
+  # in a way the signature below misses: it is computed on the rules that stay.
+  geo=""
+  [ -s "$CORE_DIR/geosite.dat" ] && geo="site"
+  [ -s "$CORE_DIR/geoip.metadb" ] && geo="$geo ip"
+  cp "$R" "$w/rules-in.json"
+  NAMES="$w/names" GEO=$geo PROV="$RP" OUT="$w/dropped.json" json_edit "$R" "$KS_RULES_PL"'
+    my (%name, %prov, %geo);
+    open my $f, "<", $ENV{NAMES} or die; %name = map { chomp; ($_ => 1) } <$f>; close $f;
+    $name{$_} = 1 for qw(DIRECT REJECT REJECT-DROP PASS COMPATIBLE GLOBAL);
+    %prov = %{ rd($ENV{PROV}) }; %geo = map { ($_ => 1) } split " ", $ENV{GEO};
+    my (@keep, @dropped);
+    for my $i (0 .. $#$j) {
+      my $why = rule_problem($j->[$i], \%name, \%prov, \%geo);
+      if ($why) { push @dropped, { section => "rules", index => $i, item => $j->[$i], reason => $why } }
+      else { push @keep, $j->[$i] }
+    }
+    @$j = @keep;
+    wr($ENV{OUT}, \@dropped);' || exit 1
+
+  # The subscription's sniffer and its DNS policy (ADR 0013), checked key by key; what is not
+  # taken goes into the report with the reason. Our own resolvers (DoH through KS-DNS) stay the
+  # default for every other name. Without a sniffer of its own the subscription gets a routing-only
+  # one: domain rules then also apply to programs that resolve names themselves (DoH in Firefox).
+  NAMES="$w/names" GEO=$geo PROV="$RP" IN="$in" W="$w" KS_DNS=$KS_DNS TUN_ADDR=$CORE_TUN_ADDR \
+    /usr/bin/perl -MJSON::PP -e "$KS_RULES_PL"'
+    my $in = rd($ENV{IN}); my $W = $ENV{W};
+    open my $f, "<", $ENV{NAMES} or die; my %name = map { chomp; ($_ => 1) } <$f>; close $f;
+    $name{$_} = 1 for qw(DIRECT RULES);
+    my %prov = %{ rd("$W/providers.json") }; my %geo = map { ($_ => 1) } split " ", $ENV{GEO};
+    my (@dropped, @notes);
+    my $drop = sub { push @dropped, { section => $_[0], item => $_[1], reason => $_[2] } };
+    my $str = sub { defined $_[0] && !ref $_[0] && length $_[0] && length $_[0] <= 256 && $_[0] !~ /[\x00-\x20\x7f]/ };
+    my $bool = sub { JSON::PP::is_bool($_[0]) };
+    # a domain pattern of fake-ip-filter, nameserver-policy, force-domain, skip-domain
+    my $pattern = sub {
+      my ($p) = @_;
+      return "bad-value" unless $str->($p);
+      if ($p =~ /\Ageosite:(.+)\z/i) { return $geo{site} ? "" : "geodata:geosite" }
+      if ($p =~ /\Arule-set:(.+)\z/i) { for (split /,/, $1) { return "provider:$_" unless $prov{$_} } return "" }
+      return $p =~ /:/ ? "bad-value" : "";
+    };
+    # a DNS server: an address or https/tls/quic/udp/tcp URL, optionally "#<proxy or group>" (or
+    # #DIRECT, #RULES); never dhcp:// or system (the LAN'"'"'s resolver)
+    my $server = sub {
+      my ($s) = @_;
+      return "bad-value" unless $str->($s);
+      return "" if $s =~ m{\Arcode://(success|format_error|server_failure|name_error|not_implemented|refused)\z};
+      my ($u, $via) = $s =~ /\A([^#]+)(?:#(.*))?\z/ or return "bad-value";
+      return "bad-value" unless $u =~ m{\A(?:(?:udp|tcp|tls|https|quic|h3)://)?(?:\[[0-9A-Fa-f:]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)(?::[0-9]{1,5})?(?:/[A-Za-z0-9._%/~-]*)?\z};
+      return "target:" . ($via // "") if defined $via && !$name{$via};
+      return "";
+    };
+    my $servers = sub {  # a list (or one) of servers: the good ones, the rest dropped
+      my ($what, $v) = @_;
+      my @l = ref $v eq "ARRAY" ? @$v : ($v);
+      my @ok;
+      for (@l) { my $why = $server->($_); if ($why) { $drop->("dns", "$what: " . (ref $_ ? "?" : $_), $why) } else { push @ok, $_ } }
+      return \@ok;
+    };
+
+    # --- sniffer
+    my $sn;
+    if (exists $in->{sniffer}) {
+      my $s = $in->{sniffer};
+      if (ref $s ne "HASH") { $drop->("sniffer", "sniffer", "bad-value") }
+      else {
+        $sn = {};
+        for my $k (sort keys %$s) {
+          my $v = $s->{$k};
+          if ($k =~ /\A(enable|parse-pure-ip|override-destination|force-dns-mapping)\z/) {
+            if ($bool->($v)) { $sn->{$k} = $v } else { $drop->("sniffer", $k, "bad-value") }
+          } elsif ($k eq "sniff") {
+            if (ref $v ne "HASH") { $drop->("sniffer", $k, "bad-value"); next }
+            for my $p (sort keys %$v) {
+              my $o = $v->{$p};
+              unless ($p =~ /\A(HTTP|TLS|QUIC)\z/ && ref $o eq "HASH") { $drop->("sniffer", "sniff.$p", "not-allowed"); next }
+              my %t;
+              for my $ok (sort keys %$o) {
+                my $ov = $o->{$ok};
+                if ($ok eq "ports" && ref $ov eq "ARRAY" && @$ov <= 64 &&
+                    !grep { ref $_ || !/\A[0-9]{1,5}(-[0-9]{1,5})?\z/ } @$ov) { $t{ports} = $ov }
+                elsif ($ok eq "override-destination" && $bool->($ov)) { $t{$ok} = $ov }
+                else { $drop->("sniffer", "sniff.$p.$ok", "bad-value") }
+              }
+              $sn->{sniff}{$p} = \%t if exists $t{ports};
+            }
+          } elsif ($k =~ /\A(force-domain|skip-domain)\z/) {
+            if (ref $v ne "ARRAY" || @$v > 1000) { $drop->("sniffer", $k, "bad-value"); next }
+            my @ok;
+            for (@$v) { my $why = $pattern->($_); if ($why) { $drop->("sniffer", "$k: " . (ref $_ ? "?" : $_), $why) } else { push @ok, $_ } }
+            $sn->{$k} = \@ok if @ok;
+          } else {
+            $drop->("sniffer", $k, "not-allowed");
+          }
+        }
+      }
+    }
+    if ($sn) { push @notes, "sniffer-taken\t" }
+    else {
+      $sn = { enable => JSON::PP::true, "parse-pure-ip" => JSON::PP::true, "override-destination" => JSON::PP::false,
+              sniff => { TLS => { ports => [443, 8443] }, HTTP => { ports => [80, "8080-8880"] }, QUIC => { ports => [443] } } };
+      push @notes, "sniffer-default\t";
+    }
+
+    # --- dns: our resolvers through the tunnel, plus the subscription'"'"'s policy
+    my @ns = map { "https://$_/dns-query#$ENV{KS_DNS}" } qw(1.1.1.1 8.8.8.8);
+    my $dns = { enable => JSON::PP::true, listen => "127.0.0.1:53", ipv6 => JSON::PP::false, "enhanced-mode" => "fake-ip",
+                "fake-ip-range" => "$ENV{TUN_ADDR}/17", "default-nameserver" => [@ns], nameserver => [@ns] };
+    my %taken;
+    if (exists $in->{dns}) {
+      my $d = $in->{dns};
+      if (ref $d ne "HASH") { $drop->("dns", "dns", "bad-value") }
+      else {
+        for my $k (sort keys %$d) {
+          my $v = $d->{$k};
+          if ($k eq "fake-ip-filter") {
+            if (ref $v ne "ARRAY" || @$v > 5000) { $drop->("dns", $k, "bad-value"); next }
+            my @ok;
+            for (@$v) { my $why = $pattern->($_); if ($why) { $drop->("dns", "$k: " . (ref $_ ? "?" : $_), $why) } else { push @ok, $_ } }
+            $taken{$k} = \@ok if @ok;
+          } elsif ($k eq "nameserver-policy") {
+            if (ref $v ne "HASH" || keys %$v > 1000) { $drop->("dns", $k, "bad-value"); next }
+            my %ok;
+            for my $p (sort keys %$v) {
+              my $why = $pattern->($p);
+              if ($why) { $drop->("dns", "$k: " . ($p =~ s/[\x00-\x1f\x7f]/?/gr), $why); next }
+              my $l = $servers->("$k: " . $p, $v->{$p});
+              $ok{$p} = $l if @$l;
+            }
+            $taken{$k} = \%ok if %ok;
+          } elsif ($k eq "direct-nameserver") {
+            my $l = ref $v eq "ARRAY" && @$v <= 16 ? $servers->($k, $v) : do { $drop->("dns", $k, "bad-value"); [] };
+            $taken{$k} = $l if @$l;
+          } elsif ($k =~ /\A(respect-rules|direct-nameserver-follow-policy)\z/) {
+            if ($bool->($v)) { $taken{$k} = $v } else { $drop->("dns", $k, "bad-value") }
+          } else {
+            $drop->("dns", $k, "managed");
+          }
+        }
+      }
+    }
+    $dns->{$_} = $taken{$_} for keys %taken;
+    $dns->{"proxy-server-nameserver"} = [@ns] if $taken{"respect-rules"};
+    # what can resolve outside the tunnel: the signature and pf (egress) follow it
+    my %sig = map { exists $taken{$_} ? ($_ => $taken{$_}) : () } qw(nameserver-policy direct-nameserver direct-nameserver-follow-policy respect-rules);
+    my $c = JSON::PP->new->canonical;
+    wr("$W/sniffer.json", $sn); wr("$W/dns.json", $dns); wr("$W/dns-taken.json", \%taken);
+    open $f, ">", "$W/dns-sig" or die;
+    print $f "dns\t", $c->encode(\%sig), "\n" if %sig;
+    close $f;
+    open $f, ">", "$W/dns-egress" or die;
+    print $f "dns\n" if $taken{"direct-nameserver"} || $taken{"nameserver-policy"};
+    close $f;
+    my $old = rd("$W/dropped.json"); wr("$W/dropped.json", [@$old, @dropped]);
+    open $f, ">>", "$W/notes" or die; print $f "$_\n" for @notes; close $f;' || fail "Не удалось разобрать sniffer или dns подписки"
+
   # What would go outside the tunnel, for "ks core refresh" to compare with the last import.
-  direct_sig "$G" "$R" "$RP" > "$w/direct" || fail "Не удалось разобрать правила"
+  { direct_sig "$G" "$R" "$RP" && cat "$w/dns-sig"; } > "$w/direct" || fail "Не удалось разобрать правила"
 
   # Double VPN: every other proxy is dialed through the entry, so the core only has to reach
   # the entry's server; the exits are reached through it and stay out of pf.
@@ -690,6 +862,7 @@ core_generate() (
       i=$((i + 1))
     done
     cp "$w/ips.$e" "$w/servers"
+    note multihop "$entry"
   fi
 
   # Auto-failover (ADR 0005): the app names sets of the profile's servers in one country
@@ -730,41 +903,46 @@ core_generate() (
     push @$j, { name => $ENV{KS_DNS}, type => "fallback", proxies => \@p, hidden => JSON::PP::true,
                 url => "https://cp.cloudflare.com/generate_204", interval => 300 };' || exit 1
 
-  # Split tunnel, only with coredirect=1 (otherwise pf drops DIRECT flows of the core), before
-  # the profile's rules: apps from "ks set splitapps", private networks, then Russian sites
-  # (operator's choice). Geodata is used only if installed (fetch-geodata.sh, sha256-pinned):
-  # the core must not download it itself. Names of direct sites are still resolved by our DoH
-  # through the tunnel, never by the provider's DNS.
-  fpm=""
-  if [ "$(setting coredirect 0)" = 1 ]; then
+  # KillSwitch writes no routing of its own (ADR 0013): which sites go direct, through which
+  # server or nowhere comes from the subscription's rules only. The two additions below are the
+  # admin's own choices in «Дополнительно», named as such in the report; both go before the
+  # subscription's rules.
+  # Apps outside the VPN ("ks set splitapps"): an app bundle's path matches every process started
+  # from inside it (its helpers too), by the executable's path. A bare process name (lists from
+  # before 0.9.1): the app itself, then its helper processes ("Google Chrome Helper (Renderer)");
+  # any program can take a name.
+  apps=$(setting splitapps "" | tr ',' '\n')
+  : > "$w/ours"
+  # Ads and trackers (adblock=1): refused before anything else, from the shipped geosite.dat only
+  # (never downloaded). REJECT sends nothing anywhere, so the DIRECT signature and pf are as before.
+  if [ "$(setting adblock 0)" = 1 ] && [ -s "$CORE_DIR/geosite.dat" ]; then
+    echo "GEOSITE,category-ads-all,REJECT" >> "$w/ours"
+    note adblock "GEOSITE,category-ads-all,REJECT"
+  fi
+  if [ -n "$apps" ]; then
     {
-      apps=$(setting splitapps "" | tr ',' '\n')
-      if [ -n "$apps" ]; then
-        # An app bundle's path: every process started from inside it (its helpers too), by the
-        # executable's path. A bare process name (lists from before 0.9.1): the app itself, then
-        # its helper processes ("Google Chrome Helper (Renderer)"); any program can take a name.
-        while IFS= read -r a; do
-          if [[ "$a" == /* ]]; then echo "PROCESS-PATH-REGEX,^$(sed 's/[][\\.*^$+?(){}|]/\\&/g' <<<"$a")/,DIRECT"
-          else echo "PROCESS-NAME,$a,DIRECT"; fi
-        done <<<"$apps"
-        while IFS= read -r a; do
-          [[ "$a" == /* ]] && continue
-          echo "PROCESS-NAME-REGEX,^$(sed 's/[][\\.*^$+?(){}|]/\\&/g' <<<"$a") Helper.*\$,DIRECT"
-        done <<<"$apps"
-        fpm='"find-process-mode":"always",'
-      fi
-      for a in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do echo "IP-CIDR,$a,DIRECT,no-resolve"; done
-      [ -s "$CORE_DIR/geosite.dat" ] && echo "GEOSITE,category-ru,DIRECT"
-      [ -s "$CORE_DIR/geoip.metadb" ] && echo "GEOIP,RU,DIRECT,no-resolve"
-    } > "$w/ours"
+      while IFS= read -r a; do
+        if [[ "$a" == /* ]]; then echo "PROCESS-PATH-REGEX,^$(sed 's/[][\\.*^$+?(){}|]/\\&/g' <<<"$a")/,DIRECT"
+        else echo "PROCESS-NAME,$a,DIRECT"; fi
+      done <<<"$apps"
+      while IFS= read -r a; do
+        [[ "$a" == /* ]] && continue
+        echo "PROCESS-NAME-REGEX,^$(sed 's/[][\\.*^$+?(){}|]/\\&/g' <<<"$a") Helper.*\$,DIRECT"
+      done <<<"$apps"
+    } >> "$w/ours"
+    while IFS= read -r a; do note splitapps "$a"; done <<<"$apps"
+  fi
+  if [ -s "$w/ours" ]; then
     json_edit "$R" 'unshift @$j, map { chomp; $_ } <STDIN>;' < "$w/ours" || exit 1
   fi
-  # Ads and trackers (adblock=1, «Дополнительно» in the app): refused before anything else, from the
-  # shipped geosite.dat only (never downloaded). REJECT sends nothing anywhere, so the DIRECT
-  # signature and the kill switch are as before.
-  if [ "$(setting adblock 0)" = 1 ] && [ -s "$CORE_DIR/geosite.dat" ]; then
-    json_edit "$R" 'unshift @$j, "GEOSITE,category-ads-all,REJECT";' || exit 1
-  fi
+
+  # Why the core may leave the tunnel at all (pf, rules()): the subscription sends something
+  # DIRECT (a rule, a provider download, a DNS server), or the admin put apps outside the VPN.
+  {
+    grep -qE '^(rule|provider-proxy)'$'\t' "$w/direct" && echo rules
+    cat "$w/dns-egress"
+    [ -n "$apps" ] && echo splitapps
+  } > "$w/egress"
 
   sort -u "$w/servers" > "$w/servers.u"
   # Server, LAN and Tailscale routes stay outside the tunnel, so a flow re-made by another
@@ -780,14 +958,16 @@ core_generate() (
     # 198.18.0.1, so the watchdog can tell the tunnels apart.
     # The controller is a unix socket in a root-only directory; the app reaches it via ks.
     # log-level warning: at info mihomo writes every connection's domain into core.log.
-    printf '{"mode":"rule","log-level":"warning","ipv6":false,"allow-lan":false,"geo-auto-update":false,%s' "$fpm"
+    # find-process-mode always: the «Трафик» window names the program of every connection.
+    printf '{"mode":"rule","log-level":"warning","ipv6":false,"allow-lan":false,"geo-auto-update":false,'
+    printf '"find-process-mode":"always",'
     printf '"external-controller-unix":"ctl/mihomo.sock",'
     printf '"tun":{"enable":true,"stack":"gvisor","auto-route":true,"auto-detect-interface":true,'
     printf '"dns-hijack":["any:53"],"route-exclude-address":[%s]},' "$excl"
-    # answers the system's DNS on 127.0.0.1:53; the resolvers are reached through the tunnel
-    printf '"dns":{"enable":true,"listen":"127.0.0.1:53","ipv6":false,"enhanced-mode":"fake-ip",'
-    printf '"fake-ip-range":"%s/17","nameserver":[%s,%s]},' "$CORE_TUN_ADDR" \
-      "$(jstr "https://1.1.1.1/dns-query#$KS_DNS")" "$(jstr "https://8.8.8.8/dns-query#$KS_DNS")"
+    # answers the system's DNS on 127.0.0.1:53; our resolvers are reached through the tunnel,
+    # the subscription's DNS policy on top (see above)
+    printf '"dns":'; cat "$w/dns.json"
+    printf ',"sniffer":'; cat "$w/sniffer.json"; printf ','
     printf '"proxies":'; cat "$P"
     printf ',"proxy-groups":'; cat "$G"
     printf ',"rules":'; cat "$R"
@@ -798,9 +978,137 @@ core_generate() (
   # plutil writes "/" as "\/", which is JSON but not YAML; pairs are taken left to right, so
   # an escaped backslash before "/" stays as it is
   perl -pi -e 's{\\(.)}{$1 eq "/" ? "/" : "\\$1"}ge' "$w/config.json" || exit 1
-  rm -f "$out" "$srv_out" "$out.pins" "$out.direct"   # a leftover would keep its mode
-  cp "$w/config.json" "$out" && cp "$w/servers.u" "$srv_out" && cp "$w/pins" "$out.pins" && cp "$w/direct" "$out.direct"
+  core_report "$w" "$in" > "$w/report.json" || fail "Не удалось собрать отчёт о правилах"
+  rm -f "$out" "$srv_out" "$out.pins" "$out.direct" "$out.egress" "$out.report"   # a leftover would keep its mode
+  cp "$w/config.json" "$out" && cp "$w/servers.u" "$srv_out" && cp "$w/pins" "$out.pins" && cp "$w/direct" "$out.direct" &&
+    cp "$w/egress" "$out.egress" && cp "$w/report.json" "$out.report"
 )
+
+# Perl shared by the generator's checks and its report: rd/wr read and write JSON files, split_rule
+# takes a mihomo rule apart the way mihomo does (TYPE,PAYLOAD,TARGET[,options]; MATCH,TARGET;
+# AND|OR|NOT,(…),TARGET), rule_problem says why the core would not take it ("" = fine).
+# shellcheck disable=SC2016 # perl, not shell
+KS_RULES_PL='
+  sub rd { local $/; open my $f, "<", $_[0] or die "$_[0]\n"; JSON::PP->new->decode(<$f>) }
+  sub wr { open my $f, ">", $_[0] or die "$_[0]\n"; print $f JSON::PP->new->canonical->encode($_[1]); close $f or die }
+  our %RULE_TYPES = map { ($_ => 1) } qw(DOMAIN DOMAIN-SUFFIX DOMAIN-KEYWORD DOMAIN-REGEX DOMAIN-WILDCARD GEOSITE GEOIP
+    SRC-GEOIP IP-ASN SRC-IP-ASN IP-CIDR IP-CIDR6 SRC-IP-CIDR IP-SUFFIX SRC-IP-SUFFIX SRC-PORT DST-PORT IN-PORT IN-USER
+    IN-NAME IN-TYPE DSCP PROCESS-NAME PROCESS-PATH PROCESS-NAME-REGEX PROCESS-PATH-REGEX PROCESS-NAME-WILDCARD
+    PROCESS-PATH-WILDCARD UID NETWORK RULE-SET AND OR NOT SUB-RULE MATCH);
+  sub trim { $_[0] =~ s/^\s+|\s+$//gr }
+  sub split_rule {  # (TYPE, payload, target, options...) or () if it cannot be read
+    my ($s) = @_;
+    return () if ref $s || !defined $s;
+    my ($type, $rest) = $s =~ /\A\s*([^,]+?)\s*,(.*)\z/s or return ();
+    $type = uc $type;
+    if ($type eq "MATCH") { my @p = map { trim($_) } split /,/, $rest, -1; return length $p[0] ? ($type, "", @p) : () }
+    if ($type =~ /\A(AND|OR|NOT)\z/) {
+      $rest =~ s/^\s+//;
+      return () unless substr($rest, 0, 1) eq "(";
+      my ($d, $i) = (0, 0);
+      for (; $i < length $rest; $i++) { my $c = substr($rest, $i, 1); $d++ if $c eq "("; $d-- if $c eq ")"; last if !$d }
+      return () if $d;
+      my $after = substr($rest, $i + 1);
+      $after =~ s/\A\s*,// or return ();
+      my @p = map { trim($_) } split /,/, $after, -1;
+      return length $p[0] ? ($type, substr($rest, 0, $i + 1), @p) : ();
+    }
+    my @p = map { trim($_) } split /,/, $rest, -1;
+    return @p >= 2 && length $p[0] && length $p[1] ? ($type, @p) : ();
+  }
+  sub rule_problem {  # rule_problem <rule> <\%names> <\%providers> <\%geodata: site, ip>
+    my ($r, $name, $prov, $geo) = @_;
+    my ($type, $payload, $target) = split_rule($r) or return "parse";
+    my (@types, @sets) = ($type);
+    if ($type =~ /\A(AND|OR|NOT)\z/) {
+      push @types, map { uc } $payload =~ /\(\s*([A-Za-z0-9-]+)\s*,/g;
+      push @sets, $payload =~ /\(\s*RULE-SET\s*,\s*([^,()\s]+)/gi;
+    } elsif ($type eq "RULE-SET") { push @sets, $payload }
+    for (@types) {
+      return "type:$_" unless $RULE_TYPES{$_};
+      return "sub-rule" if $_ eq "SUB-RULE";
+      return "geodata:asn" if /\A(SRC-)?IP-ASN\z/;
+      return "geodata:geosite" if $_ eq "GEOSITE" && !$geo->{site};
+      return "geodata:geoip" if /\A(SRC-)?GEOIP\z/ && !$geo->{ip};
+    }
+    for (@sets) { return "provider:$_" unless $prov->{$_} }
+    return "target:$target" unless $name->{$target};
+    return "";
+  }
+'
+
+# core_report <generator's work dir> <profile.json>: the routing report for the app (ADR 0013), JSON on
+# stdout. It lands world-readable in $REPORT, so it carries names, rules and addresses only: no
+# proxy object (passwords, uuids, keys), a provider's URL as its host, a DNS server without its path.
+#   rules     every rule of the config in order, "from" subscription or killswitch, "index" in the
+#             subscription's list
+#   dropped   what was not taken: section (profile, rules, sniffer, dns), item, reason code
+#   providers, groups (from subscription or killswitch), proxies (name, type)
+#   added     what KillSwitch put in, by kind; sniffer, dns: what is in effect and where it came from
+#   egress    why the core may leave the tunnel (pf)
+core_report() {
+  W=$1 IN=$2 KS_DNS=$KS_DNS /usr/bin/perl -MJSON::PP -e "$KS_RULES_PL"'
+    my ($W, $in) = ($ENV{W}, rd($ENV{IN}));
+    my $lines = sub { open my $f, "<", $_[0] or return (); my @l = map { chomp; $_ } <$f>; close $f; @l };
+    my (%notes, @order);
+    for ($lines->("$W/notes")) { my ($k, $v) = split /\t/, $_, 2; push @order, $k unless $notes{$k}; push @{ $notes{$k} }, $v // "" }
+    my ($final, $orig, $dropped) = (rd("$W/rules.json"), rd("$W/rules-in.json"), rd("$W/dropped.json"));
+    my %gone = map { ($_->{index} => 1) } grep { $_->{section} eq "rules" } @$dropped;
+    my $ours = () = $lines->("$W/ours");
+    my @rules;
+    push @rules, { rule => $final->[$_], from => "killswitch" } for 0 .. $ours - 1;
+    my $default = exists $notes{"default-rule"};
+    for my $i (0 .. $#$orig) {
+      next if $gone{$i};
+      push @rules, $default ? { rule => $orig->[$i], from => "killswitch" } : { rule => $orig->[$i], from => "subscription", index => $i };
+    }
+    die "rules out of step\n" unless @rules == @$final;
+    # sections of the profile the core config does not take from it (the app drops most before)
+    my %known = map { ($_ => 1) } qw(proxies proxy-groups rules rule-providers sniffer dns);
+    my @dropped = ((map { { section => "profile", item => $_, reason => "managed" } } grep { !$known{$_} && !/\Ax-ks-/ } sort keys %$in), @$dropped);
+    my $p = rd("$W/providers.json");
+    my @providers;
+    for my $n (sort keys %$p) {
+      my $x = $p->{$n};
+      my %o = (name => $n, map { exists $x->{$_} ? ($_ => $x->{$_}) : () } qw(type behavior format interval proxy));
+      ($o{host}) = ($x->{url} // "") =~ m{\Ahttps?://(?:[^/@]*@)?([^/:?#]+)};
+      delete $o{host} unless defined $o{host};
+      if (ref $x->{payload} eq "ARRAY") { $o{count} = @{ $x->{payload} }; $o{payload} = [ grep { !ref } @{ $x->{payload} }[0 .. ($#{ $x->{payload} } < 999 ? $#{ $x->{payload} } : 999)] ] }
+      push @providers, \%o;
+    }
+    my $g = rd("$W/groups.json");
+    my @groups = map { { name => $_->{name}, type => $_->{type}, proxies => [ grep { !ref } @{ $_->{proxies} || [] } ],
+                         from => ($_->{name} eq $ENV{KS_DNS} || $_->{name} =~ /\AKS-FO-/ ? "killswitch" : "subscription"),
+                         ($_->{hidden} ? (hidden => JSON::PP::true) : ()) } } @$g;
+    my $px = rd("$W/proxies.json");
+    my @proxies = map { { name => $_->{name}, type => $_->{type} } } @$px;
+    my @added;
+    my ($ksdns) = grep { $_->{name} eq $ENV{KS_DNS} } @groups;
+    push @added, { kind => "dns-group", name => $ENV{KS_DNS}, items => $ksdns->{proxies} };
+    my $dns = rd("$W/dns.json");
+    push @added, { kind => "dns-servers", items => $dns->{nameserver} };
+    push @added, map { { kind => "failover", name => $_->{name}, items => $_->{proxies} } } grep { $_->{name} =~ /\AKS-FO-/ } @groups;
+    my @pins = map { my ($h, $a) = split /\t/; { host => $h, address => $a } } $lines->("$W/pins");
+    push @added, { kind => "pinning", items => \@pins } if @pins;
+    push @added, { kind => "overrides", items => [ sort keys %{ $in->{"x-ks-overrides"} } ] } if ref $in->{"x-ks-overrides"} eq "HASH" && %{ $in->{"x-ks-overrides"} };
+    for my $k (@order) {
+      next if $k eq "sniffer-taken";
+      my %seen; my @items = grep { length && !$seen{$_}++ } @{ $notes{$k} };
+      push @added, { kind => ($k eq "sniffer-default" ? "sniffer" : $k), items => \@items };
+    }
+    my $short = sub { my $s = shift; $s =~ s{\A((?:[a-z0-9]+://)?[^/#]+)(/[^#]*)?}{$1 . (defined $2 && length $2 > 1 ? "/..." : "")}e; $s };
+    my $taken = rd("$W/dns-taken.json");
+    for my $k (qw(direct-nameserver)) { $taken->{$k} = [ map { $short->($_) } @{ $taken->{$k} } ] if $taken->{$k} }
+    if (my $np = $taken->{"nameserver-policy"}) {
+      $np->{$_} = ref $np->{$_} ? [ map { $short->($_) } @{ $np->{$_} } ] : $short->($np->{$_}) for keys %$np;
+    }
+    my $report = {
+      version => 1, rules => \@rules, dropped => \@dropped, providers => \@providers, groups => \@groups, proxies => \@proxies,
+      added => \@added, sniffer => { from => (exists $notes{"sniffer-taken"} ? "subscription" : "killswitch"), value => rd("$W/sniffer.json") },
+      dns => { servers => $dns->{nameserver}, taken => $taken }, egress => [ $lines->("$W/egress") ],
+    };
+    print JSON::PP->new->canonical->encode($report), "\n";'
+}
 
 # json_edit <file> <perl>: runs the perl code with $j = the decoded JSON of the file, writes it back
 json_edit() {
@@ -902,7 +1210,18 @@ core_import() {  # core_import <profile.json> [import|refresh]
   if [ "${2:-}" != refresh ]; then mv "$APPROVED_HOSTS.new" "$APPROVED_HOSTS"; mv "$APPROVED_DIRECT.new" "$APPROVED_DIRECT"; fi
 }
 
-core_clean() { rm -f "$1" "$1.pins" "$1.direct" "$2" "$SERVERS.tmp"; }
+core_clean() { rm -f "$1" "$1.pins" "$1.direct" "$1.egress" "$1.report" "$2" "$SERVERS.tmp"; }
+
+# core_publish <config.tmp>: the world-readable companions of an accepted config (egress for pf,
+# the report for the app) into place. Fails (1) when egress stayed the same, so a caller knows
+# whether pf has to follow.
+core_publish() {
+  local same=0
+  cmp -s "$1.egress" "$CORE_EGRESS" && same=1
+  chmod 644 "$1.egress" "$1.report"
+  mv "$1.egress" "$CORE_EGRESS"; mv "$1.report" "$REPORT"
+  [ "$same" = 0 ]
+}
 
 # refresh_check <servers> <pins> <direct>: fails with 3 and the reason when the profile needs
 # the admin: a server host name not in the last import, an address that is neither allowed
@@ -940,6 +1259,7 @@ core_commit() {
     core_clean "$tmp" "$srv"; echo "pf не принял адреса серверов" >&2; return 1; }
   mv "$srv" "$SERVERS_CORE"; mv "$SERVERS.tmp" "$SERVERS"
   mv "$tmp.pins" "$PINS"; rm -f "$tmp.direct"
+  core_publish "$tmp"
   mv "$tmp" "$CORE_DIR/config.yaml"
 }
 
@@ -967,6 +1287,8 @@ core_regen() {
   [ -f "$CORE_PROFILE" ] && [ -f "$PINS" ] && [ -f "$CORE_DIR/config.yaml" ] || { echo "core config: none"; return 0; }
   KS_PINS=$PINS core_generate "$CORE_PROFILE" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; return 1; }
   if cmp -s "$tmp" "$CORE_DIR/config.yaml"; then
+    # an older helper wrote no report or egress: those still come into place
+    if core_publish "$tmp"; then reload_if_on; fi
     core_clean "$tmp" "$srv"; echo "core config: kept"; return 0
   fi
   core_commit "$tmp" "$srv" || return 1
@@ -1045,14 +1367,11 @@ net_sig() {  # primary interface and router
   printf 'show State:/Network/Global/IPv4\n' | scutil | awk '$1 == "PrimaryInterface" || $1 == "Router" { print $3 }' | paste -sd' ' -
 }
 
-# "ks set splitapps <list>": apps outside the VPN; needs coredirect=1, "" clears.
+# "ks set splitapps <list>": apps outside the VPN, "" clears. The rebuilt config lets the core out
+# directly for them (egress), so they need no other switch.
 set_splitapps() {
   local list
   list=$(splitapps_parse "$1") || return 1
-  if [ -n "$list" ] && [ "$(setting coredirect 0)" != 1 ]; then
-    echo "Приложения мимо VPN работают только при coredirect=1 (ks set coredirect 1), иначе их трафик блокируется" >&2
-    return 1
-  fi
   put_setting splitapps "$(paste -sd, - <<<"$list")" || return 1
   core_apply_settings
 }
@@ -1315,6 +1634,40 @@ core_traffic() {
   [ -n "$up" ] && [ -n "$down" ] || { echo "Ядро не сказало, сколько передано" >&2; return 1; }
   echo "up=$up down=$down"
 }
+# core_connections: what the «Трафик» window shows, from the core's /connections and
+# /providers/rules: per connection the program, host or address, rule, route and bytes; per rule
+# provider its size and last update. Nothing else of the replies (no source addresses or ports, no
+# internal ids) leaves ks. The user it runs for is the one whose traffic it is (sudoers).
+core_connections() {
+  local c p rc
+  c=$(mktemp) || return 1; p=$(mktemp) || { rm -f "$c"; return 1; }
+  core_api GET /connections > "$c" && { core_api GET /providers/rules > "$p" 2>/dev/null || echo "{}" > "$p"; } &&
+    /usr/bin/perl -MJSON::PP -e "$KS_RULES_PL"'
+      my ($c, $p) = (rd($ARGV[0]), eval { rd($ARGV[1]) } || {});
+      my $num = sub { defined $_[0] && !ref $_[0] && $_[0] =~ /\A[0-9]{1,20}\z/ ? $_[0] + 0 : 0 };
+      my $txt = sub { defined $_[0] && !ref $_[0] ? substr($_[0] =~ s/[\x00-\x1f\x7f]/?/gr, 0, 512) : "" };
+      my @out;
+      for my $x (ref $c->{connections} eq "ARRAY" ? @{ $c->{connections} } : ()) {
+        next unless ref $x eq "HASH";
+        my $m = ref $x->{metadata} eq "HASH" ? $x->{metadata} : {};
+        push @out, { host => $txt->($m->{host}), ip => $txt->($m->{destinationIP}), port => $txt->($m->{destinationPort}),
+                     network => $txt->($m->{network}), process => $txt->($m->{process}), processPath => $txt->($m->{processPath}),
+                     rule => $txt->($x->{rule}), rulePayload => $txt->($x->{rulePayload}),
+                     chains => [ map { $txt->($_) } ref $x->{chains} eq "ARRAY" ? @{ $x->{chains} } : () ],
+                     upload => $num->($x->{upload}), download => $num->($x->{download}), start => $txt->($x->{start}) };
+      }
+      my %prov;
+      my $pp = ref $p->{providers} eq "HASH" ? $p->{providers} : {};
+      for (sort keys %$pp) {
+        next unless ref $pp->{$_} eq "HASH";
+        $prov{$txt->($_)} = { count => $num->($pp->{$_}{ruleCount}), updatedAt => $txt->($pp->{$_}{updatedAt}) };
+      }
+      print JSON::PP->new->canonical->encode({ connections => \@out, uploadTotal => $num->($c->{uploadTotal}),
+                                                downloadTotal => $num->($c->{downloadTotal}), providers => \%prov }), "\n";' "$c" "$p"
+  rc=$?
+  rm -f "$c" "$p"
+  return "$rc"
+}
 valid_name() { [ -n "$1" ] && [ "${#1}" -le 256 ] && [[ "$1" != *[[:cntrl:]]* ]]; }
 
 # splitapps_parse <comma list>: apps one per line (trimmed, deduplicated), each an app bundle's
@@ -1386,7 +1739,7 @@ passwordless_args_ok() {
     state|probe|on|netrestore) [ $# -eq 1 ] ;;
     core)
       case "${2:-}" in
-        state|on|off|proxies|traffic) [ $# -eq 2 ] ;;
+        state|on|off|proxies|traffic|connections) [ $# -eq 2 ] ;;
         select) [ $# -eq 4 ] && valid_name "$3" && valid_name "$4" ;;
         delay) [ $# -eq 3 ] && valid_name "$3" ;;
         # the app's own temporary file, read with the caller's rights (core_import)
@@ -1401,12 +1754,12 @@ passwordless_args_ok() {
 # reads nothing but this file: no root needed
 [ "${1:-}" = version ] && { ks_version "$0"; exit 0; }
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
-passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,25p' "$0" >&2; exit 1; }
+passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,27p' "$0" >&2; exit 1; }
 
 # Everything that writes the core's config runs under one lock (the watchdog's rotation skips
 # its turn while it is held).
 case "${1:-}:${2:-}" in
-  core:import|core:refresh|set:splitapps|set:multihop|set:coredirect|set:adblock|_regen:)
+  core:import|core:refresh|set:splitapps|set:multihop|set:adblock|_regen:)
     [ -n "${KS_LOCKED:-}" ] || [ ! -d "$CORE_DIR" ] || KS_LOCKED=1 exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@" ;;
 esac
 
@@ -1434,11 +1787,13 @@ case "${1:-status}" in
         set_multihop "$val" || exit 1
         log_event "double VPN: $val"; exit 0 ;;
     esac
-    [[ "$key" =~ ^(lan|tailscale|dns|direct|coredirect|wifiguard|adblock)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns|direct|coredirect|wifiguard|adblock 0|1" >&2; exit 1; }
+    # coredirect (until 0.14, «Российские сайты напрямую») is gone: what goes direct is the
+    # subscription's alone (ADR 0013); install.sh drops the old line
+    [[ "$key" =~ ^(lan|tailscale|dns|direct|wifiguard|adblock)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns|direct|wifiguard|adblock 0|1" >&2; exit 1; }
     { grep -vE "^$key=" "$SETTINGS" 2>/dev/null; echo "$key=$val"; } > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
     reload_if_on
-    # the generator adds the split-tunnel rules only with coredirect=1, the ad block with adblock=1
-    if [ "$key" = coredirect ] || [ "$key" = adblock ]; then core_apply_settings || exit 1; fi
+    # the generator adds the ad block with adblock=1
+    if [ "$key" = adblock ]; then core_apply_settings || exit 1; fi
     ;;
   allow)
     addr=${2:-}
@@ -1517,7 +1872,10 @@ case "${1:-status}" in
       traffic)
         [ $# -eq 2 ] || { echo "usage: ks core traffic" >&2; exit 1; }
         core_traffic || exit 1 ;;
-      *) echo "usage: ks core on|off|state|import <json>|refresh <json>|proxies|select <group> <proxy>|delay <name>|traffic" >&2; exit 1 ;;
+      connections)
+        [ $# -eq 2 ] || { echo "usage: ks core connections" >&2; exit 1; }
+        core_connections || exit 1 ;;
+      *) echo "usage: ks core on|off|state|import <json>|refresh <json>|proxies|select <group> <proxy>|delay <name>|traffic|connections" >&2; exit 1 ;;
     esac
     ;;
   probe) net_probe ;;
@@ -1532,5 +1890,5 @@ case "${1:-status}" in
     [ -f "$FLAG" ] && { u=$(cat "$FLAG"); [ "$u" = 0 ] && echo "disabled by hand" || echo "back on at $(date -r "$u" +%H:%M)"; }
     pfctl -a "$ANCHOR" -s rules 2>/dev/null
     ;;
-  *) sed -n '2,25p' "$0"; exit 1 ;;
+  *) sed -n '2,27p' "$0"; exit 1 ;;
 esac

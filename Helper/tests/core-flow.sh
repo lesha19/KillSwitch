@@ -16,6 +16,7 @@ SERVERS="$DIR/servers"; SERVERS_MANUAL="$DIR/servers-manual"; SERVERS_CORE="$DIR
 CORE_CTL="$CORE_DIR/ctl/mihomo.sock"
 CORE_PROFILE="$CORE_DIR/profile.json"; PINS="$CORE_DIR/pins"
 APPROVED_HOSTS="$CORE_DIR/approved-hosts"; APPROVED_DIRECT="$CORE_DIR/approved-direct"
+CORE_EGRESS="$CORE_DIR/egress"; REPORT="$CORE_DIR/routing.json"
 if [ -x "$MIHOMO" ]; then ln -s "$MIHOMO" "$CORE_DIR/mihomo"
 else printf '#!/bin/sh\nexit 0\n' > "$CORE_DIR/mihomo"; chmod 755 "$CORE_DIR/mihomo"; echo "skip  mihomo -t (stub)"; fi
 install() { :; }                 # core_import creates ctl/ as root
@@ -55,7 +56,21 @@ run "$fx/ok-full.json" import
 [ -s "$CORE_PROFILE" ] && [ -s "$PINS" ] && ok "import: profile and pins kept" || bad "profile/pins"
 [ "$(stat -f %Lp "$CORE_PROFILE" "$PINS" "$APPROVED_HOSTS" "$APPROVED_DIRECT" | sort -u)" = 600 ] && ok "import: state files root-only (600)" ||
   bad "modes: $(stat -f '%N %Lp' "$CORE_PROFILE" "$PINS" "$APPROVED_HOSTS" "$APPROVED_DIRECT")"
-[ -n "$(find "$CORE_DIR" -name '*.tmp' -o -name '*.new')" ] && bad "import left temp files: $(ls "$CORE_DIR")" || ok "import: no temp files left"
+[ -n "$(find "$CORE_DIR" -name '*.tmp' -o -name '*.new' -o -name '*.egress' -o -name '*.report')" ] && bad "import left temp files: $(ls "$CORE_DIR")" || ok "import: no temp files left"
+# ADR 0013: the subscription sends sites DIRECT, so the core may leave the tunnel (pf), and the
+# app gets the report; both world-readable, the report without a secret of the profile
+[ "$(cat "$CORE_EGRESS")" = rules ] && ok "import: egress = the subscription's DIRECT rules" || bad "egress: $(cat "$CORE_EGRESS" 2>&1)"
+[ "$(stat -f %Lp "$CORE_EGRESS" "$REPORT" | sort -u)" = 644 ] && ok "import: egress and report world-readable (644)" ||
+  bad "egress/report modes: $(stat -f '%N %Lp' "$CORE_EGRESS" "$REPORT" 2>&1)"
+grep -qE 'a3482e88|J1sRwuk4|6ba85179|p\\\\/x|"password"|"uuid"' "$REPORT" && bad "report holds a secret of the profile" || ok "report: no uuid, key, short-id or password"
+grep -q '"rule":"DOMAIN-SUFFIX,ru,DIRECT"' "$REPORT" && ok "report: the subscription's rules" || bad "report: $(head -c 300 "$REPORT")"
+run "$fx/ok-minimal.json" import
+[ "$rc" = 0 ] && [ ! -s "$CORE_EGRESS" ] && ok "import without DIRECT: the core stays in the tunnel (empty egress)" || bad "minimal egress: $(cat "$CORE_EGRESS")"
+run "$fx/ok-full.json" import
+edit '$j->{dns} = { "direct-nameserver" => ["77.88.8.8"] }' < "$fx/ok-full.json" > "$tmp/dnsx.json"
+cp "$cfg" "$tmp/cfg.dns"
+run "$tmp/dnsx.json" refresh
+[ "$rc" = 3 ] && cmp -s "$cfg" "$tmp/cfg.dns" && ok "refresh: a new DNS server outside the tunnel needs the admin (exit 3)" || bad "refresh dns: $rc $(cat "$tmp/err")"
 # the copy of the profile and the generated config hold server passwords: root-only from the
 # moment they are written (core/ is 711, a known name would be readable), not after a chmod
 MODES="$tmp/modes"   # core_import has a local $tmp
@@ -173,13 +188,11 @@ mv "$tmp/ah" "$APPROVED_HOSTS"
 
 # --- settings that rebuild the config from the kept profile (no DNS)
 : > "$tmp/dns"
-echo coredirect=1 > "$SETTINGS"
 set_splitapps "Telegram, Safari" 2>"$tmp/err" && [ "$(val rules.0 "$cfg")" = "PROCESS-NAME,Telegram,DIRECT" ] &&
-  grep -qx "splitapps=Telegram,Safari" "$SETTINGS" && ok "splitapps: stored and applied" || bad "splitapps: $(cat "$tmp/err")"
+  grep -qx "splitapps=Telegram,Safari" "$SETTINGS" && ok "splitapps: stored and applied (no other switch needed)" || bad "splitapps: $(cat "$tmp/err")"
+[ "$(paste -sd, - < "$CORE_EGRESS")" = rules,splitapps ] && ok "splitapps: in the egress reasons" || bad "splitapps egress: $(cat "$CORE_EGRESS")"
 set_splitapps "" && [ -z "$(setting splitapps "")" ] && [ "$(val rules.0 "$cfg")" != "PROCESS-NAME,Telegram,DIRECT" ] && ok "splitapps: cleared" || bad "splitapps clear"
-echo coredirect=0 > "$SETTINGS"
-set_splitapps "Telegram" 2>"$tmp/err" && bad "splitapps without coredirect accepted" ||
-  { grep -q coredirect "$tmp/err" && ok "splitapps without coredirect refused: $(cat "$tmp/err")" || bad "message: $(cat "$tmp/err")"; }
+[ "$(cat "$CORE_EGRESS")" = rules ] && ok "splitapps cleared: out of the egress reasons" || bad "egress after clear: $(cat "$CORE_EGRESS")"
 set_splitapps "a,,b" 2>/dev/null && bad "bad list accepted" || ok "bad splitapps list refused"
 set_multihop "NL reality" 2>"$tmp/err" && [ "$(setting multihop off)" = "NL reality" ] && [ "$(cat "$SERVERS_CORE")" = 203.0.113.10 ] &&
   [ "$(val proxies.2.dialer-proxy "$cfg")" = "NL reality" ] && ok "multihop: stored, applied, only the entry in servers-core" ||

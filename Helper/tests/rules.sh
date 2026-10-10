@@ -7,7 +7,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 . "$here/../ks"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 SETTINGS="$tmp/settings"; ALLOW="$tmp/allow"; TSRELAYS="$tmp/none"
-SERVERS="$tmp/servers"; SERVERS_MANUAL="$tmp/servers-manual"; SERVERS_CORE="$tmp/servers-core"
+SERVERS="$tmp/servers"; SERVERS_MANUAL="$tmp/servers-manual"; SERVERS_CORE="$tmp/servers-core"; CORE_EGRESS="$tmp/egress"
 vpn_ifaces() { echo utun9; }
 ts_ifaces() { :; }
 dscl() { return 0; }   # the _ksvpn group exists
@@ -59,9 +59,19 @@ rm -f "$SETTINGS"; rules > "$tmp/out"
 expect "lan default on: private networks reachable" '^pass out quick inet to \{ 10\.0\.0\.0/8, 172\.16\.0\.0/12, 192\.168\.0\.0/16 \} flags any keep state$'
 expect "lan default on: the router's DNS stays closed (dns default off)" '^block drop out quick proto \{ tcp udp \} to \{ 10\.0\.0\.0/8, 172\.16\.0\.0/12, 192\.168\.0\.0/16 \} port 53$'
 
+# ADR 0013: the core leaves the tunnel only when its accepted config sends something DIRECT
+# (core_commit writes the reasons into $CORE_EGRESS); the old coredirect setting does nothing
 echo coredirect=1 > "$SETTINGS"
 rules > "$tmp/out"
-expect "coredirect=1: broad core rule" "^pass out quick group $CORE_GROUP flags any keep state"
+expect "coredirect=1 alone: no broad core rule" "^pass out quick group $CORE_GROUP" absent
+rm -f "$SETTINGS"; : > "$CORE_EGRESS"
+rules > "$tmp/out"
+expect "empty egress: no broad core rule" "^pass out quick group $CORE_GROUP" absent
+printf 'rules\ndns\n' > "$CORE_EGRESS"
+rules > "$tmp/out"
+expect "egress (subscription DIRECT rules, DNS): broad core rule" "^pass out quick group $CORE_GROUP flags any keep state$"
+expect "egress: still only the core group, nobody else" "^pass out quick (proto [^ ]+ )?(flags any )?keep state$|^pass out quick all" absent
+rm -f "$CORE_EGRESS"
 
 rm -f "$SETTINGS" "$SERVERS_MANUAL"
 rules > "$tmp/out"

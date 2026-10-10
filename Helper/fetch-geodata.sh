@@ -1,10 +1,10 @@
 #!/bin/bash
 # Downloads geosite.dat and geoip.metadb of a pinned MetaCubeX/meta-rules-dat release into Helper/
 # and checks their sha256. They ship inside the app (signed with it); install.sh copies them from
-# the bundle into /Library/KillSwitch/core, never from anywhere the user can write. With
-# coredirect=1 the generator then sends Russian sites (GEOSITE,category-ru) and addresses
-# (GEOIP,RU) outside the VPN. The core never downloads geodata itself (geo-auto-update is off,
-# rules are added only for files present).
+# the bundle into /Library/KillSwitch/core, never from anywhere the user can write. The
+# subscription's own GEOSITE/GEOIP rules (e.g. GEOIP,RU,DIRECT) and the opt-in ad block read them
+# (ADR 0013). The core never downloads geodata itself (geo-auto-update is off; without the files
+# such rules are left out of the config).
 set -eu
 cd "$(dirname "$0")"
 # meta-rules-dat has a single moving release tag, "latest", rebuilt daily, and force-pushes the

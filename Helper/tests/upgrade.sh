@@ -58,10 +58,14 @@ regen() {  # regen <same|different>: prints what was called
     # shellcheck source=../ks
     . "$here/../ks"
     DIR="$d"; CORE_DIR="$d/core"; EVENTS="$d/events.log"; CORE_PROFILE="$d/core/profile.json"; PINS="$d/core/pins"
-    SERVERS_CORE="$d/servers-core"; SERVERS_MANUAL="$d/servers-manual"
-    echo '{}' > "$CORE_PROFILE"; : > "$PINS"; echo old > "$CORE_DIR/config.yaml"
+    SERVERS_CORE="$d/servers-core"; SERVERS_MANUAL="$d/servers-manual"; CORE_EGRESS="$d/core/egress"; REPORT="$d/core/routing.json"
+    echo '{}' > "$CORE_PROFILE"; : > "$PINS"; echo old > "$CORE_DIR/config.yaml"; echo rules > "$CORE_EGRESS"
     mode=$1
-    core_generate() { if [ "$mode" = same ]; then echo old > "$2"; else echo new > "$2"; fi; : > "$2.pins"; : > "$3"; }
+    core_generate() {
+      case "$mode" in same|egress) echo old > "$2" ;; *) echo new > "$2" ;; esac
+      : > "$2.pins"; : > "$3"; echo report > "$2.report"
+      if [ "$mode" = egress ]; then : > "$2.egress"; else echo rules > "$2.egress"; fi
+    }
     core_commit() { echo commit; mv "$1" "$CORE_DIR/config.yaml"; }
     loaded() { return 0; }
     load() { echo load; }
@@ -75,6 +79,10 @@ regen() {  # regen <same|different>: prints what was called
 out=$(regen same)
 check "_regen, same output: nothing reloaded" "$(grep -cE '^(commit|load|core_reload|launchctl)' <<<"$out")" 0
 check "_regen, same output: says so" "$(grep -c 'core config: kept' <<<"$out")" 1
+check "_regen, same output: the report written" "$(cat "$tmp/r-same/core/routing.json")" report
+out=$(regen egress)
+check "_regen, same config but the core's egress changed: pf reloaded, the core not" "$(grep -E '^(commit|load|core_reload)$' <<<"$out" | paste -sd, -)" "load"
+check "_regen, egress changed: written" "$(wc -c < "$tmp/r-egress/core/egress" | tr -d ' ')" 0
 out=$(regen different)
 check "_regen, new output: committed, pf and core reloaded in place" "$(grep -E '^(commit|load|core_reload)$' <<<"$out" | paste -sd, -)" "commit,load,core_reload"
 check "_regen: pf never flushed, the core never restarted" "$(grep -cE 'pfctl .*-F|kickstart|bootout' <<<"$out")" 0
@@ -95,7 +103,7 @@ setup() {  # setup <name>: a fresh installed system and bundle
   cp "$here/../local.killswitch.plist" "$here/../local.killswitch.core.plist" "$root/bundle/"
   cp "$here/../local.killswitch.plist" "$root/ld/local.killswitch.plist"
   cp "$here/../local.killswitch.core.plist" "$root/ld/local.killswitch.core.plist"
-  echo coredirect=1 > "$root/lib/settings"
+  printf 'lan=0\ncoredirect=1\nadblock=1\n' > "$root/lib/settings"
   : > "$root/calls"
 }
 upgrade() {  # upgrade [args]: runs main of install.sh in the bundle directory on the fakes
@@ -156,7 +164,7 @@ check "upgrade: the core config regenerated under the lock" "$(grep -c '^ks _reg
 check "upgrade: pf and the network never touched" "$(grep -cE '^(pfctl|networksetup)' "$root/calls")" 0
 check "upgrade: says the core kept running" "$(grep -c '^core: kept$' <<<"$out")" 1
 check "upgrade: sudoers kept for the same user" "$(grep -c '^someone ALL=(root) NOPASSWD:' "$root/sudoers")" 1
-check "upgrade: settings kept" "$(cat "$root/lib/settings")" "coredirect=1"
+check "upgrade: settings kept, coredirect dropped (ADR 0013)" "$(paste -sd, - < "$root/lib/settings")" "lan=0,adblock=1"
 
 setup again
 upgrade --upgrade >/dev/null 2>&1
