@@ -25,7 +25,8 @@ Rules are loaded at boot, before login.
   leak test, and the VPN client for our core: subscription URL (Remnawave or any mihomo/Clash
   subscription, kept in the keychain), auto-update by `profile-update-interval` (default 12 h), traffic
   and expiry from `subscription-userinfo`, servers added from share links (vless, trojan, ss, hysteria2,
-  tuic, wireguard) or a wg-quick `.conf`, server list with latency and selection (`ks core proxies` /
+  tuic, wireguard) or a wg-quick `.conf` (AmneziaWG fields → `amnezia-wg-option`, several `[Peer]` →
+  `peers:`), server list with latency and selection (`ks core proxies` /
   `ks core select`), latency tests and «Лучший» (`ks core delay <group>`), non-secret diagnostics. The subscription
   is fetched with a mihomo User-Agent and Remnawave's device headers (`x-hwid` = hash of the Mac's
   hardware UUID, `x-device-os`, `x-ver-os`, `x-device-model`), reduced to proxies, proxy-groups, rules
@@ -33,7 +34,16 @@ Rules are loaded at boot, before login.
   subscription, «Обновить», a new server) runs `ks core import <file.json>`, with the admin prompt if
   needed. The timer only runs `sudo -n ks core refresh <file.json>` and never prompts; if the helper
   refuses it (exit 3: new server addresses) the app shows «Нужно подтверждение: в подписке новые
-  серверы» and imports only after the user clicks «Подтвердить».
+  серверы» and imports only after the user clicks «Подтвердить». The User-Agent starts with
+  `mihomo/<core version>` (Remnawave's anchored Mihomo rule); `x-hwid-max-devices-reached` and
+  `x-hwid-not-supported` are shown as device-limit errors.
+  Also in the app: «Проверка утечек» (public IPv4 from api.ipify.org and am.i.mullvad.net, IPv6 from
+  ipv6.am.i.mullvad.net, DNS resolvers via the bash.ws API; the provider's address is remembered from a
+  run with the VPN off and compared later); «Подключаться автоматически» on start and network change,
+  never prompting (a notification instead), with trusted Wi-Fi networks (the name needs Location access
+  on macOS 14+; without it every network is untrusted); «Запускать при входе» (SMAppService);
+  «Раздельный туннель» (apps by CFBundleExecutable → `ks set splitapps <list>`, only with coredirect);
+  «Двойной VPN» (`ks set multihop <entry>|off`, chain shown in the window).
 - `App/Core/` — pure parsers (no AppKit), unit-tested by the `KillSwitchTests` target:
   `xcodegen generate && xcodebuild -scheme KillSwitch test CODE_SIGNING_ALLOWED=NO`.
 - `Widget/` — WidgetKit widget with on/off button. It is sandboxed, so its button posts a Darwin
