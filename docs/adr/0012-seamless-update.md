@@ -188,3 +188,15 @@ open anything pf blocks.
 - If macOS asks for approval of the replacement: the notice, the old version still listed active.
 - Daemon not registered: launch → `launchctl print system/com.lesha19.KillSwitch.helper` present,
   the notice when it waits for Login Items; dismiss it → not again within a day.
+
+## Addendum (0.14.2): `.notFound` before the first registration
+
+Measured on the owner's Mac with 0.14.1: no `com.lesha19.KillSwitch.helper` in `launchctl print
+system` and no Login Items notice. `HelperService.availability` mapped `.notFound` to `unavailable`
+("this build has no daemon"), so `launchStep` never registered it; a daemon that was never
+registered can read `.notFound` rather than `.notRegistered` (reported on Apple's forums for
+SMAppService agents and daemons). Now `.notFound` with the plist present in
+`Contents/Library/LaunchDaemons` is `needsRegistration` (launch, the wizard and «Восстановить
+службу…» call `register()`); `unavailable` only without the plist. The notice also shows while the
+daemon is still not registered after that attempt. `register()` logs the status before and after
+and any error (`category == "helper"`).

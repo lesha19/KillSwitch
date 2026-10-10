@@ -4,6 +4,33 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [0.14.2] - 2026-10-10
+
+### Fixed
+- No more «KillSwitch.app запрашивает доступ к данным других приложений» at launch: the app no
+  longer reads dropweb's profiles (`~/Library/Application Support/org.dropweb.vpn`) or Happ's group
+  container to suggest server addresses. «Адреса серверов для других VPN-программ» are typed by
+  hand; other VPNs are still recognised by `scutil --nc list` and the routes.
+- Nothing asks for the administrator's password without a click: every prompt (osascript's and
+  the daemon's authorization dialog) passes `AdminGate`, which refuses requests from launch,
+  refresh and timers and logs each request with its reason
+  (`log stream --predicate 'subsystem == "com.lesha19.KillSwitch" && category == "admin"'`). The
+  automatic resume after «Пауза до переподключения» used a click's path with the password
+  fallback; it now only tries the passwordless `ks on`.
+- The privileged daemon is registered again: a daemon that was never registered can read
+  `.notFound` from SMAppService, which 0.14.1 took for a build without the daemon, so it never
+  called `register()` and never showed the Login Items notice. The notice also shows while the
+  daemon is still not registered. Registration logs its status and error (category `helper`).
+
+- The passwordless helper upgrade (ADR 0012) also starts as soon as the daemon is switched on in
+  Login Items, not only at the next launch.
+
+### Notes
+- `ks` changes only its version line. With the daemon allowed it is upgraded without a password;
+  until then the main screen shows «Службу нужно обновить» and waits for the click.
+- The osascript dialog keeps osascript's icon (ADR 0002 addendum); with the daemon allowed in
+  Login Items, macOS's own dialog naming KillSwitch replaces it.
+
 ## [0.14.1] - 2026-10-10
 
 ### Fixed
