@@ -55,6 +55,19 @@ final class StatusTests: XCTestCase {
                        .otherVPN(blocksDirect: false))
     }
 
+    /// ADR 0018: protection stands by while another VPN is up and ours is not running; it blocks
+    /// nothing, and the line says it will come back.
+    func testOtherVPNWhileProtectionStandsBy() {
+        let status = Status.summary(input { $0.connection = .otherApp; $0.standby = true })
+        XCTAssertEqual(status, .otherVPN(blocksDirect: false, standby: true))
+        XCTAssertEqual(status.tone, .warning)
+        XCTAssertEqual(status.line(Status.Detail()),
+                       "KillSwitch не подключён. Пока работает другой VPN, защита ему не мешает и включится, когда он отключится.")
+        XCTAssertEqual(status.primary, .replaceOtherVPN)
+        XCTAssertEqual(Status.summary(input { $0.connection = .otherApp; $0.standby = true; $0.protection = .off }),
+                       .otherVPN(blocksDirect: false), "standby means nothing while protection is off")
+    }
+
     func testConnecting() {
         XCTAssertEqual(Status.summary(input { $0.connection = .connecting; $0.connectingSince = now.addingTimeInterval(-5) }), .connecting)
         XCTAssertEqual(Status.summary(input { $0.connection = .connecting }), .connecting)

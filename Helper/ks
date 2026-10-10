@@ -154,6 +154,16 @@ tunnel_sig() {
     END { print "vpn:" vl " ts:" tl }'
 }
 
+# Standby (ADR 0018): another program's VPN (a 198.18 tunnel, Happ or dropweb) is up and our core
+# is not running. Blocking now would cut that VPN (its server is often one of ours, open only to
+# the core's group) and leave the Mac without any tunnel, while "ks core on" refuses to start
+# next to it. So the rules let everything out until that VPN goes (the watchdog sees the tunnel
+# list change within a second and loads the blocking rules) or our core comes up.
+vpn_standby() {
+  ! core_running &&
+    utun_addrs | awk -v a="$CORE_TUN_ADDR" '$2 ~ /^198\.18\./ { v = 1 } $2 == a { o = 1 } END { exit !(v && !o) }'
+}
+
 # Prints the pf rules for the current settings.
 # Default is deny: every packet leaving the Mac is dropped unless listed here, on any
 # interface (Wi-Fi, Ethernet, iPhone USB, Thunderbolt, PPP, interfaces that appear later).
@@ -171,6 +181,7 @@ rules() {  # rules [allow-file] [servers-file] [manual-servers-file]
   local allow_file="${1:-$ALLOW}" servers_file="${2:-$SERVERS}" manual_file="${3:-$SERVERS_MANUAL}" vpn ts
   [ -e "$manual_file" ] || manual_file=$servers_file   # before the first servers_migrate
   if [ -n "$(root_files_bad "$allow_file" "$servers_file" "$manual_file")" ]; then lockdown; return 0; fi
+  if vpn_standby; then echo 'pass out quick all flags any keep state'; return 0; fi
   vpn=$(vpn_ifaces | paste -sd' ' -)
   ts=$(ts_ifaces | paste -sd' ' -)
   # tables go before the filter rules
@@ -261,6 +272,7 @@ load() {  # load [tunnel_sig, if the caller has it]
   [ -n "$sig" ] || sig=$(tunnel_sig)
   files=$(root_files_sig)
   bad=$(root_files_bad | paste -sd, -)
+  STANDBY=0; [ -z "$bad" ] && vpn_standby && STANDBY=1
   if ! rules | pfctl -a "$ANCHOR" -f - 2>/dev/null; then
     lockdown | pfctl -a "$ANCHOR" -f - 2>/dev/null || { echo "rules failed to load" >&2; return 1; }
     bad=rules
@@ -291,7 +303,7 @@ disable() {
 # guard [full|quick]: pause, off and the tunnels are checked every time (a file test and one
 # ifconfig); pf itself (three pfctl calls) only when full. Sets PROT (on, off, paused:<epoch>,
 # or "" while unknown) and TSIG (tunnel_sig) for the state file.
-PROT=""; TSIG=""
+PROT=""; TSIG=""; STANDBY=0
 guard() {
   local until why="" mode=${1:-full}
   TSIG=$(tunnel_sig)
@@ -356,7 +368,7 @@ PUBLISHED=""
 publish_state() {
   local s
   [ -n "$PROT" ] || return 0
-  s=$(printf 'pid=%s\nprotection=%s\ncore=%s\ntunnels=%s' "$$" "$PROT" "${CORE_STATE:-off}" "$TSIG")
+  s=$(printf 'pid=%s\nprotection=%s\ncore=%s\ntunnels=%s\nstandby=%s' "$$" "$PROT" "${CORE_STATE:-off}" "$TSIG" "${STANDBY:-0}")
   [ "$s" = "$PUBLISHED" ] && return 0
   printf '%s\n' "$s" > "$STATEF.tmp" && chmod 644 "$STATEF.tmp" && mv "$STATEF.tmp" "$STATEF" && PUBLISHED=$s
 }

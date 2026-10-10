@@ -79,6 +79,8 @@ final class KillSwitchControl {
     private(set) var multihopEntry: String?
     /// Set while another VPN's TUN is up next to our core (see `foreignVPNFile`).
     private(set) var foreignVPN: String?
+    /// Protection stands by while another VPN is up and ours is not (ADR 0018, the watchdog's file).
+    private(set) var protectionStandby = false
     /// Groups and servers of the running core, from `ks core proxies`.
     private(set) var proxies: CoreProxies?
     private var proxiesLoading = false
@@ -813,6 +815,7 @@ final class KillSwitchControl {
             // the watchdog runs and says what `ks state` / `ks core state` would: no sudo, no launchctl
             daemonStateLive = true
             daemonRuns(true)
+            protectionStandby = daemon.standby
             coreRunning = coreInstalled && daemon.coreRunning
             if !coreRunning { proxies = nil }
             foreignVPN = coreRunning ? Self.readForeignVPN() : nil
@@ -824,6 +827,7 @@ final class KillSwitchControl {
             return
         }
         daemonStateLive = false
+        protectionStandby = false
         checkDaemon()
         if coreInstalled {
             Task {

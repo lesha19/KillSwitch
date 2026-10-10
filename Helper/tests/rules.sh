@@ -11,6 +11,7 @@ SERVERS="$tmp/servers"; SERVERS_MANUAL="$tmp/servers-manual"; SERVERS_CORE="$tmp
 vpn_ifaces() { echo utun9; }
 ts_ifaces() { :; }
 dscl() { return 0; }   # the _ksvpn group exists
+core_running() { return 0; }   # no standby (ADR 0018) unless a check below says otherwise
 fails=0
 expect() {  # expect <desc> <regex> [absent]
   if grep -qE "$2" "$tmp/out"; then [ -z "${3:-}" ] && echo "ok    $1" || { echo "FAIL  $1"; fails=$((fails + 1)); }
@@ -79,5 +80,29 @@ expect "before migration all servers stay reachable" '^pass out quick to \{ 192\
 servers_migrate
 [ "$(cat "$SERVERS_MANUAL")" = "$(cat "$SERVERS")" ] && echo "ok    migration keeps every old server as manual" ||
   { echo "FAIL  migration"; fails=$((fails + 1)); }
+
+# ADR 0018: another program's VPN is up and ours is not running: the rules stand by instead of
+# cutting it (its server is often ours too, reachable only by the core's group)
+core_running() { return 1; }
+utun_addrs() { echo "utun23 198.18.0.1"; }
+rules > "$tmp/out"
+[ "$(cat "$tmp/out")" = "pass out quick all flags any keep state" ] && echo "ok    other VPN up, ours not running: standby, nothing blocked" ||
+  { echo "FAIL  standby: $(cat "$tmp/out")"; fails=$((fails + 1)); }
+utun_addrs() { printf 'utun23 198.18.0.1\nutun7 198.18.128.1\n'; }
+rules > "$tmp/out"
+expect "other VPN next to our TUN: no standby" '^block drop out quick all$'
+utun_addrs() { :; }
+rules > "$tmp/out"
+expect "no tunnel at all: no standby" '^block drop out quick all$'
+utun_addrs() { echo "utun23 198.18.0.1"; }
+core_running() { return 0; }
+rules > "$tmp/out"
+expect "our core running (TUN not up yet): no standby" '^block drop out quick all$'
+core_running() { return 1; }
+echo 'lan==' > "$SETTINGS"
+rules > "$tmp/out"
+[ "$(cat "$tmp/out")" = "$(lockdown)" ] && echo "ok    damaged settings: lockdown wins over standby" ||
+  { echo "FAIL  damaged + standby: $(cat "$tmp/out")"; fails=$((fails + 1)); }
+rm -f "$SETTINGS"
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

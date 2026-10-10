@@ -12,6 +12,7 @@ SERVERS="$DIR/servers"; SERVERS_MANUAL="$DIR/servers-manual"; EVENTS="$DIR/event
 HASHF="$DIR/rules.sha256"; SIGF="$DIR/tunnels"; FILESF="$DIR/rules.files"; INVALIDF="$DIR/invalid"; CORE_EGRESS="$DIR/none"; WIFI_MARK="$DIR/wifi-off-by-ks"; STATEF="$DIR/daemon-state"
 PF_CONF="$tmp/pf.conf"; echo 'anchor "com.apple/*"' > "$PF_CONF"
 dscl() { return 1; }   # no core group: fewer rules, same logic
+core_running() { [ "${CORE_RUNS:-1}" = 1 ]; }   # no standby (ADR 0018) unless said so
 # Fake pf: "on"/"off", the main ruleset and our anchor in files; every call logged.
 PF=on; echo 'anchor "com.apple/*" all' > "$tmp/main"; : > "$tmp/anchor"
 pfctl() {
@@ -92,6 +93,21 @@ echo $(( $(date +%s) + 300 )) > "$FLAG"
 passes 15 15
 [[ "$(st protection)" =~ ^paused:[0-9]+$ ]] && ok "pause: state follows" || bad "pause: $(cat "$STATEF")"
 grep -qE 'DNS|token|password|server' "$STATEF" && bad "state file carries more than the state" || ok "state file holds no settings or secrets"
+
+[ "$(st standby)" = 0 ] && ok "state file: no standby while our core runs" || bad "standby: $(cat "$STATEF")"
+
+# --- ADR 0018: another VPN up and our core not running: standby, nothing blocked, the app is told
+rm -f "$FLAG"; ADDRS="utun4 198.18.0.1"; CORE_RUNS=0
+passes 50 50
+[ "$(cat "$tmp/anchor")" = "pass out quick all flags any keep state" ] && [ "$(st protection)" = on ] && [ "$(st standby)" = 1 ] &&
+  ok "other VPN alone: standby rules within a pass, state says standby" || bad "standby: $(cat "$tmp/anchor"; cat "$STATEF")"
+ADDRS=""
+passes 51 51
+grep -q '^block drop out quick all$' "$tmp/anchor" && [ "$(st standby)" = 0 ] &&
+  ok "other VPN gone: blocking again on the next pass" || bad "after standby: $(cat "$tmp/anchor"; cat "$STATEF")"
+ADDRS="utun4 198.18.0.1
+utun7 198.18.128.1"; CORE_RUNS=1
+passes 52 52
 
 # --- "ks off" raced with a reload: rules loaded although off
 echo 0 > "$FLAG"; rules > "$tmp/anchor"; : > "$EVENTS"

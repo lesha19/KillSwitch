@@ -73,7 +73,7 @@ extension KillSwitchControl {
             protection: state, connection: connection, foreignVPN: foreignVPN != nil, daemonProblem: daemonProblem,
             coreInstalled: coreInstalled, needsRepair: needsRepair || helperOutdated && !upgradingHelper,
             hasServers: coreConfigured || client.hasURL || !client.manual.isEmpty,
-            connectingSince: connectingSince, now: clock))
+            connectingSince: connectingSince, now: clock, standby: protectionStandby))
     }
 }
 

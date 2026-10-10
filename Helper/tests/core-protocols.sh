@@ -74,6 +74,7 @@ fixture ok-wg-psk.json
 fixture ok-mieru.json; [ "$(servers)" = 203.0.113.70 ] && ok "mieru: server in servers (port-range: any port of it)" || bad "mieru: servers"
 s=$(echo 203.0.113.20 203.0.113.30 203.0.113.66 203.0.113.71 | tr ' ' '\n')
 dscl() { return 0; }
+core_running() { return 0; }   # no standby (ADR 0018) whatever runs on this Mac
 printf '%s\n' "$s" > "$tmp/srv"; : > "$tmp/manual"; : > "$tmp/allow"
 TSRELAYS="$tmp/none" rules "$tmp/allow" "$tmp/srv" "$tmp/manual" > "$tmp/pf"
 grep -qxF "pass out quick proto { tcp udp } to { $(paste -sd, "$tmp/srv") } group $CORE_GROUP flags any keep state" "$tmp/pf" &&

@@ -47,6 +47,7 @@ check "no network: no requests" "$(wc -l < "$tmp/urls" | tr -d ' ')" 0
 SETTINGS="$tmp/settings"; ALLOW="$tmp/allow"; TSRELAYS="$tmp/none"; CORE_EGRESS="$tmp/none"
 SERVERS="$tmp/servers"; SERVERS_MANUAL="$tmp/servers-manual"; : > "$SERVERS"; : > "$SERVERS_MANUAL"
 vpn_ifaces() { :; }; ts_ifaces() { :; }; dscl() { return 0; }
+core_running() { return 0; }   # no standby (ADR 0018) whatever runs on this Mac
 rules > "$tmp/rules"
 check "pf: the Russian probe addresses for the core group on tcp 443" \
   "$(grep -c "^pass out quick proto tcp to { 77\.88\.8\.8, 77\.88\.8\.1 } port 443 group $CORE_GROUP flags any keep state$" "$tmp/rules")" 1

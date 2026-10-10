@@ -48,7 +48,8 @@ enum Status: Equatable {
     case needsSetup
     /// Another program's VPN carries the traffic instead of ours (ADR 0009). With protection on,
     /// whatever that VPN sends around itself (often Russian sites) is blocked.
-    case otherVPN(blocksDirect: Bool)
+    /// `standby`: protection is on but lets everything out until that VPN goes (ADR 0018).
+    case otherVPN(blocksDirect: Bool, standby: Bool = false)
     case connecting
     case stuck
     case protected
@@ -70,6 +71,8 @@ enum Status: Equatable {
         /// When the current connection attempt started.
         var connectingSince: Date?
         var now: Date
+        /// The watchdog stands by: another VPN is up and ours is not running (ADR 0018).
+        var standby = false
     }
 
     /// «Подключение…» turns into «Подключение затянулось» after this many seconds.
@@ -86,7 +89,7 @@ enum Status: Equatable {
         if input.needsRepair { return .broken(.needsAccess) }
         if !input.hasServers { return .needsSetup }
         let protectedNow = input.protection == .on
-        if input.foreignVPN || input.connection == .otherApp { return .otherVPN(blocksDirect: protectedNow) }
+        if input.foreignVPN || input.connection == .otherApp { return .otherVPN(blocksDirect: protectedNow && !input.standby, standby: protectedNow && input.standby) }
         switch input.connection {
         case .connecting:
             if let since = input.connectingSince, input.now.timeIntervalSince(since) > stuckAfter { return .stuck }
@@ -187,7 +190,9 @@ enum Status: Equatable {
         case .notInstalled: String(localized: "Установка займёт минуту и попросит пароль один раз.")
         case .broken(let problem): UserError.problem(problem).message
         case .needsSetup: String(localized: "Без неё VPN не к чему подключаться.")
-        case .otherVPN(let blocksDirect):
+        case .otherVPN(_, true):
+            String(localized: "KillSwitch не подключён. Пока работает другой VPN, защита ему не мешает и включится, когда он отключится.")
+        case .otherVPN(let blocksDirect, _):
             blocksDirect ? String(localized: "KillSwitch не подключён. Сайты, которые тот VPN пускает напрямую (часто российские), защита блокирует.")
                          : String(localized: "KillSwitch не подключён: два VPN не работают вместе.")
         case .connecting: detail.server ?? ""

@@ -16,6 +16,12 @@ final class DaemonStateTests: XCTestCase {
         XCTAssertEqual(DaemonState(text: "pid=9\nprotection=off")?.coreRunning, false)
     }
 
+    func testStandby() {
+        XCTAssertEqual(DaemonState(text: "pid=9\nprotection=on\ncore=off\ntunnels=vpn:utun23 ts:\nstandby=1")?.standby, true)
+        XCTAssertEqual(DaemonState(text: "pid=9\nprotection=on\ncore=off\nstandby=0")?.standby, false)
+        XCTAssertEqual(DaemonState(text: "pid=9\nprotection=on")?.standby, false, "older helpers do not write it")
+    }
+
     func testIncompleteFileIsIgnored() {
         XCTAssertNil(DaemonState(text: ""))
         XCTAssertNil(DaemonState(text: "protection=on"))
