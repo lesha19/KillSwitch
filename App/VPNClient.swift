@@ -48,8 +48,19 @@ final class VPNClient {
 
     private let control: KillSwitchControl
     private var timer: Timer?
-    /// After a failed automatic update: try again in an hour, not after the full interval.
+    /// After a failed or refused update: try again in an hour, not after the full interval.
     private var retryAt: Date?
+
+    private var schedule: UpdateSchedule {
+        get { UpdateSchedule(lastUpdate: status.lastUpdate, retryAt: retryAt) }
+        set {
+            retryAt = newValue.retryAt
+            if newValue.lastUpdate != status.lastUpdate {
+                status.lastUpdate = newValue.lastUpdate
+                saveStatus()
+            }
+        }
+    }
 
     private static let urlAccount = "subscription-url"
     private static let linksAccount = "manual-links"
@@ -172,13 +183,12 @@ final class VPNClient {
     // MARK: updating
 
     func updateIfDue() {
-        guard hasURL, !updating else { return }
-        if let next = nextUpdate, next > Date() { return }
-        if let retryAt, retryAt > Date() { return }
+        guard hasURL, !updating, schedule.isDue(interval: effectiveInterval, now: Date()) else { return }
         Task { await update(interactive: false) }
     }
 
     /// Fetches the subscription and applies it. On any failure the core keeps its old config.
+    /// «Обновлено» moves only when the profile reached the core; otherwise again in an hour.
     func update(interactive: Bool) async {
         guard let url = Self.storedURL().flatMap(URL.init(string:)) else {
             if !manual.isEmpty { await apply(subscription: nil, interactive: interactive) }
@@ -188,10 +198,13 @@ final class VPNClient {
         updating = true
         defer { updating = false }
         guard let profile = await fetchProfile(url) else { return }
-        await apply(subscription: profile, interactive: interactive)
+        let applied = await apply(subscription: profile, interactive: interactive)
+        schedule.record(applied ? .applied : .notApplied, now: Date())
     }
 
-    /// Downloads and caches the subscription, without handing it to the helper.
+    /// Downloads and caches the subscription, without handing it to the helper. The cache is what
+    /// «Разрешить…» (confirmNewServers) and manual servers build on, so it is the last fetched
+    /// profile, applied or not.
     private func fetchProfile(_ url: URL) async -> Profile? {
         do {
             let (body, headers) = try await Self.fetch(url)
@@ -201,17 +214,14 @@ final class VPNClient {
             status.serverInterval = SubscriptionHeaders.updateInterval(headers["profile-update-interval"])
             status.accountURL = [headers["profile-web-page-url"], headers["support-url"]].lazy
                 .compactMap { $0.flatMap(URL.init(string:)) }.first { $0.scheme == "https" }
-            status.lastUpdate = Date()
             saveStatus()
-            retryAt = nil
             Self.cache(profile)
             reloadProfileProxies()
             noticeLimits()
             return profile
         } catch {
             let raw = Self.describe(error)
-            // no network: try again with the next timer tick (10 min), anything else in an hour
-            retryAt = Date().addingTimeInterval(raw.hasPrefix("offline") ? 540 : 3600)
+            schedule.record(.fetchFailed(offline: raw.hasPrefix("offline")), now: Date())
             lastError = UserError.from(raw: raw, context: .subscription)
             return nil
         }
@@ -288,6 +298,8 @@ final class VPNClient {
 
     func didImport(_ prepared: Prepared) {
         imported(prepared.profile, hash: prepared.hash)
+        // the wizard fetched the subscription a moment ago (check)
+        if hasURL { schedule.record(.applied, now: Date()) }
         discard(prepared)
     }
 
@@ -315,28 +327,32 @@ final class VPNClient {
         guard !updating else { return }
         updating = true
         defer { updating = false }
-        await apply(subscription: Self.cachedSubscription(), interactive: true)
+        if await apply(subscription: Self.cachedSubscription(), interactive: true) { schedule.record(.applied, now: Date()) }
     }
 
     /// Merges with the manual servers and hands the result to the helper, unless the core already
     /// has exactly this. A click imports (admin prompt if needed); a timer only refreshes, which
     /// the helper refuses when new server addresses would have to be let out.
-    private func apply(subscription: Profile?, interactive: Bool) async {
+    /// True when the core has this profile now (imported, or it had it already).
+    @discardableResult
+    private func apply(subscription: Profile?, interactive: Bool) async -> Bool {
         guard let profile = ProfileMerger.merge(subscription: subscription, manual: manual.compactMap(Self.proxy)) else {
             lastError = nil
-            return
+            return true
         }
-        guard let (file, hash) = write(profile) else { return }
+        guard let (file, hash) = write(profile) else { return false }
         defer { try? FileManager.default.removeItem(at: file) }
         if control.coreConfigured, UserDefaults.standard.string(forKey: Self.importedKey) == hash {
             lastError = nil
             needsPassword = false
             needsConfirmation = false
-            return
+            return true
         }
         guard interactive else {
             switch await control.coreRefresh(file: file.path) {
-            case .applied: imported(profile, hash: hash)
+            case .applied:
+                imported(profile, hash: hash)
+                return true
             case .newServers:
                 lastError = nil
                 if !needsConfirmation { Notifier.shared.post(.newServers) }
@@ -344,11 +360,12 @@ final class VPNClient {
             case .needsPassword: needsPassword = true
             case .failed(let message): lastError = UserError.from(raw: message, context: .subscription)
             }
-            return
+            return false
         }
         switch await control.coreImport(file: file.path, allowPassword: true) {
         case .ok:
             imported(profile, hash: hash)
+            return true
         case .cancelled:
             break
         case .needsPassword:
@@ -356,6 +373,7 @@ final class VPNClient {
         case .failed(let message):
             lastError = UserError.from(raw: message, context: .subscription)
         }
+        return false
     }
 
     private func reloadProfileProxies() {
