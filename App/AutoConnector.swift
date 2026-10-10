@@ -4,17 +4,18 @@ import Foundation
 import Network
 import Observation
 
-/// «Подключаться автоматически» (decision in AutoConnect): once after the app starts and whenever
-/// the Mac moves to another network. Never asks for a password (see coreOnAutomatically) and never
-/// disconnects: a trusted Wi-Fi only means "do not connect by itself". A manual «Отключить» holds
-/// until the network changes.
+/// «Подключаться автоматически» (decision in AutoConnect, on by default): once after the app starts
+/// and whenever the Mac moves to another network. Never asks for a password (see
+/// coreOnAutomatically) and never disconnects: a trusted Wi-Fi only means "do not connect by
+/// itself", so there the VPN may stay off or protection paused. A manual «Отключить» holds until
+/// the network changes.
 @MainActor
 @Observable
 final class AutoConnector: NSObject, CLLocationManagerDelegate {
-    var enabled = UserDefaults.standard.bool(forKey: "autoConnect") {
+    var enabled = AutoConnect.enabled(stored: UserDefaults.standard.object(forKey: "autoConnect") as? Bool) {
         didSet { UserDefaults.standard.set(enabled, forKey: "autoConnect") }
     }
-    var skipTrusted = UserDefaults.standard.bool(forKey: "autoConnectSkipTrusted") {
+    var skipTrusted = AutoConnect.skipTrusted(stored: UserDefaults.standard.object(forKey: "autoConnectSkipTrusted") as? Bool) {
         didSet {
             UserDefaults.standard.set(skipTrusted, forKey: "autoConnectSkipTrusted")
             if skipTrusted { requestLocation() }
@@ -60,6 +61,9 @@ final class AutoConnector: NSObject, CLLocationManagerDelegate {
     }
 
     var locationAllowed: Bool { location == .authorizedAlways || location == .authorized }
+
+    /// Trusted networks are on but macOS hides the Wi-Fi name (no Location access).
+    var trustedNeedsLocation: Bool { AutoConnect.trustedNeedsLocation(skipTrusted: enabled && skipTrusted, locationAllowed: locationAllowed) }
 
     func addTrusted(_ name: String) { setTrusted(trusted + [name]) }
     func removeTrusted(_ name: String) { setTrusted(trusted.filter { $0 != name }) }

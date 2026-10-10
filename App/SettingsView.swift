@@ -112,17 +112,17 @@ private struct LaunchSection: View {
             }
             Toggle(isOn: $auto.enabled) {
                 Text("Подключаться автоматически")
-                Text(control.coreConfigured ? "В новых сетях и после включения Mac. Пароль не спрашивается."
+                Text(control.coreConfigured ? "В любой сети, после включения Mac и при смене сети. Пароль не спрашивается."
                                             : "Сначала добавь подписку или сервер.")
             }
             .disabled(!control.coreConfigured)
             Toggle(isOn: $auto.skipTrusted) {
                 Text("Кроме доверенных сетей Wi-Fi")
-                Text("Например, дома. В остальных сетях VPN подключается всегда.")
+                Text("Например, дома: там VPN не подключается сам, его можно отключить или поставить защиту на паузу. В остальных сетях VPN подключается всегда.")
             }
             .disabled(!auto.enabled)
             if auto.enabled && auto.skipTrusted {
-                if !auto.locationAllowed {
+                if auto.trustedNeedsLocation {
                     VStack(alignment: .leading, spacing: 6) {
                         Footnote(text: "Без доступа к геопозиции macOS не называет сеть Wi-Fi, и все сети считаются недоверенными.",
                                  more: "Поэтому VPN подключается в любой сети. Само местоположение KillSwitch не использует и никуда не отправляет.")
@@ -142,8 +142,12 @@ private struct LaunchSection: View {
                         Button("Убрать") { auto.removeTrusted(name) }
                     }
                 }
-                if let ssid = auto.ssid, !auto.trusted.contains(ssid) {
-                    Button("Добавить «\(ssid)»") { auto.addTrusted(ssid) }
+                if let ssid = auto.ssid {
+                    if auto.trusted.contains(ssid) {
+                        StatusLabel("Сейчас «\(ssid)» — доверенная сеть", systemImage: "house.fill", tint: .green)
+                    } else {
+                        Button("Добавить «\(ssid)»") { auto.addTrusted(ssid) }
+                    }
                 }
                 HStack {
                     TextField("Имя сети Wi-Fi", text: $newNetwork).onSubmit(add)

@@ -54,4 +54,20 @@ final class AutoConnectTests: XCTestCase {
     func testTrustedListNormalised() {
         XCTAssertEqual(AutoConnect.normalized([" Дом ", "", "Дом", "Office"]), ["Дом", "Office"])
     }
+
+    /// Default: auto-connect everywhere; a choice made in the wizard or in Settings is kept.
+    func testEnabledUnlessTurnedOff() {
+        XCTAssertTrue(AutoConnect.enabled(stored: nil))
+        XCTAssertTrue(AutoConnect.enabled(stored: true))
+        XCTAssertFalse(AutoConnect.enabled(stored: false))
+        XCTAssertFalse(AutoConnect.skipTrusted(stored: nil), "trusted networks are opt-in")
+    }
+
+    /// macOS gives the Wi-Fi name only with Location access: until then every Wi-Fi is untrusted
+    /// (VPN connects), and Settings says why.
+    func testWithoutLocationTrustedNetworksCannotBeRecognised() {
+        XCTAssertEqual(AutoConnect.trustedNeedsLocation(skipTrusted: true, locationAllowed: false), true)
+        XCTAssertEqual(AutoConnect.trustedNeedsLocation(skipTrusted: true, locationAllowed: true), false)
+        XCTAssertEqual(AutoConnect.trustedNeedsLocation(skipTrusted: false, locationAllowed: false), false)
+    }
 }

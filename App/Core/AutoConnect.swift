@@ -57,6 +57,19 @@ enum AutoConnect {
         return .connect
     }
 
+    /// «Подключаться автоматически» is on unless the person turned it off (wizard or Settings):
+    /// by default the VPN connects in every network.
+    static func enabled(stored: Bool?) -> Bool { stored ?? true }
+
+    /// Trusted networks are opt-in: until some are named, no network is trusted.
+    static func skipTrusted(stored: Bool?) -> Bool { stored ?? false }
+
+    /// macOS 14 and later give an app the Wi-Fi name (CoreWLAN `ssid()`) only with Location
+    /// access; without it every Wi-Fi counts as untrusted, which Settings has to say.
+    static func trustedNeedsLocation(skipTrusted: Bool, locationAllowed: Bool) -> Bool {
+        skipTrusted && !locationAllowed
+    }
+
     /// Trimmed, without empties and repeats, order kept.
     static func normalized(_ names: [String]) -> [String] {
         var result: [String] = []
