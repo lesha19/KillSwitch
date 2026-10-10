@@ -1,0 +1,216 @@
+import Foundation
+
+/// What the privileged daemon (ADR 0010) may run for the app: the operations that went through
+/// passwordless sudo or the admin password before, nothing else. Each one becomes a fixed program
+/// (`/Library/KillSwitch/ks`, or the bundled install.sh / uninstall.sh) with an argument vector,
+/// never a shell line. The daemon checks `isValid` again before it runs anything; the rules mirror
+/// Helper/ks (valid_addr, valid_name, splitapps_parse, `pause`, `set`), which checks once more.
+enum HelperCommand: Equatable, Sendable {
+    // Never widen the rules: what the sudoers line of Helper/install.sh allows without a password.
+    case state, probe, protectionOn, netRestore
+    case coreState, coreOn, coreOff, coreProxies
+    case coreSelect(group: String, proxy: String)
+    case coreDelay(String)
+    /// Refused by ks (exit 3) if the profile brings new servers: the subscription auto-update.
+    case coreRefresh(profile: String)
+
+    // Widen or edit what may leave the Mac without the VPN: behind the authorization right.
+    case protectionOff
+    case pause(minutes: Int)
+    case setSwitch(String, Bool)
+    case setSplitApps([String])
+    /// nil turns «Двойной VPN» off.
+    case setMultihop(String?)
+    case allow(String), unallow(String)
+    case serverAdd(String), serverRemove(String)
+    case coreImport(profile: String)
+    /// The daemon puts the connecting user here (audit token), whatever the app said.
+    case install(user: String, servers: [String])
+    case uninstall
+
+    enum Program: Equatable, Sendable { case ks, install, uninstall }
+
+    var program: Program {
+        switch self {
+        case .install: .install
+        case .uninstall: .uninstall
+        default: .ks
+        }
+    }
+
+    var needsAuthorization: Bool {
+        switch self {
+        case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreSelect,
+             .coreDelay, .coreRefresh:
+            false
+        default:
+            true
+        }
+    }
+
+    /// The arguments after the program.
+    var arguments: [String] {
+        switch self {
+        case .state: ["state"]
+        case .probe: ["probe"]
+        case .protectionOn: ["on"]
+        case .netRestore: ["netrestore"]
+        case .coreState: ["core", "state"]
+        case .coreOn: ["core", "on"]
+        case .coreOff: ["core", "off"]
+        case .coreProxies: ["core", "proxies"]
+        case .coreSelect(let group, let proxy): ["core", "select", group, proxy]
+        case .coreDelay(let name): ["core", "delay", name]
+        case .coreRefresh(let profile): ["core", "refresh", profile]
+        case .protectionOff: ["off"]
+        case .pause(let minutes): ["pause", String(minutes)]
+        case .setSwitch(let key, let on): ["set", key, on ? "1" : "0"]
+        case .setSplitApps(let names): ["set", "splitapps", names.joined(separator: ",")]
+        case .setMultihop(let entry): ["set", "multihop", entry ?? Self.multihopOff]
+        case .allow(let address): ["allow", address]
+        case .unallow(let address): ["unallow", address]
+        case .serverAdd(let address): ["server-add", address]
+        case .serverRemove(let address): ["server-remove", address]
+        case .coreImport(let profile): ["core", "import", profile]
+        case .install(let user, let servers): [user] + servers
+        case .uninstall: []
+        }
+    }
+
+    var isValid: Bool {
+        switch self {
+        case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .protectionOff,
+             .uninstall:
+            true
+        case .coreSelect(let group, let proxy): Self.isName(group) && Self.isName(proxy)
+        case .coreDelay(let name): Self.isName(name)
+        case .coreRefresh(let profile), .coreImport(let profile): Self.isProfilePath(profile)
+        case .pause(let minutes): (0...9999).contains(minutes)
+        case .setSwitch(let key, _): Self.switchKeys.contains(key)
+        case .setSplitApps(let names):
+            names.count <= Self.maxSplitApps && Set(names).count == names.count && names.allSatisfy(Self.isSplitApp)
+        case .setMultihop(let entry): entry.map { Self.isName($0) && $0 != Self.multihopOff } ?? true
+        case .allow(let address), .serverAdd(let address): Self.isAddress(address)
+        case .unallow(let address), .serverRemove(let address): Self.isListedAddress(address)
+        case .install(let user, let servers):
+            Self.isUser(user) && servers.count <= Self.maxInstallServers && servers.allSatisfy(Self.isAddress)
+        }
+    }
+
+    // MARK: the argv the app builds (Batch, Onboarding, KillSwitchControl)
+
+    /// A command as the app has always written it: `[helper, ks arguments…]` or
+    /// `["/bin/bash", <…/install.sh>, user, servers…]` / `["/bin/bash", <…/uninstall.sh>]`. Nil
+    /// for anything else or a value the daemon would refuse. The script's path only names which
+    /// one: the daemon runs its own verified copy, never a path from the app.
+    init?(command: [String], helper: String) {
+        guard let first = command.first else { return nil }
+        if first == helper {
+            self.init(ks: Array(command.dropFirst()))
+            return
+        }
+        guard first == "/bin/bash", command.count >= 2 else { return nil }
+        if command[1].hasSuffix("/install.sh"), command.count >= 3 {
+            self = .install(user: command[2], servers: Array(command.dropFirst(3)))
+        } else if command[1].hasSuffix("/uninstall.sh"), command.count == 2 {
+            self = .uninstall
+        } else {
+            return nil
+        }
+        guard isValid else { return nil }
+    }
+
+    /// `ks <arguments>` as a command; nil for what the daemon does not run.
+    init?(ks arguments: [String]) {
+        let command: HelperCommand
+        switch arguments {
+        case ["state"]: command = .state
+        case ["probe"]: command = .probe
+        case ["on"]: command = .protectionOn
+        case ["netrestore"]: command = .netRestore
+        case ["off"]: command = .protectionOff
+        case ["core", "state"]: command = .coreState
+        case ["core", "on"]: command = .coreOn
+        case ["core", "off"]: command = .coreOff
+        case ["core", "proxies"]: command = .coreProxies
+        default:
+            switch (arguments.first, arguments.count) {
+            case ("pause", 2):
+                guard arguments[1].allSatisfy(\.isASCII), let minutes = Int(arguments[1]) else { return nil }
+                command = .pause(minutes: minutes)
+            case ("set", 3):
+                switch arguments[1] {
+                case "splitapps":
+                    let list = arguments[2]
+                    command = .setSplitApps(list.isEmpty ? [] : list.split(separator: ",", omittingEmptySubsequences: false)
+                        .map(String.init))
+                case "multihop":
+                    command = .setMultihop(arguments[2] == Self.multihopOff ? nil : arguments[2])
+                default:
+                    guard ["0", "1"].contains(arguments[2]) else { return nil }
+                    command = .setSwitch(arguments[1], arguments[2] == "1")
+                }
+            case ("allow", 2): command = .allow(arguments[1])
+            case ("unallow", 2): command = .unallow(arguments[1])
+            case ("server-add", 2): command = .serverAdd(arguments[1])
+            case ("server-remove", 2): command = .serverRemove(arguments[1])
+            case ("core", 3) where arguments[1] == "delay": command = .coreDelay(arguments[2])
+            case ("core", 3) where arguments[1] == "import": command = .coreImport(profile: arguments[2])
+            case ("core", 3) where arguments[1] == "refresh": command = .coreRefresh(profile: arguments[2])
+            case ("core", 4) where arguments[1] == "select": command = .coreSelect(group: arguments[2], proxy: arguments[3])
+            default: return nil
+            }
+        }
+        guard command.isValid else { return nil }
+        self = command
+    }
+
+    // MARK: checks
+
+    static let multihopOff = "off"
+    static let switchKeys: Set<String> = ["lan", "tailscale", "dns", "direct", "coredirect", "wifiguard"]
+    static let maxSplitApps = 50
+    static let maxInstallServers = 512
+
+    /// ks valid_name: non-empty, at most 256 bytes (the daemon runs ks in the C locale), no control characters.
+    static func isName(_ text: String) -> Bool {
+        !text.isEmpty && text.utf8.count <= 256 && !hasControl(text)
+    }
+
+    /// ks valid_addr: an IPv4 address or network in dotted form, or anything IPv6-shaped (pfctl -n
+    /// checks it after). Bounded: the longest IPv6 text with a prefix is 49 characters.
+    static func isAddress(_ text: String) -> Bool {
+        guard isListedAddress(text), text.utf8.count <= 49 else { return false }
+        return text.contains(":") || text.wholeMatch(of: /[0-9]{1,3}(\.[0-9]{1,3}){3}(\/[0-9]{1,2})?/) != nil
+    }
+
+    /// Removal: any entry of the address shape install.sh or an older ks let into the lists.
+    static func isListedAddress(_ text: String) -> Bool {
+        text.utf8.count <= 64 && text.wholeMatch(of: /[0-9A-Fa-f:.]+(\/[0-9]{1,3})?/) != nil
+    }
+
+    /// ks splitapps_parse: an app bundle's absolute path (at most 255 bytes, `.app`, no empty, `.`
+    /// or `..` parts) or a process name (at most 64 bytes, no slash); no list separator, no
+    /// control characters, nothing for ks to trim.
+    static func isSplitApp(_ entry: String) -> Bool {
+        guard !entry.isEmpty, !entry.contains(","), !hasControl(entry),
+              entry.trimmingCharacters(in: .whitespaces) == entry else { return false }
+        guard entry.hasPrefix("/") else { return entry.utf8.count <= 64 && !entry.contains("/") }
+        let parts = entry.split(separator: "/", omittingEmptySubsequences: false).dropFirst()
+        return entry.utf8.count <= 255 && entry.hasSuffix(".app") && !parts.contains { $0.isEmpty || $0 == "." || $0 == ".." }
+    }
+
+    /// The daemon writes profiles to its own directory; the path is absolute and one line.
+    static func isProfilePath(_ path: String) -> Bool {
+        path.hasPrefix("/") && path.utf8.count <= 1024 && !hasControl(path)
+    }
+
+    /// A macOS short user name as install.sh writes it into sudoers.
+    static func isUser(_ name: String) -> Bool {
+        name.wholeMatch(of: /[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}/) != nil
+    }
+
+    private static func hasControl(_ text: String) -> Bool {
+        text.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+    }
+}

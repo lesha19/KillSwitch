@@ -1,6 +1,6 @@
 # ADR 0001: fewer password prompts without weakening protection
 
-- Status: accepted in part — batching is done (0.9); the privileged daemon is planned below
+- Status: accepted — batching done (0.9); the privileged daemon built as ADR 0010 (manual checks pending)
 - Date: 2026-10-10
 - Owner decision: Р2 in `docs/ux/spec.md` §10
 
@@ -35,7 +35,7 @@ server addresses with exit 3). Anything that widens them asks for the password.
 
 The security model does not change: the same commands, the same prompt, fewer prompts.
 
-### Part 2 (planned): a privileged daemon with a short-lived right and Touch ID
+### Part 2 (built, see ADR 0010): a privileged daemon with a short-lived right and Touch ID
 
 Not built in 0.9: it replaces the trust boundary of the product and needs its own review and a
 test on a clean Mac with a Developer ID build. The design:

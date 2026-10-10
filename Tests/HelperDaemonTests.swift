@@ -1,0 +1,106 @@
+import Security
+import ServiceManagement
+import XCTest
+
+/// ADR 0010: who may talk to the daemon, the right it asks for, and how its answers read.
+final class HelperDaemonTests: XCTestCase {
+    private var repo: URL { URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent() }
+
+    // MARK: code-signing requirements
+
+    func testRequirementsCompileAndPinTeamAndIdentifier() throws {
+        for (text, identifier) in [(HelperIdentity.clientRequirement, "com.lesha19.KillSwitch"),
+                                   (HelperIdentity.daemonRequirement, "com.lesha19.KillSwitch.helper")] {
+            var requirement: SecRequirement?
+            XCTAssertEqual(SecRequirementCreateWithString(text as CFString, [], &requirement), errSecSuccess, text)
+            XCTAssertTrue(text.hasPrefix("anchor apple generic and "), text)
+            XCTAssertTrue(text.contains("identifier \"\(identifier)\" and"), text)
+            XCTAssertTrue(text.hasSuffix("certificate leaf[subject.OU] = \"YR58655PJ7\""), text)
+        }
+    }
+
+    /// A program that is not ours, signed by anyone (here: the test runner, Apple-signed), is refused.
+    func testOtherProgramsDoNotSatisfyTheClientRequirement() throws {
+        var code: SecStaticCode?
+        XCTAssertEqual(SecStaticCodeCreateWithPath(URL(fileURLWithPath: "/usr/bin/true") as CFURL, [], &code), errSecSuccess)
+        var requirement: SecRequirement?
+        XCTAssertEqual(SecRequirementCreateWithString(HelperIdentity.clientRequirement as CFString, [], &requirement),
+                       errSecSuccess)
+        XCTAssertNotEqual(SecStaticCodeCheckValidity(try XCTUnwrap(code), [], requirement), errSecSuccess)
+    }
+
+    // MARK: the launchd plist inside the app
+
+    func testDaemonPlistMatchesTheProtocol() throws {
+        let url = repo.appendingPathComponent("HelperDaemon/LaunchDaemons/\(HelperIdentity.plistName)")
+        let plist = try XCTUnwrap(PropertyListSerialization.propertyList(from: Data(contentsOf: url), format: nil)
+            as? [String: Any])
+        XCTAssertEqual(plist["Label"] as? String, HelperIdentity.machService)
+        XCTAssertEqual(plist["BundleProgram"] as? String, "Contents/MacOS/\(HelperIdentity.executable)")
+        XCTAssertEqual(plist["MachServices"] as? [String: Bool], [HelperIdentity.machService: true])
+        XCTAssertEqual(plist["AssociatedBundleIdentifiers"] as? [String], ["com.lesha19.KillSwitch"])
+        XCTAssertNil(plist["Program"])            // the path comes from the bundle, never absolute
+        XCTAssertNil(plist["ProgramArguments"])
+        XCTAssertNil(plist["KeepAlive"])          // started on demand by its Mach service
+    }
+
+    // MARK: the authorization right
+
+    func testRightAsksForAnAdminEveryFiveMinutesAndIsNotShared() {
+        let definition = HelperRight.definition
+        XCTAssertEqual(HelperRight.name, "com.lesha19.KillSwitch.widen")
+        XCTAssertEqual(definition["class"] as? String, "user")
+        XCTAssertEqual(definition["group"] as? String, "admin")
+        XCTAssertEqual(definition["timeout"] as? Int, 300)
+        XCTAssertEqual(definition["shared"] as? Bool, false)
+        XCTAssertEqual(definition["allow-root"] as? Bool, false)
+        XCTAssertEqual(definition["authenticate-user"] as? Bool, true)
+        XCTAssertEqual(definition["session-owner"] as? Bool, false)
+        XCTAssertTrue(HelperRight.matches(definition))
+    }
+
+    /// `config.add.` lets anyone create a right that does not exist yet: whatever is there is
+    /// checked key by key, and anything weaker is rewritten by the daemon or refused.
+    func testWeakerDefinitionsDoNotMatch() {
+        XCTAssertFalse(HelperRight.matches(nil))
+        XCTAssertFalse(HelperRight.matches(["class": "allow"]))
+        let changes: [(String, Any)] = [
+            ("class", "allow"), ("group", "staff"), ("timeout", 86400), ("shared", true), ("allow-root", true),
+            ("authenticate-user", false), ("session-owner", true),
+        ]
+        for (key, value) in changes {
+            var weaker = HelperRight.definition
+            weaker[key] = value
+            XCTAssertFalse(HelperRight.matches(weaker), key)
+            weaker[key] = nil
+            XCTAssertFalse(HelperRight.matches(weaker), "missing \(key)")
+        }
+        var stored = HelperRight.definition   // authd adds its own bookkeeping
+        stored["created"] = 655253090.98
+        stored["modified"] = 655253090.98
+        stored["comment"] = "something else"
+        stored["timeout"] = NSNumber(value: 300)
+        XCTAssertTrue(HelperRight.matches(stored))
+    }
+
+    // MARK: SMAppService states
+
+    func testServiceStates() {
+        XCTAssertEqual(HelperService.availability(.enabled), .ready)
+        XCTAssertEqual(HelperService.availability(.notRegistered), .needsRegistration)
+        XCTAssertEqual(HelperService.availability(.requiresApproval), .needsApproval)
+        XCTAssertEqual(HelperService.availability(.notFound), .unavailable)
+    }
+
+    // MARK: answers
+
+    func testRepliesReadLikeTheSudoPath() {
+        XCTAssertEqual(HelperReply(status: 0, stdout: "on\n", stderr: "").text(separateStderr: false), "on")
+        XCTAssertEqual(HelperReply(status: 1, stdout: "a", stderr: "b").text(separateStderr: false), "a\nb")
+        XCTAssertEqual(HelperReply(status: 1, stdout: "{}", stderr: "boom\n").text(separateStderr: true), "boom")
+        XCTAssertEqual(HelperReply(status: 0, stdout: "{}", stderr: "warn").text(separateStderr: true), "{}")
+        XCTAssertEqual(HelperReply(status: 0, stdout: "", stderr: "").text(separateStderr: false), "")
+        XCTAssertTrue(HelperReply(status: HelperReply.notAuthorized, stdout: "", stderr: "").needsAuthorization)
+        XCTAssertFalse(HelperReply(status: 1, stdout: "", stderr: "").needsAuthorization)
+    }
+}

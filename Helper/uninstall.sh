@@ -22,4 +22,6 @@ pfctl -a com.apple/killswitch -F all 2>/dev/null
 dscl . -delete /Groups/_ksvpn 2>/dev/null
 rm -f /Library/LaunchDaemons/local.killswitch.plist /Library/LaunchDaemons/local.killswitch.core.plist /etc/sudoers.d/killswitch
 rm -rf /Library/KillSwitch
+# the right of the privileged daemon (ADR 0010); the app unregisters the daemon itself
+security authorizationdb remove com.lesha19.KillSwitch.widen >/dev/null 2>&1
 echo "kill switch removed"

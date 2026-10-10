@@ -264,6 +264,7 @@ private struct InstallStep: View {
             } else if let error = control.error ?? client.lastError {
                 InlineError(error: error)
             }
+            HelperApprovalNote()
             Spacer(minLength: 0)
             HStack {
                 Spacer()
