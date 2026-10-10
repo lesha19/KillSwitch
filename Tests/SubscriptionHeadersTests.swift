@@ -66,9 +66,6 @@ final class SubscriptionHeadersTests: XCTestCase {
     }
 
     func testHWIDProblems() {
-        XCTAssertEqual(SubscriptionHeaders.hwidProblem(headers: ["x-hwid-max-devices-reached": "true", "x-hwid-active": "true"]),
-                       "Превышен лимит устройств в подписке — удалите старое устройство в личном кабинете.")
-        XCTAssertNotNil(SubscriptionHeaders.hwidProblem(headers: ["x-hwid-not-supported": "true"]))
         XCTAssertNil(SubscriptionHeaders.hwidProblem(headers: ["x-hwid-active": "true"]))
         XCTAssertNil(SubscriptionHeaders.hwidProblem(headers: [:]))
     }

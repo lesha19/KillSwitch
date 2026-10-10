@@ -44,6 +44,7 @@ enum DiagnosticsCopy {
             ("Своих серверов", "\(client.manual.count)"),
         ]
         let errors = [control.error, control.coreError, control.proxiesError, client.lastError].compactMap { $0 }
+            .map { $0.details.isEmpty ? "\($0.title): \($0.message)" : $0.details }
         for error in (control.recentErrors + errors).reduce(into: [String](), { if !$0.contains($1) { $0.append($1) } }) {
             fields.append(("Ошибка", error))
         }

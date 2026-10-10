@@ -12,6 +12,7 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     header
+                    TopErrorBanner()
                     banners
                     if control.state == .notInstalled {
                         installCard
@@ -26,10 +27,6 @@ struct ContentView: View {
                             card { SubscriptionSummary() }
                         }
                         card { protection }
-                    }
-                    if let error = control.error {
-                        Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
-                            .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .padding(20)

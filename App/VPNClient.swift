@@ -19,6 +19,8 @@ final class VPNClient {
         var usage: SubscriptionUsage?
         var serverInterval: TimeInterval = SubscriptionHeaders.defaultInterval
         var lastUpdate: Date?
+        /// The service's page (`profile-web-page-url` or `support-url`), for «Открыть кабинет».
+        var accountURL: URL?
     }
 
     private(set) var hasURL = false
@@ -26,7 +28,7 @@ final class VPNClient {
     private(set) var status = Status()
     private(set) var manual: [ManualServer] = []
     private(set) var updating = false
-    private(set) var lastError: String?
+    private(set) var lastError: UserError?
     /// An automatic update found a new profile, but applying it needs the admin password
     /// (the installed helper does not allow `core refresh` without one).
     private(set) var needsPassword = false
@@ -81,11 +83,11 @@ final class VPNClient {
     func setURL(_ text: String) async {
         let url = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let components = URLComponents(string: url), components.scheme?.lowercased() == "https", components.host?.isEmpty == false else {
-            lastError = "Нужна ссылка вида https://…"
+            lastError = UserError(title: "Это не ссылка на подписку", message: "Нужна ссылка вида https://…")
             return
         }
         guard Keychain.write(Self.urlAccount, Data(url.utf8)) else {
-            lastError = "Не получилось сохранить ссылку в связке ключей."
+            lastError = UserError(title: "Ссылка не сохранилась", message: "Не получилось сохранить ссылку в связке ключей.")
             return
         }
         hasURL = true
@@ -121,7 +123,8 @@ final class VPNClient {
                 let proxy = try ProxyLink.parse(link)
                 added.append(ManualServer(link: link, name: name ?? proxy["name"] as? String ?? "Сервер"))
             } catch {
-                lastError = error.localizedDescription
+                lastError = UserError(title: "Не получилось добавить сервер", message: error.localizedDescription,
+                                      details: error.localizedDescription)
                 return
             }
         }
@@ -137,11 +140,11 @@ final class VPNClient {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
               (attributes[.size] as? Int ?? 0) < 64 * 1024,
               let text = try? String(contentsOf: url, encoding: .utf8) else {
-            lastError = "Не получилось прочитать файл WireGuard."
+            lastError = UserError(title: "Не получилось добавить сервер", message: "Не получилось прочитать файл WireGuard.")
             return
         }
         guard ProxyLink.isWireGuardConf(text) else {
-            lastError = "Это не файл WireGuard: в нём нет раздела [Interface]."
+            lastError = UserError(title: "Не получилось добавить сервер", message: "Это не файл WireGuard: в нём нет раздела [Interface].")
             return
         }
         await addLink(text, name: url.deletingPathExtension().lastPathComponent)
@@ -177,14 +180,18 @@ final class VPNClient {
             status.title = SubscriptionHeaders.title(headers["profile-title"]) ?? status.title ?? url.host
             status.usage = SubscriptionUsage(header: headers["subscription-userinfo"])
             status.serverInterval = SubscriptionHeaders.updateInterval(headers["profile-update-interval"])
+            status.accountURL = [headers["profile-web-page-url"], headers["support-url"]].lazy
+                .compactMap { $0.flatMap(URL.init(string:)) }.first { $0.scheme == "https" }
             status.lastUpdate = Date()
             saveStatus()
             retryAt = nil
             Self.cache(profile)
             await apply(subscription: profile, interactive: interactive)
         } catch {
-            retryAt = Date().addingTimeInterval(3600)
-            lastError = Self.describe(error)
+            let raw = Self.describe(error)
+            // no network: try again with the next timer tick (10 min), anything else in an hour
+            retryAt = Date().addingTimeInterval(raw.hasPrefix("offline") ? 540 : 3600)
+            lastError = UserError.from(raw: raw, context: .subscription)
         }
     }
 
@@ -206,7 +213,7 @@ final class VPNClient {
         }
         let data: Data
         do { data = try ProfileConverter.json(profile) } catch {
-            lastError = "Не получилось собрать профиль: \(error.localizedDescription)"
+            lastError = UserError.from(raw: "profile: \(error.localizedDescription)", context: .subscription)
             return
         }
         let hash = Self.hash(data)
@@ -222,7 +229,7 @@ final class VPNClient {
             try data.write(to: file, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
         } catch {
-            lastError = "Не получилось записать профиль: \(error.localizedDescription)"
+            lastError = UserError.from(raw: "profile file: \(error.localizedDescription)", context: .subscription)
             return
         }
         guard interactive else {
@@ -232,7 +239,7 @@ final class VPNClient {
                 lastError = nil
                 needsConfirmation = true
             case .needsPassword: needsPassword = true
-            case .failed(let message): lastError = message
+            case .failed(let message): lastError = UserError.from(raw: message, context: .subscription)
             }
             return
         }
@@ -244,7 +251,7 @@ final class VPNClient {
         case .needsPassword:
             needsPassword = true
         case .failed(let message):
-            lastError = message
+            lastError = UserError.from(raw: message, context: .subscription)
         }
     }
 
@@ -292,29 +299,29 @@ final class VPNClient {
 
     private enum FetchError: Error { case status(Int, String?), device(String), empty }
 
-    /// Error text without the URL (URLError descriptions may carry it).
+    /// Raw text for UserError (context .subscription), without the URL (URLError descriptions may
+    /// carry it).
     private static func describe(_ error: Error) -> String {
         switch error {
         case FetchError.status(let code, let hint):
-            let reason = code == 404 ? "подписка не найдена" : code == 403 ? "доступ запрещён" : "ошибка \(code)"
-            return "Сервер подписки ответил: \(reason)." + (hint.map { $0.isEmpty ? "" : " \($0)" } ?? "")
-        case FetchError.device(let message):
-            return message
+            return "HTTP \(code)" + (hint.map { $0.isEmpty ? "" : ": \($0)" } ?? "")
+        case FetchError.device(let header):
+            return header
         case FetchError.empty:
-            return "Сервер подписки прислал пустой ответ: серверов нет. Проверь подписку в личном кабинете."
+            return "empty"
         case let error as URLError:
             switch error.code {
             case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .dnsLookupFailed, .cannotConnectToHost, .timedOut:
-                return "Нет связи с сервером подписки. Если защита включена, а VPN нет — сначала подключись."
+                return "offline (URLError \(error.code.rawValue))"
             case .serverCertificateUntrusted, .secureConnectionFailed, .serverCertificateHasBadDate, .serverCertificateNotYetValid:
-                return "Сервер подписки не прошёл проверку сертификата."
+                return "certificate (URLError \(error.code.rawValue))"
             default:
-                return "Не получилось скачать подписку (код \(error.code.rawValue))."
+                return "URLError \(error.code.rawValue)"
             }
         case let error as LocalizedError:
-            return error.errorDescription ?? "Не получилось обновить подписку."
+            return error.errorDescription ?? "\(error)"
         default:
-            return "Не получилось обновить подписку."
+            return "\(error)"
         }
     }
 

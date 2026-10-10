@@ -204,7 +204,7 @@ func main() {
         w.control.measured = ["🇩🇪 Германия": 52, "🇳🇱 Нидерланды": 70, "🇱🇹 Литва": 41, "🇫🇮 Финляндия": -1, "🇺🇸 США": -1, "🇷🇺 Россия (обход)": 23]
         w.control.measured["🇫🇮 Финляндия"] = CoreDelay.timeout
         w.control.measured["🇺🇸 США"] = CoreDelay.timeout
-        w.control.coreError = "Ни один сервер группы «⚡ Авто» не ответил."
+        w.control.coreError = UserError.from(raw: "no server of ⚡ Авто answered", context: .latency)
         UserDefaults.standard.set(true, forKey: "sortByLatency")
         window("06-window-servers-latency-timeouts", height: 1000, w)
         UserDefaults.standard.removeObject(forKey: "sortByLatency")
@@ -258,9 +258,9 @@ func main() {
         w.control.coreRunning = true
         w.control.vpnUp = true
         w.control.ownTunnelUp = true
-        w.control.proxiesError = "dial unix /Library/KillSwitch/core/ctl/mihomo.sock: connect: no such file or directory"
-        w.client.lastError = "Достигнут лимит устройств подписки. Удали старое устройство в боте или кабинете."
-        w.control.error = "sudo: a password is required"
+        w.control.proxiesError = UserError.from(raw: "dial unix /Library/KillSwitch/core/ctl/mihomo.sock: connect: no such file or directory", context: .serverList)
+        w.client.lastError = UserError.from(raw: "x-hwid-max-devices-reached", context: .subscription)
+        w.control.error = UserError.from(raw: "sudo: a password is required", context: .helper)
         window("13-window-errors", height: 860, w)
     }
     do { // 14 helper installed, core missing (older install)
@@ -279,7 +279,7 @@ func main() {
         let w = World()
         w.subscribe(used: 12, total: nil, days: -3)
         w.connect()
-        w.client.lastError = "Не удалось обновить подписку: подписка не найдена (404)."
+        w.client.lastError = UserError.from(raw: "HTTP 404", context: .subscription)
         window("16-window-subscription-expired", height: 1000, w)
     }
 

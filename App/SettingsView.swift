@@ -506,7 +506,7 @@ private struct VPNSettings: View {
                 }
                 // with a subscription the summary above shows the same error
                 if !client.hasURL, let error = client.lastError {
-                    Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                    InlineError(error: error)
                 }
             } header: {
                 Text("Свои серверы")

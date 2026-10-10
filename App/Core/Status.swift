@@ -174,9 +174,7 @@ enum Status: Equatable {
         switch self {
         case .checking: ""
         case .notInstalled: "Установка займёт минуту и попросит пароль один раз."
-        case .broken(.serviceOff): "Её выключили в Системных настройках. Правила пока действуют, но следить за ними некому."
-        case .broken(.vpnMissing): "В службе не хватает VPN — так бывает после старой версии."
-        case .broken(.needsAccess): "После обновления KillSwitch службе нужны новые права."
+        case .broken(let problem): UserError.problem(problem).message
         case .needsSetup: "Без неё VPN не к чему подключаться."
         case .otherVPN: "Отключи другой VPN: два VPN мешают друг другу."
         case .connecting: detail.server ?? ""

@@ -120,15 +120,12 @@ struct ServerList: View {
                     GroupSection(group: group, sortByLatency: sortByLatency)
                 }
                 if let error = control.coreError {
-                    Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+                    InlineError(error: error)
                 }
             }
         } else if let error = control.proxiesError, control.coreRunning {
             VStack(alignment: .leading, spacing: 6) {
-                Label("Список серверов недоступен", systemImage: "exclamationmark.triangle").font(.headline)
-                Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                InlineError(error: error)
                 Button("Повторить") { control.loadProxies(force: true) }
             }
         } else if control.proxies?.groups.isEmpty == true {
@@ -306,7 +303,7 @@ struct SubscriptionSummary: View {
                     .font(.caption).foregroundStyle(.orange)
             }
             if let error = client.lastError {
-                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                InlineError(error: error)
             }
         }
     }
@@ -333,7 +330,7 @@ struct SubscriptionOnboarding: View {
             }
             if client.updating { ProgressView().controlSize(.small) }
             if let error = client.lastError {
-                Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                InlineError(error: error)
             }
         }
     }

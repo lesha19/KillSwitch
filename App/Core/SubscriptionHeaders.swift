@@ -59,16 +59,10 @@ enum SubscriptionHeaders {
 
     /// Remnawave's device limit answers by header (status and body vary): `x-hwid-max-devices-reached`
     /// when the subscription has no free device slot, `x-hwid-not-supported` when x-hwid was missing
-    /// or invalid (an empty body).
+    /// or invalid (an empty body). Returns the header's name; UserError words it.
     static func hwidProblem(headers: [String: String]) -> String? {
         func flag(_ name: String) -> Bool { headers[name]?.trimmingCharacters(in: .whitespaces).lowercased() == "true" }
-        if flag("x-hwid-max-devices-reached") {
-            return "Превышен лимит устройств в подписке — удалите старое устройство в личном кабинете."
-        }
-        if flag("x-hwid-not-supported") {
-            return "Сервер подписки не принял номер этого Mac (HWID) и не отдал серверы. Напиши в поддержку подписки."
-        }
-        return nil
+        return ["x-hwid-max-devices-reached", "x-hwid-not-supported"].first(where: flag)
     }
 
     /// `profile-update-interval` is in hours.

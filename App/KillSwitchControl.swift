@@ -21,14 +21,14 @@ final class KillSwitchControl {
     private(set) var vpnUp = false
     /// Our core's tunnel (198.18.128.1) is up.
     private(set) var ownTunnelUp = false
-    private(set) var error: String? {
-        didSet { if let error, error != oldValue { recentErrors = Array((recentErrors + [error]).suffix(5)) } }
+    private(set) var error: UserError? {
+        didSet { if let error, error != oldValue { remember(error) } }
     }
     /// Server choice and latency tests; kept apart from `error`, which refresh() resets every 3 s.
-    private(set) var coreError: String? {
-        didSet { if let coreError, coreError != oldValue { recentErrors = Array((recentErrors + [coreError]).suffix(5)) } }
+    private(set) var coreError: UserError? {
+        didSet { if let coreError, coreError != oldValue { remember(coreError) } }
     }
-    /// For «Скопировать диагностику».
+    /// Raw texts of the last errors, for «Скопировать диагностику».
     private(set) var recentErrors: [String] = []
     private(set) var busy = false
     private(set) var allowLAN = true
@@ -67,7 +67,7 @@ final class KillSwitchControl {
     private var proxiesLoading = false
     private var proxiesLoadedAt = Date.distantPast
     /// `ks core proxies` failed while the core runs (shown instead of the server list).
-    private(set) var proxiesError: String?
+    private(set) var proxiesError: UserError?
     /// Results of the user's latency tests (ms, `CoreDelay.timeout` = no answer); fresher than
     /// the core's history, which `delay(of:)` falls back to.
     private(set) var measured: [String: Int] = [:]
@@ -86,7 +86,8 @@ final class KillSwitchControl {
             do {
                 if newValue { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             } catch {
-                self.error = error.localizedDescription
+                self.error = UserError(title: "Не получилось изменить запуск при входе", message: error.localizedDescription,
+                                       details: error.localizedDescription)
             }
         }
     }
@@ -150,7 +151,7 @@ final class KillSwitchControl {
         case .needsPassword:
             notify(.autoConnectNeedsPassword)
         case .failed(let message):
-            error = message.isEmpty ? "Не получилось подключиться автоматически" : message
+            error = UserError.from(raw: message.isEmpty ? "Не получилось подключиться автоматически" : message, context: .helper)
         case .cancelled:
             break
         }
@@ -197,7 +198,7 @@ final class KillSwitchControl {
     private func select(group: String, proxy: String) async {
         switch await callHelper(["core", "select", group, proxy], interactive: true) {
         case .ok: coreError = nil
-        case .failed(let message): coreError = message
+        case .failed(let message): coreError = UserError.from(raw: message, context: .helper)
         case .needsPassword, .cancelled: break
         }
         loadProxies(force: true)
@@ -245,14 +246,14 @@ final class KillSwitchControl {
             } catch CoreDelay.Failure.core {
                 // mihomo answers an error when no member replied
                 for name in group.all { measured[name] = CoreDelay.timeout }
-                coreError = "Ни один сервер группы «\(group.name)» не ответил."
+                coreError = UserError.from(raw: "no server of \(group.name) answered", context: .latency)
                 return .failed
             } catch {
-                coreError = error.localizedDescription
+                coreError = UserError.from(raw: error.localizedDescription, context: .helper)
                 return .failed
             }
         case .failed(let message):
-            coreError = CoreDelay.Failure.core(message.isEmpty ? "ядро не ответило" : message).errorDescription
+            coreError = UserError.from(raw: message.isEmpty ? "no answer" : message, context: .latency)
             return .failed
         case .needsPassword, .cancelled:
             return .refused
@@ -263,7 +264,7 @@ final class KillSwitchControl {
     func selectBest(group: CoreProxies.Group) async {
         guard group.selectable, await testDelay(group: group) else { return }
         guard let best = CoreDelay.best(of: group.all, delays: measured) else {
-            coreError = "Ни один сервер группы «\(group.name)» не ответил."
+            coreError = UserError.from(raw: "no server of \(group.name) answered", context: .latency)
             return
         }
         if best != group.now {
@@ -290,12 +291,12 @@ final class KillSwitchControl {
                     proxiesError = nil
                     if parsed != proxies { proxies = parsed }
                 } else {
-                    proxiesError = "Ядро вернуло непонятный список серверов."
+                    proxiesError = UserError.from(raw: "proxies: not a JSON list", context: .serverList)
                 }
             case .needsPassword:
-                proxiesError = "Нет доступа к ядру без пароля. Нажми «Обновить защиту» внизу окна."
+                proxiesError = UserError.problem(.needsAccess)
             case .failed(let message):
-                proxiesError = message.isEmpty ? "Не получилось получить список серверов." : message
+                proxiesError = UserError.from(raw: message.isEmpty ? "proxies: no answer" : message, context: .serverList)
             case .cancelled:
                 break
             }
@@ -360,7 +361,7 @@ final class KillSwitchControl {
             let result = await Self.exec("/usr/bin/sudo", ["-n", helper, "state"])
             guard result.status == 0 else {
                 needsRepair = Self.sudoWantsPassword(result.output)
-                if !needsRepair { error = result.output.isEmpty ? "Нет доступа к защите" : result.output }
+                if !needsRepair { error = UserError.from(raw: result.output.isEmpty ? "ks state: no answer" : result.output, context: .helper) }
                 return
             }
             needsRepair = false
@@ -393,7 +394,7 @@ final class KillSwitchControl {
         Task {
             switch await callHelper(args, interactive: true) {
             case .ok: error = nil
-            case .failed(let message): error = message.isEmpty ? "Не получилось" : message
+            case .failed(let message): error = UserError.from(raw: message.isEmpty ? "ks \(args.joined(separator: " ")): failed" : message, context: .helper)
             case .needsPassword, .cancelled: break
             }
             busy = false
@@ -403,20 +404,20 @@ final class KillSwitchControl {
 
     private func runBundled(_ script: String, _ args: [String]) {
         guard let path = Bundle.main.path(forResource: script, ofType: nil, inDirectory: "Helper") else {
-            error = "Не найден \(script) внутри программы"
+            error = UserError.problem(.vpnMissing)
             return
         }
-        runAsAdmin(["/bin/bash", path] + args)
+        runAsAdmin(["/bin/bash", path] + args, context: script == "install.sh" ? .install : .helper)
     }
 
     /// Runs a command as root; macOS asks for the admin password every time.
-    private func runAsAdmin(_ command: [String]) {
+    private func runAsAdmin(_ command: [String], context: UserError.Context = .helper) {
         busy = true
         Task {
             switch await adminRun(command) {
             case .ok: error = nil
             case .cancelled: break
-            case .failed(let message): error = message
+            case .failed(let message): error = UserError.from(raw: message, context: context)
             }
             busy = false
             refresh()
@@ -622,6 +623,28 @@ final class KillSwitchControl {
             } else {
                 defaults.set(false, forKey: "daemonWarned")
             }
+        }
+    }
+
+    private func remember(_ error: UserError) {
+        recentErrors = Array((recentErrors + [error.details.isEmpty ? error.title : error.details]).suffix(5))
+    }
+
+    func dismissError() { error = nil }
+
+    /// «Перезапустить VPN»: the core is running but its API does not answer.
+    func restartCore() {
+        busy = true
+        Task {
+            _ = await callHelper(["core", "off"], interactive: true)
+            switch await callHelper(["core", "on"], interactive: true) {
+            case .ok: error = nil
+            case .failed(let message): error = UserError.from(raw: message, context: .helper)
+            case .needsPassword, .cancelled: break
+            }
+            busy = false
+            refresh()
+            loadProxies(force: true)
         }
     }
 
