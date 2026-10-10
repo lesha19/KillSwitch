@@ -67,6 +67,9 @@ func proxies(selected: String = "⚡ Авто", auto: String = "🇱🇹 Лит�
 @MainActor
 func snapshot<V: View>(_ name: String, width: CGFloat, height: CGFloat? = nil, title: String? = nil,
                        background: Bool = true, @ViewBuilder _ view: () -> V) {
+    // UX_ONLY=05,50: only screens whose names start with one of these
+    if let only = ProcessInfo.processInfo.environment["UX_ONLY"],
+       !only.split(separator: ",").contains(where: { name.hasPrefix($0) }) { return }
     for dark in [false, true] {
         let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
         let content = view()
@@ -116,6 +119,7 @@ func snapshot<V: View>(_ name: String, width: CGFloat, height: CGFloat? = nil, t
         .padding(12)
         .environment(world.control)
         .environment(world.client)
+        .environment(Updater())
     }
 }
 
@@ -427,52 +431,46 @@ func main() {
         settings("48-settings-general-filter-error", height: 760, w) { GeneralSettings() }
     }
 
-    // MARK: menu bar icons: current SF Symbols and the template shields of icon-sparkle
+    // MARK: menu bar icons: one per summary status
 
-    snapshot("50-menubar-icons", width: 560, background: true) {
+    snapshot("50-menubar-icons", width: 420, background: true) {
         MenuBarIcons(iconDir: iconDir)
     }
 
     UserDefaults.standard.removePersistentDomain(forName: Bundle.main.bundleIdentifier ?? "UXRender")
 }
 
+/// Every summary status (spec §2) with its template icon from Assets.xcassets, as on a light and
+/// a dark menu bar.
 struct MenuBarIcons: View {
     let iconDir: URL?
     var body: some View {
-        let rows: [(String, String, String?)] = [
-            ("Подключено", "lock.shield.fill", "MenuBarConnected"),
-            ("Не подключено, защита вкл.", "lock.shield.fill", "MenuBarConnected"),
-            ("Подключено, защита выкл.", "lock.shield.fill", "MenuBarConnected"),
-            ("Не подключено, защита выкл.", "shield.slash", "MenuBarDisconnected"),
-            ("Пауза", "shield.slash", "MenuBarPaused"),
-            ("Не установлено", "shield", nil),
-        ]
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Состояние").frame(width: 200, alignment: .leading)
-                Text("Сейчас (SF Symbol)").frame(width: 150)
-                Text("icon-sparkle").frame(width: 150)
+                Text("Значок").frame(width: 50)
+                Text("Сводка (метка VoiceOver)").frame(maxWidth: .infinity, alignment: .leading)
             }.font(.caption.bold()).foregroundStyle(.secondary)
-            ForEach(rows, id: \.0) { row in
+            ForEach(Array(Status.examples(now: Date()).enumerated()), id: \.offset) { _, status in
                 HStack {
-                    Text(row.0).frame(width: 200, alignment: .leading)
-                    Image(systemName: row.1).font(.system(size: 15)).frame(width: 150)
-                    Group {
-                        if let file = row.2, let dir = iconDir, let image = NSImage(contentsOf: dir.appendingPathComponent("\(file).svg")) {
-                            Image(nsImage: { image.isTemplate = true; image.size = NSSize(width: 18, height: 18); return image }())
-                                .renderingMode(.template)
-                        } else {
-                            Image(systemName: row.1).font(.system(size: 15))
-                        }
-                    }.frame(width: 150)
+                    icon(status.icon).frame(width: 50, height: 24).background(.bar)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(status.accessibilityLabel)
+                        Text(status.icon).font(.caption).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(.vertical, 4)
-                .background(.bar)
             }
-            Text("«Не подключено, защита вкл.» и «Подключено» сейчас дают один и тот же значок: в метке меню state.symbol для .on — lock.shield.fill.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
+    }
+
+    @ViewBuilder private func icon(_ name: String) -> some View {
+        if let dir = iconDir, let image = NSImage(contentsOf: dir.appendingPathComponent("\(name).svg")) {
+            Image(nsImage: { image.isTemplate = true; image.size = NSSize(width: 18, height: 18); return image }())
+                .renderingMode(.template)
+        } else {
+            Text("нет").font(.caption).foregroundStyle(.red)
+        }
     }
 }
 

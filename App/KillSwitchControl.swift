@@ -14,41 +14,7 @@ import WidgetKit
 @MainActor
 @Observable
 final class KillSwitchControl {
-    enum State: Equatable {
-        case unknown
-        case notInstalled
-        case on
-        case off
-        case paused(until: Date)
-
-        var symbol: String {
-            switch self {
-            case .on: "lock.shield.fill"
-            case .off, .paused: "shield.slash"
-            case .notInstalled, .unknown: "shield"
-            }
-        }
-
-        var title: String {
-            switch self {
-            case .on: "Защита включена"
-            case .off: "Защита выключена"
-            case .paused: "Защита на паузе"
-            case .notInstalled: "Защита не установлена"
-            case .unknown: "Проверяю…"
-            }
-        }
-
-        /// Format stored for the widget.
-        var stored: String {
-            switch self {
-            case .on: "on"
-            case .off, .unknown: "off"
-            case .paused(let until): "paused:\(Int(until.timeIntervalSince1970))"
-            case .notInstalled: "notInstalled"
-            }
-        }
-    }
+    typealias State = Protection
 
     private(set) var state: State = .unknown
     /// Any VPN tunnel is up (ours, dropweb's, Happ's): what pf and the filter let traffic into.
@@ -74,6 +40,12 @@ final class KillSwitchControl {
     private(set) var servers: [String] = []          // /Library/KillSwitch/servers
     private(set) var foundServers: [String] = []     // from dropweb profiles and Happ's config
     private(set) var daemonProblem = false
+    /// `sudo -n ks state` wants a password: the helper was installed by an older app.
+    private(set) var needsRepair = false
+    /// When the current connection attempt started; nil unless connecting.
+    private(set) var connectingSince: Date?
+    /// Moves on with every refresh while connecting, so «Подключение затянулось» shows up in time.
+    private(set) var clock = Date()
     private(set) var events: [String] = []
     private(set) var leakResults: [LeakResult] = []
     private(set) var externalIP: String?
@@ -375,6 +347,7 @@ final class KillSwitchControl {
             Task {
                 // "on", possibly followed by more words in later helpers
                 coreRunning = await Self.exec("/usr/bin/sudo", ["-n", helper, "core", "state"]).output.hasPrefix("on")
+                trackConnecting()
                 loadProxies()
             }
         } else {
@@ -382,15 +355,24 @@ final class KillSwitchControl {
             proxies = nil
         }
         foreignVPN = coreRunning ? Self.readForeignVPN() : nil
+        trackConnecting()
         Task {
             let result = await Self.exec("/usr/bin/sudo", ["-n", helper, "state"])
             guard result.status == 0 else {
-                error = result.output.isEmpty ? "Нет доступа к защите" : result.output
+                needsRepair = Self.sudoWantsPassword(result.output)
+                if !needsRepair { error = result.output.isEmpty ? "Нет доступа к защите" : result.output }
                 return
             }
+            needsRepair = false
             error = nil
             publish(Self.parse(result.output))
         }
+    }
+
+    private func trackConnecting() {
+        guard connection == .connecting else { connectingSince = nil; return }
+        if connectingSince == nil { connectingSince = Date() }
+        clock = Date()
     }
 
     private func publish(_ new: State) {

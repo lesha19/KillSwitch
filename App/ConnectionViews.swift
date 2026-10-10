@@ -1,13 +1,6 @@
 import SwiftUI
 
-/// What the VPN connection is doing, as the user sees it.
-enum Connection: Equatable {
-    case unavailable    // helper or core not installed
-    case disconnected
-    case connecting     // core started, tunnel not up yet
-    case connected
-    case otherApp       // a tunnel is up, but not ours (Happ, dropweb…)
-
+extension Connection {
     var title: String {
         switch self {
         case .unavailable: "VPN не установлен"
@@ -37,6 +30,26 @@ enum Connection: Equatable {
     }
 }
 
+extension Protection {
+    var symbol: String {
+        switch self {
+        case .on: "lock.shield.fill"
+        case .off, .paused: "shield.slash"
+        case .notInstalled, .unknown: "shield"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .on: "Защита включена"
+        case .off: "Защита выключена"
+        case .paused: "Защита на паузе"
+        case .notInstalled: "Защита не установлена"
+        case .unknown: "Проверяю…"
+        }
+    }
+}
+
 extension KillSwitchControl {
     var connection: Connection {
         if state == .notInstalled || !coreInstalled { return vpnUp ? .otherApp : .unavailable }
@@ -50,6 +63,15 @@ extension KillSwitchControl {
     var currentServer: String? {
         guard let proxies, let main = proxies.mainGroup else { return nil }
         return proxies.leaf(of: main.name)
+    }
+
+    /// The summary of spec §2 (see Status).
+    func status(_ client: VPNClient) -> Status {
+        Status.summary(Status.Input(
+            protection: state, connection: connection, foreignVPN: foreignVPN != nil, daemonProblem: daemonProblem,
+            coreInstalled: coreInstalled, needsRepair: needsRepair,
+            hasServers: coreConfigured || client.hasURL || !client.manual.isEmpty,
+            connectingSince: connectingSince, now: clock))
     }
 }
 
