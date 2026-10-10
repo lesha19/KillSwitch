@@ -6,9 +6,11 @@ import UserNotifications
 import WidgetKit
 
 /// Talks to the root helper `/Library/KillSwitch/ks`.
-/// Reading the state and turning protection on go through passwordless sudo (Helper/install.sh
-/// grants exactly `ks state` and `ks on`); everything that loosens protection asks for the
-/// admin password, so another program running as the user cannot do it silently.
+/// Reading the state, turning protection on and driving the core go through passwordless sudo
+/// (Helper/install.sh grants `ks state`, `ks on`, `ks core on|off|state|proxies|select|delay|import`);
+/// everything that loosens protection asks for the admin password, so another program running
+/// as the user cannot do it silently. The password prompt only ever follows a click: calls made
+/// by timers pass `interactive: false` and give up instead (see `callHelper`).
 @MainActor
 @Observable
 final class KillSwitchControl {
@@ -50,7 +52,15 @@ final class KillSwitchControl {
 
     private(set) var state: State = .unknown
     private(set) var vpnUp = false
-    private(set) var error: String?
+    private(set) var error: String? {
+        didSet { if let error, error != oldValue { recentErrors = Array((recentErrors + [error]).suffix(5)) } }
+    }
+    /// Server choice and latency tests; kept apart from `error`, which refresh() resets every 3 s.
+    private(set) var coreError: String? {
+        didSet { if let coreError, coreError != oldValue { recentErrors = Array((recentErrors + [coreError]).suffix(5)) } }
+    }
+    /// For «Скопировать диагностику».
+    private(set) var recentErrors: [String] = []
     private(set) var busy = false
     private(set) var allowLAN = true
     private(set) var allowTailscale = true
@@ -77,6 +87,14 @@ final class KillSwitchControl {
     private(set) var proxies: CoreProxies?
     private var proxiesLoading = false
     private var proxiesLoadedAt = Date.distantPast
+    /// `ks core proxies` failed while the core runs (shown instead of the server list).
+    private(set) var proxiesError: String?
+    /// Results of the user's latency tests (ms, `CoreDelay.timeout` = no answer); fresher than
+    /// the core's history, which `delay(of:)` falls back to.
+    private(set) var measured: [String: Int] = [:]
+    /// Groups whose latency test is running; `allGroupsKey` while the whole list is tested.
+    private(set) var testing: Set<String> = []
+    static let allGroupsKey = "\u{0}all"
 
     struct LeakResult: Identifiable {
         let interface: String
@@ -144,47 +162,128 @@ final class KillSwitchControl {
     func coreImport(file: String, allowPassword: Bool) async -> ImportResult {
         busy = true
         defer { busy = false; refresh() }
-        let result = await Self.exec("/usr/bin/sudo", ["-n", helper, "core", "import", file])
-        if result.status == 0 { return .ok }
-        guard Self.sudoWantsPassword(result.output) else { return .failed(result.output.isEmpty ? "Не получилось" : result.output) }
-        guard allowPassword else { return .needsPassword }
-        switch await adminRun([helper, "core", "import", file]) {
-        case .ok: return .ok
+        switch await callHelper(["core", "import", file], interactive: allowPassword) {
+        case .ok: measured = [:]; return .ok
+        case .needsPassword: return .needsPassword
         case .cancelled: return .cancelled
-        case .failed(let message): return .failed(message)
+        case .failed(let message): return .failed(message.isEmpty ? "Не получилось" : message)
         }
     }
 
-    /// Picks a server in a selector group of the running core.
+    /// Picks a server in a selector group of the running core. Always a click.
     func coreSelect(group: String, proxy: String) {
         busy = true
         Task {
-            let args = [helper, "core", "select", group, proxy]
-            let result = await Self.exec("/usr/bin/sudo", ["-n"] + args)
-            if result.status == 0 {
-                error = nil
-            } else if Self.sudoWantsPassword(result.output) {
-                if case .failed(let message) = await adminRun(args) { error = message }
-            } else {
-                error = result.output
-            }
+            await select(group: group, proxy: proxy)
             busy = false
-            loadProxies(force: true)
+        }
+    }
+
+    private func select(group: String, proxy: String) async {
+        switch await callHelper(["core", "select", group, proxy], interactive: true) {
+        case .ok: coreError = nil
+        case .failed(let message): coreError = message
+        case .needsPassword, .cancelled: break
+        }
+        loadProxies(force: true)
+    }
+
+    /// Latency shown for a server or group: the user's last test, else the core's history.
+    func delay(of name: String) -> Int? {
+        if let value = measured[name] { return value == CoreDelay.timeout ? nil : value }
+        return proxies?.delay(name)
+    }
+
+    /// The last test got no answer from this one.
+    func timedOut(_ name: String) -> Bool { measured[name] == CoreDelay.timeout }
+
+    /// «Проверить пинг» for one group (`ks core delay <group>`); true when results came back.
+    @discardableResult
+    func testDelay(group: CoreProxies.Group) async -> Bool {
+        await runDelay(group: group) == .done
+    }
+
+    /// «Проверить пинг» for the whole list. A refused or cancelled password stops it, so the
+    /// prompt shows at most once; a group where nothing answered does not.
+    func testAllDelays() async {
+        guard let groups = proxies?.groups, !testing.contains(Self.allGroupsKey) else { return }
+        testing.insert(Self.allGroupsKey)
+        defer { testing.remove(Self.allGroupsKey) }
+        for group in groups {
+            if await runDelay(group: group) == .refused { break }
+        }
+    }
+
+    private enum DelayOutcome { case done, failed, refused }
+
+    private func runDelay(group: CoreProxies.Group) async -> DelayOutcome {
+        guard coreRunning, !testing.contains(group.name) else { return .failed }
+        testing.insert(group.name)
+        defer { testing.remove(group.name) }
+        switch await callHelper(["core", "delay", group.name], interactive: true, separateStderr: true) {
+        case .ok(let output):
+            do {
+                measured.merge(try CoreDelay.parse(Data(output.utf8), members: group.all)) { $1 }
+                coreError = nil
+                loadProxies(force: true)
+                return .done
+            } catch CoreDelay.Failure.core {
+                // mihomo answers an error when no member replied
+                for name in group.all { measured[name] = CoreDelay.timeout }
+                coreError = "Ни один сервер группы «\(group.name)» не ответил."
+                return .failed
+            } catch {
+                coreError = error.localizedDescription
+                return .failed
+            }
+        case .failed(let message):
+            coreError = CoreDelay.Failure.core(message.isEmpty ? "ядро не ответило" : message).errorDescription
+            return .failed
+        case .needsPassword, .cancelled:
+            return .refused
+        }
+    }
+
+    /// «Лучший»: tests a selector group and picks its fastest member.
+    func selectBest(group: CoreProxies.Group) async {
+        guard group.selectable, await testDelay(group: group) else { return }
+        guard let best = CoreDelay.best(of: group.all, delays: measured) else {
+            coreError = "Ни один сервер группы «\(group.name)» не ответил."
+            return
+        }
+        if best != group.now {
+            busy = true
+            await select(group: group.name, proxy: best)
+            busy = false
         }
     }
 
     /// `ks core proxies`, at most every 5 s unless forced; only while the core runs.
+    /// Runs from the 3 s timer too, so it never asks for the password.
     func loadProxies(force: Bool = false) {
-        guard coreRunning else { proxies = nil; return }
+        guard coreRunning else { proxies = nil; proxiesError = nil; measured = [:]; return }
         guard !proxiesLoading, force || Date().timeIntervalSince(proxiesLoadedAt) > 5 else { return }
         proxiesLoading = true
         Task {
-            let result = await Self.exec("/usr/bin/sudo", ["-n", helper, "core", "proxies"], separateStderr: true)
+            let result = await callHelper(["core", "proxies"], interactive: false, separateStderr: true)
             proxiesLoading = false
             proxiesLoadedAt = Date()
-            guard result.status == 0, let data = result.output.data(using: .utf8) else { return }
-            let order = UserDefaults.standard.stringArray(forKey: Self.groupOrderKey) ?? []
-            if let parsed = try? CoreProxies(data: data, order: order), parsed != proxies { proxies = parsed }
+            switch result {
+            case .ok(let output):
+                let order = UserDefaults.standard.stringArray(forKey: Self.groupOrderKey) ?? []
+                if let parsed = try? CoreProxies(data: Data(output.utf8), order: order) {
+                    proxiesError = nil
+                    if parsed != proxies { proxies = parsed }
+                } else {
+                    proxiesError = "Ядро вернуло непонятный список серверов."
+                }
+            case .needsPassword:
+                proxiesError = "Нет доступа к ядру без пароля. Нажми «Обновить защиту» внизу окна."
+            case .failed(let message):
+                proxiesError = message.isEmpty ? "Не получилось получить список серверов." : message
+            case .cancelled:
+                break
+            }
         }
     }
 
@@ -193,6 +292,22 @@ final class KillSwitchControl {
 
     private static func sudoWantsPassword(_ output: String) -> Bool {
         output.hasPrefix("sudo:") || output.contains("a password is required")
+    }
+
+    enum HelperResult: Equatable { case ok(String), needsPassword, cancelled, failed(String) }
+
+    /// `ks <args>` through passwordless sudo; if sudoers does not allow it (older helper), the
+    /// admin prompt follows only when `interactive` — a user's click, never a timer.
+    private func callHelper(_ args: [String], interactive: Bool, separateStderr: Bool = false) async -> HelperResult {
+        let result = await Self.exec("/usr/bin/sudo", ["-n", helper] + args, separateStderr: separateStderr)
+        if result.status == 0 { return .ok(result.output) }
+        guard Self.sudoWantsPassword(result.output) else { return .failed(result.output) }
+        guard interactive else { return .needsPassword }
+        switch await adminRun([helper] + args) {
+        case .ok(let output): return .ok(output)
+        case .cancelled: return .cancelled
+        case .failed(let message): return .failed(message)
+        }
     }
 
     /// Also used to upgrade the installed helper: install.sh keeps settings and lists.
@@ -245,11 +360,15 @@ final class KillSwitchControl {
         WidgetCenter.shared.reloadAllTimelines()
     }
 
+    /// A click (or the widget): may fall back to the password prompt.
     private func run(_ args: [String]) {
         busy = true
         Task {
-            let result = await Self.exec("/usr/bin/sudo", ["-n", helper] + args)
-            error = result.status == 0 ? nil : result.output
+            switch await callHelper(args, interactive: true) {
+            case .ok: error = nil
+            case .failed(let message): error = message.isEmpty ? "Не получилось" : message
+            case .needsPassword, .cancelled: break
+            }
             busy = false
             refresh()
         }
@@ -277,7 +396,7 @@ final class KillSwitchControl {
         }
     }
 
-    private enum AdminResult { case ok, cancelled, failed(String) }
+    private enum AdminResult { case ok(String), cancelled, failed(String) }
 
     private func adminRun(_ command: [String]) async -> AdminResult {
         let quoted = command.map { "quoted form of \"\($0)\"" }.joined(separator: " & \" \" & ")
@@ -288,7 +407,9 @@ final class KillSwitchControl {
             if (info[NSAppleScript.errorNumber] as? Int) == -128 { return .cancelled }   // user cancelled
             return .failed(info[NSAppleScript.errorMessage] as? String ?? "Не получилось")
         }
-        return output == nil ? .failed("Не получилось") : .ok
+        guard let output else { return .failed("Не получилось") }
+        // do shell script turns line ends into \r
+        return .ok((output.stringValue ?? "").replacingOccurrences(of: "\r", with: "\n"))
     }
 
     /// What the content filter lets out while no VPN tunnel is up, mirroring the pf settings.

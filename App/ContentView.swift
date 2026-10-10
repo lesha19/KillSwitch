@@ -65,7 +65,7 @@ struct ContentView: View {
             if connection == .connected || connection == .connecting, let server = control.currentServer {
                 HStack(spacing: 8) {
                     ServerLabel(name: server, font: .title3)
-                    DelayBadge(delay: control.proxies?.delay(server))
+                    DelayBadge(delay: control.delay(of: server))
                 }
             }
             Text(protectionLine).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)

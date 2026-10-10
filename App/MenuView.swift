@@ -12,7 +12,7 @@ struct MenuView: View {
         Text(connection.title)
         if connection == .connected || connection == .connecting, let server = control.currentServer {
             let name = ServerName(server)
-            let delay = control.proxies?.delay(server).map { " · \($0) мс" } ?? ""
+            let delay = control.delay(of: server).map { " · \($0) мс" } ?? ""
             Text("\(name.flag ?? "🌐") \(name.title.isEmpty ? server : name.title)\(delay)")
         }
         if control.foreignVPN != nil {
