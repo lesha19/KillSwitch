@@ -58,8 +58,8 @@ final class KillSwitchControl {
     /// The daemon answered that it cannot run the bundled scripts (no verified copy of the app):
     /// install.sh / uninstall.sh go straight to the password prompt, without its right's dialog first.
     private var daemonCannotRunScripts = false
-    /// Modification date of the installed helper when it was last compared.
-    private var helperComparedAt: Date?
+    /// Modification dates of the installed helper and its marker when they were last compared.
+    private var helperComparedAt: [Date?]?
     /// When the current connection attempt started; nil unless connecting.
     private(set) var connectingSince: Date?
     /// Moves on with every refresh while connecting, so «Подключение затянулось» shows up in time.
@@ -852,14 +852,21 @@ final class KillSwitchControl {
         }
     }
 
-    /// Again only when the installed helper's file changed (install.sh replaces it).
+    /// Again only when the installed helper's file or install.sh's marker changed (install.sh
+    /// replaces them), or while an install may still be running.
     private func compareHelper() {
-        let modified = (try? FileManager.default.attributesOfItem(atPath: helper))?[.modificationDate] as? Date
-        guard modified != helperComparedAt else { return }
-        helperComparedAt = modified
+        let date = { (path: String) in (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date }
+        let modified = date(helper)
+        let key = [modified, date(HelperVersion.markerPath)]
+        guard key != helperComparedAt else { return }
+        helperComparedAt = key
         speedUnavailable = false   // another helper may allow `core traffic`
         let bundled = Bundle.main.path(forResource: "ks", ofType: nil, inDirectory: "Helper").flatMap(FileManager.default.contents(atPath:))
-        helperOutdated = HelperVersion.matches(installed: FileManager.default.contents(atPath: helper), bundled: bundled) == false
+        let check = HelperVersion.check(installed: FileManager.default.contents(atPath: helper), bundled: bundled,
+                                        marker: FileManager.default.contents(atPath: HelperVersion.markerPath),
+                                        age: modified.map { Date().timeIntervalSince($0) } ?? .infinity)
+        if check == .installing { helperComparedAt = nil }   // look again with the next refresh
+        helperOutdated = check == .outdated
         if helperOutdated { upgradeHelper() }
     }
 

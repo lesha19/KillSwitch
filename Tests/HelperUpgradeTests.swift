@@ -21,6 +21,11 @@ final class HelperUpgradeTests: XCTestCase {
         XCTAssertEqual(HelperUpgrade.decide(installed: helper("0.14"), bundled: helper("0.13")), .downgrade)
         XCTAssertEqual(HelperUpgrade.decide(installed: helper("0.14"), bundled: helper("0.13.9")), .downgrade)
         XCTAssertEqual(HelperUpgrade.decide(installed: helper("0.14"), bundled: helper(nil)), .downgrade)
+
+        // 0.15.2: the same ks, but install.sh never reached its last step: it runs again
+        XCTAssertEqual(HelperUpgrade.decide(installed: helper("0.14"), bundled: helper("0.14"), completed: false), .upgrade)
+        XCTAssertEqual(HelperUpgrade.decide(installed: helper("0.14"), bundled: helper("0.14"), completed: true), .current)
+        XCTAssertEqual(HelperUpgrade.decide(installed: helper("0.14"), bundled: helper("0.13"), completed: false), .downgrade)
     }
 
     /// The same order as install.sh's version_lt (Helper/tests/upgrade.sh).

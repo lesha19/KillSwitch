@@ -7,16 +7,19 @@ enum HelperUpgrade {
     enum Decision: Equatable, Sendable {
         /// Nothing installed: the full install, with the admin's password.
         case notInstalled
-        /// Same file (or no helper in the bundle): nothing to do.
+        /// Same file, installed to the end (or no helper in the bundle): nothing to do.
         case current
         case upgrade
         /// The bundle's helper is older than the installed one: refused.
         case downgrade
     }
 
-    static func decide(installed: Data?, bundled: Data?) -> Decision {
+    /// `completed`: install.sh's marker names the installed ks (HelperVersion.installCompleted); the
+    /// same file without it is an install that stopped half-way, run again.
+    static func decide(installed: Data?, bundled: Data?, completed: Bool = true) -> Decision {
         guard let installed else { return .notInstalled }
-        guard let bundled, bundled != installed else { return .current }
+        guard let bundled else { return .current }
+        if bundled == installed { return completed ? .current : .upgrade }
         // a bundled helper without a version is from before 0.9.1, older than anything installed since
         guard let new = HelperVersion.version(of: bundled) else { return .downgrade }
         guard let old = HelperVersion.version(of: installed) else { return .upgrade }

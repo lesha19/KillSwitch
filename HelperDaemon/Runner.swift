@@ -44,7 +44,10 @@ enum Runner {
         let installed = isRootOnly(directory, directory: true) && isRootOnly(ks, directory: false)
             ? FileManager.default.contents(atPath: ks) : nil
         let bundled = FileManager.default.contents(atPath: helperDir.appendingPathComponent("ks").path)
-        switch HelperUpgrade.decide(installed: installed, bundled: bundled) {
+        let marker = installed != nil && isRootOnly(HelperVersion.markerPath, directory: false)
+            ? FileManager.default.contents(atPath: HelperVersion.markerPath) : nil
+        let completed = installed.map { HelperVersion.installCompleted(marker: marker, installed: $0) } ?? false
+        switch HelperUpgrade.decide(installed: installed, bundled: bundled, completed: completed) {
         case .notInstalled:
             return HelperReply(status: HelperReply.failedToRun, stdout: "",
                                stderr: "Служба KillSwitch не установлена или повреждена: «Восстановить службу…»")

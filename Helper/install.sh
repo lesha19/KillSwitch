@@ -90,6 +90,17 @@ put_file() {
   mv -f "$new" "$2" || { echo "cannot replace $2" >&2; exit 1; }
 }
 
+# The last step: the app takes an install as done only when $DIR/installed names the ks in place
+# (HelperVersion.installCompleted). One that stopped half-way has none, and the app runs it again.
+write_marker() {
+  local sum new="$DIR/.installed.new"
+  sum=$(shasum -a 256 "$DIR/ks") || { echo "cannot hash $DIR/ks" >&2; exit 1; }
+  rm -f "$new"
+  printf 'version %s\nsha256 %s\n' "$(script_version "$DIR/ks")" "${sum%% *}" > "$new"
+  chmod 644 "$new"
+  mv -f "$new" "$DIR/installed"
+}
+
 ks_run() { "$DIR/ks" "$@"; }
 job_loaded() { launchctl print "$1" >/dev/null 2>&1; }
 job_running() { launchctl print "$1" 2>/dev/null | grep -q 'state = running'; }
@@ -181,6 +192,7 @@ main() {
   done
 
   install -d -o root -g wheel -m 755 "$DIR"
+  rm -f "$DIR/installed"   # written again as the last step
   if put_file ks "$DIR/ks" 755; then ks_new=1; fi
   # «Российские сайты напрямую» (coredirect, 0.7–0.14) is gone (ADR 0013): what goes outside the
   # VPN comes from the subscription's rules only. Its line is dropped; every other setting stays.
@@ -223,6 +235,7 @@ main() {
 
   # The app relies on this working without a password
   sudo -u "$USER_NAME" sudo -n "$DIR/ks" state >/dev/null && echo "app access: ok"
+  write_marker
 }
 
 [ "${BASH_SOURCE[0]}" = "$0" ] || return 0   # sourced by Helper/tests

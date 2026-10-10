@@ -134,7 +134,7 @@ upgrade() {  # upgrade [args]: runs main of install.sh in the bundle directory o
     lockf() { echo "lockf $*" >> "$root/calls"; }
     dscl() { return 0; }
     sudo() { echo "sudo $*" >> "$root/calls"; }
-    visudo() { /usr/sbin/visudo "$@"; }
+    visudo() { [ "${VISUDO_FAILS:-0}" = 0 ] || return 1; /usr/sbin/visudo "$@"; }
     chmod() { /bin/chmod "$@"; }
     id() { if [ "$1" = -u ] && [ -n "${2:-}" ]; then echo 501; else /usr/bin/id "$@"; fi; }
     pfctl() { echo "pfctl $*" >> "$root/calls"; }
@@ -165,6 +165,18 @@ check "upgrade: pf and the network never touched" "$(grep -cE '^(pfctl|networkse
 check "upgrade: says the core kept running" "$(grep -c '^core: kept$' <<<"$out")" 1
 check "upgrade: sudoers kept for the same user" "$(grep -c '^someone ALL=(root) NOPASSWD:' "$root/sudoers")" 1
 check "upgrade: settings kept, coredirect dropped (ADR 0013)" "$(paste -sd, - < "$root/lib/settings")" "lan=0,adblock=1"
+
+check "upgrade: the completion marker names the new ks" "$(sed -n 's/^sha256 //p' "$root/lib/installed" 2>/dev/null)" "$(shasum -a 256 "$root/lib/ks" | cut -d' ' -f1)"
+check "upgrade: the marker says the version" "$(sed -n 's/^version //p' "$root/lib/installed" 2>/dev/null)" "0.14"
+check "upgrade: the marker is 644" "$(stat -f %Lp "$root/lib/installed" 2>/dev/null)" 644
+
+# install.sh stopping half-way (here: sudoers refused) leaves no marker, not even an earlier one
+setup halfway
+echo "version 0.14" > "$root/lib/installed"
+out=$(KEEP_E=1 VISUDO_FAILS=1 upgrade --upgrade 2>&1); rc=$?
+check "stopped half-way: fails" "$([ "$rc" != 0 ] && echo failed || echo ok)" failed
+check "stopped half-way: ks already replaced" "$(tail -1 "$root/lib/ks")" "echo new"
+check "stopped half-way: no completion marker" "$([ -e "$root/lib/installed" ] && echo there || echo none)" none
 
 setup onlycoredirect
 printf 'coredirect=1\n' > "$root/lib/settings"
