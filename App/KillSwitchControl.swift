@@ -657,19 +657,16 @@ final class KillSwitchControl {
         }
     }
 
-    private enum AdminResult { case ok(String), cancelled, failed(String) }
-
-    private func adminRun(_ commands: [[String]]) async -> AdminResult {
-        let source = AdminScript.source(commands)
-        var info: NSDictionary?
-        let output = NSAppleScript(source: source)?.executeAndReturnError(&info)
-        if let info {
-            if (info[NSAppleScript.errorNumber] as? Int) == -128 { return .cancelled }   // user cancelled
-            return .failed(info[NSAppleScript.errorMessage] as? String ?? "Не получилось")
+    /// The admin prompt and the command run off the main thread (AdminScript.run), so the app
+    /// keeps drawing while the password is typed and install.sh works.
+    private func adminRun(_ commands: [[String]]) async -> AdminScript.Outcome {
+        await AdminScript.run(source: AdminScript.source(commands)) { source in
+            var info: NSDictionary?
+            let output = NSAppleScript(source: source)?.executeAndReturnError(&info)
+            return AdminScript.outcome(output: info == nil ? output.map { $0.stringValue ?? "" } : nil,
+                                       errorNumber: info.map { $0[NSAppleScript.errorNumber] as? Int ?? 1 },
+                                       errorMessage: info?[NSAppleScript.errorMessage] as? String)
         }
-        guard let output else { return .failed("Не получилось") }
-        // do shell script turns line ends into \r
-        return .ok((output.stringValue ?? "").replacingOccurrences(of: "\r", with: "\n"))
     }
 
     /// What the content filter lets out while no VPN tunnel is up, mirroring the pf settings.

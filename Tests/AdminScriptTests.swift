@@ -19,4 +19,19 @@ final class AdminScriptTests: XCTestCase {
         XCTAssertEqual(source,
                        "do shell script quoted form of \"/k\" & \" \" & quoted form of \"allow\" & \" \" & quoted form of \"10.0.0.1\" & \" && \" & quoted form of \"/k\" & \" \" & quoted form of \"unallow\" & \" \" & quoted form of \"10.0.0.2\" with administrator privileges")
     }
+
+    func testOutcomeOfARun() {
+        XCTAssertEqual(AdminScript.outcome(output: "line1\rline2", errorNumber: nil, errorMessage: nil), .ok("line1\nline2"))
+        XCTAssertEqual(AdminScript.outcome(output: nil, errorNumber: -128, errorMessage: "User canceled."), .cancelled)
+        XCTAssertEqual(AdminScript.outcome(output: nil, errorNumber: 1, errorMessage: "pf: bad rule"), .failed("pf: bad rule"))
+        XCTAssertEqual(AdminScript.outcome(output: nil, errorNumber: 1, errorMessage: nil), .failed("Не получилось"))
+        XCTAssertEqual(AdminScript.outcome(output: nil, errorNumber: nil, errorMessage: nil), .failed("Не получилось"))
+    }
+
+    /// The password prompt and install.sh can take minutes: the main thread must stay free.
+    @MainActor
+    func testRunsOffTheMainThread() async {
+        let ranOnMain = await AdminScript.run(source: "x") { _ in Thread.isMainThread }
+        XCTAssertFalse(ranOnMain)
+    }
 }
