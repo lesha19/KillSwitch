@@ -49,7 +49,7 @@ ks_clean_env
 set -u
 umask 022
 
-KS_VERSION="0.13" # the app's version (project.yml); the app compares the whole file anyway
+KS_VERSION="0.14" # the app's version (project.yml); the app compares the whole file anyway
 DIR="/Library/KillSwitch"
 ANCHOR="com.apple/killswitch"
 FLAG="$DIR/disabled"     # contains epoch when to re-enable, 0 = never
@@ -959,6 +959,22 @@ core_apply_settings() {
   reload_if_on; core_reload
 }
 
+# "ks _regen" (install.sh, after an upgrade, under the core lock): the config again from the kept
+# profile and pins, so a new generator applies at once. Put in place only if it differs; then pf
+# is reloaded (atomic, never flushed) and the core rereads it through its API, without a restart.
+core_regen() {
+  local tmp="$CORE_DIR/config.yaml.tmp" srv="$SERVERS_CORE.tmp"
+  [ -f "$CORE_PROFILE" ] && [ -f "$PINS" ] && [ -f "$CORE_DIR/config.yaml" ] || { echo "core config: none"; return 0; }
+  KS_PINS=$PINS core_generate "$CORE_PROFILE" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; return 1; }
+  if cmp -s "$tmp" "$CORE_DIR/config.yaml"; then
+    core_clean "$tmp" "$srv"; echo "core config: kept"; return 0
+  fi
+  core_commit "$tmp" "$srv" || return 1
+  reload_if_on; core_reload
+  log_event "core config rebuilt by the new helper"
+  echo "core config: reloaded"
+}
+
 # The core rereads config.yaml (selections survive); restarted if that fails.
 core_reload() {
   local b rc
@@ -1327,6 +1343,35 @@ splitapps_parse() {
 }
 urlencode() { printf '%s' "$1" | od -An -v -tx1 | tr -s ' \n' '%%' | sed 's/%$//'; }  # every byte
 
+# "ks watch", the LaunchDaemon's loop.
+# Boot window guard (setting wifiguard): pf rules only come up a few seconds after the network, so
+# every network service on a physical port (Wi-Fi, Ethernet, iPhone USB, Thunderbolt) is disabled
+# when the system stops this daemon at shutdown (SIGTERM), and enabled again here once the rules
+# are loaded. The setting persists across reboot, so nothing gets an address before the rules
+# exist. Only services we disabled are restored.
+# SIGHUP (install.sh, after it put a new ks in place, ADR 0012): the new file runs in this process,
+# same pid, without the boot window guard; pf rules, DNS and the core are not touched. A watchdog
+# from before 0.14 has no HUP trap: it just ends, and launchd starts the new file (KeepAlive).
+KS_SELF=$0
+on_term() {
+  shutdown_guard
+  rm -f "$STATEF"   # the app falls back to asking ks
+  exit 0
+}
+on_hup() {
+  log_event "watchdog: new helper, restarting in place"
+  exec "$KS_SELF" watch
+}
+watch_main() {
+  local n=0
+  trap on_term TERM
+  trap on_hup HUP
+  while :; do
+    watch_pass "$n"; n=$((n + 1))
+    sleep 1 & wait $!   # wait, unlike a plain sleep, lets the traps run at once
+  done
+}
+
 valid_addr() {  # a bare name must not reach pfctl, it would be resolved through DNS
   [[ "$1" =~ $ADDR_RE ]] && { [[ "$1" == *:* ]] || [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?$ ]]; }
 }
@@ -1361,33 +1406,17 @@ passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,25p' "$0"
 # Everything that writes the core's config runs under one lock (the watchdog's rotation skips
 # its turn while it is held).
 case "${1:-}:${2:-}" in
-  core:import|core:refresh|set:splitapps|set:multihop|set:coredirect|set:adblock)
+  core:import|core:refresh|set:splitapps|set:multihop|set:coredirect|set:adblock|_regen:)
     [ -n "${KS_LOCKED:-}" ] || [ ! -d "$CORE_DIR" ] || KS_LOCKED=1 exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@" ;;
 esac
 
 case "${1:-status}" in
   apply) guard ;;
   _rotate) core_rotate ;;  # internal, under the lock, started by the watchdog
+  _regen) core_regen ;;    # internal, under the lock, run by install.sh after an upgrade
   _dns)  # internal, under the lock of dns_locked
     case "${2:-}" in apply) dns_apply ;; restore) dns_restore ;; *) exit 1 ;; esac ;;
-  watch)
-    # Boot window guard (setting wifiguard): pf rules only come up a few seconds after the
-    # network, so every network service on a physical port (Wi-Fi, Ethernet, iPhone USB,
-    # Thunderbolt) is disabled when the system stops this daemon at shutdown, and enabled
-    # again here once the rules are loaded. The setting persists across reboot, so nothing
-    # gets an address before the rules exist. Only services we disabled are restored.
-    on_term() {
-      shutdown_guard
-      rm -f "$STATEF"   # the app falls back to asking ks
-      exit 0
-    }
-    trap on_term TERM
-    n=0
-    while :; do
-      watch_pass "$n"; n=$((n + 1))
-      sleep 1 & wait $!   # wait, unlike a plain sleep, lets the TERM trap run at once
-    done
-    ;;
+  watch) watch_main ;;
   netrestore) net_restore || exit 1 ;;
   on)    rm -f "$FLAG"; load && echo "kill switch: ON" ;;
   off)   disable 0; echo "kill switch: OFF (until 'ks on')" ;;

@@ -18,9 +18,12 @@ done
 
 # --- geodata: from the bundle (install.sh runs in Helper/ of the app), pinned by sha256
 check "install.sh installs geoip.metadb from the bundle" \
-  "$(code "$H/install.sh" | grep -c 'install -o root -g wheel -m 644 geoip.metadb "\$DIR/core/geoip.metadb"')" 1
+  "$(code "$H/install.sh" | grep -c 'put_file geoip.metadb "\$DIR/core/geoip.metadb" 644')" 1
 check "install.sh removes a geoip.metadb the bundle does not have" \
-  "$(code "$H/install.sh" | grep -c 'else rm -f "\$DIR/core/geoip.metadb"; fi')" 1
+  "$(code "$H/install.sh" | grep -c 'rm -f "\$DIR/core/geoip.metadb"; restart=1')" 1
+# put_file installs only what install.sh runs in: the bundle's Helper/ (cd "$(dirname "$0")")
+check "put_file sources are bundle file names" \
+  "$(code "$H/install.sh" | grep -oE 'put_file [^ ]+' | grep -vE '^put_file (ks|mihomo|geosite\.dat|geoip\.metadb|tsrelays|local\.killswitch(\.core)?\.plist)$' | head -3)" ""
 for v in SHA256_GEOSITE SHA256_GEOIP; do
   pin=$(sed -nE "s/^$v=\"([0-9a-f]{64})\".*/\1/p" "$H/fetch-geodata.sh")
   [ -n "$pin" ] && check "fetch-geodata.sh pins $v" yes yes || check "fetch-geodata.sh pins $v" no yes
