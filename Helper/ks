@@ -38,6 +38,8 @@ CORE_GROUP="_ksvpn"      # the core runs with this gid; nothing else can get it
 CORE_JOB="system/local.killswitch.core"
 CORE_CTL="$CORE_DIR/ctl/mihomo.sock" # the core's API; ctl/ is root-only
 CORE_TUN_ADDR="198.18.128.1" # our TUN's address (start of the core's fake-ip-range)
+DNS_STATE="$CORE_DIR/dns-state" # system DNS keys pointed at the core, with their originals
+DNS_OURS="127.0.0.1"
 ADDR_RE='^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$'
 
 setting() {  # setting <key> <default>
@@ -406,25 +408,140 @@ core_import() {  # core_import <profile.json> [refresh]
   mv "$tmp" "$CORE_DIR/config.yaml"
 }
 
-# System DNS -> 127.0.0.1 (the core) on every physical service; previous values are kept
-# in $CORE_DIR/dns-saved and put back by core_dns_restore.
-core_dns_set() {
-  local svc
-  [ -f "$CORE_DIR/dns-saved" ] || physical_services | while IFS= read -r svc; do
-    printf '%s\t%s\n' "$svc" "$(networksetup -getdnsservers "$svc" | grep -E '^[0-9A-Fa-f:.]+$' | paste -sd' ' -)"
-  done > "$CORE_DIR/dns-saved"
-  physical_services | while IFS= read -r svc; do networksetup -setdnsservers "$svc" 127.0.0.1; done
+# System DNS -> 127.0.0.1 (the core), the way Mullvad does it on macOS (talpid-dns macos.rs):
+# ServerAddresses are written into the dynamic store, State:/Network/Service/<id>/DNS of every
+# active service and Setup:/Network/Service/<id>/DNS of every service, never into the saved
+# preferences. The dynamic store is volatile, so a crash or power loss cannot leave the Mac
+# without names after a reboot. What was there is kept in $DNS_STATE (per key; "!" no key, "-"
+# no ServerAddresses) and put back only where our address is still set. A change made by the
+# system meanwhile (DHCP renew, another network) becomes the new original, then is overridden
+# again. Unlike Mullvad only ServerAddresses is replaced, so search domains stay, and only
+# services on a physical port are touched: Tailscale's MagicDNS keeps its own resolver.
+boot_id() { sysctl -n kern.boottime | sed 's/.*sec = \([0-9]*\).*/\1/'; }
+
+# "<key>\t<addresses>" for those keys; addresses space separated, "-" or "!" as above.
+dns_snapshot() {
+  local ids x
+  ids=$(printf 'list State:/Network/Service/[^/]+/DNS\nlist Setup:/Network/Service/[^/]+/DNS\n' | scutil |
+    awk -F/ '/subKey/ && NF == 5 { id = $4; if (!(id in seen)) { seen[id] = 1; order[++n] = id }
+                                   if ($1 ~ /State:$/) st[id] = 1 }
+             END { for (i = 1; i <= n; i++) printf "%s:%d ", order[i], (order[i] in st) }')
+  [ -n "$ids" ] || return 0
+  for x in $ids; do
+    x=${x%:*}
+    printf 'show Setup:/Network/Service/%s/Interface\nshow State:/Network/Service/%s/IPv4\n' "$x" "$x"
+    printf 'show State:/Network/Service/%s/DNS\nshow Setup:/Network/Service/%s/DNS\n' "$x" "$x"
+  done | scutil | awk -v ids="$ids" '
+    BEGIN { n = split(ids, I, " ") }
+    # four replies per service: Setup Interface, State IPv4, State DNS, Setup DNS
+    function end_reply(  k, s, id, st, phys) {
+      k = r % 4; s = int(r / 4) + 1
+      if (k <= 1 && dev == "") dev = d
+      if (k == 2) sdns = v
+      if (k == 3) {
+        id = I[s]; st = substr(id, length(id)); sub(/:[01]$/, "", id)
+        if (dev ~ /^(en|bridge)[0-9]+$/) {
+          if (st == 1) printf "State:/Network/Service/%s/DNS\t%s\n", id, sdns
+          printf "Setup:/Network/Service/%s/DNS\t%s\n", id, v
+        }
+        dev = ""
+      }
+      r++; d = ""; v = "-"; inarr = 0
+    }
+    BEGIN { r = 0; d = ""; v = "-"; dev = "" }
+    /No such key/ { v = "!"; end_reply(); next }
+    /^}$/ { end_reply(); next }
+    /^  (DeviceName|InterfaceName) : / { d = $3 }
+    /^  ServerAddresses : <array> \{$/ { inarr = 1; v = ""; next }
+    inarr && /^  \}$/ { inarr = 0; if (v == "") v = "-"; next }
+    inarr { v = v (v == "" ? "" : " ") $3 }'
 }
-core_dns_restore() {
+
+dns_put() {  # dns_put <key> <addresses|-|!>: rewrites only ServerAddresses of the key
+  case "$2" in
+    '!') printf 'remove %s\n' "$1" ;;
+    '-') printf 'd.init\nget %s\nd.remove ServerAddresses\nset %s\n' "$1" "$1" ;;
+    *)   printf 'd.init\nget %s\nd.add ServerAddresses * %s\nset %s\n' "$1" "$2" "$1" ;;
+  esac | scutil >/dev/null 2>&1
+}
+
+# Until 0.7 the DNS was set with networksetup, persistently; that is put back once. The
+# system publishes it with a delay, so dns_apply waits for its next round.
+dns_migrate() {
   local svc servers
-  [ -f "$CORE_DIR/dns-saved" ] || return 0
+  [ -f "$CORE_DIR/dns-saved" ] || return 1
   while IFS=$'\t' read -r svc servers; do
     # shellcheck disable=SC2086 # several servers are several arguments
     networksetup -setdnsservers "$svc" ${servers:-Empty}
   done < "$CORE_DIR/dns-saved"
   rm -f "$CORE_DIR/dns-saved"
+  log_event "DNS set by an older version restored"
 }
+
+dns_apply() {  # prints the keys it had to (re)write
+  local boot snap old path cur prev
+  dns_migrate && return 0
+  boot=$(boot_id)
+  snap=$(dns_snapshot)
+  old=""
+  [ "$(head -1 "$DNS_STATE" 2>/dev/null)" = "boot $boot" ] && old=$(tail -n +2 "$DNS_STATE")
+  {
+    echo "boot $boot"
+    while IFS=$'\t' read -r path cur; do
+      [ -n "$path" ] || continue
+      if [ "$cur" = "$DNS_OURS" ]; then
+        prev=$(awk -F'\t' -v p="$path" '$1 == p { print $2; exit }' <<<"$old")
+        printf '%s\t%s\n' "$path" "${prev:-$cur}"
+      else
+        printf '%s\t%s\n' "$path" "$cur"
+        dns_put "$path" "$DNS_OURS"
+        echo "$path" >&3
+      fi
+    done <<<"$snap"
+  } 3>&1 > "$DNS_STATE.tmp" && mv "$DNS_STATE.tmp" "$DNS_STATE"
+}
+
+dns_restore() {
+  local snap path val
+  dns_migrate
+  [ -f "$DNS_STATE" ] || return 0
+  # the store starts empty at boot: originals from an earlier boot are void
+  if [ "$(head -1 "$DNS_STATE")" = "boot $(boot_id)" ]; then
+    snap=$(dns_snapshot)
+    tail -n +2 "$DNS_STATE" | while IFS=$'\t' read -r path val; do
+      [ "$(awk -F'\t' -v p="$path" '$1 == p { print $2; exit }' <<<"$snap")" = "$DNS_OURS" ] &&
+        dns_put "$path" "$val"
+    done
+  fi
+  rm -f "$DNS_STATE"
+}
+
+# "ks core on|off" and the watchdog run these at the same time; lockf serialises them.
+dns_locked() { lockf -k -t 30 "$CORE_DIR/dns.lock" "$0" _dns "$1"; }
 core_running() { launchctl print "$CORE_JOB" 2>/dev/null | grep -q 'state = running'; }
+
+# Watchdog part for the core: the system DNS follows it. Set while it runs (and set again if
+# the system overwrote it), restored when it has not been running for 5 s or is unloaded,
+# so a crashed core does not leave the Mac without names.
+CORE_DOWN=""
+core_guard() {
+  local p now changed
+  if ! p=$(launchctl print "$CORE_JOB" 2>/dev/null); then
+    CORE_DOWN=""
+    [ -f "$DNS_STATE" ] && { dns_locked restore; log_event "core not loaded: DNS restored"; }
+    return 0
+  fi
+  if grep -q 'state = running' <<<"$p"; then
+    CORE_DOWN=""
+    changed=$(dns_locked apply)
+    [ -n "$changed" ] && log_event "core DNS set: $(paste -sd' ' - <<<"$changed")"
+  else
+    now=$(date +%s); CORE_DOWN=${CORE_DOWN:-$now}
+    if [ $((now - CORE_DOWN)) -ge 5 ] && [ -f "$DNS_STATE" ]; then
+      dns_locked restore; log_event "core not running: DNS restored"
+    fi
+  fi
+}
 
 # The core's API, only through these commands: names are checked and encoded here.
 core_api() {  # core_api <method> <path> [json-body-file]: prints the reply, fails on HTTP errors
@@ -462,6 +579,8 @@ valid_addr() {  # a bare name must not reach pfctl, it would be resolved through
 
 case "${1:-status}" in
   apply) guard ;;
+  _dns)  # internal, under the lock of dns_locked
+    case "${2:-}" in apply) dns_apply ;; restore) dns_restore ;; *) exit 1 ;; esac ;;
   watch)
     # Boot window guard (setting wifiguard): pf rules only come up a few seconds after the
     # network, so every network service on a physical port (Wi-Fi, Ethernet, iPhone USB,
@@ -477,8 +596,10 @@ case "${1:-status}" in
       exit 0
     }
     trap on_term TERM
+    n=0
     while :; do
       guard
+      [ $((n++ % 4)) = 0 ] && core_guard   # every 2 s
       if [ -f "$WIFI_MARK" ] && { [ -f "$FLAG" ] || loaded; }; then
         while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" on; done < "$WIFI_MARK"
         rm -f "$WIFI_MARK"; log_event "rules up: network on"
@@ -544,12 +665,12 @@ case "${1:-status}" in
         # DNS goes to the core only once it runs; otherwise the Mac would be left without names
         for _ in 1 2 3 4 5 6 7 8 9 10; do core_running && break; sleep 0.5; done
         core_running || { echo "Ядро не запустилось" >&2; exit 1; }
-        core_dns_set
+        dns_locked apply >/dev/null
         log_event "core on" ;;
       off)
         launchctl bootout "$CORE_JOB" 2>/dev/null
         launchctl disable "$CORE_JOB"
-        core_dns_restore
+        dns_locked restore
         log_event "core off" ;;
       import|refresh)
         [ $# -eq 3 ] || { echo "usage: ks core $2 <json>" >&2; exit 1; }
