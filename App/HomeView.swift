@@ -9,6 +9,7 @@ struct HomeView: View {
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showingServers = false
 
     var body: some View {
@@ -20,7 +21,7 @@ struct HomeView: View {
             }
         }
         .frame(width: style == .popover ? 340 : 400)
-        .animation(.default, value: showingServers)
+        .animation(reduceMotion ? nil : .default, value: showingServers)   // spec §9.7
         // the helper is asked often only while something shows its answers
         .onAppear { control.viewAppeared() }
         .onDisappear { control.viewDisappeared() }
@@ -368,6 +369,7 @@ struct ActionsMenu: View {
                     .disabled(client.updating)
             }
             LeakTestView.OpenButton()
+                .keyboardShortcut("l", modifiers: [.command, .shift])
             Divider()
             if style == .popover {
                 Button("Открыть окно KillSwitch") { openWindow(id: "main"); NSApp.activate() }
