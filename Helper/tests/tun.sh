@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034 # globals here are read by the sourced Helper/ks
 # Checks the detection of a second VPN tunnel next to our core (ifconfig/netstat replaced).
 set -u
 here=$(cd "$(dirname "$0")" && pwd)

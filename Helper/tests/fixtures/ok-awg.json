@@ -1,0 +1,7 @@
+{"proxies": [{"name": "AWG", "type": "wireguard", "server": "203.0.113.50", "port": 51820, "ip": "172.16.0.2",
+  "private-key": "eCtXsJZ27+4PbhDkHnB923tkUn2Gj59wZw5wFA75MnU=", "public-key": "Cr8hWlKvtDt7nrvf+f0brNQQzabAqrjfBvas9pmowjo=",
+  "allowed-ips": ["0.0.0.0/0"], "udp": true, "mtu": 1280,
+  "amnezia-wg-option": {"jc": 4, "jmin": 40, "jmax": 70, "s1": 15, "s2": 68, "s3": 0, "s4": 0,
+    "h1": "1234567891", "h2": "1234567892", "h3": "1234567893", "h4": "1234567894",
+    "i1": "<b 0xf6ab3267fa><c><b 0xf6ab><t><r 10><wt 10>", "itime": 120}}],
+ "rules": ["MATCH,AWG"]}

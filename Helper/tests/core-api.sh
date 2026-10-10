@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034 # globals here are read by the sourced Helper/ks
 # Runs mihomo as the current user (no TUN, no DNS, controller on a unix socket in a temp dir)
 # and drives it through the controller functions of Helper/ks.
 #   Helper/tests/core-api.sh     (MIHOMO=/path/to/mihomo, default /Library/KillSwitch/core/mihomo)
@@ -6,7 +7,7 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=../ks
 . "$here/../ks"
-MIHOMO=${MIHOMO:-/Library/KillSwitch/core/mihomo}
+MIHOMO=${MIHOMO:-/Library/KillSwitch/core/mihomo}; [ -x "$MIHOMO" ] || [ ! -x "$here/../mihomo" ] || MIHOMO="$here/../mihomo"
 [ -x "$MIHOMO" ] || { echo "skip: no $MIHOMO"; exit 0; }
 tmp=$(mktemp -d)
 CORE_CTL="$tmp/ctl/mihomo.sock"
@@ -35,6 +36,16 @@ core_select "NL 1" "DE/2 🚀" 2>/dev/null && bad "select on a non-group accepte
 core_select "../configs" "x" 2>/dev/null && bad "path in group name accepted" || ok "path in group name stays a name"
 out=$(core_delay "NL 1" 2>&1); ok "delay proxy: $out"
 out=$(core_delay "🚀 Выбор & #1" 2>&1); ok "delay group: $out"
+# graceful reload (rotation, settings): the config file is reread, the selection survives
+launchctl() { echo "launchctl $*" >> "$tmp/launchd"; return 0; }
+sed -e 's/"DE\/2 🚀","type":"ss","server":"192.0.2.2"/"DE\/2 🚀","type":"ss","server":"192.0.2.3"/' \
+    -e 's/"proxies":\["NL 1","DE\/2 🚀"\]/"proxies":["NL 1","DE\/2 🚀","NEW"]/' \
+    -e 's/^ "proxies":\[/ "proxies":[{"name":"NEW","type":"ss","server":"192.0.2.9","port":8388,"cipher":"aes-128-gcm","password":"x"},/' \
+    "$tmp/config.yaml" > "$tmp/config.new" && mv "$tmp/config.new" "$tmp/config.yaml"
+core_reload
+core_api GET "/proxies/NEW" >/dev/null 2>&1 && ok "reload: new config in use" || bad "reload: NEW missing"
+grep -q kickstart "$tmp/launchd" 2>/dev/null && bad "reload fell back to a restart" || ok "reload without restart"
+[ "$(now)" = "DE/2 🚀" ] && ok "reload keeps the selection" || bad "selection after reload: $(now)"
 valid_name "$(printf 'a\nb')" && bad "newline in a name accepted" || ok "newline in a name refused"
 valid_name "" && bad "empty name accepted" || ok "empty name refused"
 

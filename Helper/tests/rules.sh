@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034 # globals here are read by the sourced Helper/ks
 # Checks the pf rules Helper/ks generates for the servers lists; no root, nothing loaded.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)

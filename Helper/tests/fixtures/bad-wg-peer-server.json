@@ -1,0 +1,2 @@
+{"proxies": [{"name": "WG", "type": "wireguard", "ip": "172.16.0.2", "private-key": "eCtXsJZ27+4PbhDkHnB923tkUn2Gj59wZw5wFA75MnU=",
+  "peers": [{"server": "a b;x", "port": 51820, "public-key": "Cr8hWlKvtDt7nrvf+f0brNQQzabAqrjfBvas9pmowjo=", "allowed-ips": ["0.0.0.0/0"]}]}]}
