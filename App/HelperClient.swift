@@ -1,0 +1,182 @@
+import Foundation
+import Security
+import ServiceManagement
+
+/// The app's side of the privileged daemon (ADR 0010): its SMAppService registration, the XPC
+/// connection (to our signed daemon only) and the authorization right. Commands that widen the
+/// rules ask macOS for `HelperRight.name` first: its dialog at most once every five minutes.
+@MainActor
+final class HelperClient {
+    private let service = SMAppService.daemon(plistName: HelperIdentity.plistName)
+    private var connection: NSXPCConnection?
+    private let authorization = AppAuthorization()
+
+    var availability: HelperService.Availability { HelperService.availability(service.status) }
+
+    /// Registers the daemon; macOS then wants it switched on in Login Items (`needsApproval`).
+    @discardableResult
+    func register() -> HelperService.Availability {
+        do { try service.register() } catch {
+            // "Operation not permitted" while it waits for approval: the status says the rest
+        }
+        return availability
+    }
+
+    func unregister() async { try? await service.unregister() }
+
+    static func openLoginItems() { SMAppService.openSystemSettingsLoginItems() }
+
+    enum Outcome: Equatable { case reply(HelperReply), cancelled, unreachable }
+
+    /// Runs `command` in the daemon. A command behind the right asks for it first, unless not
+    /// `interactive` (a timer): then it answers `notAuthorized` without a dialog. `unreachable`:
+    /// the daemon did not answer (not running, not ours, an older one); the caller falls back.
+    func send(_ command: HelperCommand, interactive: Bool) async -> Outcome {
+        guard command.needsAuthorization else {
+            return await call(command, authorization: nil).map(Outcome.reply) ?? .unreachable
+        }
+        guard interactive else {
+            return .reply(HelperReply(status: HelperReply.notAuthorized, stdout: "", stderr: ""))
+        }
+        for _ in 0..<2 {
+            let form: Data
+            switch await authorization.obtain() {
+            case .granted(let data): form = data
+            case .cancelled: return .cancelled
+            case .failed(let message): return .reply(HelperReply(status: HelperReply.notAuthorized, stdout: "", stderr: message))
+            }
+            guard let reply = await call(command, authorization: form) else { return .unreachable }
+            // expired between the two checks: once more, with the dialog if it is due
+            if !reply.needsAuthorization { return .reply(reply) }
+        }
+        return .reply(HelperReply(status: HelperReply.notAuthorized, stdout: "", stderr: "Нет подтверждения администратора"))
+    }
+
+    private func connect() -> NSXPCConnection {
+        if let connection { return connection }
+        let connection = NSXPCConnection(machServiceName: HelperIdentity.machService, options: .privileged)
+        connection.remoteObjectInterface = HelperIdentity.interface()
+        // only our daemon: anything else holding the name is refused by the system
+        connection.setCodeSigningRequirement(HelperIdentity.daemonRequirement)
+        connection.invalidationHandler = { [weak self] in
+            Task { @MainActor in self?.connection = nil }
+        }
+        connection.resume()
+        self.connection = connection
+        return connection
+    }
+
+    /// nil: no answer (connection refused, invalidated or interrupted).
+    private func call(_ command: HelperCommand, authorization auth: Data?) async -> HelperReply? {
+        let connection = connect()
+        var profile: FileHandle?
+        switch command {
+        case .coreImport(let path), .coreRefresh(let path):
+            // opened here, as the user: the daemon never opens a user's path as root
+            guard let handle = FileHandle(forReadingAtPath: path) else {
+                return HelperReply(status: HelperReply.failedToRun, stdout: "", stderr: "Не удалось открыть профиль")
+            }
+            profile = handle
+        default:
+            break
+        }
+        defer { try? profile?.close() }
+        return await withCheckedContinuation { (continuation: CheckedContinuation<HelperReply?, Never>) in
+            let once = Once(continuation)
+            let proxy = connection.remoteObjectProxyWithErrorHandler { _ in once.resume(nil) }
+            guard let helper = proxy as? HelperProtocol else { once.resume(nil); return }
+            let reply: @Sendable (Int32, String, String) -> Void = { once.resume(HelperReply(status: $0, stdout: $1, stderr: $2)) }
+            let form = auth ?? Data()
+            switch command {
+            case .state: helper.state(reply: reply)
+            case .probe: helper.probe(reply: reply)
+            case .protectionOn: helper.protectionOn(reply: reply)
+            case .netRestore: helper.netRestore(reply: reply)
+            case .coreState: helper.coreState(reply: reply)
+            case .coreOn: helper.coreOn(reply: reply)
+            case .coreOff: helper.coreOff(reply: reply)
+            case .coreProxies: helper.coreProxies(reply: reply)
+            case .coreSelect(let group, let proxy): helper.coreSelect(group: group, proxy: proxy, reply: reply)
+            case .coreDelay(let name): helper.coreDelay(name: name, reply: reply)
+            case .coreRefresh: helper.coreRefresh(profile: profile!, reply: reply)
+            case .protectionOff: helper.protectionOff(authorization: form, reply: reply)
+            case .pause(let minutes): helper.pause(minutes: minutes, authorization: form, reply: reply)
+            case .setSwitch(let key, let on): helper.setSwitch(key: key, on: on, authorization: form, reply: reply)
+            case .setSplitApps(let names): helper.setSplitApps(names: names, authorization: form, reply: reply)
+            case .setMultihop(let entry): helper.setMultihop(entry: entry, authorization: form, reply: reply)
+            case .allow(let address): helper.allow(address: address, authorization: form, reply: reply)
+            case .unallow(let address): helper.unallow(address: address, authorization: form, reply: reply)
+            case .serverAdd(let address): helper.serverAdd(address: address, authorization: form, reply: reply)
+            case .serverRemove(let address): helper.serverRemove(address: address, authorization: form, reply: reply)
+            case .coreImport: helper.coreImport(profile: profile!, authorization: form, reply: reply)
+            // the user is the one the daemon sees connecting
+            case .install(_, let servers): helper.install(servers: servers, authorization: form, reply: reply)
+            case .uninstall: helper.uninstall(authorization: form, reply: reply)
+            }
+        }
+    }
+}
+
+/// Resumes a continuation once: the reply and the connection's error handler may both arrive.
+private final class Once: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<HelperReply?, Never>?
+
+    init(_ continuation: CheckedContinuation<HelperReply?, Never>) { self.continuation = continuation }
+
+    func resume(_ value: HelperReply?) {
+        let pending = lock.withLock { () -> CheckedContinuation<HelperReply?, Never>? in
+            defer { continuation = nil }
+            return continuation
+        }
+        pending?.resume(returning: value)
+    }
+}
+
+/// The app's AuthorizationRef, kept for the app's lifetime: the right is not shared, so its
+/// credential (5 minutes) lives here. One dialog at a time, off the main thread.
+final class AppAuthorization: @unchecked Sendable {
+    enum Result: Sendable { case granted(Data), cancelled, failed(String) }
+
+    private let lock = NSLock()
+    private var ref: AuthorizationRef?
+
+    /// The text of macOS's dialog.
+    static let prompt = "KillSwitch хочет изменить настройки защиты."
+
+    func obtain() async -> Result {
+        await Task.detached(priority: .userInitiated) { self.obtainNow() }.value
+    }
+
+    private func obtainNow() -> Result {
+        lock.lock()
+        defer { lock.unlock() }
+        if ref == nil, AuthorizationCreate(nil, nil, [], &ref) != errAuthorizationSuccess { ref = nil }
+        guard let ref else { return .failed("AuthorizationCreate") }
+        let status = HelperRight.name.withCString { name in
+            kAuthorizationEnvironmentPrompt.withCString { promptKey in
+                var text = Array(Self.prompt.utf8)
+                return text.withUnsafeMutableBytes { promptBytes in
+                    var right = AuthorizationItem(name: name, valueLength: 0, value: nil, flags: 0)
+                    var prompt = AuthorizationItem(name: promptKey, valueLength: promptBytes.count,
+                                                   value: promptBytes.baseAddress, flags: 0)
+                    return withUnsafeMutablePointer(to: &right) { rightPointer in
+                        withUnsafeMutablePointer(to: &prompt) { promptPointer in
+                            var rights = AuthorizationRights(count: 1, items: rightPointer)
+                            var environment = AuthorizationEnvironment(count: 1, items: promptPointer)
+                            return AuthorizationCopyRights(ref, &rights, &environment, [.interactionAllowed, .extendRights], nil)
+                        }
+                    }
+                }
+            }
+        }
+        switch status {
+        case errAuthorizationSuccess: break
+        case errAuthorizationCanceled: return .cancelled
+        default: return .failed("Нет подтверждения администратора (\(status))")
+        }
+        var form = AuthorizationExternalForm()
+        guard AuthorizationMakeExternalForm(ref, &form) == errAuthorizationSuccess else { return .failed("AuthorizationMakeExternalForm") }
+        return .granted(withUnsafeBytes(of: &form) { Data($0) })
+    }
+}

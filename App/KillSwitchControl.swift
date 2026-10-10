@@ -11,6 +11,9 @@ import WidgetKit
 /// everything that loosens protection asks for the admin password, so another program running
 /// as the user cannot do it silently. The password prompt only ever follows a click: calls made
 /// by timers pass `interactive: false` and give up instead (see `callHelper`).
+/// With the privileged daemon allowed (ADR 0010, HelperClient) the same commands go through it
+/// instead, and the password (or Touch ID) is asked at most once every five minutes; without it,
+/// or when it does not answer, sudo and the AppleScript prompt work as before.
 @MainActor
 @Observable
 final class KillSwitchControl {
@@ -93,6 +96,23 @@ final class KillSwitchControl {
 
     /// Second layer, see FilterControl.
     let filter = FilterControl()
+
+    /// The privileged daemon (ADR 0010).
+    let helperClient = HelperClient()
+    /// Its state in System Settings › Login Items; `.needsApproval` shows HelperApprovalNote.
+    private(set) var helperAvailability: HelperService.Availability = .unavailable
+
+    private func updateHelperAvailability() {
+        let current = helperClient.availability
+        if current != helperAvailability { helperAvailability = current }
+    }
+
+    /// «Восстановить службу» and the wizard: registers the daemon when it is not yet. While macOS
+    /// waits for the switch in Login Items, this one change still goes through the password prompt.
+    private func prepareHelper() {
+        if helperClient.availability == .needsRegistration { helperClient.register() }
+        updateHelperAvailability()
+    }
 
     private let helper = "/Library/KillSwitch/ks"
     private var timer: Timer?
@@ -496,7 +516,7 @@ final class KillSwitchControl {
     func coreRefresh(file: String) async -> RefreshOutcome {
         busy = true
         defer { busy = false; refresh() }
-        let result = await Self.exec("/usr/bin/sudo", ["-n", helper, "core", "refresh", file])
+        let result = await readHelper(["core", "refresh", file])
         let outcome = RefreshOutcome(status: result.status, output: result.output)
         if outcome == .applied { measured = [:] }
         return outcome
@@ -642,6 +662,16 @@ final class KillSwitchControl {
     /// `ks <args>` through passwordless sudo; if sudoers does not allow it (older helper), the
     /// admin prompt follows only when `interactive` — a user's click, never a timer.
     private func callHelper(_ args: [String], interactive: Bool, separateStderr: Bool = false) async -> HelperResult {
+        if helperAvailability == .ready, let command = HelperCommand(ks: args) {
+            switch await helperClient.send(command, interactive: interactive) {
+            case .reply(let reply):
+                if reply.status == 0 { return .ok(reply.text(separateStderr: separateStderr)) }
+                if reply.needsAuthorization { return interactive ? .failed(reply.text(separateStderr: false)) : .needsPassword }
+                return .failed(reply.text(separateStderr: separateStderr))
+            case .cancelled: return .cancelled
+            case .unreachable: break   // sudo and the password prompt, as before
+            }
+        }
         let result = await Self.exec("/usr/bin/sudo", ["-n", helper] + args, separateStderr: separateStderr)
         if result.status == 0 { return .ok(result.output) }
         guard Self.sudoWantsPassword(result.output) else { return .failed(result.output) }
@@ -655,6 +685,7 @@ final class KillSwitchControl {
 
     /// Also used to upgrade the installed helper: install.sh keeps settings and lists.
     func install() {
+        prepareHelper()
         readFoundServers()
         runBundled("install.sh", [NSUserName()] + foundServers)
     }
@@ -666,6 +697,7 @@ final class KillSwitchControl {
     /// `profile` and connecting, as one admin command — one password, and the protection that
     /// install.sh turns on never finds the Mac without a VPN.
     func setUp(profile: String) async -> Bool {
+        prepareHelper()
         let installed = serviceInstalled
         var script: String?
         if !installed {
@@ -697,7 +729,13 @@ final class KillSwitchControl {
             return false
         }
     }
-    func uninstall() { runBundled("uninstall.sh", []) }
+    /// Then the daemon goes too (uninstall.sh removes its authorization right).
+    func uninstall() {
+        runBundled("uninstall.sh", []) { [self] in
+            await helperClient.unregister()
+            updateHelperAvailability()
+        }
+    }
 
     func refresh() {
         let wasVPNUp = vpnUp
@@ -720,6 +758,7 @@ final class KillSwitchControl {
         }
         if wasVPNUp && !vpnUp && state == .on && !manual && !stoppingOtherVPN { notify(.vpnDropped(protected: true)) }
         readSettings()
+        updateHelperAvailability()
         defer { scheduleTimer(); readOtherVPN() }
         guard FileManager.default.fileExists(atPath: helper) else {
             daemonProblem = false; networkLeftOff = false
@@ -751,7 +790,7 @@ final class KillSwitchControl {
         if coreInstalled {
             Task {
                 // "on", possibly followed by more words in later helpers
-                coreRunning = await Self.exec("/usr/bin/sudo", ["-n", helper, "core", "state"]).output.hasPrefix("on")
+                coreRunning = await readHelper(["core", "state"]).output.hasPrefix("on")
                 trackConnecting()
                 loadProxies()
             }
@@ -762,7 +801,7 @@ final class KillSwitchControl {
         foreignVPN = coreRunning ? Self.readForeignVPN() : nil
         trackConnecting()
         Task {
-            let result = await Self.exec("/usr/bin/sudo", ["-n", helper, "state"])
+            let result = await readHelper(["state"])
             guard result.status == 0 else {
                 needsRepair = Self.sudoWantsPassword(result.output)
                 if !needsRepair {
@@ -825,7 +864,7 @@ final class KillSwitchControl {
         }
     }
 
-    private func runBundled(_ script: String, _ args: [String]) {
+    private func runBundled(_ script: String, _ args: [String], then done: (@MainActor () async -> Void)? = nil) {
         guard let path = Bundle.main.path(forResource: script, ofType: nil, inDirectory: "Helper") else {
             error = UserError.problem(.vpnMissing)
             return
@@ -835,7 +874,7 @@ final class KillSwitchControl {
             let intact = await Self.bundleIntact()
             busy = false
             guard intact else { error = .damagedApp; return }
-            runAsAdmin(["/bin/bash", path] + args, context: script == "install.sh" ? .install : .helper)
+            runAsAdmin(batch: [["/bin/bash", path] + args], context: script == "install.sh" ? .install : .helper, then: done)
         }
     }
 
@@ -852,12 +891,15 @@ final class KillSwitchControl {
     }
 
     /// Several commands behind one password; the first failure stops the rest.
-    private func runAsAdmin(batch commands: [[String]], context: UserError.Context = .helper) {
+    private func runAsAdmin(batch commands: [[String]], context: UserError.Context = .helper,
+                            then done: (@MainActor () async -> Void)? = nil) {
         guard !commands.isEmpty else { return }
         busy = true
         Task {
             switch await adminRun(commands) {
-            case .ok: error = nil
+            case .ok:
+                error = nil
+                await done?()
             case .cancelled: break
             case .failed(let message): error = UserError.from(raw: message, context: context)
             }
@@ -866,10 +908,44 @@ final class KillSwitchControl {
         }
     }
 
-    /// The admin prompt and the command run in their own process (AdminScript.run), so the app
-    /// keeps drawing while the password is typed and install.sh works.
+    /// Through the daemon when it is allowed: one authorization for the whole batch, none within
+    /// five minutes of the last. Otherwise the admin prompt and the command run in their own
+    /// process (AdminScript.run), so the app keeps drawing while the password is typed and
+    /// install.sh works.
     private func adminRun(_ commands: [[String]]) async -> AdminScript.Outcome {
-        await AdminScript.run(commands)
+        if helperAvailability == .ready {
+            let typed = commands.compactMap { HelperCommand(command: $0, helper: helper) }
+            if typed.count == commands.count, let outcome = await daemonRun(typed) { return outcome }
+        }
+        return await AdminScript.run(commands)
+    }
+
+    /// The batch in the daemon, stopping at the first failure like `&&`. Nil when the daemon did
+    /// not answer the first command, so nothing ran yet and the password prompt can take over.
+    private func daemonRun(_ commands: [HelperCommand]) async -> AdminScript.Outcome? {
+        var output: [String] = []
+        for (index, command) in commands.enumerated() {
+            switch await helperClient.send(command, interactive: true) {
+            case .unreachable:
+                return index == 0 ? nil : .failed("Служба KillSwitch не ответила")
+            case .cancelled:
+                return .cancelled
+            case .reply(let reply):
+                let text = reply.text(separateStderr: false)
+                guard reply.status == 0 else { return .failed(text.isEmpty ? "Не получилось" : text) }
+                if !text.isEmpty { output.append(text) }
+            }
+        }
+        return .ok(output.joined(separator: "\n"))
+    }
+
+    /// A passwordless read (`ks state`, `core state`, `core refresh`): the daemon, else sudo -n.
+    private func readHelper(_ args: [String]) async -> (status: Int32, output: String) {
+        if helperAvailability == .ready, let command = HelperCommand(ks: args), !command.needsAuthorization,
+           case .reply(let reply) = await helperClient.send(command, interactive: false) {
+            return (reply.status, reply.text(separateStderr: false))
+        }
+        return await Self.exec("/usr/bin/sudo", ["-n", helper] + args)
     }
 
     /// What the content filter lets out while no VPN tunnel is up, mirroring the pf settings.

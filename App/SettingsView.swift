@@ -615,6 +615,7 @@ private struct ServiceSection: View {
             LabeledContent((control.daemonProblem ? "Выключена" : "Работает") + " · версия \(DeviceInfo.appVersion)") {
                 Button("Восстановить службу…") { control.install() }
             }
+            HelperApprovalNote()
             Button("Удалить KillSwitch из системы…", role: .destructive) { confirmUninstall = true }
                 .foregroundStyle(.red)
         }
