@@ -41,7 +41,6 @@ final class KillSwitchControl {
     private(set) var exceptions: [String] = []
     private(set) var allowDirect = false
     private(set) var servers: [String] = []          // /Library/KillSwitch/servers
-    private(set) var foundServers: [String] = []     // from dropweb profiles and Happ's config
     private(set) var manualServers: [String] = []    // /Library/KillSwitch/servers-manual
     private(set) var daemonProblem = false
     /// The service is gone and left the network services off (its boot guard): «Включить сеть».
@@ -718,8 +717,7 @@ final class KillSwitchControl {
     /// Also used to upgrade the installed helper: install.sh keeps settings and lists.
     func install() {
         prepareHelper()
-        readFoundServers()
-        runBundled("install.sh", [NSUserName()] + foundServers)
+        runBundled("install.sh", [NSUserName()])
     }
 
     /// The service is on this Mac (the helper may still be broken or switched off).
@@ -745,8 +743,7 @@ final class KillSwitchControl {
             error = .damagedApp
             return false
         }
-        readFoundServers()
-        let commands = Onboarding.commands(installScript: script, user: NSUserName(), servers: foundServers, helper: helper,
+        let commands = Onboarding.commands(installScript: script, user: NSUserName(), servers: [], helper: helper,
                                            profile: profile)
         switch await adminRun(commands) {
         case .ok:
@@ -1049,27 +1046,10 @@ final class KillSwitchControl {
         exceptions = Self.readLines("/Library/KillSwitch/allow")
         servers = Self.readLines("/Library/KillSwitch/servers")
         manualServers = Self.readLines("/Library/KillSwitch/servers-manual")
-        if Date().timeIntervalSince(foundServersAt) > 60 { readFoundServers() }
-    }
-
-    private var foundServersAt = Date.distantPast
-
-    /// dropweb's profiles and Happ's config: at most once a minute from refresh(), always before
-    /// they go into an install.
-    private func readFoundServers() {
-        foundServersAt = Date()
-        let dropweb = Self.readDropwebServers()
-        foundServers = dropweb + Self.readHappServers().filter { !dropweb.contains($0) }
     }
 
     private static func readLines(_ path: String) -> [String] {
         ((try? String(contentsOfFile: path, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
-    }
-
-    /// Plain IPs only: these go into a root command, and profiles/configs are user-writable.
-    private static func isPlainIP(_ text: String) -> Bool {
-        text.wholeMatch(of: /[0-9A-Fa-f:.]{2,45}/) != nil
-            && (text.contains(":") || text.wholeMatch(of: /[0-9]{1,3}(\.[0-9]{1,3}){3}/) != nil)
     }
 
     /// Written by the watchdog (Helper/ks tun_guard, world-readable): while our core runs and another
@@ -1081,79 +1061,6 @@ final class KillSwitchControl {
         guard let text = try? String(contentsOfFile: foreignVPNFile, encoding: .utf8) else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : String(trimmed.prefix(80))
-    }
-
-    /// `server: <ip>` lines from dropweb's profiles.
-    private static func readDropwebServers() -> [String] {
-        let dir = NSHomeDirectory() + "/Library/Application Support/org.dropweb.vpn/profiles"
-        let files = ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).filter { $0.hasSuffix(".yaml") }.sorted()
-        var found: [String] = []
-        for file in files {
-            let text = (try? String(contentsOfFile: dir + "/" + file, encoding: .utf8)) ?? ""
-            for match in text.matches(of: /(?m)^[ \t-]*server:[ \t]*["']?([0-9A-Fa-f:.]{2,45})["']?[ \t]*$/) {
-                let address = String(match.1)
-                if isPlainIP(address) && !found.contains(address) { found.append(address) }
-            }
-        }
-        return found
-    }
-
-    /// Server addresses from Happ's connected Xray config.
-    private static func readHappServers() -> [String] {
-        let path = NSHomeDirectory() + "/Library/Group Containers/group.su.ffg.happ/Library/Preferences/group.su.ffg.happ.plist"
-        guard let prefs = NSDictionary(contentsOfFile: path),
-              let json = (prefs["connectedConfigJson"] as? String)?.data(using: .utf8),
-              let config = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
-              let outbounds = config["outbounds"] as? [[String: Any]] else { return [] }
-        var servers: [String] = []
-        for outbound in outbounds {
-            let settings = outbound["settings"] as? [String: Any] ?? [:]
-            let entries = (settings["vnext"] as? [[String: Any]] ?? []) + (settings["servers"] as? [[String: Any]] ?? [])
-            // Happ's config is user-writable and these go into a root command: plain IPs only.
-            // Subscriptions often give a host name: its current addresses are what the tunnel dials.
-            for case let address as String in entries.compactMap({ $0["address"] }) {
-                for ip in isPlainIP(address) ? [address] : resolve(address)
-                where isPlainIP(ip) && !servers.contains(ip) {
-                    servers.append(ip)
-                }
-            }
-        }
-        return servers
-    }
-
-    /// Last known addresses of each host name. Lookups run off the main thread at most once a
-    /// minute per name: refresh() runs every few seconds and without a network a lookup can hang.
-    private static var resolved: [String: (ips: [String], at: Date)] = [:]
-
-    private static func resolve(_ host: String) -> [String] {
-        let cached = resolved[host]
-        if cached == nil || Date().timeIntervalSince(cached!.at) > 60 {
-            resolved[host] = (cached?.ips ?? [], Date())
-            Task.detached {
-                let ips = lookup(host)
-                await MainActor.run { if !ips.isEmpty { resolved[host] = (ips, Date()) } }
-            }
-        }
-        return cached?.ips ?? []
-    }
-
-    /// Addresses of a host name through the system resolver, without the TUN fake-IP range
-    /// 198.18.0.0/15 (a VPN answering DNS itself would hand those out).
-    nonisolated private static func lookup(_ host: String) -> [String] {
-        var hints = addrinfo(ai_flags: 0, ai_family: AF_UNSPEC, ai_socktype: SOCK_STREAM,
-                             ai_protocol: 0, ai_addrlen: 0, ai_canonname: nil, ai_addr: nil, ai_next: nil)
-        var list: UnsafeMutablePointer<addrinfo>?
-        guard getaddrinfo(host, nil, &hints, &list) == 0, let first = list else { return [] }
-        defer { freeaddrinfo(first) }
-        var result: [String] = []
-        for info in sequence(first: first, next: { $0.pointee.ai_next }) {
-            var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            guard getnameinfo(info.pointee.ai_addr, info.pointee.ai_addrlen, &buf, socklen_t(buf.count),
-                              nil, 0, NI_NUMERICHOST) == 0 else { continue }
-            let ip = String(cString: buf)
-            if !ip.hasPrefix("198.18.") && !ip.hasPrefix("198.19.") && !result.contains(ip) { result.append(ip) }
-        }
-        return result
     }
 
     private func notify(_ notice: UserNotice) { Notifier.shared.post(notice) }

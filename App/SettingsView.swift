@@ -591,7 +591,7 @@ private struct AdvancedSettings: View {
             ListSheet(title: String(localized: "Адреса серверов для других VPN-программ"),
                       note: String(localized: "К этим адресам сможет подключиться любая программа. Серверы подписки сюда добавлять не нужно."),
                       placeholder: String(localized: "Адрес сервера"), original: control.manualServers,
-                      suggestions: control.foundServers, apply: control.setManualServers)
+                      apply: control.setManualServers)
         }
     }
 }
@@ -774,7 +774,6 @@ private struct ListSheet: View {
     let note: String
     let placeholder: String
     let original: [String]
-    var suggestions: [String] = []
     let apply: ([String]) -> Void
 
     @State private var draft: [String] = []
@@ -793,14 +792,6 @@ private struct ListSheet: View {
                         Button("Убрать") { draft.removeAll { $0 == item } }
                             .buttonStyle(.borderless)
                             .accessibilityLabel("Убрать \(item)")
-                    }
-                }
-                ForEach(suggestions.filter { !draft.contains($0) }, id: \.self) { item in
-                    HStack {
-                        Text(item).monospaced().foregroundStyle(.secondary)
-                        Text("найден в настройках другой программы").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Добавить") { draft.append(item) }.buttonStyle(.borderless)
                     }
                 }
             }
