@@ -720,6 +720,7 @@ final class KillSwitchControl {
         }
         if wasVPNUp && !vpnUp && state == .on && !manual && !stoppingOtherVPN { notify(.vpnDropped(protected: true)) }
         readSettings()
+        readOtherTunnels()
         defer { scheduleTimer(); readOtherVPN() }
         guard FileManager.default.fileExists(atPath: helper) else {
             daemonProblem = false; networkLeftOff = false
@@ -1139,6 +1140,40 @@ final class KillSwitchControl {
             memcpy(&sin, addr, MemoryLayout<sockaddr_in>.size)
             let octets = withUnsafeBytes(of: sin.sin_addr) { Array($0) }
             if let kind = TunnelAddress.kind(octets.map(String.init).joined(separator: ".")) { result.append(kind) }
+        }
+        return result
+    }
+
+    /// Another VPN's tunnels beyond the 198.18 address (OtherVPN.tunnels): `netstat -rn` as the
+    /// user, after every refresh.
+    private(set) var otherTunnels: [String] = []
+    private var readingTunnels = false
+
+    private func readOtherTunnels() {
+        guard !readingTunnels else { return }
+        readingTunnels = true
+        Task {
+            let routes = await Self.exec("/usr/sbin/netstat", ["-rn"]).output
+            let found = OtherVPN.tunnels(routes: routes, addresses: Self.interfaceAddresses())
+            if found != otherTunnels { otherTunnels = found }
+            readingTunnels = false
+        }
+    }
+
+    /// IPv4 and IPv6 addresses of every interface, without the `%scope`.
+    private static func interfaceAddresses() -> [OtherVPN.Address] {
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0, let first = list else { return [] }
+        defer { freeifaddrs(list) }
+        var result: [OtherVPN.Address] = []
+        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            guard let addr = ptr.pointee.ifa_addr,
+                  addr.pointee.sa_family == UInt8(AF_INET) || addr.pointee.sa_family == UInt8(AF_INET6) else { continue }
+            var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(addr, socklen_t(addr.pointee.sa_len), &buf, socklen_t(buf.count), nil, 0, NI_NUMERICHOST) == 0
+            else { continue }
+            let address = String(cString: buf).split(separator: "%").first.map(String.init) ?? ""
+            result.append(OtherVPN.Address(interface: String(cString: ptr.pointee.ifa_name), address: address))
         }
         return result
     }

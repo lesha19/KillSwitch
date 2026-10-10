@@ -6,6 +6,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 
 ## [Unreleased]
 
+### Added
+- Another program's VPN is recognised beyond the 198.18 address: any utun, ipsec or ppp tunnel
+  (WireGuard, IKEv2, L2TP…) that takes the default route or splits it, IPv4 or IPv6, both by the
+  app (`netstat -rn`) and by the watchdog (`core/foreign-vpn`). Ours and Tailscale's (100.64/10,
+  fd7a:115c:a1e0::/48, exit node included) are not counted. What pf lets through is unchanged.
+
 ### Fixed
 - `xcodebuild test` from a fresh DerivedData no longer fails with «Unable to find module
   dependency: 'KillSwitch'»: the test target depends on the app (built first, not hosted).

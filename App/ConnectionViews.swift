@@ -52,11 +52,13 @@ extension Protection {
 
 extension KillSwitchControl {
     var connection: Connection {
-        if state == .notInstalled || !coreInstalled { return vpnUp ? .otherApp : .unavailable }
+        // another VPN: a 198.18 tunnel that is not ours, or any tunnel taking the routes (OtherVPN.tunnels)
+        let other = vpnUp || !otherTunnels.isEmpty
+        if state == .notInstalled || !coreInstalled { return other ? .otherApp : .unavailable }
         // Our tunnel is told by its address: another VPN's tunnel next to the running core is not
         // a connection through it.
-        if coreRunning { return ownTunnelUp ? .connected : vpnUp ? .otherApp : .connecting }
-        return vpnUp ? .otherApp : .disconnected
+        if coreRunning { return ownTunnelUp ? .connected : other ? .otherApp : .connecting }
+        return other ? .otherApp : .disconnected
     }
 
     /// The server traffic goes through right now, following nested groups.

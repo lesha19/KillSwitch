@@ -65,6 +65,59 @@ enum OtherVPN {
         return result
     }
 
+    // MARK: tunnels by the routing table
+
+    /// An address of a network interface (getifaddrs), IPv4 or IPv6 without the `%scope`.
+    struct Address: Equatable {
+        var interface: String
+        var address: String
+    }
+
+    /// Another VPN's tunnel interfaces beyond the 198.18 address (TunnelAddress): utun, ipsec and
+    /// ppp interfaces with a default or wide route outside an interface scope (`netstat -rn`), as
+    /// the watchdog's `foreign_tuns` (Helper/ks) sees them. Wide: IPv4 /8 or larger but not 10/8
+    /// (corporate VPNs), IPv6 /3 or larger. Ours (198.18.128.1) and Tailscale's (an address in
+    /// 100.64/10 or fd7a:115c:a1e0::/48, exit node or not) are not another VPN. Sorted.
+    static func tunnels(routes: String, addresses: [Address]) -> [String] {
+        let excluded = Set(addresses.filter { $0.address == TunnelAddress.own || isTailscale($0.address) }.map(\.interface))
+        var found = Set<String>()
+        var v6 = false
+        for line in routes.split(whereSeparator: \.isNewline) {
+            if line.hasPrefix("Internet6:") { v6 = true; continue }
+            if line.hasPrefix("Internet:") { v6 = false; continue }
+            let fields = line.split(whereSeparator: \.isWhitespace).map(String.init)
+            guard fields.count >= 4, fields[3].wholeMatch(of: /(utun|ipsec|ppp)[0-9]+/) != nil,
+                  !excluded.contains(fields[3]), !fields[2].contains("I") else { continue }
+            if isWide(fields[0], v6: v6) { found.insert(fields[3]) }
+        }
+        return found.sorted()
+    }
+
+    private static func isWide(_ destination: String, v6: Bool) -> Bool {
+        if destination == "default" { return true }
+        if v6 {
+            guard let slash = destination.lastIndex(of: "/"), let length = Int(destination[destination.index(after: slash)...])
+            else { return false }
+            return length <= 3
+        }
+        if destination == "10" || destination == "10/8" { return false }
+        let length: Int
+        if let slash = destination.lastIndex(of: "/") {
+            guard let value = Int(destination[destination.index(after: slash)...]) else { return false }
+            length = value
+        } else {
+            length = 8 * destination.split(separator: ".").count   // netstat drops trailing zero octets
+        }
+        return length <= 8
+    }
+
+    /// 100.64.0.0/10 or fd7a:115c:a1e0::/48.
+    static func isTailscale(_ address: String) -> Bool {
+        if address.lowercased().hasPrefix("fd7a:115c:a1e0:") { return true }
+        let octets = address.split(separator: ".").compactMap { Int($0) }
+        return octets.count == 4 && octets[0] == 100 && (64...127).contains(octets[1])
+    }
+
     /// The main button while another VPN is up.
     enum Remedy: Equatable {
         /// `scutil --nc stop`, then connect ours.

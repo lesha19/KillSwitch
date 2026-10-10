@@ -64,6 +64,81 @@ final class OtherVPNTests: XCTestCase {
         XCTAssertEqual(OtherVPN.appCandidates(provider: "single"), [])
     }
 
+    // MARK: tunnels by the routing table (beyond 198.18)
+
+    /// `netstat -rn` of a Mac with Tailscale (utun11, exit node on), our core (utun19) and the
+    /// system's idle utuns, as on the owner's Mac.
+    private let baseRoutes = """
+    Routing tables
+
+    Internet:
+    Destination        Gateway            Flags               Netif Expire
+    default            192.168.89.254     UGScg                 en0
+    default            link#29            UCSIg              utun11
+    1                  198.18.128.0       UGSc               utun19
+    2/7                198.18.128.0       UGSc               utun19
+    128.0/1            198.18.128.0       UGSc               utun19
+    100.64/10          link#29            UCS                utun11
+    10/8               link#40            UCS                utun24
+    192.168.5/24       link#41            UCS                utun25
+
+    Internet6:
+    Destination        Gateway            Flags               Netif Expire
+    default            fe80::%utun1       UGcIg               utun1
+    default            fd7a:115c:a1e0::   UGcg               utun11
+    fd00::/8           fe80::%utun30      UGSc               utun30
+    ff00::/8           ::1                UmCI               utun30
+    """
+
+    private let addresses: [OtherVPN.Address] = [
+        .init(interface: "utun11", address: "100.64.111.130"),
+        .init(interface: "utun11", address: "fd7a:115c:a1e0::8d3a:7604"),
+        .init(interface: "utun19", address: "198.18.128.1"),
+        .init(interface: "utun30", address: "10.66.0.2"),
+        .init(interface: "en0", address: "192.168.89.10"),
+    ]
+
+    func testOursTailscaleAndNarrowRoutesAreNoOtherVPN() {
+        XCTAssertEqual(OtherVPN.tunnels(routes: baseRoutes, addresses: addresses), [])
+        XCTAssertEqual(OtherVPN.tunnels(routes: "", addresses: []), [])
+    }
+
+    func testTunnelsBeyond198AreFound() {
+        let wireGuard = baseRoutes.replacingOccurrences(of: "\nInternet6:", with: """
+        0/1                10.66.0.1          UGSc               utun30
+        128.0/1            10.66.0.1          UGSc               utun30
+
+        Internet6:
+        """)
+        XCTAssertEqual(OtherVPN.tunnels(routes: wireGuard, addresses: addresses), ["utun30"])
+        let ikev2 = baseRoutes.replacingOccurrences(of: "\nInternet6:", with: """
+        default            link#50            UCSg               ipsec0
+        0/1                link#51            UGSc               ppp0
+
+        Internet6:
+        """)
+        XCTAssertEqual(OtherVPN.tunnels(routes: ikev2, addresses: addresses), ["ipsec0", "ppp0"])
+        let happ = baseRoutes.replacingOccurrences(of: "\nInternet6:", with: """
+        default            link#58            UCSg               utun23
+        default            198.18.0.1         UGS1cIg            utun23
+
+        Internet6:
+        """)
+        XCTAssertEqual(OtherVPN.tunnels(routes: happ, addresses: addresses), ["utun23"])
+    }
+
+    func testIPv6SplitRoutesCount() {
+        let routes = baseRoutes + "\n::/1               fe80::%utun30      UGSc               utun30\n"
+        XCTAssertEqual(OtherVPN.tunnels(routes: routes, addresses: addresses), ["utun30"])
+    }
+
+    /// Tailscale's exit node takes the default route, but the kill switch lets Tailscale through
+    /// on purpose: not «another VPN».
+    func testTailscaleExitNodeIsNotOtherVPN() {
+        let routes = baseRoutes.replacingOccurrences(of: "UCSIg              utun11", with: "UCSg               utun11")
+        XCTAssertEqual(OtherVPN.tunnels(routes: routes, addresses: addresses), [])
+    }
+
     // MARK: what the main button does
 
     func testRemedy() {

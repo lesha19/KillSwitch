@@ -1124,17 +1124,31 @@ core_log_tidy() {
 dns_locked() { lockf -k -t 30 "$CORE_DIR/dns.lock" "$0" _dns "$1"; }
 core_running() { launchctl print "$CORE_JOB" 2>/dev/null | grep -q 'state = running'; }
 
-# Utun interfaces other than ours with a default or wide (/8 or larger, not 10/8) route
-# outside an interface scope: another VPN (Happ, dropweb, a Tailscale exit node) taking traffic next to
-# our core; two TUNs fight over routes and DNS. Unknown while our TUN has no address.
+# "interface address" for every tunnel interface (utun, ipsec, ppp), IPv4 and IPv6, sorted.
+tun_addrs() {
+  ifconfig 2>/dev/null | awk '/^[A-Za-z0-9]+:/ { i=$1; sub(/:$/,"",i) }
+    i ~ /^(utun|ipsec|ppp)[0-9]+$/ && ($1 == "inet" || $1 == "inet6") { a=$2; sub(/%.*/,"",a); print i, a }' | sort
+}
+# Tunnel interfaces (utun, ipsec, ppp) other than ours with a default or wide route outside an
+# interface scope: another VPN (Happ, dropweb, WireGuard, IKEv2, L2TP…) taking traffic next to our
+# core; two of them fight over routes and DNS. Wide: IPv4 /8 or larger but not 10/8 (corporate
+# VPNs), IPv6 /3 or larger (::/1, 2000::/3). Tailscale's interface (an address in 100.64/10 or
+# fd7a:115c:a1e0::/48) is not one, exit node or not: the kill switch lets it through on purpose.
+# Unknown while our TUN has no address.
 foreign_tuns() {
-  local ours
+  local ours ts
   ours=$(utun_addrs | awk -v a="$CORE_TUN_ADDR" '$2 == a { print $1; exit }')
   [ -n "$ours" ] || return 0
-  netstat -rn -f inet | awk -v ours="$ours" '
-    $4 ~ /^utun[0-9]+$/ && $4 != ours && $3 !~ /I/ && $1 !~ /^10(\/8)?$/ {
+  ts=$(tun_addrs | awk '$2 ~ /^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./ || tolower($2) ~ /^fd7a:115c:a1e0:/ { print $1 }' |
+    sort -u | paste -sd' ' -)
+  netstat -rn 2>/dev/null | awk -v ours="$ours" -v ts=" $ts " '
+    /^Internet6:/ { v6 = 1; next }
+    /^Internet:/ { v6 = 0; next }
+    $4 ~ /^(utun|ipsec|ppp)[0-9]+$/ && $4 != ours && index(ts, " " $4 " ") == 0 && $3 !~ /I/ {
       d = $1
       if (d == "default") len = 0
+      else if (v6) { if (d !~ /\//) next; len = d; sub(/.*\//, "", len); if (len + 0 > 3) next; len = 0 }
+      else if (d ~ /^10(\/8)?$/) next
       else if (d ~ /\//) { len = d; sub(/.*\//, "", len) }
       else len = 8 * split(d, p, ".")
       if (len + 0 <= 8) print $4
