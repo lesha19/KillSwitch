@@ -689,16 +689,10 @@ final class KillSwitchControl {
         }
     }
 
-    /// The admin prompt and the command run off the main thread (AdminScript.run), so the app
+    /// The admin prompt and the command run in their own process (AdminScript.run), so the app
     /// keeps drawing while the password is typed and install.sh works.
     private func adminRun(_ commands: [[String]]) async -> AdminScript.Outcome {
-        await AdminScript.run(source: AdminScript.source(commands)) { source in
-            var info: NSDictionary?
-            let output = NSAppleScript(source: source)?.executeAndReturnError(&info)
-            return AdminScript.outcome(output: info == nil ? output.map { $0.stringValue ?? "" } : nil,
-                                       errorNumber: info.map { $0[NSAppleScript.errorNumber] as? Int ?? 1 },
-                                       errorMessage: info?[NSAppleScript.errorMessage] as? String)
-        }
+        await AdminScript.run(commands)
     }
 
     /// What the content filter lets out while no VPN tunnel is up, mirroring the pf settings.
