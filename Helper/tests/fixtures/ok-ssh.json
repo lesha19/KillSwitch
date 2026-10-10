@@ -1,0 +1,2 @@
+{"proxies": [{"name": "SSH", "type": "ssh", "server": "203.0.113.69", "port": 22, "username": "root", "password": "p",
+  "host-key-algorithms": ["ssh-ed25519"]}]}

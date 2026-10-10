@@ -1,0 +1,2 @@
+{"proxies": [{"name": "Sudoku", "type": "sudoku", "server": "203.0.113.72", "port": 8443, "key": "sudoku-key",
+  "aead-method": "chacha20-poly1305", "padding-min": 2, "padding-max": 7, "table-type": "prefer_ascii"}]}

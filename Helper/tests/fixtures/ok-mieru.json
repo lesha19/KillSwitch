@@ -1,0 +1,2 @@
+{"proxies": [{"name": "Mieru", "type": "mieru", "server": "203.0.113.70", "port-range": "2090-2099", "transport": "TCP",
+  "username": "u", "password": "p", "multiplexing": "MULTIPLEXING_LOW", "udp": true}]}

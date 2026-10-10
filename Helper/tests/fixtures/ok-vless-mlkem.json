@@ -1,0 +1,5 @@
+{"proxies": [{"name": "VLESS ML-KEM", "type": "vless", "server": "203.0.113.75", "port": 443,
+  "uuid": "a3482e88-686a-4a58-8126-99c9df64b7bf", "network": "tcp", "tls": true, "servername": "www.microsoft.com",
+  "flow": "xtls-rprx-vision", "client-fingerprint": "chrome",
+  "encryption": "mlkem768x25519plus.native.0rtt.Ea85ctZjj5CGgiiRfUQ5HLhbUVEPr_l1VIIBzRNDVHI",
+  "reality-opts": {"public-key": "J1sRwuk4Rm8Hb7zEIUPhGIrjjtMHpDKFLDvdy7v9qXo", "short-id": "6ba85179e30d4fc2", "support-x25519mlkem768": true}}]}
