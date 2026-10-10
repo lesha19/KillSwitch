@@ -54,8 +54,11 @@ Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale
 - Second layer (`Filter/`, optional, Settings → Общие): a content filter system extension
   (NEFilterDataProvider). It cannot see the outgoing interface, so it does not repeat pf: while no VPN
   tunnel is up it drops every new flow except to the LAN, to the addresses pf lets out (servers, Tailscale
-  relays, exceptions) and from trusted programs by code-signature path (our core, Homebrew tailscaled,
-  DropwebCore with `direct=1`). With a tunnel up it allows everything and leaves the rest to pf. The app
+  relays, exceptions) and from trusted programs. Those are recognised by code signature, never by path
+  (`Filter/TrustedCode.swift`): our core signed by team YR58655PJ7 as `com.lesha19.KillSwitch.core`
+  (`scripts/sign-core.sh`), Tailscale's app and network extension (Developer ID or App Store). Ad-hoc
+  and unsigned binaries never match, so Homebrew tailscaled and DropwebCore are not trusted by the
+  filter (their traffic still passes to listed addresses; pf rules are unchanged). With a tunnel up it allows everything and leaves the rest to pf. The app
   keeps its lists in sync and turns it on and off with the protection. Signed with Apple Development:
   works on Macs registered in the team, not notarised.
 - Tailscale: direct UDP and STUN only for root (system tailscaled); DERP relays and the control plane
