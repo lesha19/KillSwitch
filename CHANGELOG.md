@@ -4,7 +4,7 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
-## [Unreleased]
+## [0.15] - 2026-10-10
 
 Routing comes only from the subscription, and the app shows where traffic goes (ADR 0013, #8).
 
