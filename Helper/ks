@@ -443,6 +443,7 @@ resolve_host() {  # resolve_host <name>
 # profile it will not take. Runs in a subshell: "exit" leaves only the generator.
 core_generate() (
   in=$1 out=$2 srv_out=$3 manual=${4:-}
+  umask 077   # the config and the copies hold the servers' passwords
   w=$(mktemp -d) || exit 1
   trap 'rm -rf "$w"' EXIT
   fail() { echo "$*" >&2; exit 1; }
@@ -790,6 +791,7 @@ core_generate() (
   # plutil writes "/" as "\/", which is JSON but not YAML; pairs are taken left to right, so
   # an escaped backslash before "/" stays as it is
   perl -pi -e 's{\\(.)}{$1 eq "/" ? "/" : "\\$1"}ge' "$w/config.json" || exit 1
+  rm -f "$out" "$srv_out" "$out.pins" "$out.direct"   # a leftover would keep its mode
   cp "$w/config.json" "$out" && cp "$w/servers.u" "$srv_out" && cp "$w/pins" "$out.pins" && cp "$w/direct" "$out.direct"
 )
 
@@ -871,8 +873,11 @@ core_import() {  # core_import <profile.json> [import|refresh]
   [ -n "$src" ] || { echo "usage: ks core import <json>" >&2; return 1; }
   local as=()
   [ -n "${SUDO_UID:-}" ] && [ "$SUDO_UID" != 0 ] && as=(sudo -n -u "#$SUDO_UID")
-  ${as[@]+"${as[@]}"} /bin/cat -- "$src" | head -c 20000001 > "$in"
-  [ "${PIPESTATUS[0]}" = 0 ] || { rm -f "$in"; echo "Не удалось прочитать $src" >&2; return 1; }
+  # It holds the servers' passwords: root-only from the first byte (core/ is 711, so a file of a
+  # known name there would be readable by anyone), and a leftover file would keep its old mode.
+  rm -f "$in"
+  ( umask 077; ${as[@]+"${as[@]}"} /bin/cat -- "$src" | head -c 20000001 > "$in"; exit "${PIPESTATUS[0]}" ) ||
+    { rm -f "$in"; echo "Не удалось прочитать $src" >&2; return 1; }
   chmod 600 "$in"
   if [ "${2:-}" = refresh ]; then
     KS_STRICT_DNS=1 core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; rm -f "$in"; return 1; }
@@ -881,7 +886,8 @@ core_import() {  # core_import <profile.json> [import|refresh]
   else
     core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; rm -f "$in"; return 1; }
     # what the admin just approved: refresh and rotation measure against it
-    cut -f1 "$tmp.pins" > "$APPROVED_HOSTS.new"; cp "$tmp.direct" "$APPROVED_DIRECT.new"
+    rm -f "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new"
+    ( umask 077; cut -f1 "$tmp.pins" > "$APPROVED_HOSTS.new"; cp "$tmp.direct" "$APPROVED_DIRECT.new" )
     chmod 600 "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new"
   fi
   core_commit "$tmp" "$srv" || { rm -f "$in" "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new"; return 1; }

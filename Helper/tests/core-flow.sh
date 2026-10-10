@@ -56,6 +56,18 @@ run "$fx/ok-full.json" import
 [ "$(stat -f %Lp "$CORE_PROFILE" "$PINS" "$APPROVED_HOSTS" "$APPROVED_DIRECT" | sort -u)" = 600 ] && ok "import: state files root-only (600)" ||
   bad "modes: $(stat -f '%N %Lp' "$CORE_PROFILE" "$PINS" "$APPROVED_HOSTS" "$APPROVED_DIRECT")"
 [ -n "$(find "$CORE_DIR" -name '*.tmp' -o -name '*.new')" ] && bad "import left temp files: $(ls "$CORE_DIR")" || ok "import: no temp files left"
+# the copy of the profile and the generated config hold server passwords: root-only from the
+# moment they are written (core/ is 711, a known name would be readable), not after a chmod
+MODES="$tmp/modes"   # core_import has a local $tmp
+chmod() { stat -f "%N %Lp" "${@:2}" >> "$MODES" 2>/dev/null; command chmod "$@"; }
+( umask 022; run "$fx/ok-full.json" import )
+unset -f chmod
+[ -s "$MODES" ] && ! grep -v " 600$" "$MODES" | grep -E 'profile\.json\.new|config\.yaml\.tmp|approved-' &&
+  ok "import: profile copy, config and pins root-only when written" || bad "written world-readable: $(grep -v " 600$" "$MODES")"
+cp "$cfg" "$tmp/cfg.kept"
+run "$tmp/no-such-profile.json" import
+[ "$rc" = 1 ] && grep -q 'Не удалось прочитать' "$tmp/err" && [ ! -e "$CORE_PROFILE.new" ] && cmp -s "$cfg" "$tmp/cfg.kept" &&
+  ok "import: unreadable file refused, nothing left, config kept" || bad "unreadable: $rc $(cat "$tmp/err")"
 
 # --- refresh: same names with new addresses are fine
 dns de.example.com "198.51.100.20"
