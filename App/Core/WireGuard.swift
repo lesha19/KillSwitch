@@ -1,6 +1,7 @@
 import Foundation
 
 /// WireGuard: a wg-quick `.conf` or a `wireguard://` link → a mihomo `type: wireguard` proxy.
+/// AmneziaWG fields (Jc, S1, H1, I1, …) become `amnezia-wg-option`; several [Peer] become `peers:`.
 /// DNS, ListenPort, Table and Pre/PostUp/Down of the file are ignored: names are resolved by the
 /// core and nothing from the file is ever run. Error texts never contain key material.
 enum WireGuard {
@@ -26,21 +27,26 @@ enum WireGuard {
             default: continue
             }
         }
-        let amnezia: Set<String> = ["jc", "jmin", "jmax", "s1", "s2", "h1", "h2", "h3", "h4"]
-        if !amnezia.isDisjoint(with: interface.keys) { throw ProxyLinkError.malformed("AmneziaWG пока не поддерживается") }
         guard !peers.isEmpty else { throw ProxyLinkError.malformed("нет раздела [Peer]") }
-        guard peers.count == 1 else { throw ProxyLinkError.malformed("несколько [Peer] не поддерживаются") }
-        let peer = peers[0]
-        guard let endpoint = peer["endpoint"], let (host, port) = splitEndpoint(endpoint) else {
+        let first = peers[0]
+        guard let endpoint = first["endpoint"], let (host, port) = splitEndpoint(endpoint) else {
             throw ProxyLinkError.malformed("нет адреса сервера (Endpoint)")
         }
-        return try build(
+        var proxy = try build(
             name: name, host: host, port: port,
-            privateKey: interface["privatekey"], publicKey: peer["publickey"], presharedKey: peer["presharedkey"],
-            address: interface["address"], allowedIPs: peer["allowedips"],
-            mtu: interface["mtu"], reserved: peer["reserved"] ?? interface["reserved"],
-            keepalive: peer["persistentkeepalive"]
+            privateKey: interface["privatekey"], publicKey: first["publickey"], presharedKey: first["presharedkey"],
+            address: interface["address"], allowedIPs: first["allowedips"],
+            mtu: interface["mtu"], reserved: first["reserved"] ?? interface["reserved"],
+            keepalive: peers.lazy.compactMap { $0["persistentkeepalive"] }.first
         )
+        if peers.count > 1 {
+            // mihomo's `peers:` replaces the top-level peer; the first one stays as `server`/`port`
+            // (the helper lets it out and the list shows it)
+            proxy["peers"] = try peers.enumerated().map { try peer($1, number: $0 + 1) }
+            for key in ["public-key", "pre-shared-key", "allowed-ips", "reserved"] { proxy[key] = nil }
+        }
+        if let option = try amneziaOption(interface) { proxy["amnezia-wg-option"] = option }
+        return proxy
     }
 
     /// `wireguard://<private key>@host:port?publickey=…&address=…&mtu=…&reserved=…#name`
@@ -103,6 +109,55 @@ enum WireGuard {
             proxy["reserved"] = bytes.count == 3 && bytes.allSatisfy({ (0...255).contains($0) }) ? bytes as Any : reserved as Any
         }
         return proxy
+    }
+
+    /// One entry of mihomo's `peers:`. Unlike a single peer, each needs its AllowedIPs: they decide
+    /// which peer a packet goes to.
+    private static func peer(_ fields: [String: String], number: Int) throws -> [String: Any] {
+        guard let endpoint = fields["endpoint"], let (host, port) = splitEndpoint(endpoint) else {
+            throw ProxyLinkError.malformed("нет адреса сервера (Endpoint) у [Peer] №\(number)")
+        }
+        guard let publicKey = fields["publickey"], isKey(publicKey) else {
+            throw ProxyLinkError.malformed("нет открытого ключа или он неверный у [Peer] №\(number)")
+        }
+        let allowed = list(fields["allowedips"] ?? "")
+        guard !allowed.isEmpty else { throw ProxyLinkError.malformed("нет AllowedIPs у [Peer] №\(number)") }
+        var peer: [String: Any] = ["server": host, "port": port, "public-key": publicKey, "allowed-ips": allowed]
+        if let presharedKey = fields["presharedkey"], !presharedKey.isEmpty {
+            guard isKey(presharedKey) else { throw ProxyLinkError.malformed("неверный общий ключ (PresharedKey) у [Peer] №\(number)") }
+            peer["pre-shared-key"] = presharedKey
+        }
+        if let reserved = fields["reserved"], !reserved.isEmpty {
+            // mihomo reads a peer's reserved only as 3 bytes
+            guard let bytes = reservedBytes(reserved) else { throw ProxyLinkError.malformed("неверное Reserved у [Peer] №\(number)") }
+            peer["reserved"] = bytes
+        }
+        return peer
+    }
+
+    /// "1,2,3" or base64 of 3 bytes ("U4An").
+    private static func reservedBytes(_ text: String) -> [Int]? {
+        let numbers = list(text).compactMap(Int.init)
+        if numbers.count == 3 && numbers.allSatisfy({ (0...255).contains($0) }) { return numbers }
+        guard let data = Data(base64Encoded: text), data.count == 3 else { return nil }
+        return data.map(Int.init)
+    }
+
+    /// AmneziaWG obfuscation fields of [Interface] → mihomo's `amnezia-wg-option` (1.0, 1.5 and 2.0
+    /// fields; H1–H4 stay text, since 2.0 allows ranges like "100-200"). Nil for plain WireGuard.
+    private static func amneziaOption(_ interface: [String: String]) throws -> [String: Any]? {
+        let numbers = ["jc": "Jc", "jmin": "Jmin", "jmax": "Jmax", "s1": "S1", "s2": "S2", "s3": "S3", "s4": "S4", "itime": "Itime"]
+        let texts = ["h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5", "j1", "j2", "j3"]
+        var option: [String: Any] = [:]
+        for (key, title) in numbers {
+            guard let value = interface[key] else { continue }
+            guard let number = Int(value), number >= 0 else { throw ProxyLinkError.malformed("неверное значение \(title) (AmneziaWG)") }
+            option[key] = number
+        }
+        for key in texts {
+            if let value = interface[key], !value.isEmpty { option[key] = value }
+        }
+        return option.isEmpty ? nil : option
     }
 
     private static func list(_ text: String) -> [String] {
