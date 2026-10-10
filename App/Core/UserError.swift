@@ -74,6 +74,12 @@ struct UserError: Equatable {
         message: "Служба защиты остановлена и не включила Wi-Fi и другие сети обратно. Включи их здесь, а службу — в Объектах входа.",
         action: .restoreNetwork)
 
+    /// The app bundle failed its signature check (BundleSignature): nothing from it runs as root.
+    static let damagedApp = UserError(
+        title: "Программа повреждена",
+        message: "Подпись KillSwitch не сходится, поэтому служба не устанавливается. Скачай программу заново.",
+        action: .copyDiagnostics)
+
     private static func classify(_ text: String, context: Context) -> UserError {
         let lower = text.lowercased()
         let firstLine = String(text.split(separator: "\n", maxSplits: 1).first ?? "")

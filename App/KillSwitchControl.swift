@@ -500,6 +500,10 @@ final class KillSwitchControl {
         }
         busy = true
         defer { busy = false; refresh() }
+        if script != nil, !(await Self.bundleIntact()) {
+            error = .damagedApp
+            return false
+        }
         readFoundServers()
         let commands = Onboarding.commands(installScript: script, user: NSUserName(), servers: foundServers, helper: helper,
                                            profile: profile)
@@ -649,7 +653,20 @@ final class KillSwitchControl {
             error = UserError.problem(.vpnMissing)
             return
         }
-        runAsAdmin(["/bin/bash", path] + args, context: script == "install.sh" ? .install : .helper)
+        busy = true
+        Task {
+            let intact = await Self.bundleIntact()
+            busy = false
+            guard intact else { error = .damagedApp; return }
+            runAsAdmin(["/bin/bash", path] + args, context: script == "install.sh" ? .install : .helper)
+        }
+    }
+
+    /// The bundle's scripts are about to run as root (BundleSignature); checked off the main thread,
+    /// nested code takes a moment.
+    private static func bundleIntact() async -> Bool {
+        let bundle = Bundle.main.bundleURL
+        return await Task.detached(priority: .userInitiated) { BundleSignature.isValid(bundle) }.value
     }
 
     /// Runs a command as root; macOS asks for the admin password every time.

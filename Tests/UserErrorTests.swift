@@ -135,6 +135,11 @@ final class UserErrorTests: XCTestCase {
         XCTAssertTrue(error.message.contains("Объектах входа"), "says where the service is switched back on")
     }
 
+    func testDamagedApp() {
+        XCTAssertEqual(UserError.damagedApp.title, "Программа повреждена")
+        XCTAssertTrue(UserError.damagedApp.message.contains("Скачай программу заново"))
+    }
+
     func testHWIDHeaderNames() {
         XCTAssertEqual(SubscriptionHeaders.hwidProblem(headers: ["x-hwid-max-devices-reached": "true", "x-hwid-active": "true"]),
                        "x-hwid-max-devices-reached")
