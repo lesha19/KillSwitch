@@ -10,7 +10,8 @@ Rules are loaded at boot, before login.
 - `Helper/ks` — root helper: generates the pf rules from settings and loads them into anchor
   `com.apple/killswitch` (`/etc/pf.conf` untouched). `status | state | on | off | pause [min] |
   set lan|tailscale|dns|direct|coredirect 0|1 | allow <addr> | unallow <addr> | server-add <ip> |
-  server-remove <ip> | apply | watch`.
+  server-remove <ip> | core … | apply | watch`. Tests (no root, nothing on the system changes):
+  `for t in Helper/tests/*.sh; do bash "$t"; done`.
 - `Helper/local.killswitch.plist` — LaunchDaemon: runs `ks watch` (RunAtLoad + KeepAlive), so rules
   are loaded at boot, before login, and checked every 3 s. `AssociatedBundleIdentifiers` makes it
   show up under the app's name in System Settings → Login Items & Extensions.
@@ -46,7 +47,7 @@ profile, rewritten on every import, reachable only by our core), `servers` (both
   config and escape. The rule exists only with `direct=1` ("Сайты мимо VPN через dropweb"), a weaker mode
   in which the core reaches any address. Without it dropweb still works through its servers; its DIRECT
   rules (Russian sites and so on) do not.
-- Own VPN core (`ks core on|off|state|import <yaml>`): launchd runs `/Library/KillSwitch/core/mihomo` with
+- Own VPN core (`ks core on|off|state|import <json>|refresh <json>|proxies|select|delay`): launchd runs `/Library/KillSwitch/core/mihomo` with
   a root-owned config as uid 0, gid `_ksvpn` (created by install.sh, no members, no setgid binary), and the
   rules let that gid reach only the addresses in `servers`, so a DIRECT rule or proxy in a profile
   cannot leak past the tunnel. `coredirect=1` is the explicit split-tunnel switch: the gid may then reach
