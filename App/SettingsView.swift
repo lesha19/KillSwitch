@@ -88,6 +88,12 @@ private struct CheckSettings: View {
     var body: some View {
         Form {
             Section {
+                LeakTestView.OpenButton(title: "Открыть «Проверка утечек»…")
+            } footer: {
+                Text("Какой адрес видят сайты по IPv4 и IPv6 и кто узнаёт для тебя адреса сайтов (DNS).")
+                    .foregroundStyle(.secondary)
+            }
+            Section {
                 Button(control.leakRunning ? "Проверяю…" : "Проверить утечку") { control.checkLeak() }
                     .disabled(control.leakRunning)
                 ForEach(control.leakResults) { result in

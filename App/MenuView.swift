@@ -90,6 +90,7 @@ struct MenuView: View {
             openWindow(id: "main")
             NSApp.activate()
         }
+        LeakTestView.OpenButton()
         SettingsLink { Text("Настройки…") }.keyboardShortcut(",")
         Button("Скопировать диагностику") { DiagnosticsCopy.copy(control: control, client: client) }
         Button("Выйти") { NSApp.terminate(nil) }.keyboardShortcut("q")
