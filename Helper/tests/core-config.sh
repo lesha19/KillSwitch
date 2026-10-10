@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034 # globals here are read by the sourced Helper/ks
 # Runs the core config generator of Helper/ks against the fixtures; no root, no network.
 #   Helper/tests/core-config.sh            (MIHOMO=/path/to/mihomo to check with "mihomo -t";
 #                                           default /Library/KillSwitch/core/mihomo if present)
@@ -20,7 +21,7 @@ resolve_host() {
 }
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-SETTINGS="$tmp/settings"; SPLITAPPS="$tmp/splitapps"; MULTIHOP="$tmp/multihop"
+SETTINGS="$tmp/settings"
 fails=0
 ok()   { echo "ok    $*"; }
 bad()  { echo "FAIL  $*"; fails=$((fails + 1)); }

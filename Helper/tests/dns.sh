@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034 # globals here are read by the sourced Helper/ks
 # Checks the system DNS handling of Helper/ks against a fake dynamic store (scutil and
 # networksetup are replaced by functions here); the real system is not touched.
 set -u
@@ -9,6 +10,8 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 store="$tmp/store"; mkdir "$store"
 CORE_DIR="$tmp/core"; mkdir "$CORE_DIR"
 DNS_STATE="$CORE_DIR/dns-state"; EVENTS="$tmp/events.log"
+APPROVED_HOSTS="$CORE_DIR/approved-hosts"   # no rotation unless set below
+core_rotate_bg() { echo rotate >> "$tmp/rotations"; }
 
 # Fake store: one file per key, lines "A<tab>key<tab>v1 v2" (array) or "S<tab>key<tab>value".
 kf() { echo "$store/$(tr '/' '|' <<<"$1")"; }
@@ -117,5 +120,13 @@ check "watchdog: core back -> DNS set" "$(get "$W/DNS")" 127.0.0.1
 LAUNCHD=unloaded; core_guard
 check "watchdog: core unloaded -> DNS restored" "$(get "$W/DNS")" 192.168.1.1
 grep -q 'core not running: DNS restored' "$EVENTS" && echo "ok    events logged" || { echo "FAIL  events"; fails=$((fails + 1)); }
+check "watchdog: no approved names -> no rotation" "$(cat "$tmp/rotations" 2>/dev/null)" ""
+echo de.example.com > "$APPROVED_HOSTS"; ROT_NEXT=1
+LAUNCHD=waiting; core_guard
+check "watchdog: core not running -> no rotation" "$(cat "$tmp/rotations" 2>/dev/null)" ""
+LAUNCHD=running; core_guard
+check "watchdog: core running, check due -> rotation started" "$(cat "$tmp/rotations" 2>/dev/null)" rotate
+LAUNCHD=running; core_guard
+check "watchdog: not again at once" "$(cat "$tmp/rotations" 2>/dev/null)" rotate
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

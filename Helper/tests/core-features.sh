@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034 # globals here are read by the sourced Helper/ks
 # Generator features of Helper/ks on top of the fixtures: DIRECT signature, apps outside the
 # core (splitapps), double VPN (multihop), rebuilding from pinned addresses. No root, no network.
 #   Helper/tests/core-features.sh   (MIHOMO=/path/to/mihomo for "mihomo -t")
@@ -10,7 +11,8 @@ MIHOMO=${MIHOMO:-/Library/KillSwitch/core/mihomo}; [ -x "$MIHOMO" ] || [ ! -x "$
 fx="$here/fixtures"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/home"
-SETTINGS="$tmp/settings"; SPLITAPPS="$tmp/splitapps"; MULTIHOP="$tmp/multihop"
+SETTINGS="$tmp/settings"
+put() { { grep -v "^$1=" "$SETTINGS" 2>/dev/null; echo "$1=$2"; } > "$SETTINGS.new"; mv "$SETTINGS.new" "$SETTINGS"; }
 CORE_DIR="$tmp/core"; mkdir "$CORE_DIR"   # no geodata until the Russian-sites part
 resolve_host() {
   case "$1" in
@@ -55,18 +57,25 @@ grep -qE 'u\.com|MATCH' "$tmp/c.direct" && bad "nested: proxy-only rules listed"
 mt "nested groups" "$tmp/c"
 
 # --- splitapps
-printf 'Telegram\nGoogle Chrome\n' > "$SPLITAPPS"
+put splitapps "Telegram,Google Chrome"
 gen "$fx/ok-full.json"
 [ "$(val rules.0 "$tmp/c")" = "RULE-SET,ru-blocked,🚀 Выбор сервера" ] && ! plutil -type find-process-mode "$tmp/c" >/dev/null 2>&1 &&
   ok "splitapps ignored without coredirect" || bad "splitapps without coredirect: $(val rules.0 "$tmp/c")"
-echo coredirect=1 > "$SETTINGS"
+put coredirect 1
 gen "$fx/ok-full.json"
 [ "$(val rules.0 "$tmp/c")" = "PROCESS-NAME,Telegram,DIRECT" ] && [ "$(val rules.1 "$tmp/c")" = "PROCESS-NAME,Google Chrome,DIRECT" ] &&
-  [ "$(val rules.2 "$tmp/c")" = "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve" ] && [ "$(val find-process-mode "$tmp/c")" = always ] &&
-  ok "splitapps with coredirect: PROCESS-NAME rules first, find-process-mode always" || bad "splitapps: $(val rules.0 "$tmp/c")"
+  [ "$(val rules.2 "$tmp/c")" = 'PROCESS-NAME-REGEX,^Telegram Helper.*$,DIRECT' ] &&
+  [ "$(val rules.3 "$tmp/c")" = 'PROCESS-NAME-REGEX,^Google Chrome Helper.*$,DIRECT' ] &&
+  [ "$(val rules.4 "$tmp/c")" = "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve" ] && [ "$(val find-process-mode "$tmp/c")" = always ] &&
+  ok "splitapps with coredirect: PROCESS-NAME and their helpers first, find-process-mode always" || bad "splitapps: $(val rules.0 "$tmp/c")"
 cmp -s "$tmp/c.direct" "$tmp/full.direct" && ok "splitapps rules stay out of the DIRECT signature" || bad "splitapps in signature"
 mt "splitapps" "$tmp/c"
-rm -f "$SPLITAPPS" "$SETTINGS"
+put splitapps 'a.b (x)+[y]'
+gen "$fx/ok-minimal.json"
+[ "$(val rules.1 "$tmp/c")" = 'PROCESS-NAME-REGEX,^a\.b \(x\)\+\[y\] Helper.*$,DIRECT' ] && ok "splitapps: helper regex quotes the name" ||
+  bad "splitapps regex: $(val rules.1 "$tmp/c")"
+mt "splitapps regex" "$tmp/c"
+rm -f "$SETTINGS"
 
 valid_apps() { splitapps_parse "$1" >/dev/null 2>&1; }
 [ "$(splitapps_parse ' Telegram , Google Chrome,Telegram')" = "$(printf 'Telegram\nGoogle Chrome')" ] &&
@@ -82,7 +91,7 @@ valid_apps "$(seq 1 51 | paste -sd, -)" && bad "51 entries accepted" || ok "51 e
 valid_apps "$(seq 1 50 | paste -sd, -)" && ok "50 entries accepted" || bad "50 entries refused"
 
 # --- multihop
-echo "NL reality" > "$MULTIHOP"
+put multihop "NL reality"
 gen "$fx/ok-full.json" || bad "multihop: refused: $(cat "$tmp/err")"
 plutil -type proxies.0.dialer-proxy "$tmp/c" >/dev/null 2>&1 && bad "multihop: entry dials through itself" || ok "multihop: entry dials directly"
 [ "$(val proxies.1.dialer-proxy "$tmp/c")" = "NL reality" ] && [ "$(val proxies.2.dialer-proxy "$tmp/c")" = "NL reality" ] &&
@@ -92,14 +101,16 @@ grep -q '"203.0.113.20/32"' "$tmp/c" && bad "multihop: exit excluded from the TU
 [ "$(cut -f1 "$tmp/c.pins" | sort | paste -sd' ' -)" = "de.example.com fi.example.com" ] && ok "multihop: exit names still pinned" ||
   bad "multihop: pins"
 mt "multihop" "$tmp/c"
-echo "nope" > "$MULTIHOP"
+put multihop nope
 gen "$fx/ok-full.json" && bad "multihop: missing entry accepted" || ok "multihop: missing entry refused: $(cat "$tmp/err")"
-echo "🚀 Выбор сервера" > "$MULTIHOP"
+put multihop "🚀 Выбор сервера"
 gen "$fx/ok-full.json" && bad "multihop: group as entry accepted" || ok "multihop: group as entry refused"
 profile "{\"proxies\":[{\"name\":\"in\",\"server\":\"198.51.100.1\",\"dialer-proxy\":\"out\",$SS},{\"name\":\"out\",\"server\":\"198.51.100.2\",$SS}]}"
-echo in > "$MULTIHOP"
+put multihop in
 gen "$tmp/p.json" && bad "multihop: entry with its own dialer-proxy accepted" || ok "multihop: entry with dialer-proxy refused"
-rm -f "$MULTIHOP"
+put multihop off
+gen "$fx/ok-full.json" && ! plutil -type proxies.1.dialer-proxy "$tmp/c" >/dev/null 2>&1 && ok "multihop=off: plain" || bad "multihop=off"
+rm -f "$SETTINGS"
 
 # --- Russian sites and private networks outside the VPN (coredirect=1), from local geodata only
 
@@ -126,16 +137,16 @@ else echo "skip  ru: mihomo -t (no geoip.metadb or mihomo)"; fi
 site=""
 for f in /Library/KillSwitch/core/geosite.dat "$here/../geosite.dat"; do [ -r "$f" ] && { site=$f; break; }; done
 if [ -n "$site" ]; then cp "$site" "$CORE_DIR/geosite.dat"; else echo fake > "$CORE_DIR/geosite.dat"; fi
-printf 'Telegram\n' > "$SPLITAPPS"
+put splitapps Telegram
 gen "$fx/ok-minimal.json"
-[ "$(rules_of "$tmp/c")" = "PROCESS-NAME,Telegram,DIRECT $PRIV GEOSITE,category-ru,DIRECT GEOIP,RU,DIRECT,no-resolve MATCH,only" ] &&
+[ "$(rules_of "$tmp/c")" = "PROCESS-NAME,Telegram,DIRECT PROCESS-NAME-REGEX,^Telegram Helper.*$,DIRECT $PRIV GEOSITE,category-ru,DIRECT GEOIP,RU,DIRECT,no-resolve MATCH,only" ] &&
   ok "ru: apps, private nets, GEOSITE, GEOIP, then the profile" || bad "ru with geosite: $(rules_of "$tmp/c")"
 [ ! -s "$tmp/c.direct" ] && ok "ru: our rules stay out of the DIRECT signature" || bad "ru: signature $(cat "$tmp/c.direct")"
 [ "$(val dns.nameserver.0 "$tmp/c")" = "https://1.1.1.1/dns-query#KS-DNS" ] && ok "ru: DNS still through the tunnel" || bad "ru: DNS"
 if [ -n "$mmdb" ] && [ -n "$site" ] && [ -x "$MIHOMO" ]; then
   if out=$("$MIHOMO" -t -d "$CORE_DIR" -f "$tmp/c" 2>&1); then ok "ru: mihomo -t with geosite.dat"; else bad "ru: mihomo -t: $(tail -2 <<<"$out")"; fi
 else echo "skip  ru: mihomo -t with GEOSITE (no geosite.dat: Helper/fetch-geodata.sh)"; fi
-rm -f "$SETTINGS" "$SPLITAPPS"
+rm -f "$SETTINGS"
 
 # --- pins
 gen "$fx/ok-full.json"
