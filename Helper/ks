@@ -32,6 +32,7 @@ SERVERS="$DIR/servers"   # VPN server addresses, one per line, root-owned: the t
 SERVERS_MANUAL="$DIR/servers-manual" # added by hand (server-add, install.sh)
 SERVERS_CORE="$DIR/servers-core"     # servers of the imported core profile, rewritten by import
 EVENTS="$DIR/events.log" # corrective actions of the watchdog, world-readable
+STATEF="$DIR/daemon-state" # the watchdog's view for the app, world-readable (publish_state)
 HASHF="$DIR/rules.sha256" # hash of the anchor as loaded by us
 WIFI_MARK="$DIR/wifi-off-by-ks" # Wi-Fi was switched off by us at shutdown
 SIGF="$DIR/tunnels"      # tunnel interfaces the loaded rules were built for
@@ -66,7 +67,13 @@ utun_addrs() {
 vpn_ifaces() { utun_addrs | awk '$2 ~ /^198\.18\./ { print $1 }' | sort -u; }
 # Tailscale: 100.64.0.0/10.
 ts_ifaces() { utun_addrs | awk '$2 ~ /^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./ { print $1 }' | sort -u; }
-tunnel_sig() { echo "vpn:$(vpn_ifaces | paste -sd, -) ts:$(ts_ifaces | paste -sd, -)"; }
+# Both lists from one ifconfig (the watchdog asks every second); utun_addrs is sorted.
+tunnel_sig() {
+  utun_addrs | awk '
+    $2 ~ /^198\.18\./ && !($1 in v) { v[$1]; vl = vl (vl == "" ? "" : ",") $1 }
+    $2 ~ /^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./ && !($1 in t) { t[$1]; tl = tl (tl == "" ? "" : ",") $1 }
+    END { print "vpn:" vl " ts:" tl }'
+}
 
 # Prints the pf rules for the current settings.
 # Default is deny: every packet leaving the Mac is dropped unless listed here, on any
@@ -157,11 +164,11 @@ log_event() {
   fi
 }
 
-load() {
+load() {  # load [tunnel_sig, if the caller has it]
   [ -f "$FLAG" ] && return 0   # a switch-off raced with the watchdog
   pf_enabled || pfctl -E >/dev/null 2>&1   # enable first: loading can take a moment
-  local sig
-  sig=$(tunnel_sig)
+  local sig=${1:-}
+  [ -n "$sig" ] || sig=$(tunnel_sig)
   rules | pfctl -a "$ANCHOR" -f - 2>/dev/null || { echo "rules failed to load" >&2; return 1; }
   echo "$sig" > "$SIGF"
   rules_hash > "$HASHF"
@@ -179,27 +186,63 @@ disable() {
 }
 
 # One pass of the watchdog: respects pause / off, reloads if anything was tampered with.
+# guard [full|quick]: pause, off and the tunnels are checked every time (a file test and one
+# ifconfig); pf itself (three pfctl calls) only when full. Sets PROT (on, off, paused:<epoch>,
+# or "" while unknown) and TSIG (tunnel_sig) for the state file.
+PROT=""; TSIG=""
 guard() {
-  local until why=""
+  local until why="" mode=${1:-full}
+  TSIG=$(tunnel_sig)
   if [ -f "$FLAG" ]; then
     until=$(cat "$FLAG")
     if [ "$until" != 0 ] && [ "$(date +%s)" -ge "$until" ]; then
-      rm -f "$FLAG"; log_event "pause ended"
+      rm -f "$FLAG"; log_event "pause ended"; mode=full
     else
+      if [ "$until" = 0 ]; then PROT=off; else PROT="paused:$until"; fi
       return 0
     fi
   fi
   if [ ! -f "$HASHF" ]; then why="initial load"
+  elif [ "$TSIG" != "$(cat "$SIGF" 2>/dev/null)" ]; then why="tunnels changed ($TSIG)"
+  elif [ "$mode" != full ]; then return 0
   elif ! pf_enabled; then why="pf was disabled"
   elif ! pfctl -s rules 2>/dev/null | grep -q 'anchor "com.apple/\*"'; then
     why="anchor missing from main ruleset"
     pfctl -f /etc/pf.conf >/dev/null 2>&1
   elif [ "$(rules_hash)" != "$(cat "$HASHF" 2>/dev/null)" ]; then why="rules were changed or flushed"
-  elif [ "$(tunnel_sig)" != "$(cat "$SIGF" 2>/dev/null)" ]; then why="tunnels changed ($(tunnel_sig))"
   fi
-  [ -z "$why" ] && return 0
+  if [ -z "$why" ]; then PROT=on; return 0; fi
   log_event "$why: reloading"
-  load || log_event "reload failed"
+  if load "$TSIG"; then PROT=on; else PROT=off; log_event "reload failed"; fi
+}
+
+# The state for the app (world-readable, nothing secret): what "ks state" and "ks core state"
+# say, the tunnels and our pid. Rewritten only when a line changes, so the app watches the
+# directory instead of asking through sudo every few seconds.
+PUBLISHED=""
+publish_state() {
+  local s
+  [ -n "$PROT" ] || return 0
+  s=$(printf 'pid=%s\nprotection=%s\ncore=%s\ntunnels=%s' "$$" "$PROT" "${CORE_STATE:-off}" "$TSIG")
+  [ "$s" = "$PUBLISHED" ] && return 0
+  printf '%s\n' "$s" > "$STATEF.tmp" && chmod 644 "$STATEF.tmp" && mv "$STATEF.tmp" "$STATEF" && PUBLISHED=$s
+}
+
+# watch_pass <n>: pass n of "ks watch", one a second. pf every second pass (tampering is undone
+# within 2 s), at once when off/pause just ended; the core every second pass.
+LAST_FLAG=""
+watch_pass() {
+  local mode=quick flag=0
+  [ -f "$FLAG" ] && flag=1
+  if [ $(($1 % 2)) = 0 ] || [ "$flag" != "$LAST_FLAG" ]; then mode=full; fi
+  LAST_FLAG=$flag
+  guard "$mode"
+  [ $(($1 % 2)) = 0 ] && core_guard
+  if [ -f "$WIFI_MARK" ] && { [ -f "$FLAG" ] || [ "$PROT" = on ]; }; then
+    while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" on; done < "$WIFI_MARK"
+    rm -f "$WIFI_MARK"; log_event "rules up: network on"
+  fi
+  publish_state
 }
 
 # The core config is generated, not filtered: from the profile only proxies, proxy-groups,
@@ -863,6 +906,13 @@ dns_apply() {  # prints the keys it had to (re)write
   } 3>&1 > "$DNS_STATE.tmp" && mv "$DNS_STATE.tmp" "$DNS_STATE"
 }
 
+# Whether dns_apply would write anything: read-only, so the watchdog can ask without the lock.
+dns_pending() {
+  [ -f "$CORE_DIR/dns-saved" ] && return 0
+  [ "$(head -1 "$DNS_STATE" 2>/dev/null)" = "boot $(boot_id)" ] || return 0
+  dns_snapshot | awk -F'\t' -v o="$DNS_OURS" '$1 != "" && $2 != o { f = 1 } END { exit !f }'
+}
+
 dns_restore() {
   local snap path val
   dns_migrate
@@ -914,23 +964,26 @@ tun_guard() {
 # Watchdog part for the core: the system DNS follows it. Set while it runs (and set again if
 # the system overwrote it), restored when it has not been running for 5 s or is unloaded,
 # so a crashed core does not leave the Mac without names.
-CORE_DOWN=""
+CORE_DOWN=""; CORE_STATE=off
 core_guard() {
   local p now changed
   if ! p=$(launchctl print "$CORE_JOB" 2>/dev/null); then
-    CORE_DOWN=""; rm -f "$FOREIGN_VPN"
+    CORE_DOWN=""; CORE_STATE=off; rm -f "$FOREIGN_VPN"
     [ -f "$DNS_STATE" ] && { dns_locked restore; log_event "core not loaded: DNS restored"; }
     return 0
   fi
   if grep -q 'state = running' <<<"$p"; then
-    CORE_DOWN=""
-    changed=$(dns_locked apply)
-    [ -n "$changed" ] && log_event "core DNS set: $(paste -sd' ' - <<<"$changed")"
+    CORE_DOWN=""; CORE_STATE=on
+    # lockf and a second ks only when something has to be written
+    if dns_pending; then
+      changed=$(dns_locked apply)
+      [ -n "$changed" ] && log_event "core DNS set: $(paste -sd' ' - <<<"$changed")"
+    fi
     tun_guard
     # lookups can take seconds: in the background, so the pf checks keep their pace
     if [ -s "$APPROVED_HOSTS" ] && rotate_due "$(date +%s)" "$(net_sig)"; then core_rotate_bg; fi
   else
-    rm -f "$FOREIGN_VPN"
+    CORE_STATE=off; rm -f "$FOREIGN_VPN"
     now=$(date +%s); CORE_DOWN=${CORE_DOWN:-$now}
     if [ $((now - CORE_DOWN)) -ge 5 ] && [ -f "$DNS_STATE" ]; then
       dns_locked restore; log_event "core not running: DNS restored"
@@ -1013,18 +1066,14 @@ case "${1:-status}" in
         while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" off; done < "$WIFI_MARK"
         log_event "shutdown: network off ($(paste -sd, - < "$WIFI_MARK"))"
       fi
+      rm -f "$STATEF"   # the app falls back to asking ks
       exit 0
     }
     trap on_term TERM
     n=0
     while :; do
-      guard
-      [ $((n++ % 4)) = 0 ] && core_guard   # every 2 s
-      if [ -f "$WIFI_MARK" ] && { [ -f "$FLAG" ] || loaded; }; then
-        while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" on; done < "$WIFI_MARK"
-        rm -f "$WIFI_MARK"; log_event "rules up: network on"
-      fi
-      sleep 0.5 & wait $!   # wait, unlike a plain sleep, lets the TERM trap run at once
+      watch_pass "$n"; n=$((n + 1))
+      sleep 1 & wait $!   # wait, unlike a plain sleep, lets the TERM trap run at once
     done
     ;;
   on)    rm -f "$FLAG"; load && echo "kill switch: ON" ;;

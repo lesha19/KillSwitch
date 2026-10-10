@@ -117,6 +117,12 @@ CORE_DOWN=$(( $(date +%s) - 6 )); core_guard
 check "watchdog: core down 5 s -> DNS restored" "$(get "$W/DNS")" 192.168.1.1
 LAUNCHD=running; core_guard
 check "watchdog: core back -> DNS set" "$(get "$W/DNS")" 127.0.0.1
+dns_locked() { echo "$1" >> "$tmp/locked"; "dns_$1"; }
+core_guard
+check "watchdog: DNS already ours -> no lock taken, no second ks" "$(cat "$tmp/locked" 2>/dev/null)" ""
+put "$W/DNS" "A|ServerAddresses|192.168.1.1"   # DHCP renew
+core_guard
+check "watchdog: overwritten by the system -> set again under the lock" "$(get "$W/DNS"):$(cat "$tmp/locked" 2>/dev/null)" 127.0.0.1:apply
 LAUNCHD=unloaded; core_guard
 check "watchdog: core unloaded -> DNS restored" "$(get "$W/DNS")" 192.168.1.1
 grep -q 'core not running: DNS restored' "$EVENTS" && echo "ok    events logged" || { echo "FAIL  events"; fails=$((fails + 1)); }

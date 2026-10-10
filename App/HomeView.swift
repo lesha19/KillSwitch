@@ -21,6 +21,9 @@ struct HomeView: View {
         }
         .frame(width: style == .popover ? 340 : 400)
         .animation(.default, value: showingServers)
+        // the helper is asked often only while something shows its answers
+        .onAppear { control.viewAppeared() }
+        .onDisappear { control.viewDisappeared() }
         // Esc: back from the server list, then closes the popover
         .onExitCommand {
             if showingServers { showingServers = false } else if style == .popover { dismiss() }

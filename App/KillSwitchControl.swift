@@ -24,7 +24,7 @@ final class KillSwitchControl {
     private(set) var error: UserError? {
         didSet { if let error, error != oldValue { remember(error) } }
     }
-    /// Server choice and latency tests; kept apart from `error`, which refresh() resets every 3 s.
+    /// Server choice and latency tests; kept apart from `error` (the helper and the actions).
     private(set) var coreError: UserError? {
         didSet { if let coreError, coreError != oldValue { remember(coreError) } }
     }
@@ -90,14 +90,70 @@ final class KillSwitchControl {
 
     private let helper = "/Library/KillSwitch/ks"
     private var timer: Timer?
+    /// Changes in /Library/KillSwitch: the watchdog rewrites its state file there (DaemonState).
+    private var watcher: DispatchSourceFileSystemObject?
+    private var pendingRefresh: Task<Void, Never>?
+    /// The popover, the window or Settings is open: the timer runs every 3 s and the server list
+    /// stays fresh; otherwise the app mostly waits for the watchdog's state file to change.
+    private var openViews = 0
+    /// The watchdog's state file is there and its writer runs: no sudo polling.
+    private var daemonStateLive = false
+    /// The error the last failed state read showed: the next good read clears it, not an action's.
+    private var statePollError: UserError?
 
     init() {
         notifyIfMacOSUpdated()
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+        listenForWidget()
+    }
+
+    func viewAppeared() {
+        openViews += 1
+        if openViews == 1 { refresh() }
+    }
+
+    func viewDisappeared() {
+        openViews = max(0, openViews - 1)
+        scheduleTimer()
+    }
+
+    /// The timer is the fallback: with a live state file it only moves the clock and catches what
+    /// the watchdog does not publish (settings files, the other VPN's tunnel).
+    private func scheduleTimer() {
+        let interval: TimeInterval = openViews > 0 ? 3 : daemonStateLive ? 30 : 10
+        guard timer?.timeInterval != interval else { return }
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
-        listenForWidget()
+    }
+
+    /// The helper replaces its files by rename, which changes the directory: one refresh per burst.
+    private func watchHelperDirectory() {
+        guard watcher == nil else { return }
+        let fd = open("/Library/KillSwitch", O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .delete, .rename],
+                                                               queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.helperDirectoryChanged() }
+        }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        watcher = source
+    }
+
+    private func helperDirectoryChanged() {
+        if !FileManager.default.fileExists(atPath: "/Library/KillSwitch") {   // uninstalled
+            watcher?.cancel()
+            watcher = nil
+        }
+        pendingRefresh?.cancel()
+        pendingRefresh = Task {
+            try? await Task.sleep(for: .milliseconds(200))
+            guard !Task.isCancelled else { return }
+            refresh()
+        }
     }
 
     func turnOn() { run(["on"]) }
@@ -357,11 +413,12 @@ final class KillSwitchControl {
         }
     }
 
-    /// `ks core proxies`, at most every 5 s unless forced; only while the core runs.
-    /// Runs from the 3 s timer too, so it never asks for the password.
+    /// `ks core proxies`, at most every 5 s while the app is open (every minute otherwise) unless
+    /// forced; only while the core runs. Runs from the timer too, so it never asks for the password.
     func loadProxies(force: Bool = false) {
         guard coreRunning else { proxies = nil; proxiesError = nil; measured = [:]; return }
-        guard !proxiesLoading, force || Date().timeIntervalSince(proxiesLoadedAt) > 5 else { return }
+        let interval: TimeInterval = openViews > 0 ? 5 : 60
+        guard !proxiesLoading, force || Date().timeIntervalSince(proxiesLoadedAt) > interval else { return }
         proxiesLoading = true
         Task {
             let result = await callHelper(["core", "proxies"], interactive: false, separateStderr: true)
@@ -414,7 +471,10 @@ final class KillSwitchControl {
     }
 
     /// Also used to upgrade the installed helper: install.sh keeps settings and lists.
-    func install() { runBundled("install.sh", [NSUserName()] + foundServers) }
+    func install() {
+        readFoundServers()
+        runBundled("install.sh", [NSUserName()] + foundServers)
+    }
 
     /// The service is on this Mac (the helper may still be broken or switched off).
     var serviceInstalled: Bool { FileManager.default.fileExists(atPath: helper) }
@@ -434,6 +494,7 @@ final class KillSwitchControl {
         }
         busy = true
         defer { busy = false; refresh() }
+        readFoundServers()
         let commands = Onboarding.commands(installScript: script, user: NSUserName(), servers: foundServers, helper: helper,
                                            profile: profile)
         switch await adminRun(commands) {
@@ -472,13 +533,32 @@ final class KillSwitchControl {
         }
         if wasVPNUp && !vpnUp && state == .on && !manual { notify(.vpnDropped(protected: true)) }
         readSettings()
-        checkDaemon()
+        defer { scheduleTimer() }
         guard FileManager.default.fileExists(atPath: helper) else {
+            daemonProblem = false
+            daemonStateLive = false
             publish(.notInstalled)
             return
         }
+        watchHelperDirectory()
         coreInstalled = FileManager.default.fileExists(atPath: "/Library/KillSwitch/core/mihomo")
         coreConfigured = FileManager.default.fileExists(atPath: "/Library/KillSwitch/core/config.yaml")
+        if let daemon = DaemonState.read() {
+            // the watchdog runs and says what `ks state` / `ks core state` would: no sudo, no launchctl
+            daemonStateLive = true
+            daemonRuns(true)
+            coreRunning = coreInstalled && daemon.coreRunning
+            if !coreRunning { proxies = nil }
+            foreignVPN = coreRunning ? Self.readForeignVPN() : nil
+            trackConnecting()
+            loadProxies()
+            needsRepair = false
+            clearStatePollError()
+            publish(daemon.protection)
+            return
+        }
+        daemonStateLive = false
+        checkDaemon()
         if coreInstalled {
             Task {
                 // "on", possibly followed by more words in later helpers
@@ -496,13 +576,22 @@ final class KillSwitchControl {
             let result = await Self.exec("/usr/bin/sudo", ["-n", helper, "state"])
             guard result.status == 0 else {
                 needsRepair = Self.sudoWantsPassword(result.output)
-                if !needsRepair { error = UserError.from(raw: result.output.isEmpty ? "ks state: no answer" : result.output, context: .helper) }
+                if !needsRepair {
+                    let failure = UserError.from(raw: result.output.isEmpty ? "ks state: no answer" : result.output, context: .helper)
+                    error = failure
+                    statePollError = failure
+                }
                 return
             }
             needsRepair = false
-            error = nil
-            publish(Self.parse(result.output))
+            clearStatePollError()
+            publish(DaemonState.protection(result.output))
         }
+    }
+
+    private func clearStatePollError() {
+        if let statePollError, error == statePollError { error = nil }
+        statePollError = nil
     }
 
     private func trackConnecting() {
@@ -612,6 +701,15 @@ final class KillSwitchControl {
         exceptions = Self.readLines("/Library/KillSwitch/allow")
         servers = Self.readLines("/Library/KillSwitch/servers")
         manualServers = Self.readLines("/Library/KillSwitch/servers-manual")
+        if Date().timeIntervalSince(foundServersAt) > 60 { readFoundServers() }
+    }
+
+    private var foundServersAt = Date.distantPast
+
+    /// dropweb's profiles and Happ's config: at most once a minute from refresh(), always before
+    /// they go into an install.
+    private func readFoundServers() {
+        foundServersAt = Date()
         let dropweb = Self.readDropwebServers()
         foundServers = dropweb + Self.readHappServers().filter { !dropweb.contains($0) }
     }
@@ -720,22 +818,26 @@ final class KillSwitchControl {
     }
 
     /// The daemon (ks watch) is what keeps the rules in place; BTM can switch it off in System Settings.
+    /// Asked only while the watchdog's state file is missing or stale (see DaemonState).
     private func checkDaemon() {
-        guard FileManager.default.fileExists(atPath: helper) else { daemonProblem = false; return }
         Task {
             let disabled = await Self.exec("/bin/launchctl", ["print-disabled", "system"]).output
             let running = await Self.exec("/bin/launchctl", ["print", "system/local.killswitch"]).status == 0
             let isDisabled = disabled.contains("\"local.killswitch\" => disabled") || disabled.contains("\"local.killswitch\" => true")
-            daemonProblem = isDisabled || !running
-            let defaults = UserDefaults.standard
-            if daemonProblem {
-                if !defaults.bool(forKey: "daemonWarned") {
-                    defaults.set(true, forKey: "daemonWarned")
-                    notify(.serviceOff)
-                }
-            } else {
-                defaults.set(false, forKey: "daemonWarned")
+            daemonRuns(!isDisabled && running)
+        }
+    }
+
+    private func daemonRuns(_ runs: Bool) {
+        daemonProblem = !runs
+        let defaults = UserDefaults.standard
+        if daemonProblem {
+            if !defaults.bool(forKey: "daemonWarned") {
+                defaults.set(true, forKey: "daemonWarned")
+                notify(.serviceOff)
             }
+        } else if defaults.bool(forKey: "daemonWarned") {
+            defaults.set(false, forKey: "daemonWarned")
         }
     }
 
@@ -801,15 +903,6 @@ final class KillSwitchControl {
         case .pause5: pause(minutes: 5)
         case nil: break
         }
-    }
-
-    private static func parse(_ text: String) -> State {
-        let word = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if word == "on" { return .on }
-        if word.hasPrefix("paused:"), let epoch = TimeInterval(word.dropFirst(7)) {
-            return .paused(until: Date(timeIntervalSince1970: epoch))
-        }
-        return .off
     }
 
     /// VPN TUN interfaces (our core, dropweb, Happ) use an address in 198.18.0.0/16; the exact one varies.

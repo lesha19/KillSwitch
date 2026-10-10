@@ -19,6 +19,7 @@ enum SettingsTab: String {
 /// traffic around the VPN are edited in a sheet and applied together, behind one password.
 struct SettingsView: View {
     @AppStorage(SettingsTab.key) private var tab = SettingsTab.general.rawValue
+    @Environment(KillSwitchControl.self) private var control
 
     var body: some View {
         TabView(selection: $tab) {
@@ -29,6 +30,8 @@ struct SettingsView: View {
             HelpSettings().tabItem { Label("Помощь", systemImage: "questionmark.circle") }.tag(SettingsTab.help.rawValue)
         }
         .frame(width: 520)
+        .onAppear { control.viewAppeared() }
+        .onDisappear { control.viewDisappeared() }
     }
 }
 
