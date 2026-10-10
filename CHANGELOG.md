@@ -4,6 +4,25 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Added
+- Xray-core as the main way of connecting (ADR 0020): Xray v26.9.30 (pinned, `Helper/fetch-xray.sh`)
+  with its own TUN, built from the panel's Xray config (`<subscription>/json`); mihomo stays as the
+  fallback in Settings › VPN «Способ подключения». New installs get Xray; existing ones keep mihomo
+  until switched (one password). `geoip.dat` is shipped pinned for Xray's GEOIP rules. With Xray
+  «Трафик» shows only the rules; ping, speed and «Двойной VPN» are mihomo-only for now.
+
+### Fixed
+- DNS: our `127.0.0.1` is never recorded as a network service's original DNS, and stopping the
+  core (and uninstalling) always removes it from the Wi‑Fi/Ethernet DNS (ADR 0017). Before, a lost
+  or stale `dns-state` could leave the Mac resolving through a core that was gone.
+- Another VPN (Happ) is no longer cut when protection is switched on or installed while our VPN is
+  off: protection stands by and blocks again within a second of that VPN going (ADR 0018).
+- mihomo: no sniffing of plain HTTP or of connections to bare addresses, the program is looked up
+  only for «Программы без VPN», and nothing is sent DIRECT back into our own tunnel (ADR 0019).
+- A compiler warning in the updater (a main-actor property read inside a KVO callback).
+
 ## [0.16.0] - 2026-10-10
 
 ### Added

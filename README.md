@@ -63,7 +63,7 @@ the app target's `.stringsdata` files from DerivedData. Check before a release:
 `rg -n 'ядр|pf |туннел|utun|mihomo|Clash|Remnawave|Обновить защиту' App/*.swift` — only comments
 and code may match. Technical names stay in «Скопировать диагностику» (for support).
 
-Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, wifiguard, adblock, splitapps, multihop),
+Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, wifiguard, adblock, splitapps, multihop, core, xrayserver),
 `allow` (addresses reachable by any process), `servers-manual` (VPN server IPs added by `server-add`
 and install.sh, reachable by any process), `servers-core` (proxy addresses of the imported core
 profile, rewritten on every import, reachable only by our core), `servers` (both merged),
@@ -224,7 +224,7 @@ addresses found in dropweb and Happ configs are passed to it). After updating th
    «Пароли приложений», затем в Терминале
    `xcrun notarytool store-credentials killswitch-notary --apple-id <Apple ID> --team-id YR58655PJ7`
    и ввести пароль, когда спросит (в командную строку его не писать). Он хранится в связке ключей.
-4. Ядро: `Helper/fetch-mihomo.sh`; геоданные для правил подписки GEOSITE/GEOIP и блокировки рекламы: `Helper/fetch-geodata.sh`
+4. Ядра: `Helper/fetch-xray.sh` (основное, ADR 0020) и `Helper/fetch-mihomo.sh`; геоданные для правил подписки GEOSITE/GEOIP и блокировки рекламы: `Helper/fetch-geodata.sh`
    (выпуск meta-rules-dat и его sha256 уже закреплены в скрипте; без `Helper/geosite.dat` и `Helper/geoip.metadb` выпуск не соберётся).
    Скрипт сначала берёт копию каждого файла из последнего выпуска `lesha19/KillSwitch-releases` (их кладёт туда
    `--publish`), а закреплённый коммит meta-rules-dat — только если копии нет или она другого sha256:
