@@ -1,0 +1,8 @@
+{"proxies": [{"name": "WG multi", "type": "wireguard", "ip": "172.16.0.2",
+  "private-key": "eCtXsJZ27+4PbhDkHnB923tkUn2Gj59wZw5wFA75MnU=",
+  "peers": [
+    {"server": "de.example.com", "port": 51820, "public-key": "Cr8hWlKvtDt7nrvf+f0brNQQzabAqrjfBvas9pmowjo=", "allowed-ips": ["0.0.0.0/1"]},
+    {"server": "203.0.113.40", "port": 51820, "public-key": "Cr8hWlKvtDt7nrvf+f0brNQQzabAqrjfBvas9pmowjo=", "allowed-ips": ["128.0.0.0/1"],
+     "reserved": [1, 2, 3]}],
+  "udp": true}],
+ "rules": ["MATCH,WG multi"]}

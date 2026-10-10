@@ -37,9 +37,16 @@ CORE_DIR="$DIR/core"     # mihomo, config.yaml, geoip.metadb, root-owned
 CORE_GROUP="_ksvpn"      # the core runs with this gid; nothing else can get it
 CORE_JOB="system/local.killswitch.core"
 CORE_CTL="$CORE_DIR/ctl/mihomo.sock" # the core's API; ctl/ is root-only
-CORE_TUN_ADDR="198.18.128.1" # our TUN's address (start of the core's fake-ip-range)
+CORE_TUN_ADDR="198.18.128.1"
+KS_DNS="KS-DNS"          # our group for DNS and rule downloads: the profile's proxies, never DIRECT # our TUN's address (start of the core's fake-ip-range)
 DNS_STATE="$CORE_DIR/dns-state" # system DNS keys pointed at the core, with their originals
 DNS_OURS="127.0.0.1"
+CORE_PROFILE="$CORE_DIR/profile.json"       # last accepted profile, root-only: rebuilds start from it
+PINS="$CORE_DIR/pins"                       # "host<TAB>address" the config's servers are pinned to
+APPROVED_HOSTS="$CORE_DIR/approved-hosts"   # server host names of the last "ks core import"
+APPROVED_DIRECT="$CORE_DIR/approved-direct" # its DIRECT rules and groups (direct_sig)
+SPLITAPPS="$DIR/splitapps"  # process names that bypass the core (coredirect=1 only), one per line
+MULTIHOP="$DIR/multihop"    # name of the entry proxy of the double VPN; absent = off
 FOREIGN_VPN="$CORE_DIR/foreign-vpn" # world-readable: other VPN tunnels up next to our core
 ADDR_RE='^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$'
 
@@ -250,43 +257,83 @@ core_generate() (
     fail "В профиле нет proxies"
   n=$(plutil -extract proxies raw -o - "$in")
   [ "$n" -gt 0 ] 2>/dev/null || fail "В профиле нет proxies"
-  : > "$w/servers"
+  : > "$w/servers"; : > "$w/pins"; : > "$w/names"
+  # pf works on addresses, so a server given by name is pinned to the address we let through
+  # (one per name, also when several proxies share it); TLS and Reality still see the name.
+  # With KS_PINS set (a rebuild) the addresses come from that file only, no DNS.
+  pin() {  # pin <host>: prints its address
+    local a
+    a=$(awk -F'\t' -v h="$1" '$1 == h { print $2; exit }' "$w/pins")
+    if [ -z "$a" ]; then
+      if [ -n "${KS_PINS:-}" ]; then a=$(awk -F'\t' -v h="$1" '$1 == h { print $2; exit }' "$KS_PINS")
+      else a=$(resolve_host "$1") || a=""; fi
+      is_ipv4 "$a" || return 1
+      printf '%s\t%s\n' "$1" "$a" >> "$w/pins"
+    fi
+    echo "$a"
+  }
+  is_host() { [[ "$1" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ ]]; }
+  is_ip6() { [[ "$1" =~ ^[0-9A-Fa-f:]+$ && "$1" == *:* ]]; }
   i=0
   while [ "$i" -lt "$n" ]; do
     [ "$(plutil -type "$i" "$P")" = dictionary ] || fail "proxies[$i]: не объект"
     name=$(str "$i.name" "$P"); t=$(str "$i.type" "$P"); server=$(str "$i.server" "$P")
     [ -n "$name" ] || fail "proxies[$i]: нет имени"
+    [[ "$name" != *[[:cntrl:]]* ]] || fail "proxies[$i]: управляющие символы в имени"
     case "$t" in
       direct|dns|reject|reject-drop|pass|compatible) fail "Прокси «$name»: тип «$t» не допускается" ;;
     esac
     [[ "$t" =~ ^($PROXY_TYPES)$ ]] || fail "Прокси «$name»: неизвестный тип «$t»"
-    [ -n "$server" ] || fail "Прокси «$name»: нет server"
     plutil -remove "$i.interface-name" "$P" >/dev/null 2>&1
     plutil -remove "$i.routing-mark" "$P" >/dev/null 2>&1
-    if is_ipv4 "$server" || [[ "$server" =~ ^[0-9A-Fa-f:]+$ && "$server" == *:* ]]; then
-      ip=$server
-    elif [[ "$server" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ ]]; then
-      # pf works on addresses, so the server is pinned to the one we let through; TLS and
-      # Reality still see the name
-      ip=$(resolve_host "$server") || ip=""
-      is_ipv4 "$ip" || fail "Прокси «$name»: не удалось узнать адрес сервера $server"
-      plutil -replace "$i.server" -string "$ip" "$P"
-      has "$i.servername" "$P" || plutil -insert "$i.servername" -string "$server" "$P"
-      has "$i.sni" "$P" || plutil -insert "$i.sni" -string "$server" "$P"
-      if [ "$(plutil -type "$i.ws-opts" "$P" 2>/dev/null)" = dictionary ]; then
-        if ! has "$i.ws-opts.headers" "$P"; then
-          plutil -insert "$i.ws-opts.headers" -json "{\"Host\":\"$server\"}" "$P"
-        elif ! has "$i.ws-opts.headers.Host" "$P"; then
-          plutil -insert "$i.ws-opts.headers.Host" -string "$server" "$P"
+    : > "$w/ips.$i"
+    if [ "$t" = wireguard ] && has "$i.peers" "$P"; then
+      # several peers: mihomo ignores the top-level server then, so it is dropped
+      [ "$(plutil -type "$i.peers" "$P")" = array ] || fail "Прокси «$name»: peers не список"
+      np=$(plutil -extract "$i.peers" raw -o - "$P")
+      [ "$np" -gt 0 ] 2>/dev/null || fail "Прокси «$name»: пустой peers"
+      plutil -remove "$i.server" "$P" >/dev/null 2>&1
+      k=0
+      while [ "$k" -lt "$np" ]; do
+        [ "$(plutil -type "$i.peers.$k" "$P")" = dictionary ] || fail "Прокси «$name»: peers[$k] не объект"
+        ps=$(str "$i.peers.$k.server" "$P")
+        if is_ipv4 "$ps" || is_ip6 "$ps"; then ip=$ps
+        elif is_host "$ps"; then
+          ip=$(pin "$ps") || fail "Прокси «$name»: не удалось узнать адрес сервера $ps"
+          plutil -replace "$i.peers.$k.server" -string "$ip" "$P"
+        else
+          fail "Прокси «$name»: плохой server «$ps» в peers[$k]"
         fi
-      fi
+        echo "$ip" >> "$w/ips.$i"
+        k=$((k + 1))
+      done
     else
-      fail "Прокси «$name»: плохой server «$server»"
+      [ -n "$server" ] || fail "Прокси «$name»: нет server"
+      if is_ipv4 "$server" || is_ip6 "$server"; then
+        ip=$server
+      elif is_host "$server"; then
+        ip=$(pin "$server") || fail "Прокси «$name»: не удалось узнать адрес сервера $server"
+        plutil -replace "$i.server" -string "$ip" "$P"
+        has "$i.servername" "$P" || plutil -insert "$i.servername" -string "$server" "$P"
+        has "$i.sni" "$P" || plutil -insert "$i.sni" -string "$server" "$P"
+        if [ "$(plutil -type "$i.ws-opts" "$P" 2>/dev/null)" = dictionary ]; then
+          if ! has "$i.ws-opts.headers" "$P"; then
+            plutil -insert "$i.ws-opts.headers" -json "{\"Host\":\"$server\"}" "$P"
+          elif ! has "$i.ws-opts.headers.Host" "$P"; then
+            plutil -insert "$i.ws-opts.headers.Host" -string "$server" "$P"
+          fi
+        fi
+      else
+        fail "Прокси «$name»: плохой server «$server»"
+      fi
+      echo "$ip" >> "$w/ips.$i"
     fi
     [[ "$name" == *[\#\&]* ]] || [ -n "${first_proxy:-}" ] || first_proxy=$name
-    echo "$ip" >> "$w/servers"
+    echo "$name" >> "$w/names"
+    cat "$w/ips.$i" >> "$w/servers"
     i=$((i + 1))
   done
+  nproxies=$n
 
   G="$w/groups.json"
   if has proxy-groups "$in"; then
@@ -301,13 +348,14 @@ core_generate() (
       plutil -remove "$i.interface-name" "$G" >/dev/null 2>&1
       plutil -remove "$i.routing-mark" "$G" >/dev/null 2>&1
       [[ "$name" == *[\#\&]* ]] || [ -n "${first_group:-}" ] || first_group=$name
+      echo "$name" >> "$w/names"
       i=$((i + 1))
     done
   else
     echo '[]' > "$G"
   fi
-  # DNS and rule downloads go through the profile's main group (its first one) or the first
-  # proxy; "#" and "&" would break the nameserver URL
+  grep -qxF "$KS_DNS" "$w/names" && fail "Имя «$KS_DNS» занято: так называется наша группа для DNS"
+  # without rules everything goes to the profile's main group (its first one) or the first proxy
   tunnel=${first_group:-${first_proxy:-}}
   [ -n "$tunnel" ] || fail "Нет группы или прокси для DNS"
 
@@ -328,7 +376,7 @@ core_generate() (
       [[ "$name" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || fail "rule-provider «$name»: плохое имя"
       t=$(str "$name.type" "$RP")
       case "$t" in
-        http) has "$name.proxy" "$RP" || plutil -insert "$name.proxy" -string "$tunnel" "$RP" ;;
+        http) has "$name.proxy" "$RP" || plutil -insert "$name.proxy" -string "$KS_DNS" "$RP" ;;
         inline) ;;
         *) fail "rule-provider «$name»: тип «$t» не допускается (только http и inline)" ;;
       esac
@@ -336,6 +384,42 @@ core_generate() (
     done < "$w/rp-names"
   else
     echo '{"_":0}' > "$RP"; plutil -remove _ "$RP"
+  fi
+
+  # What would go outside the tunnel, for "ks core refresh" to compare with the last import.
+  direct_sig "$G" "$R" > "$w/direct" || fail "Не удалось разобрать правила"
+
+  # Double VPN: every other proxy is dialed through the entry, so the core only has to reach
+  # the entry's server; the exits are reached through it and stay out of pf.
+  entry=$(head -1 "$MULTIHOP" 2>/dev/null)
+  if [ -n "$entry" ]; then
+    e=$(head -n "$nproxies" "$w/names" | grep -nxF -- "$entry" | head -1 | cut -d: -f1)
+    [ -n "$e" ] || fail "Двойной VPN: прокси входа «$entry» нет в профиле"
+    e=$((e - 1))
+    has "$e.dialer-proxy" "$P" && fail "Двойной VPN: у прокси входа «$entry» свой dialer-proxy"
+    i=0
+    while [ "$i" -lt "$nproxies" ]; do
+      if [ "$i" != "$e" ]; then
+        plutil -remove "$i.dialer-proxy" "$P" >/dev/null 2>&1
+        plutil -insert "$i.dialer-proxy" -string "$entry" "$P"
+      fi
+      i=$((i + 1))
+    done
+    cp "$w/ips.$e" "$w/servers"
+  fi
+
+  # DNS and rule downloads go through KS-DNS, a group of the profile's proxies only: picking
+  # DIRECT in a group of the profile cannot take them out of the tunnel.
+  head -n "$nproxies" "$w/names" | KS_DNS=$KS_DNS json_edit "$G" '
+    my @p = map { chomp; $_ } <STDIN>;
+    push @$j, { name => $ENV{KS_DNS}, type => "fallback", proxies => \@p, hidden => JSON::PP::true,
+                url => "https://cp.cloudflare.com/generate_204", interval => 300 };' || exit 1
+
+  # Apps that bypass the core (only with coredirect=1: otherwise pf drops their DIRECT flows)
+  fpm=""
+  if [ "$(setting coredirect 0)" = 1 ] && [ -s "$SPLITAPPS" ]; then
+    json_edit "$R" 'unshift @$j, map { chomp; "PROCESS-NAME,$_,DIRECT" } <STDIN>;' < "$SPLITAPPS" || exit 1
+    fpm='"find-process-mode":"always",'
   fi
 
   sort -u "$w/servers" > "$w/servers.u"
@@ -351,14 +435,14 @@ core_generate() (
     # The TUN takes the first address of fake-ip-range: ours differs from dropweb's and Happ's
     # 198.18.0.1, so the watchdog can tell the tunnels apart.
     # The controller is a unix socket in a root-only directory; the app reaches it via ks.
-    printf '{"mode":"rule","log-level":"info","ipv6":false,"allow-lan":false,'
+    printf '{"mode":"rule","log-level":"info","ipv6":false,"allow-lan":false,%s' "$fpm"
     printf '"external-controller-unix":"ctl/mihomo.sock",'
     printf '"tun":{"enable":true,"stack":"gvisor","auto-route":true,"auto-detect-interface":true,'
     printf '"dns-hijack":["any:53"],"route-exclude-address":[%s]},' "$excl"
     # answers the system's DNS on 127.0.0.1:53; the resolvers are reached through the tunnel
     printf '"dns":{"enable":true,"listen":"127.0.0.1:53","ipv6":false,"enhanced-mode":"fake-ip",'
     printf '"fake-ip-range":"%s/17","nameserver":[%s,%s]},' "$CORE_TUN_ADDR" \
-      "$(jstr "https://1.1.1.1/dns-query#$tunnel")" "$(jstr "https://8.8.8.8/dns-query#$tunnel")"
+      "$(jstr "https://1.1.1.1/dns-query#$KS_DNS")" "$(jstr "https://8.8.8.8/dns-query#$KS_DNS")"
     printf '"proxies":'; cat "$P"
     printf ',"proxy-groups":'; cat "$G"
     printf ',"rules":'; cat "$R"
@@ -369,8 +453,46 @@ core_generate() (
   # plutil writes "/" as "\/", which is JSON but not YAML; pairs are taken left to right, so
   # an escaped backslash before "/" stays as it is
   perl -pi -e 's{\\(.)}{$1 eq "/" ? "/" : "\\$1"}ge' "$w/config.json" || exit 1
-  cp "$w/config.json" "$out" && cp "$w/servers.u" "$srv_out"
+  cp "$w/config.json" "$out" && cp "$w/servers.u" "$srv_out" && cp "$w/pins" "$out.pins" && cp "$w/direct" "$out.direct"
 )
+
+# json_edit <file> <perl>: runs the perl code with $j = the decoded JSON of the file, writes it back
+json_edit() {
+  /usr/bin/perl -MJSON::PP -e 'local $/; open my $f, "<", $ARGV[0] or die; my $j = JSON::PP->new->decode(<$f>);
+    close $f; { local $/ = "\n"; eval $ARGV[1]; die $@ if $@; }
+    open $f, ">", $ARGV[0] or die; print $f JSON::PP->new->encode($j); close $f or die' "$1" "$2"
+}
+
+# direct_sig <groups.json> <rules.json>: what can send traffic outside the tunnel, one per line.
+# DIRECT, GLOBAL (mihomo's built-in group, it holds DIRECT) and COMPATIBLE (what an empty group
+# becomes, a direct dialer) are direct; so is every group that holds one of them, transitively,
+# and every group whose members depend on a filter. Printed: those groups (name, members,
+# filters) sorted, then every rule naming one of them, in order.
+direct_sig() {
+  /usr/bin/perl -MJSON::PP -e '
+    sub rd { local $/; open my $f, "<", $_[0] or die; JSON::PP->new->decode(<$f>) }
+    my ($g, $r) = (rd($ARGV[0]), rd($ARGV[1]));
+    my %d = map { $_ => 1 } qw(DIRECT GLOBAL COMPATIBLE);
+    my $more = 1;
+    while ($more) {
+      $more = 0;
+      for my $x (@$g) {
+        my $n = $x->{name}; next if $d{$n};
+        my @p = @{ $x->{proxies} || [] };
+        my $dyn = grep { exists $x->{$_} } qw(filter exclude-filter exclude-type include-all include-all-proxies include-all-providers);
+        if ($dyn || !@p || grep { $d{$_} || $d{uc $_} } @p) { $d{$n} = 1; $more = 1 }
+      }
+    }
+    my $c = JSON::PP->new->canonical;
+    for my $x (sort { $a->{name} cmp $b->{name} } grep { $d{$_->{name}} } @$g) {
+      print "group\t", $c->encode({ map { exists $x->{$_} ? ($_ => $x->{$_}) : () }
+        qw(name type proxies filter exclude-filter exclude-type include-all include-all-proxies include-all-providers) }), "\n";
+    }
+    for my $rule (@$r) {
+      my $t = ref $rule ? $c->encode($rule) : $rule;
+      print "rule\t$t\n" if grep { $d{$_} || $d{uc $_} } map { s/^[\s(]+|[\s)]+$//gr } split /,/, $t;
+    }' "$1" "$2"
+}
 
 # Servers: those added by hand (server-add, install.sh) plus those of the core profile.
 servers_merge() { cat "$SERVERS_MANUAL" "${1:-$SERVERS_CORE}" 2>/dev/null | awk 'NF && !seen[$0]++'; }

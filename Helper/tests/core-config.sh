@@ -8,7 +8,7 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=../ks
 . "$here/../ks"
-MIHOMO=${MIHOMO:-/Library/KillSwitch/core/mihomo}
+MIHOMO=${MIHOMO:-/Library/KillSwitch/core/mihomo}; [ -x "$MIHOMO" ] || [ ! -x "$here/../mihomo" ] || MIHOMO="$here/../mihomo"
 
 # host names in the fixtures; anything else does not resolve
 resolve_host() {
@@ -20,6 +20,7 @@ resolve_host() {
 }
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+SETTINGS="$tmp/settings"; SPLITAPPS="$tmp/splitapps"; MULTIHOP="$tmp/multihop"
 fails=0
 ok()   { echo "ok    $*"; }
 bad()  { echo "FAIL  $*"; fails=$((fails + 1)); }
@@ -38,14 +39,38 @@ check_config() {  # check_config <name> <config> <servers>
     ok "$name: template values" || bad "$name: template values"
   n=$(val proxies "$c"); i=0
   while [ "$i" -lt "$n" ]; do
-    is_ipv4 "$(val "proxies.$i.server" "$c")" || bad "$name: proxies[$i].server is not an address"
+    if plutil -type "proxies.$i.peers" "$c" >/dev/null 2>&1; then
+      k=0
+      while plutil -type "proxies.$i.peers.$k" "$c" >/dev/null 2>&1; do
+        is_ipv4 "$(val "proxies.$i.peers.$k.server" "$c")" || bad "$name: proxies[$i].peers[$k].server is not an address"
+        grep -qxF "$(val "proxies.$i.peers.$k.server" "$c")" "$s" || bad "$name: proxies[$i].peers[$k] server missing from servers"
+        k=$((k + 1))
+      done
+      plutil -type "proxies.$i.server" "$c" >/dev/null 2>&1 && bad "$name: proxies[$i] kept a top-level server next to peers"
+    else
+      is_ipv4 "$(val "proxies.$i.server" "$c")" || bad "$name: proxies[$i].server is not an address"
+      grep -qxF "$(val "proxies.$i.server" "$c")" "$s" || bad "$name: proxies[$i] server missing from servers"
+    fi
     plutil -type "proxies.$i.interface-name" "$c" >/dev/null 2>&1 && bad "$name: proxies[$i] kept interface-name"
-    grep -qxF "$(val "proxies.$i.server" "$c")" "$s" || bad "$name: proxies[$i] server missing from servers"
     i=$((i + 1))
   done
   ok "$name: $n proxies pinned to addresses"
-  [[ "$(val dns.nameserver.0 "$c")" == https://1.1.1.1/dns-query#* ]] && ok "$name: DNS through the tunnel ($(val dns.nameserver.0 "$c"))" ||
-    bad "$name: nameserver"
+  [ "$(val dns.nameserver.0 "$c")" = "https://1.1.1.1/dns-query#KS-DNS" ] &&
+    [ "$(val dns.nameserver.1 "$c")" = "https://8.8.8.8/dns-query#KS-DNS" ] && ok "$name: DNS through KS-DNS" ||
+    bad "$name: nameserver $(val dns.nameserver.0 "$c")"
+  # KS-DNS: our last group, a fallback over every proxy of the profile and nothing else
+  g=$(( $(val proxy-groups "$c") - 1 ))
+  if [ "$(val "proxy-groups.$g.name" "$c")" = KS-DNS ] && [ "$(val "proxy-groups.$g.type" "$c")" = fallback ] &&
+     [ "$(val "proxy-groups.$g.proxies" "$c")" = "$n" ]; then
+    i=0; same=1
+    while [ "$i" -lt "$n" ]; do
+      [ "$(val "proxy-groups.$g.proxies.$i" "$c")" = "$(val "proxies.$i.name" "$c")" ] || same=0
+      i=$((i + 1))
+    done
+    [ "$same" = 1 ] && ok "$name: KS-DNS = fallback over the $n proxies, no DIRECT" || bad "$name: KS-DNS members"
+  else
+    bad "$name: KS-DNS group missing or wrong"
+  fi
   if [ -x "$MIHOMO" ]; then
     if out=$("$MIHOMO" -t -d "$tmp/home" -f "$c" 2>&1); then ok "$name: mihomo -t"
     else bad "$name: mihomo -t: $(tail -2 <<<"$out")"; fi
@@ -80,11 +105,9 @@ if [ -f "$c" ]; then
     bad "ok-full: reality servername"
   [ "$(val proxies.2.ws-opts.headers.Host "$c")" = fi.example.com ] && ok "ok-full: ws Host header kept" ||
     bad "ok-full: ws Host"
-  [ "$(val dns.nameserver.0 "$c")" = "https://1.1.1.1/dns-query#🚀 Выбор сервера" ] &&
-    ok "ok-full: DNS group skips a name with #" || bad "ok-full: DNS group: $(val dns.nameserver.0 "$c")"
   plutil -type rule-providers.ru-blocked.path "$c" >/dev/null 2>&1 && bad "ok-full: provider path kept" ||
     ok "ok-full: provider path dropped"
-  [ "$(val rule-providers.ru-blocked.proxy "$c")" = "🚀 Выбор сервера" ] && ok "ok-full: provider downloads through the tunnel" ||
+  [ "$(val rule-providers.ru-blocked.proxy "$c")" = KS-DNS ] && ok "ok-full: provider downloads through KS-DNS" ||
     bad "ok-full: provider proxy"
   plutil -type proxy-groups.1.interface-name "$c" >/dev/null 2>&1 && bad "ok-full: group kept interface-name" ||
     ok "ok-full: group interface-name dropped"
@@ -99,6 +122,13 @@ fi
 c="$tmp/ok-minimal.json.config"
 [ -f "$c" ] && { [ "$(val rules.0 "$c")" = "MATCH,only" ] && ok "ok-minimal: default rule goes to the proxy, not DIRECT" ||
   bad "ok-minimal: default rule"; }
+c="$tmp/ok-wg-peers.json.config"
+[ -f "$c" ] && { [ "$(val proxies.0.peers.0.server "$c")" = 203.0.113.20 ] && [ "$(val proxies.0.peers.1.server "$c")" = 203.0.113.40 ] &&
+  [ "$(paste -sd' ' - < "$tmp/ok-wg-peers.json.servers")" = "203.0.113.20 203.0.113.40" ] &&
+  ok "ok-wg-peers: every peer pinned and in servers" || bad "ok-wg-peers: peers"; }
+c="$tmp/ok-awg.json.config"
+[ -f "$c" ] && { [ "$(val proxies.0.amnezia-wg-option.jc "$c")" = 4 ] && [ "$(val proxies.0.amnezia-wg-option.h4 "$c")" = 1234567894 ] &&
+  [ "$(val proxies.0.amnezia-wg-option.itime "$c")" = 120 ] && ok "ok-awg: amnezia-wg-option passed through" || bad "ok-awg: amnezia-wg-option"; }
 
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

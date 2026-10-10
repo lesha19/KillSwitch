@@ -6,7 +6,7 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=../ks
 . "$here/../ks"
-MIHOMO=${MIHOMO:-/Library/KillSwitch/core/mihomo}
+MIHOMO=${MIHOMO:-/Library/KillSwitch/core/mihomo}; [ -x "$MIHOMO" ] || [ ! -x "$here/../mihomo" ] || MIHOMO="$here/../mihomo"
 [ -x "$MIHOMO" ] || { echo "skip: no $MIHOMO"; exit 0; }
 tmp=$(mktemp -d)
 CORE_CTL="$tmp/ctl/mihomo.sock"
