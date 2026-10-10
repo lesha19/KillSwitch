@@ -37,6 +37,23 @@ enum SplitApps {
         return result
     }
 
+    /// Apps of the list that can be changed without the admin password: the bundle or the folder
+    /// it sits in is writable for the user (`isWritable`, FileManager in the app). Every process
+    /// started from inside such a bundle goes around the VPN, whoever put it there.
+    static func userWritable(_ entries: [String], isWritable: (String) -> Bool) -> [String] {
+        entries.filter { entry in
+            guard isPath(entry) else { return false }
+            return isWritable(entry) || isWritable((entry as NSString).deletingLastPathComponent)
+        }
+    }
+
+    /// The small warning under «Программы без VPN»; nil when there is nothing to say.
+    static func writableWarning(_ paths: [String]) -> String? {
+        guard !paths.isEmpty else { return nil }
+        let names = paths.map { (($0 as NSString).lastPathComponent as NSString).deletingPathExtension }.joined(separator: ", ")
+        return "\(names) можно изменить без пароля администратора, и всё, что запустится из \(paths.count == 1 ? "него" : "них"), пойдёт мимо VPN."
+    }
+
     /// What the helper accepts: no list separator or control characters, and either an absolute
     /// `.app` path without `.`/`..` parts or a process name without a slash.
     static func isValid(_ entry: String) -> Bool {

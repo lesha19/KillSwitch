@@ -241,6 +241,11 @@ private struct VPNSettings: View {
                     Text("Программы без VPN")
                     Text(control.splitApps.isEmpty ? "Нет" : control.splitApps.joined(separator: ", "))
                 }
+                if let warning = SplitApps.writableWarning(SplitApps.userWritable(control.splitApps,
+                                                                                  isWritable: FileManager.default.isWritableFile)) {
+                    Label(warning, systemImage: "exclamationmark.triangle")
+                        .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
             }
             .disabled(control.busy || control.state == .notInstalled)
 

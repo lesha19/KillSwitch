@@ -15,6 +15,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   (WireGuard, IKEv2, L2TP…) that takes the default route or splits it, IPv4 or IPv6, both by the
   app (`netstat -rn`) and by the watchdog (`core/foreign-vpn`). Ours and Tailscale's (100.64/10,
   fd7a:115c:a1e0::/48, exit node included) are not counted. What pf lets through is unchanged.
+- Split tunnel integrity: Settings › VPN warns under «Программы без VPN» when an app in the list
+  (or the folder it sits in) can be changed without the admin password, since everything run from
+  that path goes around the VPN.
 - «Скорость VPN в строке меню» in Settings › Общие (off by default): ↓/↑ next to the icon, read
   once a second only while it is on and our VPN is connected, through the new passwordless-safe
   `ks core traffic` (only the totals of mihomo's /connections leave the helper). It needs
