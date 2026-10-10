@@ -25,6 +25,16 @@ final class HelperLaunchTests: XCTestCase {
                                                        lastShown: now.addingTimeInterval(-86400), now: now))
     }
 
+    /// The helper was compared (outdated) while the daemon waited for Login Items: the passwordless
+    /// upgrade starts as soon as the switch is on, not only at the next launch.
+    func testUpgradeWhenTheDaemonBecomesReady() {
+        XCTAssertTrue(HelperService.upgradeWhenReady(previous: .needsApproval, current: .ready, helperOutdated: true))
+        XCTAssertTrue(HelperService.upgradeWhenReady(previous: .needsRegistration, current: .ready, helperOutdated: true))
+        XCTAssertFalse(HelperService.upgradeWhenReady(previous: .ready, current: .ready, helperOutdated: true))
+        XCTAssertFalse(HelperService.upgradeWhenReady(previous: .needsApproval, current: .ready, helperOutdated: false))
+        XCTAssertFalse(HelperService.upgradeWhenReady(previous: .needsRegistration, current: .needsApproval, helperOutdated: true))
+    }
+
     /// The registration at launch did not take (still not registered): the banner too, never a password.
     func testBannerWhileTheDaemonIsStillNotRegistered() {
         XCTAssertTrue(HelperService.showApprovalBanner(helperInstalled: true, availability: .needsRegistration, lastShown: nil, now: now))

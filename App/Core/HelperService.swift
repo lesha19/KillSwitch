@@ -35,6 +35,12 @@ enum HelperService {
         helperInstalled && availability == .needsRegistration ? .register : .nothing
     }
 
+    /// The daemon just became usable (switched on in Login Items) and the installed helper is not
+    /// the bundled one: start the passwordless upgrade (ADR 0012) now.
+    static func upgradeWhenReady(previous: Availability, current: Availability, helperOutdated: Bool) -> Bool {
+        helperOutdated && previous != .ready && current == .ready
+    }
+
     static let approvalBannerInterval: TimeInterval = 86400
 
     /// The banner asking for the switch in Login Items: not more often than once a day. Also while

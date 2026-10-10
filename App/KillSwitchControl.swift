@@ -114,7 +114,11 @@ final class KillSwitchControl {
 
     private func updateHelperAvailability() {
         let current = helperClient.availability
-        if current != helperAvailability { helperAvailability = current }
+        if current != helperAvailability {
+            let previous = helperAvailability
+            helperAvailability = current
+            if HelperService.upgradeWhenReady(previous: previous, current: current, helperOutdated: helperOutdated) { upgradeHelper() }
+        }
         let defaults = UserDefaults.standard
         if HelperService.showApprovalBanner(helperInstalled: FileManager.default.fileExists(atPath: helper), availability: current,
                                             lastShown: defaults.object(forKey: "helperApprovalShown") as? Date, now: Date()) {
