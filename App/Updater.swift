@@ -17,10 +17,13 @@ final class Updater {
 
     init() {
         controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: installer, userDriverDelegate: nil)
-        observation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] updater, _ in
-            let value = updater.canCheckForUpdates
-            // KVO calls back on the thread that changed the value, not necessarily the main one
-            Task { @MainActor in self?.canCheck = value }
+        observation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] _, _ in
+            // KVO calls back on the thread that changed the value, not necessarily the main one:
+            // the updater is read only after the hop to the main actor
+            Task { @MainActor in
+                guard let self else { return }
+                self.canCheck = self.controller.updater.canCheckForUpdates
+            }
         }
         automaticallyUpdates = controller.updater.automaticallyDownloadsUpdates
         // #11: a check that could not reach the appcast goes again through the VPN once it connects
