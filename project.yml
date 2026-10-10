@@ -20,7 +20,9 @@ settings:
     CODE_SIGN_IDENTITY: "Apple Development"
     MARKETING_VERSION: "0.12"
     CURRENT_PROJECT_VERSION: "13"
-    ENABLE_HARDENED_RUNTIME: NO
+    # on for every target (ADR 0010): the root daemon trusts the app by its signature, so no other
+    # process may inject code into it; release.sh signs with --options runtime as well
+    ENABLE_HARDENED_RUNTIME: YES
     GENERATE_INFOPLIST_FILE: YES
     SWIFT_EMIT_LOC_STRINGS: YES
     LOCALIZATION_PREFERS_STRING_CATALOGS: YES
@@ -34,12 +36,22 @@ targets:
       - path: Helper
         type: folder
         buildPhase: resources
+      # the privileged daemon's launchd plist (ADR 0010), registered with SMAppService.daemon
+      - path: HelperDaemon/LaunchDaemons/com.lesha19.KillSwitch.helper.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchDaemons
       # XcodeGen has no target-level `resources:` key: the catalog must be listed as a source,
       # otherwise it is silently dropped and the app ships without its icon.
       - Assets.xcassets
     dependencies:
       - target: KillSwitchWidget
       - target: KillSwitchFilter
+      # Contents/MacOS/KillSwitchHelper, the plist's BundleProgram
+      - target: KillSwitchHelper
+        copy:
+          destination: executables
       - package: Yams
       - package: Sparkle
     info:
@@ -61,6 +73,8 @@ targets:
         com.apple.security.application-groups: [YR58655PJ7.killswitch]
         com.apple.developer.system-extension.install: true
         com.apple.developer.networking.networkextension: [content-filter-provider]
+        # the Wi-Fi name for trusted networks: with the hardened runtime location needs this
+        com.apple.security.personal-information.location: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lesha19.KillSwitch
@@ -120,6 +134,26 @@ targets:
         PRODUCT_NAME: com.lesha19.KillSwitch.Filter
         PRODUCT_MODULE_NAME: KillSwitchFilter
         GENERATE_INFOPLIST_FILE: NO
+  KillSwitchHelper:
+    # The root daemon of ADR 0010: XPC for the app, runs /Library/KillSwitch/ks and the bundled
+    # install.sh/uninstall.sh. No dependencies; only the shared, tested parts of App/Core.
+    type: tool
+    platform: macOS
+    sources:
+      - path: HelperDaemon
+        excludes: [LaunchDaemons]
+      - App/Core/HelperCommand.swift
+      - App/Core/HelperProtocol.swift
+      - App/Core/HelperRight.swift
+      - App/Core/BundleSignature.swift
+    settings:
+      base:
+        PRODUCT_NAME: KillSwitchHelper
+        PRODUCT_BUNDLE_IDENTIFIER: com.lesha19.KillSwitch.helper
+        # the identifier codesign gives the tool comes from its embedded Info.plist
+        GENERATE_INFOPLIST_FILE: YES
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
+        SKIP_INSTALL: YES
   KillSwitchTests:
     type: bundle.unit-test
     platform: macOS

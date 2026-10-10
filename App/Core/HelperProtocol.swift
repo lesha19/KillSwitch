@@ -56,6 +56,19 @@ enum HelperIdentity {
     func uninstall(authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
 }
 
+extension HelperIdentity {
+    /// The interface both sides use; string lists are decoded as arrays of strings only.
+    static func interface() -> NSXPCInterface {
+        let interface = NSXPCInterface(with: HelperProtocol.self)
+        let strings = NSSet(objects: NSArray.self, NSString.self) as! Set<AnyHashable>
+        for selector in [#selector(HelperProtocol.setSplitApps(names:authorization:reply:)),
+                         #selector(HelperProtocol.install(servers:authorization:reply:))] {
+            interface.setClasses(strings, for: selector, argumentIndex: 0, ofReply: false)
+        }
+        return interface
+    }
+}
+
 /// One answer of the daemon.
 struct HelperReply: Equatable, Sendable {
     var status: Int32

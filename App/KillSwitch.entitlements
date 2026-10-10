@@ -12,5 +12,7 @@
 	<array>
 		<string>YR58655PJ7.killswitch</string>
 	</array>
+	<key>com.apple.security.personal-information.location</key>
+	<true/>
 </dict>
 </plist>
