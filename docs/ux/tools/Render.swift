@@ -440,11 +440,11 @@ struct MenuBarIcons: View {
     let iconDir: URL?
     var body: some View {
         let rows: [(String, String, String?)] = [
-            ("Подключено", "lock.shield.fill", "connected"),
-            ("Не подключено, защита вкл.", "lock.shield.fill", "connected"),
-            ("Подключено, защита выкл.", "lock.shield.fill", "connected"),
-            ("Не подключено, защита выкл.", "shield.slash", "disconnected"),
-            ("Пауза", "shield.slash", "paused"),
+            ("Подключено", "lock.shield.fill", "MenuBarConnected"),
+            ("Не подключено, защита вкл.", "lock.shield.fill", "MenuBarConnected"),
+            ("Подключено, защита выкл.", "lock.shield.fill", "MenuBarConnected"),
+            ("Не подключено, защита выкл.", "shield.slash", "MenuBarDisconnected"),
+            ("Пауза", "shield.slash", "MenuBarPaused"),
             ("Не установлено", "shield", nil),
         ]
         VStack(alignment: .leading, spacing: 10) {

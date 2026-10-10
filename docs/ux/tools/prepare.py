@@ -73,6 +73,17 @@ enum Keychain {
     static func delete(_ account: String) {}
 }
 """
+    if path.name == "Updater.swift":   # Sparkle is not linked into the renderer
+        text = """import SwiftUI
+@MainActor @Observable final class Updater {
+    var canCheck = true
+    func check() {}
+}
+struct CheckForUpdatesButton: View {
+    let updater: Updater
+    var body: some View { Button("Проверить обновления…") {} }
+}
+"""
     (src / path.name).write_text(text)
 
 shutil.copy(Path(__file__).with_name("Render.swift"), src / "main.swift")

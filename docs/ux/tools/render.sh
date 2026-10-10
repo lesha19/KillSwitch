@@ -3,7 +3,7 @@
 # Builds a throwaway SwiftPM package from patched copies of App/ (prepare.py) in $TMPDIR; the app
 # target and its sources are not touched. Needs Xcode and a resolved Yams checkout (any earlier
 # xcodebuild of the project leaves one in DerivedData) or network access for SwiftPM.
-# Usage: docs/ux/tools/render.sh [icon-branch]   (default icon-sparkle; menu bar SVGs are read from it)
+# Usage: docs/ux/tools/render.sh
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/../../.." && pwd)
 work=${UX_RENDER_DIR:-${TMPDIR:-/tmp}/ks-ux-render}
@@ -23,10 +23,9 @@ let package = Package(
 PKG
 
 icons="$work/icons"; mkdir -p "$icons"
-branch=${1:-icon-sparkle}
-for s in Connected Disconnected Paused; do
-  lower=$(echo "$s" | tr '[:upper:]' '[:lower:]')
-  git -C "$repo" show "$branch:Assets.xcassets/MenuBar$s.imageset/menubar-$lower.svg" > "$icons/$lower.svg" 2>/dev/null || rm -f "$icons/$lower.svg"
+# menu bar template icons of the working tree, named after their image set (MenuBarConnected.svg …)
+for set in "$repo"/Assets.xcassets/MenuBar*.imageset; do
+  cp "$set"/*.svg "$icons/$(basename "$set" .imageset).svg"
 done
 
 swift build --package-path "$work" -c debug 2>&1 | grep -E "error|warning: unre|Compiling|Build complete" | grep -v "^.*warning" | tail -20
