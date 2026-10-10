@@ -3,6 +3,7 @@ import SwiftUI
 struct MenuView: View {
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
+    @Environment(Updater.self) private var updater
     @AppStorage("pauseShort") private var pauseShort = 5
     @AppStorage("pauseLong") private var pauseLong = 30
     @Environment(\.openWindow) private var openWindow
@@ -95,6 +96,7 @@ struct MenuView: View {
         }
         LeakTestView.OpenButton()
         SettingsLink { Text("Настройки…") }.keyboardShortcut(",")
+        CheckForUpdatesButton(updater: updater)
         Button("Скопировать диагностику") { DiagnosticsCopy.copy(control: control, client: client) }
         Button("Выйти") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
