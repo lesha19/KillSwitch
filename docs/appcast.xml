@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sparkle appcast template. Sparkle is NOT in the app yet; this file only reserves the feed.
+
+  How scripts/release.sh is meant to fill it (not implemented yet):
+    1. After notarizing and stapling build/release/KillSwitch-<version>.dmg, sign the dmg with
+       Sparkle's EdDSA key: `sign_update build/release/KillSwitch-<version>.dmg` prints
+       sparkle:edSignature and length. The private key stays in the login keychain.
+    2. Insert one <item> per release at the top of <channel>, newest first:
+
+       <item>
+         <title>KillSwitch 0.7</title>
+         <pubDate>Sat, 10 Oct 2026 12:00:00 +0300</pubDate>
+         <sparkle:version>7</sparkle:version>                        CURRENT_PROJECT_VERSION
+         <sparkle:shortVersionString>0.7</sparkle:shortVersionString> MARKETING_VERSION
+         <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+         <sparkle:releaseNotesLink>https://RELEASE_NOTES_URL</sparkle:releaseNotesLink>
+         <enclosure url="https://RELEASE_DMG_URL" length="BYTES" type="application/octet-stream"
+                    sparkle:edSignature="SIGNATURE"/>
+       </item>
+
+    3. Publish this file next to docs/index.html; the app's SUFeedURL would point at it.
+-->
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>KillSwitch</title>
+    <description>KillSwitch updates</description>
+    <language>ru</language>
+  </channel>
+</rss>
