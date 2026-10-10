@@ -60,6 +60,8 @@ final class KillSwitchControl {
     private(set) var coreRunning = false
     /// «Российские сайты — напрямую (мимо VPN)»: the core sends Russian sites around the tunnel.
     private(set) var coreDirect = false
+    /// «Блокировать рекламу и трекеры»: the core refuses category-ads-all of the shipped geosite.dat.
+    private(set) var adBlock = false
     /// «Раздельный туннель»: process names that go around the VPN (only with coreDirect).
     private(set) var splitApps: [String] = []
     /// «Двойной VPN»: the entry server; the exit is the selected one. Nil = off.
@@ -899,6 +901,7 @@ final class KillSwitchControl {
         allowRouterDNS = (values["dns"] ?? "0") == "1"
         allowDirect = (values["direct"] ?? "0") == "1"
         coreDirect = (values["coredirect"] ?? "0") == "1"
+        adBlock = (values["adblock"] ?? "0") == "1"
         splitApps = SplitApps.parse(setting: values["splitapps"])
         multihopEntry = Multihop.entry(setting: values["multihop"])
         exceptions = Self.readLines("/Library/KillSwitch/allow")

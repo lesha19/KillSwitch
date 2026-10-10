@@ -533,6 +533,16 @@ private struct AdvancedSettings: View {
             }
             .disabled(control.busy || control.state == .notInstalled)
 
+            Section("Реклама и трекеры") {
+                Toggle(isOn: Binding(get: { control.adBlock }, set: { control.set("adblock", $0) })) {
+                    Text("Блокировать рекламу и трекеры")
+                    Text("Только пока подключён VPN KillSwitch.")
+                }
+                .disabled(control.busy || control.state == .notInstalled)
+                Footnote(text: "Если какой-то сайт перестал работать, выключи и проверь снова.",
+                         more: "Адреса рекламы и трекеров берутся из списка, который лежит в самой программе (category-ads-all), и обновляются вместе с ней: VPN ничего не скачивает сам. Заблокированное не уходит никуда — ни через VPN, ни мимо него.")
+            }
+
             TransportSection()
 
             Section("Старая схема с dropweb") {

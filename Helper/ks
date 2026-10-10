@@ -7,7 +7,7 @@
 #   ks off                  disable until "ks on"
 #   ks pause [min]          disable for N minutes (default 5), e.g. for a captive Wi-Fi portal
 #   ks netrestore           network services turned off at shutdown back on (if the watchdog is gone)
-#   ks set <key> <0|1>      lan, tailscale, dns, direct, coredirect (see rules() below)
+#   ks set <key> <0|1>      lan, tailscale, dns, direct, coredirect (see rules() below), adblock
 #   ks set splitapps <a,b>  apps outside the VPN (coredirect=1 only); "" clears
 #   ks set multihop <proxy>|off  double VPN: every other proxy is reached through this one
 #   ks allow <addr[/n]>     always let this address or network out without VPN
@@ -706,6 +706,12 @@ core_generate() (
     } > "$w/ours"
     json_edit "$R" 'unshift @$j, map { chomp; $_ } <STDIN>;' < "$w/ours" || exit 1
   fi
+  # Ads and trackers (adblock=1, «Дополнительно» in the app): refused before anything else, from the
+  # shipped geosite.dat only (never downloaded). REJECT sends nothing anywhere, so the DIRECT
+  # signature and the kill switch are as before.
+  if [ "$(setting adblock 0)" = 1 ] && [ -s "$CORE_DIR/geosite.dat" ]; then
+    json_edit "$R" 'unshift @$j, "GEOSITE,category-ads-all,REJECT";' || exit 1
+  fi
 
   sort -u "$w/servers" > "$w/servers.u"
   # Server, LAN and Tailscale routes stay outside the tunnel, so a flow re-made by another
@@ -1264,7 +1270,7 @@ ks_version() { echo "$KS_VERSION $(shasum -a 256 < "$1" | cut -d' ' -f1)"; }
 # Everything that writes the core's config runs under one lock (the watchdog's rotation skips
 # its turn while it is held).
 case "${1:-}:${2:-}" in
-  core:import|core:refresh|set:splitapps|set:multihop|set:coredirect)
+  core:import|core:refresh|set:splitapps|set:multihop|set:coredirect|set:adblock)
     [ -n "${KS_LOCKED:-}" ] || [ ! -d "$CORE_DIR" ] || KS_LOCKED=1 exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@" ;;
 esac
 
@@ -1308,11 +1314,11 @@ case "${1:-status}" in
         set_multihop "$val" || exit 1
         log_event "double VPN: $val"; exit 0 ;;
     esac
-    [[ "$key" =~ ^(lan|tailscale|dns|direct|coredirect|wifiguard)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns|direct|coredirect|wifiguard 0|1" >&2; exit 1; }
+    [[ "$key" =~ ^(lan|tailscale|dns|direct|coredirect|wifiguard|adblock)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns|direct|coredirect|wifiguard|adblock 0|1" >&2; exit 1; }
     { grep -vE "^$key=" "$SETTINGS" 2>/dev/null; echo "$key=$val"; } > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
     reload_if_on
-    # the generator adds the split-tunnel rules only with coredirect=1
-    if [ "$key" = coredirect ]; then core_apply_settings || exit 1; fi
+    # the generator adds the split-tunnel rules only with coredirect=1, the ad block with adblock=1
+    if [ "$key" = coredirect ] || [ "$key" = adblock ]; then core_apply_settings || exit 1; fi
     ;;
   allow)
     addr=${2:-}
