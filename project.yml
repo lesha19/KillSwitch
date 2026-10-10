@@ -3,6 +3,10 @@ options:
   bundleIdPrefix: com.lesha19
   deploymentTarget:
     macOS: "15.0"
+packages:
+  Yams:
+    url: https://github.com/jpsim/Yams.git
+    exactVersion: 6.2.2
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -27,6 +31,7 @@ targets:
     dependencies:
       - target: KillSwitchWidget
       - target: KillSwitchFilter
+      - package: Yams
     entitlements:
       path: App/KillSwitch.entitlements
       properties:
@@ -88,3 +93,22 @@ targets:
         PRODUCT_NAME: com.lesha19.KillSwitch.Filter
         PRODUCT_MODULE_NAME: KillSwitchFilter
         GENERATE_INFOPLIST_FILE: NO
+  KillSwitchTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests
+      - App/Core
+    dependencies:
+      - package: Yams
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lesha19.KillSwitch.Tests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  KillSwitch:
+    build:
+      targets:
+        KillSwitch: all
+    test:
+      targets: [KillSwitchTests]
