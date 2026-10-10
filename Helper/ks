@@ -185,15 +185,26 @@ core_import() {  # core_import <profile.yaml>
     /^dns:/ { print "  enable: true"; print "  listen: 127.0.0.1:53" }
     END { if (!seen) { print "dns:"; print "  enable: true"; print "  listen: 127.0.0.1:53";
                        print "  enhanced-mode: fake-ip"; print "  nameserver:"; print "    - https://1.1.1.1/dns-query" } }' > "$tmp"
+  # gvisor, not system: the system stack hands tunnel TCP to mihomo as incoming connections,
+  # and the macOS firewall in "block all incoming" mode drops them silently.
+  # Server, LAN and Tailscale routes stay outside the tunnel, so a flow re-made by another
+  # program (AdGuard's proxy, Tailscale) cannot loop back into the core.
   cat >> "$tmp" <<'TUN'
 tun:
   enable: true
-  stack: system
+  stack: gvisor
   auto-route: true
   auto-detect-interface: true
   dns-hijack:
     - any:53
+  route-exclude-address:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 100.64.0.0/10
 TUN
+  local server
+  grep -E '^[0-9.]+$' "$SERVERS" 2>/dev/null | while IFS= read -r server; do echo "    - $server/32"; done >> "$tmp"
   chmod 600 "$tmp"
   "$CORE_DIR/mihomo" -t -d "$CORE_DIR" -f "$tmp" >/dev/null 2>&1 || {
     "$CORE_DIR/mihomo" -t -d "$CORE_DIR" -f "$tmp" 2>&1 | tail -3 >&2; rm -f "$tmp"; return 1; }
@@ -300,6 +311,9 @@ case "${1:-status}" in
         launchctl enable "$CORE_JOB"
         launchctl bootstrap system /Library/LaunchDaemons/local.killswitch.core.plist 2>/dev/null ||
           launchctl kickstart "$CORE_JOB"
+        # DNS goes to the core only once it runs; otherwise the Mac would be left without names
+        for _ in 1 2 3 4 5 6 7 8 9 10; do core_running && break; sleep 0.5; done
+        core_running || { echo "Ядро не запустилось" >&2; exit 1; }
         core_dns_set
         log_event "core on" ;;
       off)
