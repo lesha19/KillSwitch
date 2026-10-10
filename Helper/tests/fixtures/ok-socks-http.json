@@ -1,0 +1,6 @@
+{"proxies": [
+  {"name": "SOCKS", "type": "socks5", "server": "203.0.113.68", "port": 1080, "username": "u", "password": "p", "udp": true},
+  {"name": "HTTPS proxy", "type": "http", "server": "de.example.com", "port": 443, "username": "u", "password": "p", "tls": true,
+   "headers": {"X-Note": "1"}}
+ ],
+ "rules": ["MATCH,SOCKS"]}

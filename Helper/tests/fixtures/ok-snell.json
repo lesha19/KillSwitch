@@ -1,0 +1,2 @@
+{"proxies": [{"name": "Snell", "type": "snell", "server": "203.0.113.67", "port": 44046, "psk": "yourpsk", "version": 3,
+  "udp": true, "obfs-opts": {"mode": "http", "host": "bing.com"}}]}

@@ -1,0 +1,3 @@
+{"proxies": [{"name": "HY1", "type": "hysteria", "server": "203.0.113.65", "port": 443, "ports": "20000-30000",
+  "auth-str": "secret", "obfs": "obfs-pass", "protocol": "udp", "up": "30 Mbps", "down": "200 Mbps", "sni": "hy.example.org",
+  "alpn": ["h3"]}]}

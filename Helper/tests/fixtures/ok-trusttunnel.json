@@ -1,0 +1,2 @@
+{"proxies": [{"name": "TrustTunnel", "type": "trusttunnel", "server": "fi.example.com", "port": 443, "username": "u",
+  "password": "p", "client-fingerprint": "chrome", "udp": true, "health-check": true}]}

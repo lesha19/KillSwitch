@@ -68,7 +68,7 @@ enum WireGuard {
             query[item.name.lowercased().replacingOccurrences(of: "_", with: "").replacingOccurrences(of: "-", with: "")] = item.value ?? ""
         }
         let privateKey = userinfo.isEmpty ? query["privatekey"] : (userinfo.removingPercentEncoding ?? userinfo)
-        return try build(
+        var proxy = try build(
             name: components.fragment.flatMap { $0.isEmpty ? nil : $0 }, host: host, port: port,
             privateKey: privateKey,
             publicKey: query["publickey"] ?? query["peerpublickey"],
@@ -76,6 +76,9 @@ enum WireGuard {
             address: query["address"] ?? query["ip"], allowedIPs: query["allowedips"],
             mtu: query["mtu"], reserved: query["reserved"], keepalive: query["keepalive"] ?? query["persistentkeepalive"]
         )
+        // AmneziaWG links carry the obfuscation fields as query keys (jc=…&h1=…)
+        if let option = try amneziaOption(query) { proxy["amnezia-wg-option"] = option }
+        return proxy
     }
 
     // MARK: -

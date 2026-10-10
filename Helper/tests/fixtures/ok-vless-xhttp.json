@@ -1,0 +1,8 @@
+{"proxies": [{"name": "NL xhttp split", "type": "vless", "server": "de.example.com", "port": 443,
+  "uuid": "a3482e88-686a-4a58-8126-99c9df64b7bf", "network": "xhttp", "tls": true, "udp": true, "client-fingerprint": "chrome",
+  "alpn": ["h2"],
+  "xhttp-opts": {"path": "/up", "mode": "packet-up", "x-padding-bytes": "100-1000",
+    "reuse-settings": {"max-concurrency": "16-32", "c-max-reuse-times": "0", "h-max-request-times": "600-900"},
+    "download-settings": {"server": "fi.example.com", "port": 443, "path": "/down", "tls": true,
+      "reality-opts": {"public-key": "J1sRwuk4Rm8Hb7zEIUPhGIrjjtMHpDKFLDvdy7v9qXo", "short-id": "6ba85179e30d4fc2"},
+      "servername": "www.microsoft.com"}}}]}

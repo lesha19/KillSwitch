@@ -1,0 +1,2 @@
+{"proxies": [{"name": "ShadowQUIC", "type": "shadowquic", "server": "203.0.113.73", "port": 443, "username": "u",
+  "password": "p", "sni": "echo.free.beeceptor.com", "alpn": ["h3"], "congestion-controller": "bbr", "zero-rtt": true, "udp": true}]}

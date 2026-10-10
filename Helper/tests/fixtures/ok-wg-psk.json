@@ -1,0 +1,5 @@
+{"proxies": [{"name": "AWG2 PSK", "type": "wireguard", "server": "203.0.113.76", "port": 51820, "ip": "10.66.0.2",
+  "private-key": "eCtXsJZ27+4PbhDkHnB923tkUn2Gj59wZw5wFA75MnU=", "public-key": "Cr8hWlKvtDt7nrvf+f0brNQQzabAqrjfBvas9pmowjo=",
+  "pre-shared-key": "31aIhAPwktDGpH4JDhA8GNvjFXEf/a6+UaQRyOAiyfM=", "allowed-ips": ["0.0.0.0/0"], "udp": true,
+  "amnezia-wg-option": {"jc": 4, "jmin": 40, "jmax": 70, "s1": 15, "s2": 68, "s3": 20, "s4": 10,
+    "h1": "100-200", "h2": "300-400", "h3": "500-600", "h4": "700-800", "i1": "<r 32>"}}]}

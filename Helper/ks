@@ -350,7 +350,98 @@ net_restore() {
 # TUN) comes from the fixed template below. The profile must be JSON (the app converts
 # subscription YAML), so plutil can parse it and no YAML trick (quoted or flow-style keys,
 # anchors) can slip a key past us.
-PROXY_TYPES='ss|ssr|vmess|vless|trojan|hysteria|hysteria2|tuic|wireguard|snell|http|socks5|ssh|mieru|anytls'
+# Every outbound type of the pinned mihomo (1.19.32) that dials one server, or a list of them
+# (wireguard peers). Not tailscale, zerotier or easytier: they reach their own control planes and
+# peers, which the kill switch would have to let through. Which keys each type keeps: proxy_keys.
+PROXY_TYPES='ss|ssr|vmess|vless|trojan|hysteria|hysteria2|tuic|wireguard|snell|http|socks5|ssh|mieru|anytls|masque|trusttunnel|sudoku|shadowquic|openvpn'
+
+# proxy_keys: perl for json_edit over the proxies (after pinning), $ENV{IN} = the profile.
+# Each proxy keeps only the keys mihomo 1.19.32 reads for its type (adapter/outbound/*.go), so
+# interface-name, routing-mark and anything newer never reach the core. Refused:
+# - certificate/private-key that is not PEM text: mihomo reads it as a file then (as root);
+#   ssh's private-key likewise unless it holds a key;
+# - dialer-proxy that is not another proxy or group of the profile (DIRECT, GLOBAL…);
+# - hysteria2 realm-opts (a rendezvous server and STUN servers outside the pinned list) and
+#   vmess tlsmirror connection-enrolment (it names outbounds of its own);
+# - a shadowsocks plugin mihomo does not build in.
+proxy_keys() {
+  cat <<'PERL'
+    open my $f, "<", $ENV{IN} or die; my $in = do { local $/; JSON::PP->new->decode(<$f>) }; close $f;
+    my %named = map { (ref $_ eq "HASH" && defined $_->{name} && !ref $_->{name}) ? ($_->{name} => 1) : () }
+      @{ $in->{proxies} }, (ref $in->{"proxy-groups"} eq "ARRAY" ? @{ $in->{"proxy-groups"} } : ());
+    my $tls = "skip-cert-verify name-cert-verify fingerprint certificate private-key";
+    my $sec = "ech-opts shadow-tls-opts restls-opts jls-opts";
+    my $quic = "congestion-controller cwnd bbr-profile";
+    my %keys = (
+      ss => "password cipher udp plugin plugin-opts udp-over-tcp udp-over-tcp-version client-fingerprint",
+      ssr => "password cipher obfs obfs-param protocol protocol-param udp",
+      vmess => "uuid alterId cipher udp network tls alpn $tls servername $sec reality-opts tlsmirror-opts mekya-opts mkcp-opts
+                http-opts h2-opts grpc-opts ws-opts packet-addr xudp packet-encoding global-padding authenticated-length client-fingerprint",
+      vless => "uuid flow tls alpn udp packet-addr xudp packet-encoding encryption network $sec reality-opts http-opts h2-opts
+                grpc-opts ws-opts xhttp-opts ws-headers $tls servername client-fingerprint",
+      trojan => "password alpn sni $tls udp network $sec reality-opts grpc-opts ws-opts ss-opts client-fingerprint",
+      hysteria => "ports protocol obfs-protocol up up-speed down down-speed auth auth-str obfs sni ech-opts $tls alpn
+                   recv-window-conn recv-window disable-mtu-discovery fast-open hop-interval",
+      hysteria2 => "ports hop-interval up down password obfs obfs-password obfs-min-packet-size obfs-max-packet-size sni ech-opts
+                    $tls alpn cwnd bbr-profile udp-mtu handshake-timeout realm-opts initial-stream-receive-window
+                    max-stream-receive-window initial-connection-receive-window max-connection-receive-window",
+      tuic => "token uuid password ip heartbeat-interval alpn reduce-rtt request-timeout udp-relay-mode disable-sni
+               max-udp-relay-packet-size fast-open max-open-streams $quic $tls recv-window-conn recv-window
+               disable-mtu-discovery max-datagram-frame-size sni ech-opts udp-over-stream udp-over-stream-version",
+      wireguard => "public-key pre-shared-key reserved allowed-ips ip ipv6 private-key workers mtu udp persistent-keepalive
+                    ip-stack amnezia-wg-option peers remote-dns-resolve dns refresh-server-ip-interval",
+      snell => "psk udp version reuse obfs-opts client-fingerprint",
+      http => "username password tls sni $tls headers",
+      socks5 => "username password tls udp $tls",
+      ssh => "username password private-key private-key-passphrase host-key host-key-algorithms",
+      mieru => "port-range transport udp username password multiplexing handshake-mode traffic-pattern",
+      anytls => "password alpn sni $sec client-fingerprint $tls udp client-metadata idle-session-check-interval
+                 idle-session-timeout min-idle-session disable-reuse",
+      masque => "private-key public-key ip ipv6 uri sni mtu udp handshake-timeout skip-cert-verify name-cert-verify network
+                 $quic ip-stack remote-dns-resolve dns",
+      trusttunnel => "username password alpn sni ech-opts client-fingerprint $tls udp health-check quic $quic
+                      max-connections min-streams max-streams",
+      sudoku => "key aead-method padding-min padding-max table-type enable-pure-downlink http-mask http-mask-mode http-mask-tls
+                 http-mask-host path-root multiplex http-mask-multiplex httpmask custom-table custom-tables",
+      shadowquic => "username password sni alpn quic-versions udp-over-stream zero-rtt keep-alive-interval $quic up down
+                     recv-window-conn recv-window disable-mtu-discovery max-datagram-frame-size max-open-streams",
+      openvpn => "proto dev cipher data-ciphers data-ciphers-fallback auth comp-lzo ca cert key tls-auth key-direction tls-crypt
+                  tls-crypt-v2 username password peer-info ping ping-restart tran-window handshake-timeout mtu udp ip-stack
+                  remote-dns-resolve dns",
+    );
+    my %plugin = map { ($_ => 1) } qw(obfs v2ray-plugin gost-plugin shadow-tls restls jls kcptun);
+    my $n;
+    sub pem { my ($x, $at, $top, $t) = @_;   # certificate/private-key at any depth must be PEM text
+      if (ref $x eq "HASH") {
+        for my $k (sort keys %$x) {
+          my $v = $x->{$k};
+          if ($k eq "certificate" || $k eq "private-key") {
+            next if $top && $k eq "private-key" && $t =~ /^(wireguard|masque)$/;   # a key, never a file
+            my $want = $top && $t eq "ssh" ? qr/PRIVATE KEY/ : qr/-----BEGIN [A-Z0-9 ]+-----/;
+            die "Прокси «$n»: $at$k — не PEM-текст (путь к файлу не допускается)\n" if ref $v || ($v // "") !~ $want;
+          } else { pem($v, "$at$k.", 0, $t) }
+        }
+      } elsif (ref $x eq "ARRAY") { pem($_, $at, 0, $t) for @$x }
+    }
+    for my $p (@$j) {
+      ($n, my $t) = ($p->{name}, $p->{type});
+      my %ok = map { ($_ => 1) } qw(name type server port tfo mptcp ip-version dialer-proxy smux), split " ", $keys{$t};
+      delete @$p{ grep { !$ok{$_} } keys %$p };
+      pem($p, "", 1, $t);
+      if (exists $p->{"dialer-proxy"}) {
+        my $d = $p->{"dialer-proxy"};
+        die "Прокси «$n»: dialer-proxy — не другой сервер или группа профиля\n" if ref $d || !$named{$d // ""} || $d eq $n;
+      }
+      die "Прокси «$n»: realm-opts не допускается (серверы вне списка)\n" if exists $p->{"realm-opts"};
+      die "Прокси «$n»: tlsmirror-opts.connection-enrolment не допускается\n"
+        if ref $p->{"tlsmirror-opts"} eq "HASH" && exists $p->{"tlsmirror-opts"}{"connection-enrolment"};
+      if ($t eq "ss" && length($p->{plugin} // "")) {
+        die "Прокси «$n»: плагин не допускается\n" if ref $p->{plugin} || !$plugin{$p->{plugin}};
+        die "Прокси «$n»: plugin-opts не объект\n" if exists $p->{"plugin-opts"} && ref $p->{"plugin-opts"} ne "HASH";
+      }
+    }
+PERL
+}
 
 is_ipv4() { [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; }
 is_fake_ip() { [[ "$1" =~ ^198\.1[89]\. ]]; }   # fake-ip answers of a running mihomo
@@ -560,6 +651,26 @@ core_generate() (
         fail "Прокси «$name»: плохой server «$server»"
       fi
       echo "$ip" >> "$w/ips.$i"
+      # tuic dials its "ip" instead of the server's address when one is given
+      if [ "$t" = tuic ] && has "$i.ip" "$P"; then
+        a=$(str "$i.ip" "$P")
+        good_server_ip "$a" || fail "Прокси «$name»: ip «$a» — не адрес сервера"
+        echo "$a" >> "$w/ips.$i"
+      fi
+      # xHTTP can download from a second server (download-settings): pinned the same way
+      if [ "$t" = vless ] && has "$i.xhttp-opts.download-settings.server" "$P"; then
+        ds=$(str "$i.xhttp-opts.download-settings.server" "$P")
+        if good_server_ip "$ds" || is_ip6 "$ds"; then a=$ds
+        elif ! is_ipv4 "$ds" && is_host "$ds"; then
+          a=$(pin "$ds") || fail "Прокси «$name»: не удалось узнать адрес сервера загрузки $ds"
+          plutil -replace "$i.xhttp-opts.download-settings.server" -string "$a" "$P"
+          has "$i.xhttp-opts.download-settings.servername" "$P" ||
+            plutil -insert "$i.xhttp-opts.download-settings.servername" -string "$ds" "$P"
+        else
+          fail "Прокси «$name»: плохой сервер загрузки «$ds»"
+        fi
+        echo "$a" >> "$w/ips.$i"
+      fi
     fi
     [[ "$name" == *[\#\&]* ]] || [ -n "${first_proxy:-}" ] || first_proxy=$name
     echo "$name" >> "$w/names"
@@ -567,6 +678,7 @@ core_generate() (
     i=$((i + 1))
   done
   nproxies=$n
+  IN=$in json_edit "$P" "$(proxy_keys)" || exit 1
 
   # Transport overrides (ADR 0007): «Дополнительно» in the app, per server, as "x-ks-overrides"
   # {"<proxy>": {"client-fingerprint": "...", "smux": {"enabled": bool, "protocol": "..."}}}.

@@ -14,7 +14,7 @@ enum ServerIdentity {
         guard let type = (proxy["type"] as? String)?.lowercased(), !type.isEmpty,
               let server = (proxy["server"] as? String) ?? (peer?["server"] as? String), !server.isEmpty else { return nil }
         let port = text(proxy["port"]) ?? text(peer?["port"]) ?? ""
-        let secret = ["uuid", "password", "private-key", "auth-str", "psk"].lazy.compactMap { proxy[$0] as? String }.first ?? ""
+        let secret = ["uuid", "password", "private-key", "auth-str", "psk", "key"].lazy.compactMap { proxy[$0] as? String }.first ?? ""
         let hash = SHA256.hash(data: Data(secret.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
         return "\(prefix)\(type)|\(server.lowercased())|\(port)|\(hash)"
     }

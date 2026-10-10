@@ -1,0 +1,3 @@
+{"proxies": [{"name": "AnyTLS", "type": "anytls", "server": "de.example.com", "port": 443, "password": "p",
+  "client-fingerprint": "chrome", "udp": true, "idle-session-check-interval": 30, "idle-session-timeout": 30, "min-idle-session": 0,
+  "alpn": ["h2", "http/1.1"]}]}

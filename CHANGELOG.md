@@ -26,6 +26,14 @@ Routing comes only from the subscription, and the app shows where traffic goes (
 - The subscription's `sniffer` and `dns` policy (`fake-ip-filter`, `nameserver-policy`,
   `direct-nameserver`, `respect-rules`) are taken, validated. Without a sniffer, a routing-only
   default (TLS/HTTP/QUIC, destination not overridden) is enabled and listed as KillSwitch's.
+- Every protocol the bundled mihomo 1.19.32 has for one server can be used (#9): MASQUE,
+  TrustTunnel, Sudoku, ShadowQUIC and OpenVPN join VLESS (Reality, Vision, xHTTP with a separate
+  download server, ML-KEM encryption), VMess, Trojan, Shadowsocks/2022 (obfs, v2ray-plugin,
+  gost-plugin, ShadowTLS, Restls, JLS, kcptun), Hysteria, Hysteria2, TUIC, WireGuard with
+  AmneziaWG and a preshared key, AnyTLS, Mieru, SSH, Snell, SOCKS5 and HTTP.
+- Links: vmess:// (v2rayN and URI form), anytls://, socks5:// and http(s):// proxies; xHTTP links
+  bring Xray's `extra` (padding, XMUX, download server); ss:// links with v2ray-plugin or
+  shadow-tls; wireguard:// links with AmneziaWG fields (#21).
 
 ### Changed
 - pf lets the core reach addresses outside the tunnel only when the subscription has DIRECT
@@ -53,6 +61,14 @@ Routing comes only from the subscription, and the app shows where traffic goes (
   password prompt (only on a click) instead of a dead end. Updating from 0.14.2: the app sees the
   older daemon (build 18), sends its reads through sudo so it goes idle and leaves (≤ 2.5 min),
   and launchd starts the fixed daemon for the passwordless upgrade (ADR 0012).
+
+### Security
+- The helper keeps only the keys mihomo reads for each protocol and refuses a certificate or
+  private key given as a file path, a `dialer-proxy` outside the profile, hysteria2 realms and
+  unknown shadowsocks plugins (ADR 0014). TUIC's `ip` and the xHTTP download server are pinned
+  and added to the servers pf lets the core reach; nothing else is opened. Tailscale, ZeroTier
+  and EasyTier outbounds stay refused: they need addresses outside the server list.
+
 
 ## [0.14.2] - 2026-10-10
 

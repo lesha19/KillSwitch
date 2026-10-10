@@ -1,0 +1,4 @@
+{"proxies": [{"name": "MASQUE", "type": "masque", "server": "203.0.113.71", "port": 443,
+  "private-key": "MHcCAQEEIFWehr+ZX9ygwik6u0v3SiYkZBGiF503DVyg8qs3ly8doAoGCCqGSM49AwEHoUQDQgAEL8ii/x8eZ21+OCDvFAd+saRdC2OBKgAprb4q2qch58PAauq7iFmecjukbrMCZxEBplTqwlaPYr3/NC0P7X23Hg==",
+  "public-key": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEL8ii/x8eZ21+OCDvFAd+saRdC2OBKgAprb4q2qch58PAauq7iFmecjukbrMCZxEBplTqwlaPYr3/NC0P7X23Hg==",
+  "ip": "172.16.0.2", "ipv6": "2606:4700:110:8a36::2", "mtu": 1280, "udp": true, "remote-dns-resolve": true, "dns": ["1.1.1.1"]}]}
