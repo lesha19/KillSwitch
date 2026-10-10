@@ -56,14 +56,16 @@ struct KillSwitchApp: App {
                 .environment(updater)
         }
 
+        // spec §5.1, Р3: a click on the icon opens the main screen as a popover
         MenuBarExtra {
-            MenuView()
+            HomeView(style: .popover)
                 .environment(control)
                 .environment(client)
                 .environment(updater)
         } label: {
             MenuBarLabel(status: control.status(client))
         }
+        .menuBarExtraStyle(.window)
     }
 }
 

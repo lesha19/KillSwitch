@@ -103,54 +103,12 @@ func snapshot<V: View>(_ name: String, width: CGFloat, height: CGFloat? = nil, t
     }
 }
 
-/// The menu bar menu as a list: SwiftUI turns MenuView into an NSMenu only inside MenuBarExtra,
-/// so here it is laid out by hand, item for item, in the menu's look.
-@MainActor struct MenuMock: View {
-    let world: World
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MenuView()
-                .buttonStyle(MenuItemStyle())
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.visible)
-                .toggleStyle(.checkbox)
-                .labelsHidden()
-        }
-        .padding(.vertical, 5).padding(.horizontal, 14)
-        .frame(width: 330, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-        .padding(12)
-        .environment(world.control)
-        .environment(world.client)
-        .environment(Updater())
-    }
-}
-
-struct MenuItemStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var enabled
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(enabled ? .primary : .tertiary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 3)
-    }
-}
-
+/// The menu bar popover (MenuBarExtra .window): the main screen at 340.
 @MainActor
-func menu(_ name: String, _ world: World) {
-    snapshot(name, width: 354, background: false) {
-        MenuMock(world: world)
-            .font(.body)
-            .textCase(nil)
-            .padding(.horizontal, 0)
-            .environment(\.defaultMinListRowHeight, 22)
-            .modifier(MenuTextStyle())
+func popover(_ name: String, _ world: World) {
+    snapshot(name, width: 340) {
+        HomeView(style: .popover).environment(world.control).environment(world.client).environment(Updater())
     }
-}
-
-/// Plain Text/Divider lines in the mock get menu padding.
-struct MenuTextStyle: ViewModifier {
-    func body(content: Content) -> some View { content }
 }
 
 @MainActor
@@ -348,32 +306,32 @@ func main() {
         wizard("64-wizard-done", .done, w)
     }
 
-    // MARK: menu bar menu
+    // MARK: menu bar popover
 
     do {
         let w = World(); w.control.state = .notInstalled; w.control.coreInstalled = false
-        menu("20-menu-not-installed", w)
+        popover("20-popover-not-installed", w)
     }
     do {
         let w = World(); w.subscribe()
-        menu("21-menu-disconnected-protection-on", w)
+        popover("21-popover-disconnected-protection-on", w)
     }
     do {
         let w = World(); w.subscribe(); w.connect()
-        menu("22-menu-connected", w)
+        popover("22-popover-connected", w)
     }
     do {
         let w = World(); w.subscribe(); w.connect(selected: "🇳🇱 Нидерланды"); w.control.multihopEntry = "🇱🇹 Литва"
         w.client.needsConfirmation = true
-        menu("23-menu-double-vpn-confirmation", w)
+        popover("23-popover-double-vpn-confirmation", w)
     }
     do {
         let w = World(); w.subscribe(); w.control.state = .paused(until: Date().addingTimeInterval(25 * 60))
-        menu("24-menu-paused", w)
+        popover("24-popover-paused", w)
     }
     do {
         let w = World(); w.subscribe(); w.connect(); w.control.ownTunnelUp = false; w.control.foreignVPN = "utun6"
-        menu("25-menu-foreign-vpn", w)
+        popover("25-popover-foreign-vpn", w)
     }
 
     // MARK: leak test window

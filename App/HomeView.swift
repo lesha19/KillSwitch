@@ -8,6 +8,7 @@ struct HomeView: View {
 
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
+    @Environment(\.dismiss) private var dismiss
     @State private var showingServers = false
 
     var body: some View {
@@ -20,6 +21,10 @@ struct HomeView: View {
         }
         .frame(width: style == .popover ? 340 : 400)
         .animation(.default, value: showingServers)
+        // Esc: back from the server list, then closes the popover
+        .onExitCommand {
+            if showingServers { showingServers = false } else if style == .popover { dismiss() }
+        }
     }
 }
 
