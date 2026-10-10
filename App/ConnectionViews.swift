@@ -40,7 +40,9 @@ enum Connection: Equatable {
 extension KillSwitchControl {
     var connection: Connection {
         if state == .notInstalled || !coreInstalled { return vpnUp ? .otherApp : .unavailable }
-        if coreRunning { return vpnUp ? .connected : .connecting }
+        // Our tunnel is told by its address: another VPN's tunnel next to the running core is not
+        // a connection through it.
+        if coreRunning { return ownTunnelUp ? .connected : vpnUp ? .otherApp : .connecting }
         return vpnUp ? .otherApp : .disconnected
     }
 

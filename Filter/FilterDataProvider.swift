@@ -84,7 +84,8 @@ final class FilterDataProvider: NEFilterDataProvider {
         return nil
     }
 
-    /// VPN TUN interfaces (dropweb, Happ, our core) carry an address in 198.18.0.0/16.
+    /// VPN TUN interfaces carry an address in 198.18.0.0/16: our core's 198.18.128.1, dropweb's and
+    /// Happ's 198.18.0.1. Any of them counts: pf decides what may enter which tunnel.
     private static func vpnTunnelUp() -> Bool {
         var list: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&list) == 0, let first = list else { return false }

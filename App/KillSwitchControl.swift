@@ -51,7 +51,10 @@ final class KillSwitchControl {
     }
 
     private(set) var state: State = .unknown
+    /// Any VPN tunnel is up (ours, dropweb's, Happ's): what pf and the filter let traffic into.
     private(set) var vpnUp = false
+    /// Our core's tunnel (198.18.128.1) is up.
+    private(set) var ownTunnelUp = false
     private(set) var error: String? {
         didSet { if let error, error != oldValue { recentErrors = Array((recentErrors + [error]).suffix(5)) } }
     }
@@ -327,7 +330,9 @@ final class KillSwitchControl {
 
     func refresh() {
         let wasVPNUp = vpnUp
-        vpnUp = Self.vpnTunnelUp()
+        let tunnels = Self.vpnTunnels()
+        vpnUp = !tunnels.isEmpty
+        ownTunnelUp = tunnels.contains(.own)
         if wasVPNUp && !vpnUp && state == .on { notify(.vpnDropped) }
         readSettings()
         checkDaemon()
@@ -664,21 +669,24 @@ final class KillSwitchControl {
     }
 
     /// VPN TUN interfaces (our core, dropweb, Happ) use an address in 198.18.0.0/16; the exact one varies.
-    private static func vpnTunnelUp() -> Bool {
+    /// VPN tunnels that are up, by their utun's IPv4 address (TunnelAddress).
+    private static func vpnTunnels() -> [TunnelAddress.Kind] {
         var list: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&list) == 0, let first = list else { return false }
+        guard getifaddrs(&list) == 0, let first = list else { return [] }
         defer { freeifaddrs(list) }
+        var result: [TunnelAddress.Kind] = []
         for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
             let ifa = ptr.pointee
             guard let addr = ifa.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET),
-                  String(cString: ifa.ifa_name).hasPrefix("utun") else { continue }
+                  String(cString: ifa.ifa_name).hasPrefix("utun"), ifa.ifa_flags & UInt32(IFF_UP) != 0 else { continue }
             var sin = sockaddr_in()
             memcpy(&sin, addr, MemoryLayout<sockaddr_in>.size)
-            if UInt32(bigEndian: sin.sin_addr.s_addr) & 0xFFFF0000 == 0xC6120000, ifa.ifa_flags & UInt32(IFF_UP) != 0 {
-                return true
-            }
+            var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            guard inet_ntop(AF_INET, &sin.sin_addr, &text, socklen_t(text.count)) != nil,
+                  let kind = TunnelAddress.kind(String(cString: text)) else { continue }
+            result.append(kind)
         }
-        return false
+        return result
     }
 
     /// `separateStderr`: stdout only on success (JSON), stderr on failure.
