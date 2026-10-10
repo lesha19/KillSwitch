@@ -4,6 +4,41 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [0.10] - 2026-10-10
+
+For people in Russia: blocked servers, «white lists», captive Wi‑Fi. Needs «Восстановить службу…»
+once: the helper, its pf rules and its sudoers entry changed (`ks probe`).
+
+### Added
+- Auto-failover within the chosen country: each country with two or more servers becomes a
+  hidden mihomo `fallback` group; when the picked server stops answering, the core moves to
+  another server of the same country, the status line says which, and a notification follows
+  (at most every 10 minutes). If the whole country is down, a banner offers «Самый быстрый» or
+  another server; another country is never picked by itself (ADR 0005).
+- «Why nothing works»: while no server answers, the app asks the helper (passwordless
+  `ks probe`, at most once a minute) whether there is a network, whether a Russian address open
+  in the mobile «white lists» answers and whether foreign ones do, and shows «Нет подключения
+  к сети», «Интернета нет», «Оператор пускает только на российские сайты» or «Серверы VPN
+  недоступны» with what to do. pf lets only the core's group reach the Russian probe addresses,
+  TCP 443 (ADR 0006).
+- Settings › Дополнительно › «Подключение к серверу»: TLS fingerprint and multiplexing
+  (sing-mux) per server, default «Как в подписке»; the helper accepts only known values on the
+  protocols mihomo supports, applied without a password (ADR 0007). mihomo has no TLS fragment
+  option, so there is none.
+
+### Changed
+- Auto-connect is on by default (new installs and anyone who never touched the switch);
+  trusted Wi‑Fi networks and the location permission they need are explained in Settings
+  (ADR 0004).
+- «Домашняя сеть» is now «Доступ к домашней сети», with what it covers; default unchanged (on).
+
+### Security
+- IPv6: with «Доступ к домашней сети» off or DNS protection on, DNS to link-local and multicast
+  IPv6 addresses (a router's RDNSS resolver) is blocked like IPv4 DNS; tests cover that nothing
+  but link-local, multicast and the tailnet passes over IPv6 (ADR 0003).
+- The admin password prompt runs in `osascript` instead of NSAppleScript off the main thread
+  (not thread-safe) (ADR 0002).
+
 ## [0.9.1] - 2026-10-10
 
 Fixes from the 0.9 review. Needs «Восстановить службу…» once: the helper, its sudoers entry and
