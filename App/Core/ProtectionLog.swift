@@ -47,6 +47,8 @@ enum ProtectionLog {
             ("rules found loaded while off", "Защита осталась включённой после выключения — снята"),
             ("rules up: network on", "Защита включилась после загрузки — сеть включена"),
             ("shutdown: network off", "Mac выключается — сеть отключена"),
+            ("watchdog switched off", "Службу выключили в Объектах входа — сеть не отключалась"),
+            ("network turned back on", "Сеть включена вручную"),
             ("core on", "VPN подключён"),
             ("core off", "VPN отключён"),
             ("core config imported", "Серверы подписки загружены"),

@@ -26,6 +26,9 @@ final class ProtectionLogTests: XCTestCase {
         XCTAssertEqual(text("2026-10-10 14:03:22 apps outside the VPN: none"), "Программы без VPN: нет")
         XCTAssertEqual(text("2026-10-10 14:03:22 another VPN tunnel next to the core: utun6"), "Рядом работает другой VPN")
         XCTAssertEqual(text("2026-10-10 14:03:22 shutdown: network off (en0)"), "Mac выключается — сеть отключена")
+        XCTAssertEqual(text("2026-10-10 14:03:22 watchdog switched off (Login Items): network left on"),
+                       "Службу выключили в Объектах входа — сеть не отключалась")
+        XCTAssertEqual(text("2026-10-10 14:03:22 network turned back on by hand"), "Сеть включена вручную")
     }
 
     func testUnknownLineStaysAsIs() {
