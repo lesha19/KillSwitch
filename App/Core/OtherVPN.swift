@@ -20,7 +20,7 @@ enum OtherVPN {
     /// `* (Connected)  59D4…F68F VPN (su.ffg.happ)  "Happ"   [VPN:su.ffg.happ]`.
     static func services(_ output: String) -> [Service] {
         output.split(whereSeparator: \.isNewline).compactMap { line in
-            guard let match = line.wholeMatch(of: /\s*\*?\s*\(([^)]+)\)\s+([0-9A-Fa-f-]{36})\s+.*?\s+"(.*)"\s+\[([^\]]*)\]\s*/)
+            guard let match = line.wholeMatch(of: /\s*\*?\s*\(([^)]+)\)\s+([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\s+.*?\s+"(.*)"\s+\[([^\]]*)\]\s*/)
             else { return nil }
             let status = match.1.trimmingCharacters(in: .whitespaces)
             let kind = String(match.4)

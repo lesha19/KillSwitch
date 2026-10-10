@@ -29,6 +29,15 @@ final class OtherVPNTests: XCTestCase {
         XCTAssertEqual(OtherVPN.services("scutil: command not found"), [])
     }
 
+    /// The id becomes an argument of `scutil --nc stop`: only a real UUID, never something that
+    /// starts with "-" and would be read as an option.
+    func testOnlyAUUIDIsAnId() {
+        for id in ["------------------------------------", "--nc-stop-0000-4000-8000-0000000000AA", "AAAAAAAA000040008000000000000001----"] {
+            let line = "* (Connected)      \(id) VPN (su.ffg.happ)  \"Happ\"   [VPN:su.ffg.happ]"
+            XCTAssertEqual(OtherVPN.services(line), [], id)
+        }
+    }
+
     func testConnectingCountsAsUp() {
         let line = #"* (Connecting)     AAAAAAAA-0000-4000-8000-000000000001 VPN (su.ffg.happ)  "Happ"   [VPN:su.ffg.happ]"#
         XCTAssertEqual(OtherVPN.services(line).first?.connected, true)
