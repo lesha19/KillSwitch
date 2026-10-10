@@ -1,0 +1,100 @@
+# Build and test on the main branch, on release tags and by hand.
+# The repository is private: macOS minutes are billed (with the macOS multiplier), so CI runs
+# only where it matters, in one job, and a newer push to the same ref cancels the running one.
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned tools, checked by sha256 (GitHub release asset digests).
+  XCODEGEN_VERSION: "2.46.0"
+  XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+  SHELLCHECK_VERSION: v0.11.0
+  SHELLCHECK_SHA256: 56affdd8de5527894dca6dc3d7e0a99a873b0f004d7aabc30ae407d3f48b0a79
+  # Runner image macos-26 (arm64); Xcode versions on it: actions/runner-images,
+  # images/macos/macos-26-arm64-Readme.md.
+  XCODE_APP: /Applications/Xcode_26.6.app
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+
+      - name: Install xcodegen and shellcheck (pinned)
+        run: |
+          tools="$RUNNER_TEMP/tools"
+          mkdir -p "$tools"
+          curl -fsSL -o "$tools/xcodegen.zip" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip"
+          echo "$XCODEGEN_SHA256  $tools/xcodegen.zip" | shasum -a 256 -c -
+          unzip -q "$tools/xcodegen.zip" -d "$tools"
+          curl -fsSL -o "$tools/shellcheck.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/shellcheck-$SHELLCHECK_VERSION.darwin.aarch64.tar.xz"
+          echo "$SHELLCHECK_SHA256  $tools/shellcheck.tar.xz" | shasum -a 256 -c -
+          tar -xJf "$tools/shellcheck.tar.xz" -C "$tools"
+          echo "$tools/xcodegen/bin" >> "$GITHUB_PATH"
+          echo "$tools/shellcheck-$SHELLCHECK_VERSION" >> "$GITHUB_PATH"
+
+      - name: Lint shell scripts
+        run: |
+          xcodegen --version
+          shellcheck --version
+          for f in Helper/ks Helper/*.sh Helper/tests/*.sh scripts/*.sh; do
+            bash -n "$f"
+          done
+          shellcheck -S warning Helper/ks Helper/*.sh scripts/*.sh
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Build and unit tests
+        run: >-
+          xcodebuild -project KillSwitch.xcodeproj -scheme KillSwitch
+          -destination 'platform=macOS' -derivedDataPath build
+          CODE_SIGNING_ALLOWED=NO build test
+
+      - name: Fetch mihomo for the helper tests
+        id: mihomo
+        run: |
+          # The pinned, sha256-checked upstream core. Signing it fails without our certificate;
+          # fetch-mihomo.sh only warns then, and an unsigned core is fine for "mihomo -t".
+          if Helper/fetch-mihomo.sh; then
+            echo "path=$PWD/Helper/mihomo" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::mihomo could not be fetched: the helper tests skip the mihomo -t and controller checks"
+          fi
+
+      - name: Helper tests
+        env:
+          # No core: core-api.sh and core-config.sh print "skip" for the mihomo parts.
+          MIHOMO: ${{ steps.mihomo.outputs.path || '/nonexistent/mihomo' }}
+        run: |
+          fails=0
+          for t in Helper/tests/*.sh; do
+            echo "== $t"
+            bash "$t" || fails=$((fails + 1))
+          done
+          [ "$fails" = 0 ]
+
+      - name: Filter trust tests
+        # Without our certificates only the negative cases run (forged, unsigned, ad-hoc);
+        # the positive ones print "skip".
+        run: scripts/test-filter-trust.sh

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>KillSwitch для macOS</title>
+<meta name="description" content="KillSwitch: интернет на Mac только через VPN. Если VPN упал, трафик не утекает мимо туннеля.">
+<style>
+  :root {
+    --bg: #f7f7f5; --fg: #1d1d1f; --muted: #5f6368; --card: #ffffff;
+    --line: #e2e2de; --accent: #0a6b4f; --accent-fg: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141416; --fg: #ececec; --muted: #a0a0a6; --card: #1e1e21;
+      --line: #2e2e33; --accent: #3ecf9a; --accent-fg: #0b2a20;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 17px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 16px 64px; }
+  h1 { font-size: 2.4rem; line-height: 1.15; margin: 0 0 12px; letter-spacing: -0.02em; }
+  h2 { font-size: 1.3rem; margin: 40px 0 12px; }
+  p, li { color: var(--fg); }
+  .lead { font-size: 1.15rem; color: var(--muted); margin: 0 0 28px; }
+  .download {
+    display: inline-block; background: var(--accent); color: var(--accent-fg);
+    text-decoration: none; font-weight: 600; padding: 14px 24px; border-radius: 12px;
+  }
+  .download:focus-visible { outline: 3px solid var(--fg); outline-offset: 3px; }
+  .note { color: var(--muted); font-size: 0.9rem; margin-top: 10px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 18px 22px; margin: 12px 0;
+  }
+  ol, ul { padding-left: 1.3em; }
+  li { margin: 6px 0; }
+  code { font: 0.92em ui-monospace, SFMono-Regular, Menlo, monospace; }
+  footer { color: var(--muted); font-size: 0.85rem; margin-top: 48px; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>KillSwitch</h1>
+  <p class="lead">Интернет на Mac только через VPN. Если туннель упал, программы теряют сеть,
+    а не уходят в обход VPN. Защита включается при загрузке, ещё до входа в систему.</p>
+
+  <!-- Ссылку заменить на dmg выпуска (scripts/release.sh кладёт его в build/release/). -->
+  <a class="download" href="#RELEASE_DMG_URL">Скачать KillSwitch (.dmg)</a>
+  <p class="note">Версия 0.7 · подписано Developer ID и нотаризовано Apple</p>
+
+  <h2>Что умеет</h2>
+  <ul>
+    <li>Правила pf запрещают всё, кроме локальной сети, VPN-туннеля и адресов ваших VPN-серверов.</li>
+    <li>Встроенный VPN-клиент на ядре mihomo: подписка, серверы по ссылкам (VLESS, Trojan, Shadowsocks,
+      Hysteria2, TUIC, WireGuard), замер задержки и выбор лучшего сервера.</li>
+    <li>Ядро может ходить только к серверам своей подписки, поэтому правила «напрямую» в профиле не
+      выпускают трафик мимо туннеля.</li>
+    <li>DNS через туннель; системный DNS возвращается, когда ядро остановлено.</li>
+    <li>Второй слой — фильтр содержимого macOS: доверяет программам по подписи кода, а не по пути.</li>
+    <li>Сторож каждые несколько секунд проверяет, что правила на месте, и восстанавливает их.</li>
+    <li>Предупреждает, если рядом поднялся чужой VPN-туннель.</li>
+  </ul>
+
+  <h2>Системные требования</h2>
+  <div class="card">
+    <ul>
+      <li>macOS 15 Sequoia или новее.</li>
+      <li>Mac на Apple Silicon (ядро VPN собрано для arm64).</li>
+      <li>Учётная запись администратора — для установки защиты и изменения настроек.</li>
+    </ul>
+  </div>
+
+  <h2>Как установить</h2>
+  <ol>
+    <li>Откройте скачанный <code>.dmg</code> и перетащите KillSwitch в папку «Программы».
+      Приложение должно лежать в <code>/Applications</code>, иначе системное расширение не включится.</li>
+    <li>Запустите KillSwitch и нажмите «Установить защиту». macOS спросит пароль администратора:
+      служба защиты ставится в <code>/Library/KillSwitch</code> и запускается от root.</li>
+    <li>Если включаете второй слой (Настройки → Общие), разрешите системное расширение:
+      Системные настройки → Основные → Объекты входа и расширения → Расширения сети.</li>
+    <li>Добавьте подписку или сервер и проверьте утечки: Настройки → «Проверка».</li>
+  </ol>
+  <p>Отключение, пауза и любые послабления правил всегда требуют пароль администратора.
+    Включение защиты и переключение серверов — без пароля.</p>
+
+  <h2>Конфиденциальность</h2>
+  <div class="card">
+    <p>KillSwitch не собирает телеметрию, аналитику и отчёты о сбоях и ничего не отправляет
+      разработчику. Ссылка на подписку хранится в связке ключей вашего Mac. Сеть приложение использует
+      только чтобы скачать вашу подписку, связаться с вашими VPN-серверами и по вашей кнопке проверить
+      утечки. Диагностика копируется в буфер обмена без секретов и только когда вы сами её нажмёте.</p>
+  </div>
+
+  <h2>Если что-то пошло не так</h2>
+  <p>Аварийно снять правила можно в Терминале:
+    <code>sudo pfctl -a com.apple/killswitch -F all</code>.
+    После каждого обновления macOS перезагрузите Mac и запустите проверку утечек.</p>
+
+  <footer>KillSwitch · распространяется вне App Store: ему нужны служба root и pf, в песочнице это невозможно.</footer>
+</main>
+</body>
+</html>
