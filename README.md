@@ -94,6 +94,36 @@ Then open the app and press "Установить защиту" (or run `Helper/
 addresses found in dropweb and Happ configs are passed to it). After updating the app, press
 "Обновить защиту" to upgrade the installed helper.
 
+## Выпуск
+
+Сборка для других Mac — вне App Store, как у Mullvad и IVPN: приложению нужны root-служба и pf, в
+песочнице App Store это невозможно. Подпись Developer ID, hardened runtime, нотаризация Apple, `.dmg`.
+
+Один раз:
+
+1. Сертификат: Xcode → Settings → Accounts → команда YR58655PJ7 → Manage Certificates → «+» →
+   **Developer ID Application**. Ключ остаётся в связке ключей входа.
+2. Профили: на developer.apple.com есть два профиля Developer ID — «KillSwitch Developer ID»
+   (`com.lesha19.KillSwitch`: System Extension, Network Extensions) и «KillSwitch Filter Developer ID»
+   (`com.lesha19.KillSwitch.Filter`: Network Extensions); в обоих `content-filter-provider-systemextension`.
+   Скачать: Xcode → Settings → Accounts → YR58655PJ7 → **Download Manual Profiles** (лягут в
+   `~/Library/Developer/Xcode/UserData/Provisioning Profiles`, скрипт найдёт их сам; другой путь можно
+   указать в `KS_PROFILE_APP` / `KS_PROFILE_FILTER`). Виджету профиль не нужен: ограниченных прав у него
+   нет, группа приложений начинается с ID команды.
+3. Профиль нотаризации: создать пароль приложения на appleid.apple.com → «Вход и безопасность» →
+   «Пароли приложений», затем в Терминале
+   `xcrun notarytool store-credentials killswitch-notary --apple-id <Apple ID> --team-id YR58655PJ7`
+   и ввести пароль, когда спросит (в командную строку его не писать). Он хранится в связке ключей.
+4. Ядро: `Helper/fetch-mihomo.sh`.
+
+Выпуск: `scripts/release.sh`. Сначала проверяет всё перечисленное и без этого ничего не собирает
+(`scripts/release.sh --check` — только проверка), затем собирает Release, подписывает изнутри наружу
+(ядро как `com.lesha19.KillSwitch.core`, виджет, фильтр, приложение — с правами Developer ID и
+вложенными профилями), отправляет в нотаризацию, прикрепляет квитанцию (`stapler`) и делает
+подписанный и нотаризованный `build/release/KillSwitch-<версия>.dmg`. `scripts/release.sh --sign-only`
+только собирает и подписывает приложение, без нотаризации. Системное расширение включается, только
+когда приложение лежит в /Applications.
+
 ## Emergency off
 
 ```bash
