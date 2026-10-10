@@ -132,6 +132,26 @@ watchdog_update() {
   fi
 }
 
+# geodata_put <file>: the bundle's geosite.dat or geoip.metadb over the installed one, only if its
+# sha256 is the one pinned in the bundle's fetch-geodata.sh (#27, as release.sh checks it); the old
+# file stays otherwise, and stderr says which. GEO_STATE collects "<file>=ok|mismatch|unpinned"
+# for core/geodata, which the app shows. 0 only if the file was replaced.
+GEO_STATE=""
+geodata_put() {
+  local var pin sum
+  case "$1" in geosite.dat) var=SHA256_GEOSITE ;; *) var=SHA256_GEOIP ;; esac
+  pin=$(sed -nE "s/^$var=\"([0-9a-f]{64})\".*/\1/p" fetch-geodata.sh 2>/dev/null || true)
+  sum=$(shasum -a 256 "$1" | cut -d' ' -f1)
+  if [ -z "$pin" ]; then
+    GEO_STATE+="$1=unpinned"$'\n'; echo "$1: в программе нет его sha256, оставлен прежний" >&2; return 1
+  fi
+  if [ "$sum" != "$pin" ]; then
+    GEO_STATE+="$1=mismatch"$'\n'; echo "$1: не совпадает с закреплённым sha256, оставлен прежний" >&2; return 1
+  fi
+  GEO_STATE+="$1=ok"$'\n'
+  put_file "$1" "$DIR/core/$1" 644
+}
+
 # Own VPN core (optional: only if Helper/mihomo is present, see fetch-mihomo.sh). Prints
 # "core: restarted" or "core: kept".
 core_update() {
@@ -141,12 +161,13 @@ core_update() {
   # (fetch-geodata.sh), never a copy from a place the user can write. A geoip.metadb that older
   # versions took from dropweb's folder is replaced, or removed if the bundle has none. The core
   # reads them when it starts.
-  if [ -f geosite.dat ] && put_file geosite.dat "$DIR/core/geosite.dat" 644; then restart=1; fi
+  if [ -f geosite.dat ] && geodata_put geosite.dat; then restart=1; fi
   if [ -f geoip.metadb ]; then
-    if put_file geoip.metadb "$DIR/core/geoip.metadb" 644; then restart=1; fi
+    if geodata_put geoip.metadb; then restart=1; fi
   elif [ -e "$DIR/core/geoip.metadb" ]; then
     rm -f "$DIR/core/geoip.metadb"; restart=1
   fi
+  printf '%s' "$GEO_STATE" > "$DIR/core/.geodata.new"; chmod 644 "$DIR/core/.geodata.new"; mv -f "$DIR/core/.geodata.new" "$DIR/core/geodata"
   # the core starts at boot only after "ks core on"; an upgrade keeps a running core running
   job_running "$CORE_JOB" || launchctl disable "$CORE_JOB"
   if put_file local.killswitch.core.plist "$CORE_PLIST" 644; then plist=1; fi

@@ -654,6 +654,10 @@ private struct ServiceSection: View {
                 Button("Восстановить службу…") { control.install() }
             }
             HelperApprovalNote()
+            ForEach(GeoDataInstall.problems(try? String(contentsOfFile: GeoDataInstall.path, encoding: .utf8)), id: \.self) { problem in
+                Label(problem, systemImage: "exclamationmark.triangle")
+                    .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
             Button("Удалить KillSwitch из системы…", role: .destructive) { confirmUninstall = true }
                 .foregroundStyle(.red)
         }

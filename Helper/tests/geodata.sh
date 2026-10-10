@@ -58,6 +58,16 @@ check "pinned commit gone: the copies are enough" "$(run "$good" "")" \
 check "neither: fails, nothing written" "$(run "" "")" "1 geosite.dat@copy,geosite.dat@upstream none/none"
 check "wrong sha256 everywhere: fails, nothing written" "$(run "$bad" "$bad")" "1 geosite.dat@copy,geosite.dat@upstream none/none"
 check "  no temporary file left" "$(ls "$tmp/Helper")" "fetch-geodata.sh"
+check "every download gives up after 3 minutes (#27)" \
+  "$(grep -vE '^[[:space:]]*#' "$here/../fetch-geodata.sh" | grep -E '(^|[^-])curl ' | grep -vc -- '--max-time 180')" 0
+# the file already there stays when nothing pinned comes (#27)
+check "a failed download keeps the files there" \
+  "$(echo old-site > "$tmp/Helper/geosite.dat"; echo old-ip > "$tmp/Helper/geoip.metadb"
+     FAKE_COPY="$bad" FAKE_UPSTREAM="" PATH="$tmp/bin:$PATH" bash "$tmp/Helper/fetch-geodata.sh" >/dev/null 2>&1
+     echo "$? $(cat "$tmp/Helper/geosite.dat")/$(cat "$tmp/Helper/geoip.metadb")")" "1 old-site/old-ip"
+check "  the error names the file" \
+  "$(FAKE_COPY="" FAKE_UPSTREAM="" PATH="$tmp/bin:$PATH" bash "$tmp/Helper/fetch-geodata.sh" 2>&1 >/dev/null | grep -c '^Нет geosite.dat')" 1
+rm -f "$tmp/Helper/geosite.dat" "$tmp/Helper/geoip.metadb"
 check "every download with curl -q (no ~/.curlrc)" \
   "$(grep -vE '^[[:space:]]*#' "$here/../fetch-geodata.sh" | grep -E '(^|[^-])curl ' | grep -vc 'curl -q ')" 0
 

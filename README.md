@@ -67,7 +67,8 @@ and install.sh, reachable by any process), `servers-core` (proxy addresses of th
 profile, rewritten on every import, reachable only by our core), `servers` (both merged),
 `rules.sha256`, `rules.files` and `tunnels` (state of the last load, for tamper checks), `invalid`
 (world-readable: damaged files that made the last load block everything, ADR 0015), `events.log`
-(world-readable, last 500 corrective actions).
+(world-readable, last 500 corrective actions), `core/geodata` (world-readable: whether install.sh put
+the bundled geodata in place or kept the old file because its sha256 was not the pinned one, #27).
 
 ## Security model
 

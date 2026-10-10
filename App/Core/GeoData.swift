@@ -281,3 +281,24 @@ struct MMDB {
         }
     }
 }
+
+/// What install.sh did with the bundled geodata (#27): `core/geodata`, one "<file>=ok|mismatch|
+/// unpinned" per file. A file that was not the pinned one was not installed; the old one stays.
+enum GeoDataInstall {
+    static let path = "/Library/KillSwitch/core/geodata"
+
+    /// One sentence per file that did not update; empty when all is well or nothing is known.
+    static func problems(_ text: String?) -> [String] {
+        (text ?? "").split(whereSeparator: \.isNewline).compactMap { line in
+            let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
+            guard parts.count == 2, parts[1] == "mismatch" || parts[1] == "unpinned" else { return nil }
+            let name: String
+            switch parts[0] {
+            case "geosite.dat": name = String(localized: "База категорий сайтов")
+            case "geoip.metadb": name = String(localized: "База стран")
+            default: return nil
+            }
+            return String(localized: "\(name) не обновилась: файл в программе не прошёл проверку, работает прежняя. Скачай KillSwitch заново.")
+        }
+    }
+}

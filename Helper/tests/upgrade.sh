@@ -90,6 +90,12 @@ check "_regen: config in place" "$(grep '^config=' <<<"$out")" "config=new"
 
 # ===== install.sh --upgrade on fakes =====
 # A fake system: /Library/KillSwitch is $root/lib, the bundle's Helper/ is $root/bundle.
+pin_bundle() {  # pin_bundle <geosite text> <geoip text>: the bundle's fetch-geodata.sh pins these contents
+  local s i
+  s=$(printf '%s\n' "$1" | shasum -a 256 | cut -d' ' -f1); i=$(printf '%s\n' "$2" | shasum -a 256 | cut -d' ' -f1)
+  sed -e "s/^SHA256_GEOSITE=\"[0-9a-f]*\"/SHA256_GEOSITE=\"$s\"/" -e "s/^SHA256_GEOIP=\"[0-9a-f]*\"/SHA256_GEOIP=\"$i\"/" \
+    "$here/../fetch-geodata.sh" > "$root/bundle/fetch-geodata.sh"
+}
 setup() {  # setup <name>: a fresh installed system and bundle
   root="$tmp/i-$1"
   mkdir -p "$root/lib/core" "$root/bundle" "$root/ld"
@@ -99,6 +105,7 @@ setup() {  # setup <name>: a fresh installed system and bundle
   echo core-1 > "$root/bundle/mihomo"; echo core-1 > "$root/lib/core/mihomo"
   echo site > "$root/bundle/geosite.dat"; echo site > "$root/lib/core/geosite.dat"
   echo ip > "$root/bundle/geoip.metadb"; echo ip > "$root/lib/core/geoip.metadb"
+  pin_bundle site ip
   echo cfg > "$root/lib/core/config.yaml"
   cp "$here/../local.killswitch.plist" "$here/../local.killswitch.core.plist" "$root/bundle/"
   cp "$here/../local.killswitch.plist" "$root/ld/local.killswitch.plist"
@@ -211,6 +218,29 @@ check "new core binary: in place" "$(cat "$root/lib/core/mihomo")" core-2
 check "new core binary: core restarted once, in place" "$(grep -c '^launchctl kickstart -k system/local.killswitch.core$' "$root/calls")" 1
 check "new core binary: says so" "$(grep -c '^core: restarted$' <<<"$out")" 1
 check "new core binary: pf and the network never touched" "$(grep -cE '^(pfctl|networksetup)' "$root/calls")" 0
+
+# --- geodata (#27): the bundle's files only if they are the pinned ones; the old file stays otherwise
+geo() { awk -F= -v k="$1" '$1 == k { print $2 }' "$root/lib/core/geodata"; }
+setup geonew
+echo site-2 > "$root/bundle/geosite.dat"; pin_bundle site-2 ip
+out=$(KEEP_E=1 upgrade --upgrade 2>&1); rc=$?
+check "new pinned geosite: installed" "$rc $(cat "$root/lib/core/geosite.dat")" "0 site-2"
+check "new pinned geosite: core restarted" "$(grep -c '^core: restarted$' <<<"$out")" 1
+check "geodata state: both files fine" "$(geo geosite.dat) $(geo geoip.metadb)" "ok ok"
+check "geodata state: readable by the app" "$(stat -f %Lp "$root/lib/core/geodata")" 644
+setup geobad
+echo tampered > "$root/bundle/geosite.dat"
+out=$(KEEP_E=1 upgrade --upgrade 2>&1); rc=$?
+check "geosite not the pinned one: the install still succeeds" "$rc" 0
+check "  the old geosite stays" "$(cat "$root/lib/core/geosite.dat")" site
+check "  said on stderr, per file" "$(grep -c '^geosite.dat: ' <<<"$out")" 1
+check "  geodata state names the file" "$(geo geosite.dat) $(geo geoip.metadb)" "mismatch ok"
+check "  core not restarted for it" "$(grep -c '^core: restarted$' <<<"$out")" 0
+setup geonopin
+rm "$root/bundle/fetch-geodata.sh"; echo ip-2 > "$root/bundle/geoip.metadb"
+out=$(KEEP_E=1 upgrade --upgrade 2>&1); rc=$?
+check "no pin in the bundle: nothing replaced, install succeeds" "$rc $(cat "$root/lib/core/geoip.metadb")" "0 ip"
+check "  geodata state" "$(geo geosite.dat) $(geo geoip.metadb)" "unpinned unpinned"
 
 setup coreoff
 echo core-2 > "$root/bundle/mihomo"

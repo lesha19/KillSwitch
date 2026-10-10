@@ -22,16 +22,18 @@ SHA256_GEOIP="cc522e05d607c725bdd4b1219b6d80e2b6c3454571ca07157e73a17951ba8c84" 
 COPY="https://github.com/lesha19/KillSwitch-releases/releases/latest/download"
 UPSTREAM="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/$RELEASE"
 trap 'rm -f geosite.dat.tmp geoip.metadb.tmp' EXIT
+# Each download gives up after 3 minutes (#27); a file only replaces the one here once its sha256
+# is the pinned one, so any failure keeps the old file.
 fetch() {  # fetch <file> <sha256>
   local url
   if [ -z "$2" ]; then
-    curl -q -fsSL -o "$1.tmp" "$UPSTREAM/$1"
+    curl -q --max-time 180 -fsSL -o "$1.tmp" "$UPSTREAM/$1"
     shasum -a 256 "$1.tmp"; rm -f "$1.tmp"
     echo "Not pinned yet: put this sha256 of $1 into $0 and run it again" >&2; return 1
   fi
   for url in "$COPY/$1" "$UPSTREAM/$1"; do
     rm -f "$1.tmp"
-    if curl -q -fsSL -o "$1.tmp" "$url" && echo "$2  $1.tmp" | shasum -a 256 -c - >/dev/null 2>&1; then
+    if curl -q --max-time 180 -fsSL -o "$1.tmp" "$url" && echo "$2  $1.tmp" | shasum -a 256 -c - >/dev/null 2>&1; then
       mv "$1.tmp" "$1"
       echo "$1: $url"
       return 0
