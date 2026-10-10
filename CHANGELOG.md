@@ -4,6 +4,12 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Fixed
+- `xcodebuild test` from a fresh DerivedData no longer fails with «Unable to find module
+  dependency: 'KillSwitch'»: the test target depends on the app (built first, not hosted).
+
 ## [0.12] - 2026-10-10
 
 Another program's VPN (Happ and the like) is named and can be replaced with one click (ADR 0009).

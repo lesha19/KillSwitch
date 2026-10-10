@@ -129,9 +129,16 @@ targets:
       - Shared
     dependencies:
       - package: Yams
+      # The tests compile App/Core themselves; a few `@testable import KillSwitch` for the rest of
+      # the app's module, so the app has to be built first (a fresh DerivedData failed with
+      # "Unable to find module dependency"). Not hosted: running the tests must not start the app.
+      - target: KillSwitch
+        link: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lesha19.KillSwitch.Tests
+        TEST_HOST: ""
+        BUNDLE_LOADER: ""
         GENERATE_INFOPLIST_FILE: YES
 schemes:
   KillSwitch:
