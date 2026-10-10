@@ -1192,6 +1192,239 @@ core_generate() (
     cp "$w/egress" "$out.egress" && cp "$w/report.json" "$out.report"
 )
 
+# --- Xray (ADR 0020) ---------------------------------------------------------------------------
+# core_generate_xray <subscription.json> <config-out> <servers-out> [manual-servers]
+# The panel's Xray JSON (Remnawave XRAY_JSON: an array of full Xray configs, one per host). Every
+# element is checked and all their servers are approved at import (servers, pins, direct_sig), so
+# switching hosts (xrayserver=<remarks>) needs no password; the chosen one, else the first, becomes
+# the config. Taken as the panel wrote them: outbounds (only the protocols below), routing, dns,
+# policy, observatory. Ours: the inbounds (TUN, system DNS on 127.0.0.1:53, the app's fetch on
+# 127.0.0.1:47890), the log, our rules first. Same files as core_generate: config, servers,
+# .pins, .direct, .egress, .report. Runs in a subshell: "exit" leaves only the generator.
+XRAY_PROTOCOLS='vless|vmess|trojan|shadowsocks|freedom|blackhole|dns|loopback'
+core_generate_xray() (
+  in=$1 out=$2 srv_out=$3
+  umask 077   # the config holds the servers' keys
+  w=$(mktemp -d) || exit 1
+  trap 'rm -rf "$w"' EXIT
+  fail() { echo "$*" >&2; exit 1; }
+  [ -f "$in" ] || fail "Нет файла профиля: $in"
+  [ "$(wc -c < "$in")" -le 20000000 ] || fail "Профиль слишком большой"
+  cp "$in" "$w/in.json" || exit 1
+  # pass 1: checked; the server host names to pin, one per line
+  W=$w PROTOS=$XRAY_PROTOCOLS /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' check()' > "$w/hosts" || exit 1
+  : > "$w/pins"
+  while IFS= read -r h; do
+    [ -n "$h" ] || continue
+    if [ -n "${KS_PINS:-}" ]; then a=$(awk -F'\t' -v h="$h" '$1 == h { print $2; exit }' "$KS_PINS")
+    else a=$(resolve_host "$h") || a=""; fi
+    is_ipv4 "$a" || fail "Не удалось узнать адрес сервера $h"
+    printf '%s\t%s\n' "$h" "$a" >> "$w/pins"
+  done < "$w/hosts"
+  # pass 2: the config and what goes with it
+  W=$w PROTOS=$XRAY_PROTOCOLS PICK=$(setting xrayserver "") ADBLOCK=$(setting adblock 0) \
+    GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) APPS=$(setting splitapps "") \
+    TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT \
+    /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' build()' || exit 1
+  rm -f "$out" "$srv_out" "$out.pins" "$out.direct" "$out.egress" "$out.report"   # a leftover would keep its mode
+  cp "$w/config.json" "$out" && cp "$w/servers" "$srv_out" && cp "$w/pins" "$out.pins" && cp "$w/direct" "$out.direct" &&
+    cp "$w/egress" "$out.egress" && cp "$w/report.json" "$out.report"
+)
+
+# shellcheck disable=SC2016 # perl, not shell
+KS_XRAY_PL='
+  use strict; use warnings;
+  my $W = $ENV{W};
+  my $J = JSON::PP->new->canonical;
+  sub rd { local $/; open my $f, "<", $_[0] or die "$_[0]\n"; JSON::PP->new->decode(<$f>) }
+  sub wr { open my $f, ">", $_[0] or die; print $f JSON::PP->new->canonical->encode($_[1]); close $f or die }
+  sub ipv4 { $_[0] =~ /\A\d{1,3}(\.\d{1,3}){3}\z/ }
+  sub host { $_[0] =~ /\A[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\z/ }
+  sub load {
+    my $a = eval { local $/; open my $f, "<", "$W/in.json" or die; JSON::PP->new->decode(<$f>) };
+    die "Подписка не в формате Xray (нужен JSON-список конфигов Xray)\n"
+      unless ref $a eq "ARRAY" && @$a && !grep { ref $_ ne "HASH" || ref $_->{outbounds} ne "ARRAY" } @$a;
+    die "Слишком много конфигов в подписке\n" if @$a > 200;
+    my $walk; $walk = sub { my $x = shift;
+      if (ref $x eq "HASH") { for (keys %$x) { die "Управляющие символы в ключе подписки\n" if /[\x00-\x1f\x7f]/ || length > 256; $walk->($x->{$_}) } }
+      elsif (ref $x eq "ARRAY") { $walk->($_) for @$x }
+      elsif (defined $x && !ref $x && $x =~ /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/) { die "Управляющие символы в подписке\n" } };
+    $walk->($a);
+    $a
+  }
+  # the server addresses of a proxy outbound, as references to edit in place
+  sub addrs { my $o = shift; my $s = $o->{settings}; return () unless ref $s eq "HASH";
+    my @r;
+    for my $k (qw(vnext servers)) { push @r, map { \$_->{address} } grep { ref $_ eq "HASH" } @{ ref $s->{$k} eq "ARRAY" ? $s->{$k} : [] } }
+    push @r, \$s->{address} if exists $s->{address} && $o->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/;
+    @r }
+  sub name_of { my ($c, $i) = @_; my $r = $c->{remarks}; defined $r && !ref $r && length $r ? $r : "#" . ($i + 1) }
+  sub check {
+    my $a = load(); my %hosts;
+    for my $i (0 .. $#$a) {
+      my $c = $a->[$i]; my $n = name_of($c, $i);
+      my %tags;
+      for my $o (@{ $c->{outbounds} }) {
+        die "$n: outbound не объект\n" unless ref $o eq "HASH";
+        my $p = $o->{protocol} // "";
+        die "$n: незнакомый тип сервера «$p» (KillSwitch берёт $ENV{PROTOS})\n" unless $p =~ /\A($ENV{PROTOS})\z/;
+        my $t = $o->{tag} // ""; die "$n: два outbound с тегом «$t»\n" if length $t && $tags{$t}++;
+        for my $r (addrs($o)) {
+          my $h = $$r // ""; die "$n: у сервера нет адреса\n" if ref $h || !length $h;
+          next if ipv4($h);
+          die "$n: адрес сервера $h — IPv6, KillSwitch пускает к серверам только IPv4\n" if $h =~ /:/;
+          die "$n: не похоже на адрес сервера: $h\n" unless host($h);
+          $hosts{$h} = 1;
+        }
+      }
+      for my $o (@{ $c->{outbounds} }) {
+        my @to = grep { defined } ($o->{proxySettings} && ref $o->{proxySettings} eq "HASH" ? $o->{proxySettings}{tag} : undef,
+                                   ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" ? $o->{streamSettings}{sockopt}{dialerProxy} : undef);
+        for (@to) { die "$n: «" . ($o->{tag} // "?") . "» подключается через несуществующий «$_»\n" if ref $_ || !$tags{$_} }
+      }
+    }
+    print "$_\n" for sort keys %hosts;
+  }
+  my %RULE_KEYS = map { $_ => 1 } qw(type domain ip port sourcePort source sourceIP network user inboundTag protocol attrs
+    outboundTag balancerTag ruleTag domainMatcher process localIP localPort vlessRoute);
+  sub rule_text { my $r = shift; my @p;
+    for my $k (sort grep { !/\A(outboundTag|balancerTag|type|ruleTag|domainMatcher)\z/ } keys %$r) {
+      my $v = $r->{$k}; my @v = ref $v eq "ARRAY" ? @$v : ($v);
+      @v = (@v[0 .. 4], "…+" . (@v - 5)) if @v > 6;
+      push @p, "$k=" . join ",", map { ref $_ ? "?" : $_ } @v;
+    }
+    join(" ", @p) . " → " . ($r->{outboundTag} // "балансировщик " . ($r->{balancerTag} // "?")) }
+  sub build {
+    my $a = load();
+    my %pin = map { chomp; split /\t/ } do { open my $f, "<", "$W/pins" or die; <$f> };
+    my (%srv, @servers);
+    for my $i (0 .. $#$a) {
+      push @servers, { name => name_of($a->[$i], $i) };
+      for my $o (@{ $a->[$i]{outbounds} }) { for my $r (addrs($o)) { $srv{ ipv4($$r) ? $$r : $pin{$$r} } = 1 } }
+    }
+    my ($ci) = grep { length $ENV{PICK} && name_of($a->[$_], $_) eq $ENV{PICK} } 0 .. $#$a;
+    $ci //= 0;
+    my $c = $a->[$ci];
+    my (@dropped, @added, %unbound);
+    my %keep = map { $_ => 1 } qw(dns routing outbounds policy observatory burstObservatory);
+    my %managed = map { $_ => 1 } qw(inbounds log remarks meta);
+    for (sort keys %$c) { next if $keep{$_}; push @dropped, { section => "profile", item => $_, reason => $managed{$_} ? "managed" : "not-allowed" } }
+    my %cfg = map { exists $c->{$_} ? ($_ => $c->{$_}) : () } keys %keep;
+    my $outs = $cfg{outbounds};
+    my (%tag, %freedom, $dnsout, $block, $direct, $proxy);
+    for my $o (@$outs) {
+      my $t = $o->{tag} // ""; $tag{$t} = $o if length $t;
+      my $p = $o->{protocol};
+      $freedom{$t} = 1 if $p eq "freedom";
+      $direct //= $t if $p eq "freedom" && length $t;
+      $dnsout //= $t if $p eq "dns" && length $t;
+      $block //= $t if $p eq "blackhole" && length $t;
+      $proxy //= $t if $p =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && length $t;
+      if (exists $o->{sendThrough}) { delete $o->{sendThrough}; $unbound{$t} = 1 }
+      my $so = ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" ? $o->{streamSettings}{sockopt} : undef;
+      for my $k (qw(interface mark)) { if ($so && exists $so->{$k}) { delete $so->{$k}; $unbound{$t} = 1 } }
+      for my $r (addrs($o)) {
+        next if ipv4($$r);
+        my $h = $$r; $$r = $pin{$h};
+        my $ss = ref $o->{streamSettings} eq "HASH" ? $o->{streamSettings} : undef;
+        my $sec = $ss ? $ss->{security} // "" : "";
+        if ($sec eq "tls" || $sec eq "reality") {
+          my $k = $sec . "Settings"; $ss->{$k} = {} unless ref $ss->{$k} eq "HASH";
+          $ss->{$k}{serverName} = $h unless defined $ss->{$k}{serverName} && length $ss->{$k}{serverName};
+        }
+      }
+    }
+    die "В конфиге «" . name_of($c, $ci) . "» нет ни одного сервера\n" unless defined $proxy;
+    unless (defined $dnsout) { $dnsout = "ks-dns-out"; push @$outs, { tag => $dnsout, protocol => "dns" }; push @added, { kind => "dns-out", items => [$dnsout] } }
+    my $r = ref $cfg{routing} eq "HASH" ? $cfg{routing} : {};
+    my %rt = map { exists $r->{$_} ? ($_ => $r->{$_}) : () } qw(domainStrategy domainMatcher balancers);
+    for (sort grep { !/\A(domainStrategy|domainMatcher|balancers|rules)\z/ } keys %$r) { push @dropped, { section => "routing", item => $_, reason => "not-allowed" } }
+    my %bal;
+    for my $b (ref $rt{balancers} eq "ARRAY" ? @{ $rt{balancers} } : ()) {
+      next unless ref $b eq "HASH" && defined $b->{tag};
+      my @sel = grep { !ref } @{ ref $b->{selector} eq "ARRAY" ? $b->{selector} : [] };
+      my @m = grep { my $t = $_; grep { index($t, $_) == 0 } @sel } map { $_->{tag} // () } @$outs;
+      push @m, $b->{fallbackTag} if defined $b->{fallbackTag} && !grep { $_ eq $b->{fallbackTag} } @m;
+      $bal{ $b->{tag} } = \@m;
+    }
+    my %dnstags = map { ref $_ eq "HASH" && defined $_->{tag} ? ($_->{tag} => 1) : () } (ref $cfg{dns} eq "HASH" && ref $cfg{dns}{servers} eq "ARRAY" ? @{ $cfg{dns}{servers} } : ());
+    $dnstags{ $cfg{dns}{tag} } = 1 if ref $cfg{dns} eq "HASH" && defined $cfg{dns}{tag};
+    my (@rules, @report, @direct, %egress);
+    my $todirect = sub { my $x = shift;
+      (defined $x->{outboundTag} && $freedom{ $x->{outboundTag} }) || (defined $x->{balancerTag} && grep { $freedom{$_} } @{ $bal{ $x->{balancerTag} } || [] }) };
+    my @in = ref $r->{rules} eq "ARRAY" ? @{ $r->{rules} } : ();
+    for my $i (0 .. $#in) {
+      my $x = $in[$i];
+      my $text = ref $x eq "HASH" ? rule_text($x) : "?";
+      if (ref $x ne "HASH" || grep { !$RULE_KEYS{$_} } keys %$x) { push @dropped, { section => "rules", index => $i, item => $text, reason => "not-allowed" }; next }
+      if (defined $x->{outboundTag} ? !$tag{ $x->{outboundTag} } : !(defined $x->{balancerTag} && $bal{ $x->{balancerTag} })) {
+        push @dropped, { section => "rules", index => $i, item => $text, reason => "target:" . ($x->{outboundTag} // $x->{balancerTag} // "") }; next }
+      push @rules, $x; push @report, { rule => $text, from => "subscription", index => $i };
+      if ($todirect->($x)) {
+        my @k = grep { !/\A(outboundTag|balancerTag|type|ruleTag)\z/ } keys %$x;
+        my $dnsonly = @k == 1 && $k[0] eq "inboundTag" && ref $x->{inboundTag} eq "ARRAY" && !grep { !$dnstags{$_} } @{ $x->{inboundTag} };
+        $egress{ $dnsonly ? "dns" : "rules" } = 1;
+        push @direct, "rule\t" . $J->encode($x);
+      }
+    }
+    # what no rule takes goes to the first outbound
+    if ($outs->[0]{protocol} eq "freedom") { $egress{rules} = 1; push @direct, "default\t" . ($outs->[0]{tag} // "") }
+    for my $t (sort keys %bal) { push @direct, "balancer\t" . $J->encode({ tag => $t, members => $bal{$t} }) if grep { $freedom{$_} } @{ $bal{$t} } }
+    for my $o (grep { $_->{protocol} eq "freedom" } @$outs) { push @direct, "outbound\t" . $J->encode($o) if @direct }
+    push @direct, "dns\t" . $J->encode($cfg{dns}) if $egress{dns};
+    # ours, first: the system DNS to the template DNS outbound, the fetch to a server (never
+    # direct, ADR 0016), then the person'"'"'s choices
+    my @ours = ({ inboundTag => ["ks-dns"], outboundTag => $dnsout }, { inboundTag => ["ks-fetch"], outboundTag => $proxy });
+    if ($ENV{ADBLOCK} eq "1" && $ENV{GEOSITE}) {
+      unless (defined $block) { $block = "ks-block"; push @$outs, { tag => $block, protocol => "blackhole" } }
+      push @ours, { domain => ["geosite:category-ads-all"], outboundTag => $block };
+      push @added, { kind => "adblock", items => ["geosite:category-ads-all → $block"] };
+    }
+    my @apps = grep { length } split /,/, $ENV{APPS} // "";
+    if (@apps) {
+      unless (defined $direct) { $direct = "ks-direct"; push @$outs, { tag => $direct, protocol => "freedom" } }
+      my $rule = { process => [ map { m{\A/} ? (m{/\z} ? $_ : "$_/") : $_ } @apps ], outboundTag => $direct };
+      push @ours, $rule; push @added, { kind => "splitapps", items => \@apps };
+      $egress{splitapps} = 1; push @direct, "rule\t" . $J->encode($rule);
+    }
+    unshift @report, map { { rule => rule_text($_), from => "killswitch" } } @ours;
+    $rt{rules} = [ @ours, @rules ];
+    # DNS: the system resolver is ourselves (127.0.0.1:53), fakedns would outlive the core
+    if (ref $cfg{dns} eq "HASH" && ref $cfg{dns}{servers} eq "ARRAY") {
+      $cfg{dns}{servers} = [ grep { my $s = ref $_ eq "HASH" ? $_->{address} // "" : $_ // "";
+        my $bad = $s =~ /\A(localhost|fakedns)\z/i || $s =~ m{\A(https|tcp|quic)\+local://}i;
+        push @dropped, { section => "dns", item => $s, reason => "bad-value" } if $bad; !$bad } @{ $cfg{dns}{servers} } ];
+    }
+    # sniffing: the template inbound'"'"'s, else routing only
+    my ($tpl) = grep { ref $_ eq "HASH" && ref $_->{sniffing} eq "HASH" && $_->{sniffing}{enabled} } @{ ref $c->{inbounds} eq "ARRAY" ? $c->{inbounds} : [] };
+    my $sniff = $tpl ? $tpl->{sniffing} : { enabled => JSON::PP::true, destOverride => ["http", "tls", "quic"], routeOnly => JSON::PP::true };
+    push @added, { kind => "sniffer", items => [] } unless $tpl;
+    push @added, { kind => "unbound", items => [ sort keys %unbound ] } if %unbound;
+    my @pins = map { { host => $_, address => $pin{$_} } } sort keys %pin;
+    unshift @added, { kind => "pinning", items => \@pins } if @pins;
+    $cfg{routing} = \%rt;
+    $cfg{log} = { loglevel => "warning", access => "none", dnsLog => JSON::PP::false };
+    $cfg{inbounds} = [
+      { tag => "ks-tun", protocol => "tun", sniffing => $sniff,
+        settings => { mtu => 1500, gateway => [ $ENV{TUN_GW} ], autoSystemRoutingTable => ["0.0.0.0/0"], autoOutboundsInterface => "auto" } },
+      { tag => "ks-dns", protocol => "dokodemo-door", listen => "127.0.0.1", port => 53,
+        settings => { address => "1.1.1.1", port => 53, network => "tcp,udp" } },
+      { tag => "ks-fetch", protocol => "http", listen => "127.0.0.1", port => $ENV{FETCH_PORT} + 0 } ];
+    wr("$W/config.json", \%cfg);
+    open my $f, ">", "$W/servers" or die; print $f "$_\n" for sort keys %srv; close $f;
+    open $f, ">", "$W/direct" or die; print $f "$_\n" for @direct; close $f;
+    open $f, ">", "$W/egress" or die; print $f "$_\n" for grep { $egress{$_} } qw(rules dns splitapps); close $f;
+    my @dnss = map { ref $_ eq "HASH" ? $_->{address} // "?" : $_ } @{ ref $cfg{dns} eq "HASH" && ref $cfg{dns}{servers} eq "ARRAY" ? $cfg{dns}{servers} : [] };
+    s{\A([a-z0-9+]+://[^/]+)/.+}{$1/...}i for @dnss;
+    wr("$W/report.json", { version => 1, core => "xray", rules => \@report, dropped => \@dropped, providers => [],
+      groups => [ map { { name => $_, type => "balancer", proxies => $bal{$_}, from => "subscription" } } sort keys %bal ],
+      proxies => [ map { { name => $_->{tag}, type => $_->{protocol} } } grep { $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ } @$outs ],
+      added => \@added, sniffer => { from => ($tpl ? "subscription" : "killswitch"), value => $sniff },
+      dns => { servers => \@dnss, taken => {} }, egress => [ grep { $egress{$_} } qw(rules dns splitapps) ],
+      servers => \@servers, selected => name_of($c, $ci) });
+  }
+'
+
 # Perl shared by the generator's checks and its report: rd/wr read and write JSON files, split_rule
 # takes a mihomo rule apart the way mihomo does (TYPE,PAYLOAD,TARGET[,options]; MATCH,TARGET;
 # AND|OR|NOT,(…),TARGET), rule_problem says why the core would not take it ("" = fine).

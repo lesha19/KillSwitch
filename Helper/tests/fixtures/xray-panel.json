@@ -1,0 +1,387 @@
+[
+ {
+  "dns": {
+   "servers": [
+    {
+     "tag": "direct-dns",
+     "address": "77.88.8.8",
+     "domains": [
+      "domain:storkvpn.online",
+      "geosite:category-ru",
+      "geosite:apple",
+      "geosite:steam",
+      "domain:windowsupdate.com",
+      "domain:update.microsoft.com",
+      "domain:xbox.com",
+      "domain:msn.com",
+      "domain:skype.com",
+      "domain:mnpl.one",
+      "domain:monopoly-one.com",
+      "domain:bsu.by"
+     ],
+     "queryStrategy": "UseIPv4"
+    },
+    {
+     "tag": "proxy-dns",
+     "address": "8.8.8.8",
+     "queryStrategy": "UseIPv4"
+    },
+    {
+     "tag": "fallback-dns",
+     "address": "1.1.1.1",
+     "queryStrategy": "UseIPv4"
+    }
+   ],
+   "queryStrategy": "UseIPv4"
+  },
+  "policy": {
+   "levels": {
+    "0": {
+     "connIdle": 600,
+     "handshake": 4,
+     "uplinkOnly": 0,
+     "downlinkOnly": 0
+    }
+   }
+  },
+  "routing": {
+   "rules": [
+    {
+     "type": "field",
+     "inboundTag": [
+      "direct-dns"
+     ],
+     "outboundTag": "direct"
+    },
+    {
+     "type": "field",
+     "inboundTag": [
+      "proxy-dns",
+      "fallback-dns"
+     ],
+     "balancerTag": "country-lb"
+    },
+    {
+     "port": "53",
+     "type": "field",
+     "outboundTag": "dns-out"
+    },
+    {
+     "port": "443",
+     "type": "field",
+     "network": "udp",
+     "outboundTag": "block"
+    },
+    {
+     "type": "field",
+     "domain": [
+      "domain:doubleclick.net",
+      "domain:adservice.google.com"
+     ],
+     "outboundTag": "block"
+    },
+    {
+     "type": "field",
+     "domain": [
+      "domain:localhost",
+      "domain:local",
+      "domain:localdomain",
+      "domain:lan"
+     ],
+     "outboundTag": "direct"
+    },
+    {
+     "ip": [
+      "10.0.0.0/8",
+      "172.16.0.0/12",
+      "192.168.0.0/16",
+      "127.0.0.0/8"
+     ],
+     "type": "field",
+     "outboundTag": "direct"
+    },
+    {
+     "type": "field",
+     "domain": [
+      "domain:mnpl.one",
+      "domain:monopoly-one.com"
+     ],
+     "outboundTag": "direct"
+    },
+    {
+     "type": "field",
+     "domain": [
+      "geosite:youtube"
+     ],
+     "balancerTag": "country-lb"
+    },
+    {
+     "type": "field",
+     "domain": [
+      "domain:telegram.org",
+      "domain:t.me",
+      "domain:telegram.me",
+      "domain:telegra.ph"
+     ],
+     "balancerTag": "country-lb"
+    },
+    {
+     "type": "field",
+     "domain": [
+      "domain:twitch.tv",
+      "domain:jtvnw.net"
+     ],
+     "balancerTag": "country-lb"
+    },
+    {
+     "type": "field",
+     "domain": [
+      "domain:tiktok.com",
+      "domain:tiktokcdn.com",
+      "domain:tiktokcdn-us.com",
+      "domain:tiktokcdn-eu.com"
+     ],
+     "balancerTag": "country-lb"
+    },
+    {
+     "type": "field",
+     "domain": [
+      "domain:copilot.microsoft.com",
+      "domain:copilot.cloud.microsoft",
+      "domain:copilot.com",
+      "domain:copilot.ai"
+     ],
+     "balancerTag": "country-lb"
+    },
+    {
+     "type": "field",
+     "domain": [
+      "domain:speedtest.net",
+      "domain:ookla.com",
+      "domain:speedtestcustom.com",
+      "domain:cdnst.net"
+     ],
+     "balancerTag": "country-lb"
+    },
+    {
+     "type": "field",
+     "domain": [
+      "domain:ntc.party"
+     ],
+     "balancerTag": "country-lb"
+    },
+    {
+     "type": "field",
+     "domain": [
+      "domain:ivi.ru",
+      "domain:ivi.tv",
+      "domain:okko.tv",
+      "domain:okko.ru"
+     ],
+     "outboundTag": "direct"
+    },
+    {
+     "type": "field",
+     "domain": [
+      "domain:ifconfig.me",
+      "domain:ipify.org",
+      "domain:checkip.amazonaws.com",
+      "domain:ip-api.com"
+     ],
+     "outboundTag": "direct"
+    },
+    {
+     "type": "field",
+     "domain": [
+      "geosite:category-ru",
+      "geosite:apple",
+      "geosite:steam",
+      "domain:windowsupdate.com"
+     ],
+     "outboundTag": "direct"
+    },
+    {
+     "port": "0-65535",
+     "type": "field",
+     "balancerTag": "country-lb"
+    }
+   ],
+   "balancers": [
+    {
+     "tag": "country-lb",
+     "selector": [
+      "LT_"
+     ],
+     "strategy": {
+      "type": "leastLoad",
+      "settings": {
+       "costs": [
+        {
+         "match": "LT_1",
+         "value": 0,
+         "regexp": false
+        },
+        {
+         "match": "LT_1_FB",
+         "value": 13000,
+         "regexp": false
+        }
+       ],
+       "maxRTT": "5000ms",
+       "expected": 1,
+       "baselines": [
+        "200ms"
+       ]
+      }
+     },
+     "fallbackTag": "LT_1"
+    }
+   ],
+   "domainStrategy": "AsIs"
+  },
+  "inbounds": [
+   {
+    "tag": "socks-in",
+    "port": 10808,
+    "listen": "127.0.0.1",
+    "protocol": "socks",
+    "settings": {
+     "udp": true,
+     "auth": "noauth"
+    },
+    "sniffing": {
+     "enabled": true,
+     "routeOnly": true,
+     "destOverride": [
+      "http",
+      "tls",
+      "quic"
+     ]
+    }
+   },
+   {
+    "tag": "http-in",
+    "port": 10809,
+    "listen": "127.0.0.1",
+    "protocol": "http",
+    "sniffing": {
+     "enabled": true,
+     "routeOnly": true,
+     "destOverride": [
+      "http",
+      "tls",
+      "quic"
+     ]
+    }
+   }
+  ],
+  "outbounds": [
+   {
+    "tag": "LT_1",
+    "protocol": "vless",
+    "settings": {
+     "vnext": [
+      {
+       "address": "203.0.113.10",
+       "port": 443,
+       "users": [
+        {
+         "id": "00000000-0000-4000-8000-000000000001",
+         "encryption": "none",
+         "flow": "xtls-rprx-vision"
+        }
+       ]
+      }
+     ]
+    },
+    "streamSettings": {
+     "network": "tcp",
+     "tcpSettings": {},
+     "security": "reality",
+     "realitySettings": {
+      "serverName": "www.example.com",
+      "publicKey": "Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBrjqnAw",
+      "shortId": "0123abcd",
+      "fingerprint": "chrome"
+     },
+     "sockopt": {
+      "domainStrategy": "ForceIPv4"
+     }
+    }
+   },
+   {
+    "tag": "LT_1_FB",
+    "protocol": "vless",
+    "settings": {
+     "vnext": [
+      {
+       "address": "203.0.113.10",
+       "port": 2083,
+       "users": [
+        {
+         "id": "00000000-0000-4000-8000-000000000001",
+         "encryption": "none",
+         "flow": ""
+        }
+       ]
+      }
+     ]
+    },
+    "streamSettings": {
+     "network": "xhttp",
+     "xhttpSettings": {
+      "mode": "packet-up",
+      "host": "www.example.com",
+      "path": "/fake-path",
+      "extra": {
+       "noSSEHeader": true,
+       "xPaddingBytes": "100-1000",
+       "scMaxEachPostBytes": "1000000-2000000",
+       "scMinPostsIntervalMs": "10-50",
+       "scStreamUpServerSecs": "30-60"
+      }
+     },
+     "security": "reality",
+     "realitySettings": {
+      "serverName": "www.example.com",
+      "publicKey": "Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBrjqnAw",
+      "shortId": "0123abcd",
+      "fingerprint": "chrome"
+     },
+     "sockopt": {
+      "domainStrategy": "ForceIPv4"
+     }
+    }
+   },
+   {
+    "tag": "direct",
+    "protocol": "freedom",
+    "streamSettings": {
+     "sockopt": {
+      "domainStrategy": "ForceIPv4"
+     }
+    }
+   },
+   {
+    "tag": "block",
+    "protocol": "blackhole"
+   },
+   {
+    "tag": "dns-out",
+    "protocol": "dns"
+   }
+  ],
+  "burstObservatory": {
+   "pingConfig": {
+    "timeout": "3s",
+    "interval": "90s",
+    "sampling": 5,
+    "connectivity": "http://connectivitycheck.gstatic.com/generate_204"
+   },
+   "subjectSelector": [
+    "LT_"
+   ]
+  },
+  "remarks": "🇱🇹Литва"
+ }
+]
