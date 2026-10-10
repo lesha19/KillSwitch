@@ -665,17 +665,17 @@ final class KillSwitchControl {
             content.body = "Интернет перекрыт, пока VPN не подключится снова."
         case .pauseEnded:
             guard defaults.object(forKey: "notifyPauseEnded") as? Bool ?? true else { return }
-            content.title = "Пауза закончилась"
+            content.title = "Пауза защиты закончилась"
             content.body = "Защита снова включена."
         case .daemonOff:
-            content.title = "Служба защиты выключена"
+            content.title = "Служба KillSwitch выключена"
             content.body = "Включи её в Системных настройках → Основные → Объекты входа."
         case .macOSUpdated:
             content.title = "macOS обновилась"
             content.body = "Перезагрузи Mac и проверь утечки в KillSwitch"
         case .autoConnectNeedsPassword:
             content.title = "VPN не подключился сам"
-            content.body = "Для этого нужен пароль. Подключись в KillSwitch вручную или нажми там «Обновить защиту»."
+            content.body = "Для этого нужен пароль. Подключись в KillSwitch вручную или нажми в его настройках «Восстановить службу…»."
         }
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         Task {

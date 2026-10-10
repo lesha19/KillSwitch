@@ -1,6 +1,8 @@
 name: KillSwitch
 options:
   bundleIdPrefix: com.lesha19
+  # the app speaks Russian; its strings live in App/Localizable.xcstrings
+  developmentLanguage: ru
   deploymentTarget:
     macOS: "15.0"
 packages:
@@ -20,6 +22,8 @@ settings:
     CURRENT_PROJECT_VERSION: "8"
     ENABLE_HARDENED_RUNTIME: NO
     GENERATE_INFOPLIST_FILE: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
 targets:
   KillSwitch:
     type: application

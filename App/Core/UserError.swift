@@ -61,7 +61,7 @@ struct UserError: Equatable {
             UserError(title: "VPN не установлен", message: "В службе не хватает VPN — так бывает после старой версии.", action: .repair)
         case .serviceOff:
             UserError(title: "Служба KillSwitch выключена",
-                      message: "Её выключили в Системных настройках. Правила пока действуют, но следить за ними некому.",
+                      message: "Её выключили в Системных настройках. Защита пока действует, но следить за ней некому.",
                       action: .openLoginItems)
         }
     }

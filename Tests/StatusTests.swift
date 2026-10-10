@@ -147,7 +147,7 @@ final class StatusTests: XCTestCase {
         XCTAssertEqual(Status.unprotected(pausedUntil: nil).line(server), "Программы ходят в интернет напрямую.")
         XCTAssertTrue(Status.unprotected(pausedUntil: now).line(server).hasPrefix("Программы ходят в интернет напрямую. Пауза до "))
         XCTAssertEqual(Status.broken(.serviceOff).line(server),
-                       "Её выключили в Системных настройках. Правила пока действуют, но следить за ними некому.")
+                       "Её выключили в Системных настройках. Защита пока действует, но следить за ней некому.")
     }
 
     func testHomeLineLeavesTheServerToItsRow() {

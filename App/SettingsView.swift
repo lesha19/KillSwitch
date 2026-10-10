@@ -38,9 +38,9 @@ private struct AccessSettings: View {
                 toggle("Домашняя сеть", "Роутер, NAS, принтер, AirPlay.", key: "lan", value: control.allowLAN)
                 toggle("Адреса сайтов через роутер", "Пока VPN выключен, Mac может узнавать адреса сайтов у роутера. Само содержимое не уходит, но видно, куда ходит Mac.", key: "dns", value: control.allowRouterDNS)
                     .disabled(!control.allowLAN)
-                toggle("Сторонний клиент dropweb мимо VPN", "Только для старой схемы с dropweb вместо встроенного VPN: его ядро сможет выходить на любые адреса. Это слабее защиты: любая программа может запустить то ядро со своим конфигом. Фильтр macOS этому ядру не доверяет: пока туннель dropweb не поднят, оно доходит только до серверов VPN. Встроенному VPN это не нужно.", key: "direct", value: control.allowDirect)
+                toggle("Пускать dropweb мимо VPN (слабее защиты)", "Только для старой схемы, когда вместо KillSwitch подключается dropweb: он сможет выходить на любые адреса, и любая программа может этим воспользоваться. Встроенному VPN это не нужно.", key: "direct", value: control.allowDirect)
                 toggle("Отключать сеть при выключении Mac", "Wi-Fi, кабель и iPhone по USB отключаются при выключении Mac и включаются сами после загрузки, когда защита уже стоит. Так при загрузке ничего не утекает. Не спасает при внезапном выключении (сел аккумулятор, сбой).", key: "wifiguard", value: control.wifiGuard)
-                toggle("Tailscale", "Связь между своими устройствами без VPN: напрямую (только системная служба Tailscale) и через ретрансляторы Tailscale вне дома. Фильтр macOS доверяет только подписанному приложению Tailscale (с сайта или из App Store); tailscaled из Homebrew без VPN доходит лишь до ретрансляторов.", key: "tailscale", value: control.allowTailscale)
+                toggle("Tailscale", "Связь между своими устройствами без VPN: напрямую (только системная служба Tailscale) и через ретрансляторы Tailscale вне дома. Защита macOS доверяет только подписанному приложению Tailscale (с сайта или из App Store).", key: "tailscale", value: control.allowTailscale)
             } footer: {
                 Text("Каждое изменение спросит пароль.").foregroundStyle(.secondary)
             }
@@ -86,7 +86,7 @@ private struct ServerSettings: View {
             } header: {
                 Text("Серверы VPN")
             } footer: {
-                Text("Без VPN доступны только эти адреса. Серверы встроенного VPN пропускаются сами при обновлении подписки. Здесь же видны серверы сторонних клиентов (Happ, dropweb), если они есть: к ним сможет подключиться любая программа. Изменения спросят пароль.")
+                Text("Без VPN доступны только эти адреса. Серверы из подписки пропускаются сами. Остальные нужны, только если ты пользуешься Happ или dropweb вместе с KillSwitch: к ним сможет подключиться любая программа. Изменения спросят пароль.")
                     .foregroundStyle(.secondary)
             }
         }
@@ -138,12 +138,12 @@ private struct CheckSettings: View {
             Section {
                 Button("Скопировать диагностику") { DiagnosticsCopy.copy(control: control, client: client) }
             } footer: {
-                Text("Версия, состояние защиты и ядра, последние ошибки — без ссылок, ключей и адресов серверов. Можно отправить в поддержку.")
+                Text("Версия, состояние защиты и VPN, последние ошибки — без ссылок, ключей и адресов серверов. Можно отправить в поддержку.")
                     .foregroundStyle(.secondary)
             }
             Section("Советы") {
-                Text("Выключи «Частный узел iCloud» (Private Relay): он может обходить фильтр.")
-                Text("После каждого обновления macOS перезагрузи Mac и нажми проверку.")
+                Text("Выключи «Частный узел iCloud» (Private Relay): он может обходить защиту.")
+                Text("После каждого обновления macOS перезагрузи Mac и проверь утечки.")
                 Text("Для полной защиты при загрузке выключай Wi-Fi перед выключением Mac.")
             }
             .foregroundStyle(.secondary)
@@ -202,13 +202,13 @@ private struct GeneralSettings: View {
     var body: some View {
         @Bindable var control = control
         Form {
-            Section("Пауза") {
+            Section("Пауза защиты") {
                 Stepper("Короткая: \(pauseShort) мин", value: $pauseShort, in: 1...60)
                 Stepper("Длинная: \(pauseLong) мин", value: $pauseLong, in: 5...240, step: 5)
             }
             Section("Уведомления") {
                 Toggle("VPN отключился, интернет перекрыт", isOn: $notifyVPNDropped)
-                Toggle("Пауза закончилась", isOn: $notifyPauseEnded)
+                Toggle("Пауза защиты закончилась", isOn: $notifyPauseEnded)
             }
             AutoConnectSection(control: control)
             FilterSection(filter: control.filter)
@@ -299,7 +299,7 @@ private struct SplitTunnelSection: View {
         let paths = (try? JSONDecoder().decode([String: String].self, from: pathsData)) ?? [:]
         Section {
             if !control.coreDirect {
-                Label("Включи «Российские сайты — напрямую» выше: без него ядру VPN закрыт выход мимо туннеля.", systemImage: "info.circle")
+                Label("Сначала включи «Российские сайты напрямую» выше: без него VPN не может выпустить программы мимо себя.", systemImage: "info.circle")
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             if control.splitApps.isEmpty {
@@ -323,7 +323,7 @@ private struct SplitTunnelSection: View {
             }
             Button("Добавить программы…", action: pick)
         } header: {
-            Text("Раздельный туннель")
+            Text("Программы без VPN")
         } footer: {
             Text("Эти программы ходят в интернет напрямую, мимо VPN; остальные — через VPN. Программа узнаётся по имени процесса, поэтому её вспомогательные процессы (например, «Google Chrome Helper») могут идти через VPN. Каждое изменение спросит пароль.")
                 .foregroundStyle(.secondary)
@@ -444,9 +444,9 @@ private struct FilterSection: View {
                 }
             }
         } header: {
-            Text("Второй слой: фильтр macOS")
+            Text("Защита macOS")
         } footer: {
-            Text("Отдельная от правил pf проверка внутри macOS. Пока VPN не подключён, пропускает только домашнюю сеть, серверы VPN, ретрансляторы Tailscale и исключения, а из программ — наше ядро VPN и приложение Tailscale, узнавая их по подписи разработчика, а не по пути, — даже если правила pf кто-то снял. Включается и выключается вместе с защитой. Виден в Системных настройках → Сеть → Фильтры.")
+            Text("Второй уровень: macOS сама не выпустит программы мимо VPN, даже если основную защиту кто-то снимет. Программы узнаёт по подписи разработчика. Включается и выключается вместе с защитой.")
                 .foregroundStyle(.secondary)
         }
     }
@@ -454,9 +454,9 @@ private struct FilterSection: View {
     private var statusText: String {
         switch filter.status {
         case .unknown: "Проверяю…"
-        case .notInstalled: "Не установлен"
+        case .notInstalled: "Не установлена"
         case .waitingForApproval: "Разреши в Системных настройках → Основные → Объекты входа и расширения → Сетевые расширения"
-        case .off: "Установлен, выключен"
+        case .off: "Установлена, выключена"
         case .on: "Работает"
         case .failed(let message): "Ошибка: \(message)"
         }
@@ -516,7 +516,7 @@ private struct VPNSettings: View {
             } header: {
                 Text("Подписка")
             } footer: {
-                Text("Ссылка хранится в связке ключей этого Mac. При обновлении сервер видит обезличенный номер этого Mac (для лимита устройств), версию macOS и модель. Если обновление не удалось, VPN продолжает работать со старым профилем.")
+                Text("Ссылка хранится в связке ключей этого Mac. При обновлении сервер видит обезличенный номер этого Mac (для лимита устройств), версию macOS и модель. Если обновление не удалось, VPN работает со старым списком серверов.")
                     .foregroundStyle(.secondary)
             }
 
@@ -549,18 +549,18 @@ private struct VPNSettings: View {
             } header: {
                 Text("Свои серверы")
             } footer: {
-                Text("Серверы по ссылкам и из файлов WireGuard появятся в списке отдельной группой «\(ProfileMerger.manualGroup)». Ссылки и ключи хранятся в связке ключей. DNS из файла WireGuard не используется: адреса узнаёт само ядро. Каждое изменение может спросить пароль.")
+                Text("Серверы по ссылкам и из файлов WireGuard появятся в списке серверов с пометкой «свой». Ссылки и ключи хранятся в связке ключей. Каждое изменение может спросить пароль.")
                     .foregroundStyle(.secondary)
             }
 
             Section {
                 Toggle(isOn: Binding(get: { control.coreDirect }, set: { control.set("coredirect", $0) })) {
-                    Text("Российские сайты — напрямую (мимо VPN)")
-                    Text("Банки и Госуслуги открываются как без VPN; остальное — через VPN. Провайдер видит, что ты на них заходишь. Спросит пароль.")
+                    Text("Российские сайты напрямую")
+                    Text("Банки и Госуслуги открываются как без VPN; остальное — через VPN. Провайдер видит эти сайты. Спросит пароль.")
                 }
                 .disabled(control.busy || control.state == .notInstalled)
             } header: {
-                Text("Маршрутизация")
+                Text("Маршруты")
             }
 
             MultihopSection()
@@ -574,7 +574,7 @@ private struct VPNSettings: View {
         .confirmationDialog("Удалить подписку?", isPresented: $confirmRemove) {
             Button("Удалить", role: .destructive) { revealed = nil; Task { await client.removeURL() } }
         } message: {
-            Text("Ссылка удалится из связки ключей. Ядро продолжит работать с последним профилем, пока его не заменят.")
+            Text("Ссылка удалится из связки ключей. VPN продолжит работать с последним списком серверов.")
         }
     }
 

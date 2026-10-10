@@ -4,8 +4,8 @@ extension Connection {
     var title: String {
         switch self {
         case .unavailable: "VPN не установлен"
-        case .disconnected: "Не подключено"
-        case .connecting: "Подключаюсь…"
+        case .disconnected: "Отключено"
+        case .connecting: "Подключение…"
         case .connected: "Подключено"
         case .otherApp: "VPN другой программы"
         }
@@ -42,8 +42,8 @@ extension Protection {
     var title: String {
         switch self {
         case .on: "Защита включена"
-        case .off: "Защита выключена"
-        case .paused: "Защита на паузе"
+        case .off: "Без защиты"
+        case .paused: "Пауза защиты"
         case .notInstalled: "Защита не установлена"
         case .unknown: "Проверяю…"
         }
@@ -130,7 +130,7 @@ struct ServerList: View {
                 Button("Повторить") { control.loadProxies(force: true) }
             }
         } else if control.proxies?.groups.isEmpty == true {
-            Text("В профиле нет групп серверов. Проверь подписку.").foregroundStyle(.secondary).font(.callout)
+            Text("В подписке нет серверов. Проверь ссылку подписки.").foregroundStyle(.secondary).font(.callout)
         } else if control.coreRunning {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -148,7 +148,7 @@ struct ServerList: View {
             Spacer()
             Toggle("По пингу", isOn: $sortByLatency)
                 .toggleStyle(.checkbox).font(.callout)
-                .help("Сортировать серверы по задержке")
+                .help("Сортировать серверы по пингу")
             Button {
                 Task { await control.testAllDelays() }
             } label: {
@@ -156,7 +156,7 @@ struct ServerList: View {
             }
             .buttonStyle(.borderless)
             .disabled(!control.testing.isEmpty)
-            .help("Проверить задержку всех серверов")
+            .help("Проверить пинг всех серверов")
             .accessibilityLabel("Проверить пинг всех серверов")
         }
     }
@@ -296,11 +296,11 @@ struct SubscriptionSummary: View {
                     Button("Подтвердить…") { Task { await client.confirmNewServers() } }
                         .controlSize(.small)
                         .disabled(client.updating)
-                        .help("Разрешить новые серверы подписки (попросит пароль)")
+                        .help("Разрешить новые серверы подписки (спросит пароль)")
                 }
             }
             if client.needsPassword {
-                Text("Пришёл новый профиль. Нажми «Обновить», чтобы применить (попросит пароль).")
+                Text("Подписка изменилась. Нажми «Обновить», чтобы применить (спросит пароль).")
                     .font(.caption).foregroundStyle(.orange)
             }
             if let error = client.lastError {
@@ -322,7 +322,7 @@ struct SubscriptionOnboarding: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Добавь подписку").font(.headline)
-            Text("Вставь ссылку подписки (Remnawave, любая подписка mihomo/Clash). Ссылка хранится в связке ключей.")
+            Text("Вставь ссылку подписки от VPN-сервиса. Она хранится в связке ключей этого Mac.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 SecureField("https://…", text: $url).onSubmit(save)

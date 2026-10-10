@@ -74,8 +74,8 @@ struct MenuView: View {
         switch control.state {
         case .on:
             Button("Выключить защиту") { control.turnOff() }
-            Button("Пауза \(pauseShort) мин") { control.pause(minutes: pauseShort) }
-            Button("Пауза \(pauseLong) мин") { control.pause(minutes: pauseLong) }
+            Button("Пауза защиты \(pauseShort) мин") { control.pause(minutes: pauseShort) }
+            Button("Пауза защиты \(pauseLong) мин") { control.pause(minutes: pauseLong) }
         case .off, .paused:
             Button("Включить защиту") { control.turnOn() }
         case .notInstalled, .unknown:

@@ -17,7 +17,7 @@ Rules are loaded at boot, before login.
   show up under the app's name in System Settings → Login Items & Extensions.
 - `Helper/install.sh [user] [server-ip ...]` / `uninstall.sh` — put everything into root-owned
   `/Library/KillSwitch`. install.sh is safe to re-run: it upgrades the helper in place and keeps
-  `settings`, `allow` and `servers`. The app's "Обновить защиту" button does exactly that.
+  `settings`, `allow` and `servers`. The app's «Восстановить службу…» (Settings) does exactly that.
 - `Helper/local.killswitch.core.plist` + `Helper/mihomo` (downloaded by `Helper/fetch-mihomo.sh`, pinned
   version and sha256, not in git, then signed by `scripts/sign-core.sh` with our Developer ID or, without
   it, Apple Development, so the content filter trusts it) — our own VPN core, see below.
@@ -42,12 +42,24 @@ Rules are loaded at boot, before login.
   run with the VPN off and compared later); «Подключаться автоматически» on start and network change,
   never prompting (a notification instead), with trusted Wi-Fi networks (the name needs Location access
   on macOS 14+; without it every network is untrusted); «Запускать при входе» (SMAppService);
-  «Раздельный туннель» (apps by CFBundleExecutable → `ks set splitapps <list>`, only with coredirect);
+  «Программы без VPN» (apps by CFBundleExecutable → `ks set splitapps <list>`, only with coredirect);
   «Двойной VPN» (`ks set multihop <entry>|off`, chain shown in the window).
 - `App/Core/` — pure parsers (no AppKit), unit-tested by the `KillSwitchTests` target:
   `xcodegen generate && xcodebuild -scheme KillSwitch test CODE_SIGNING_ALLOWED=NO`.
 - `Widget/` — WidgetKit widget with on/off button. It is sandboxed, so its button posts a Darwin
   notification and the running app performs the switch; state reaches it via app group `YR58655PJ7.killswitch`.
+
+## Words on screen
+
+The app speaks Russian, without technical words: «VPN» (never core, mihomo, tunnel), «Защита»
+(never pf, rules, filter), «Защита macOS» for the content filter, «Служба KillSwitch» for the root
+helper, «Подписка», «Сервер», «Пинг», «Программы без VPN», «Адреса без VPN». The full dictionary
+is in `docs/ux/audit.md` §7.2, the exact screens and strings in `docs/ux/spec.md`. All strings are
+collected in `App/Localizable.xcstrings` (source language ru) for proofreading; Xcode refreshes it on
+build, or by hand: `xcrun xcstringstool sync App/Localizable.xcstrings --stringsdata <file>…` with
+the app target's `.stringsdata` files from DerivedData. Check before a release:
+`rg -n 'ядр|pf |туннел|utun|mihomo|Clash|Remnawave|Обновить защиту' App/*.swift` — only comments
+and code may match. Technical names stay in «Скопировать диагностику» (for support).
 
 Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, coredirect),
 `allow` (addresses reachable by any process), `servers-manual` (VPN server IPs added by `server-add`
@@ -175,9 +187,9 @@ xcodebuild -project KillSwitch.xcodeproj -scheme KillSwitch -configuration Relea
 cp -R build/Build/Products/Release/KillSwitch.app /Applications/
 ```
 
-Then open the app and press "Установить защиту" (or run `Helper/install.sh` in Terminal; server
+Then open the app and press «Начать настройку…» (or run `Helper/install.sh` in Terminal; server
 addresses found in dropweb and Happ configs are passed to it). After updating the app, press
-"Обновить защиту" to upgrade the installed helper.
+«Восстановить службу…» in Settings to upgrade the installed helper.
 
 ## Выпуск
 

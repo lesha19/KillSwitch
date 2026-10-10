@@ -30,7 +30,7 @@ enum DiagnosticsCopy {
             ("Ядро настроено", yes(control.coreConfigured)),
             ("Ядро запущено", yes(control.coreRunning)),
             ("Туннель поднят", yes(control.vpnUp)),
-            ("Наш туннель (198.18.128.1)", yes(control.ownTunnelUp)),
+            ("VPN KillSwitch поднят (198.18.128.1)", yes(control.ownTunnelUp)),
             ("VPN другой программы", control.foreignVPN ?? "нет"),
             ("Российские сайты — напрямую", yes(control.coreDirect)),
             ("Двойной VPN", yes(control.multihopEntry != nil)),

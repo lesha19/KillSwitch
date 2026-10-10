@@ -98,7 +98,7 @@ enum WireGuard {
             let ip = String(item.split(separator: "/").first ?? "")
             if ip.contains(":") { if proxy["ipv6"] == nil { proxy["ipv6"] = ip } } else if proxy["ip"] == nil { proxy["ip"] = ip }
         }
-        guard proxy["ip"] != nil || proxy["ipv6"] != nil else { throw ProxyLinkError.malformed("нет адреса в туннеле (Address)") }
+        guard proxy["ip"] != nil || proxy["ipv6"] != nil else { throw ProxyLinkError.malformed("в файле нет адреса (Address)") }
         let allowed = list(allowedIPs ?? "")
         proxy["allowed-ips"] = allowed.isEmpty ? ["0.0.0.0/0", "::/0"] : allowed
         if let mtu = mtu.flatMap(Int.init), mtu > 0 { proxy["mtu"] = mtu }
