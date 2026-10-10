@@ -27,8 +27,12 @@ final class VPNClient {
     private(set) var manual: [ManualServer] = []
     private(set) var updating = false
     private(set) var lastError: String?
-    /// An automatic update found a new profile, but applying it needs the admin password.
+    /// An automatic update found a new profile, but applying it needs the admin password
+    /// (the installed helper does not allow `core refresh` without one).
     private(set) var needsPassword = false
+    /// An automatic update brought new server addresses: the helper refused `core refresh`, and
+    /// only a click (`confirmNewServers`) may import it with the admin password.
+    private(set) var needsConfirmation = false
 
     /// Hours between automatic updates; 0 = what the subscription asks for.
     var intervalHours = UserDefaults.standard.integer(forKey: "subscriptionIntervalHours") {
@@ -184,7 +188,17 @@ final class VPNClient {
         }
     }
 
-    /// Merges with the manual servers and imports, unless the core already has exactly this.
+    /// Imports the last fetched subscription with the admin password. Only from a click.
+    func confirmNewServers() async {
+        guard !updating else { return }
+        updating = true
+        defer { updating = false }
+        await apply(subscription: Self.cachedSubscription(), interactive: true)
+    }
+
+    /// Merges with the manual servers and hands the result to the helper, unless the core already
+    /// has exactly this. A click imports (admin prompt if needed); a timer only refreshes, which
+    /// the helper refuses when new server addresses would have to be let out.
     private func apply(subscription: Profile?, interactive: Bool) async {
         guard let profile = ProfileMerger.merge(subscription: subscription, manual: manual.compactMap(Self.proxy)) else {
             lastError = nil
@@ -199,6 +213,7 @@ final class VPNClient {
         if control.coreConfigured, UserDefaults.standard.string(forKey: Self.importedKey) == hash {
             lastError = nil
             needsPassword = false
+            needsConfirmation = false
             return
         }
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-profile-\(UUID().uuidString).json")
@@ -210,13 +225,20 @@ final class VPNClient {
             lastError = "Не получилось записать профиль: \(error.localizedDescription)"
             return
         }
-        switch await control.coreImport(file: file.path, allowPassword: interactive) {
+        guard interactive else {
+            switch await control.coreRefresh(file: file.path) {
+            case .applied: imported(profile, hash: hash)
+            case .newServers:
+                lastError = nil
+                needsConfirmation = true
+            case .needsPassword: needsPassword = true
+            case .failed(let message): lastError = message
+            }
+            return
+        }
+        switch await control.coreImport(file: file.path, allowPassword: true) {
         case .ok:
-            UserDefaults.standard.set(hash, forKey: Self.importedKey)
-            let groups = (profile["proxy-groups"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
-            UserDefaults.standard.set(groups, forKey: KillSwitchControl.groupOrderKey)
-            lastError = nil
-            needsPassword = false
+            imported(profile, hash: hash)
         case .cancelled:
             break
         case .needsPassword:
@@ -224,6 +246,15 @@ final class VPNClient {
         case .failed(let message):
             lastError = message
         }
+    }
+
+    private func imported(_ profile: Profile, hash: String) {
+        UserDefaults.standard.set(hash, forKey: Self.importedKey)
+        let groups = (profile["proxy-groups"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
+        UserDefaults.standard.set(groups, forKey: KillSwitchControl.groupOrderKey)
+        lastError = nil
+        needsPassword = false
+        needsConfirmation = false
     }
 
     /// The stored name wins: a `.conf` carries none, and it is what the list shows.

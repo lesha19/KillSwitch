@@ -62,6 +62,12 @@ struct MenuView: View {
             }
             .keyboardShortcut("r")
             .disabled(client.updating)
+            if client.needsConfirmation {
+                Button("Нужно подтверждение: в подписке новые серверы…") {
+                    Task { await client.confirmNewServers() }
+                }
+                .disabled(client.updating)
+            }
         }
 
         Divider()

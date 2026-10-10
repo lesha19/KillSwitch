@@ -7,7 +7,7 @@ import WidgetKit
 
 /// Talks to the root helper `/Library/KillSwitch/ks`.
 /// Reading the state, turning protection on and driving the core go through passwordless sudo
-/// (Helper/install.sh grants `ks state`, `ks on`, `ks core on|off|state|proxies|select|delay|import`);
+/// (Helper/install.sh grants `ks state`, `ks on`, `ks core on|off|state|proxies|select|delay|refresh`);
 /// everything that loosens protection asks for the admin password, so another program running
 /// as the user cannot do it silently. The password prompt only ever follows a click: calls made
 /// by timers pass `interactive: false` and give up instead (see `callHelper`).
@@ -170,6 +170,17 @@ final class KillSwitchControl {
         }
     }
 
+    /// Subscription auto-update: the same as import, but through passwordless sudo only and
+    /// refused by the helper (exit 3) if the profile brings new server addresses. Never prompts.
+    func coreRefresh(file: String) async -> RefreshOutcome {
+        busy = true
+        defer { busy = false; refresh() }
+        let result = await Self.exec("/usr/bin/sudo", ["-n", helper, "core", "refresh", file])
+        let outcome = RefreshOutcome(status: result.status, output: result.output)
+        if outcome == .applied { measured = [:] }
+        return outcome
+    }
+
     /// Picks a server in a selector group of the running core. Always a click.
     func coreSelect(group: String, proxy: String) {
         busy = true
@@ -291,7 +302,7 @@ final class KillSwitchControl {
     static let groupOrderKey = "coreGroupOrder"
 
     private static func sudoWantsPassword(_ output: String) -> Bool {
-        output.hasPrefix("sudo:") || output.contains("a password is required")
+        RefreshOutcome.sudoWantsPassword(output)
     }
 
     enum HelperResult: Equatable { case ok(String), needsPassword, cancelled, failed(String) }

@@ -267,6 +267,16 @@ struct SubscriptionSummary: View {
             if let last = client.status.lastUpdate {
                 Text("Обновлено \(last.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary)
             }
+            if client.needsConfirmation {
+                HStack {
+                    Text("Нужно подтверждение: в подписке новые серверы")
+                        .font(.caption).foregroundStyle(.orange)
+                    Button("Подтвердить…") { Task { await client.confirmNewServers() } }
+                        .controlSize(.small)
+                        .disabled(client.updating)
+                        .help("Разрешить новые серверы подписки (попросит пароль)")
+                }
+            }
             if client.needsPassword {
                 Text("Пришёл новый профиль. Нажми «Обновить», чтобы применить (попросит пароль).")
                     .font(.caption).foregroundStyle(.orange)
