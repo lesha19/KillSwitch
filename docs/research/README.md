@@ -7,6 +7,7 @@ Research notes written by agents for the owner, one file per topic. Decisions li
 |---|---|---|
 | [mullvad-ivpn-gap-2026-10.md](mullvad-ivpn-gap-2026-10.md) | Mullvad and IVPN desktop features vs KillSwitch | #11–#18, #20 |
 | [multi-core-2026-10.md](multi-core-2026-10.md) | Protocols per core, Xray / sing-box next to mihomo | #9 (done), #10, #19, #31 |
+| [xray-core-2026-10.md](xray-core-2026-10.md) | Xray-core as the main core: native macOS TUN, Remnawave Xray JSON, pf, first slice | #10, #31 |
 | [incy-2026-10.md](incy-2026-10.md) | INCY client features | #22–#30 |
 | [wireguard-full-2026-10.md](wireguard-full-2026-10.md) | WireGuard at Mullvad/IVPN level: PQ, DAITA, obfuscation | #21 |
 | [doodle-subscription-2026-10.md](doodle-subscription-2026-10.md) | DoodleVPN subscription vs StorkVPN | panel template, #20, #22 |
