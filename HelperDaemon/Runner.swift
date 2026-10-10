@@ -5,7 +5,6 @@ import Foundation
 enum Runner {
     static let directory = "/Library/KillSwitch"
     static let ks = directory + "/ks"
-    private static let environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
 
     static func run(_ command: HelperCommand) -> HelperReply {
         switch command.program {
@@ -24,7 +23,7 @@ enum Runner {
             defer { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
             let script = command.program == .install ? "install.sh" : "uninstall.sh"
             let path = copy.appendingPathComponent("Contents/Resources/Helper/\(script)").path
-            return execute("/bin/bash", [path] + command.arguments)
+            return execute("/bin/bash", HelperCommand.scriptArguments(path, command.arguments))
         }
     }
 
@@ -75,7 +74,7 @@ enum Runner {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: program)
         process.arguments = arguments
-        process.environment = environment
+        process.environment = HelperCommand.environment   // nothing of the daemon's own (0.12.1)
         process.currentDirectoryURL = URL(fileURLWithPath: "/")
         let output = Pipe(), errors = Pipe()
         process.standardInput = FileHandle.nullDevice

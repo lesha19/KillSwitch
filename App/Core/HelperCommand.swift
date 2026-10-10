@@ -99,9 +99,9 @@ enum HelperCommand: Equatable, Sendable {
 
     // MARK: the argv the app builds (Batch, Onboarding, KillSwitchControl)
 
-    /// A command as the app has always written it: `[helper, ks arguments…]` or
-    /// `["/bin/bash", <…/install.sh>, user, servers…]` / `["/bin/bash", <…/uninstall.sh>]`. Nil
-    /// for anything else or a value the daemon would refuse. The script's path only names which
+    /// A command as the app writes it: `[helper, ks arguments…]` or (AdminScript.bundled)
+    /// `["/bin/bash", "-p", <…/install.sh>, user, servers…]` / `["/bin/bash", "-p", <…/uninstall.sh>]`.
+    /// Nil for anything else or a value the daemon would refuse. The script's path only names which
     /// one: the daemon runs its own verified copy, never a path from the app.
     init?(command: [String], helper: String) {
         guard let first = command.first else { return nil }
@@ -109,7 +109,8 @@ enum HelperCommand: Equatable, Sendable {
             self.init(ks: Array(command.dropFirst()))
             return
         }
-        guard first == "/bin/bash", command.count >= 2 else { return nil }
+        guard first == "/bin/bash", command.count >= 3, command[1] == "-p" else { return nil }
+        let command = Array(command.dropFirst())
         if command[1].hasSuffix("/install.sh"), command.count >= 3 {
             self = .install(user: command[2], servers: Array(command.dropFirst(3)))
         } else if command[1].hasSuffix("/uninstall.sh"), command.count == 2 {
@@ -165,6 +166,16 @@ enum HelperCommand: Equatable, Sendable {
         self = command
     }
 
+    // MARK: how root runs it (0.12.1)
+
+    /// The whole environment of what the daemon runs: the system tools and nothing of its own or
+    /// the app's (the same as AdminScript.environment; ks_clean_env and install.sh reset the rest).
+    static let environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
+
+    /// `/bin/bash` arguments for a bundled script: `-p` ignores BASH_ENV, ENV, SHELLOPTS and
+    /// exported functions, as AdminScript.bundled.
+    static func scriptArguments(_ script: String, _ arguments: [String]) -> [String] { ["-p", script] + arguments }
+
     // MARK: checks
 
     static let multihopOff = "off"
@@ -205,9 +216,10 @@ enum HelperCommand: Equatable, Sendable {
         path.hasPrefix("/") && path.utf8.count <= 1024 && !hasControl(path)
     }
 
-    /// A macOS short user name as install.sh writes it into sudoers.
+    /// A macOS short user name as install.sh's valid_user takes it into sudoers (which also wants
+    /// an existing account with uid 500 or more): never the keyword ALL.
     static func isUser(_ name: String) -> Bool {
-        name.wholeMatch(of: /[A-Za-z0-9_][A-Za-z0-9_.-]{0,254}/) != nil
+        name != "ALL" && name.wholeMatch(of: /[A-Za-z_][A-Za-z0-9_.-]{0,31}/) != nil
     }
 
     private static func hasControl(_ text: String) -> Bool {

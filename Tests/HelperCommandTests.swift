@@ -41,10 +41,22 @@ final class HelperCommandTests: XCTestCase {
         XCTAssertEqual(install.arguments, ["alex", "192.0.2.1", "2001:db8::1"])
         XCTAssertEqual(HelperCommand.uninstall.program, .uninstall)
         XCTAssertEqual(HelperCommand.uninstall.arguments, [])
-        XCTAssertEqual(HelperCommand(command: ["/bin/bash", "/Applications/KillSwitch.app/Contents/Resources/Helper/install.sh",
-                                               "alex", "192.0.2.1"], helper: ks),
+        XCTAssertEqual(HelperCommand(command: AdminScript.bundled("/Applications/KillSwitch.app/Contents/Resources/Helper/install.sh",
+                                                                  ["alex", "192.0.2.1"]), helper: ks),
                        .install(user: "alex", servers: ["192.0.2.1"]))
-        XCTAssertEqual(HelperCommand(command: ["/bin/bash", "/A.app/Contents/Resources/Helper/uninstall.sh"], helper: ks), .uninstall)
+        XCTAssertEqual(HelperCommand(command: AdminScript.bundled("/A.app/Contents/Resources/Helper/uninstall.sh", []), helper: ks),
+                       .uninstall)
+        // 0.12.1: only the `bash -p` form the app builds
+        XCTAssertNil(HelperCommand(command: ["/bin/bash", "/A.app/Contents/Resources/Helper/uninstall.sh"], helper: ks))
+    }
+
+    /// 0.12.1 for the daemon too: root runs the scripts with `bash -p` (no BASH_ENV, ENV, SHELLOPTS or
+    /// exported functions) and every program with the system tools' PATH and nothing else.
+    func testDaemonRunsWithTheSanitizedEnvironment() {
+        XCTAssertEqual(HelperCommand.environment, ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"])
+        XCTAssertEqual(HelperCommand.environment, AdminScript.environment)
+        XCTAssertEqual(HelperCommand.scriptArguments("/x/Helper/install.sh", ["alex"]), ["-p", "/x/Helper/install.sh", "alex"])
+        XCTAssertEqual(["/bin/bash"] + HelperCommand.scriptArguments("/p", ["a"]), AdminScript.bundled("/p", ["a"]))
     }
 
     /// The wizard's one-password chain becomes three daemon commands, one authorization.
@@ -86,7 +98,8 @@ final class HelperCommandTests: XCTestCase {
         let installScript = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Helper/install.sh")
         let text = try String(contentsOf: installScript, encoding: .utf8)
-        let sudoers = Set(text.matches(of: /\$DIR\/ks ([a-z -]+?)( \*)?[,"]/).map { String($0.1) })
+        // sudoers_text: "$ks state, $ks probe, … $ks core refresh *"
+        let sudoers = Set(text.matches(of: /\$ks ([a-z -]+?)( \*)?[,"]/).map { String($0.1) })
         XCTAssertFalse(sudoers.isEmpty)
         let all: [HelperCommand] = [
             .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies,
@@ -175,7 +188,10 @@ final class HelperCommandTests: XCTestCase {
 
     func testInstallUser() {
         XCTAssertTrue(HelperCommand.install(user: "alexey.zhuravel", servers: []).isValid)
-        for bad in ["", "-alex", "a b", "a/b", "root\n", String(repeating: "a", count: 256)] {
+        XCTAssertTrue(HelperCommand.install(user: "_svc", servers: []).isValid)
+        // as install.sh's valid_user takes it into sudoers (Helper/tests/args.sh)
+        for bad in ["", "-alex", "a b", "a/b", "root\n", String(repeating: "a", count: 256), "ALL", "0day", "%admin", "#0",
+                    String(repeating: "a", count: 33)] {
             XCTAssertFalse(HelperCommand.install(user: bad, servers: []).isValid, bad)
         }
         XCTAssertFalse(HelperCommand.install(user: "alex", servers: Array(repeating: "192.0.2.1", count: 513)).isValid)
