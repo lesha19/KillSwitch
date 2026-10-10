@@ -4,3 +4,4 @@ build/
 Helper/mihomo
 dist/
 Helper/geosite.dat
+Helper/geoip.metadb

@@ -198,7 +198,7 @@ gen "$fx/ok-minimal.json"
 [ "$(rules_of "$tmp/c")" = "$PRIV MATCH,only" ] && ok "ru: no geodata, no geo rules (the core never downloads it)" ||
   bad "ru without geodata: $(rules_of "$tmp/c")"
 mmdb=""
-for f in /Library/KillSwitch/core/geoip.metadb "$HOME/Library/Application Support/org.dropweb.vpn/geoip.metadb"; do
+for f in "$here/../geoip.metadb" /Library/KillSwitch/core/geoip.metadb; do
   [ -r "$f" ] && { mmdb=$f; break; }
 done
 if [ -n "$mmdb" ]; then cp "$mmdb" "$CORE_DIR/geoip.metadb"; else echo fake > "$CORE_DIR/geoip.metadb"; fi
@@ -207,7 +207,7 @@ gen "$fx/ok-minimal.json"
   bad "ru with mmdb: $(rules_of "$tmp/c")"
 if [ -n "$mmdb" ] && [ -x "$MIHOMO" ]; then
   if out=$("$MIHOMO" -t -d "$CORE_DIR" -f "$tmp/c" 2>&1); then ok "ru: mihomo -t with geoip.metadb"; else bad "ru: mihomo -t: $(tail -2 <<<"$out")"; fi
-else echo "skip  ru: mihomo -t (no geoip.metadb or mihomo)"; fi
+else echo "skip  ru: mihomo -t (no geoip.metadb: Helper/fetch-geodata.sh, or no mihomo)"; fi
 site=""
 for f in /Library/KillSwitch/core/geosite.dat "$here/../geosite.dat"; do [ -r "$f" ] && { site=$f; break; }; done
 if [ -n "$site" ]; then cp "$site" "$CORE_DIR/geosite.dat"; else echo fake > "$CORE_DIR/geosite.dat"; fi

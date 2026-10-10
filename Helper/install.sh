@@ -59,10 +59,12 @@ if [ -f mihomo ]; then
   launchctl print system/local.killswitch.core 2>/dev/null | grep -q 'state = running' ||
     launchctl disable system/local.killswitch.core
   install -o root -g wheel -m 644 local.killswitch.core.plist /Library/LaunchDaemons/local.killswitch.core.plist
-  GEOIP="/Users/$USER_NAME/Library/Application Support/org.dropweb.vpn/geoip.metadb"
-  [ -f "$DIR/core/geoip.metadb" ] || [ ! -f "$GEOIP" ] || install -o root -g wheel -m 644 "$GEOIP" "$DIR/core/geoip.metadb"
-  # Russian sites outside the VPN (coredirect=1); see fetch-geodata.sh
+  # Russian sites and addresses outside the VPN (coredirect=1): the pinned files of the app bundle
+  # (fetch-geodata.sh), never a copy from a place the user can write. A geoip.metadb that older
+  # versions took from dropweb's folder is replaced, or removed if the bundle has none.
   [ ! -f geosite.dat ] || install -o root -g wheel -m 644 geosite.dat "$DIR/core/geosite.dat"
+  if [ -f geoip.metadb ]; then install -o root -g wheel -m 644 geoip.metadb "$DIR/core/geoip.metadb"
+  else rm -f "$DIR/core/geoip.metadb"; fi
   launchctl print system/local.killswitch.core >/dev/null 2>&1 && launchctl kickstart -k system/local.killswitch.core
 fi
 [ -e "$DIR/events.log" ] || install -o root -g wheel -m 644 /dev/null "$DIR/events.log"

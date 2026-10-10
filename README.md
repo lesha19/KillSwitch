@@ -123,7 +123,7 @@ profile, rewritten on every import, reachable only by our core), `servers` (both
   `settings`; ≤50 names, ≤64 bytes, no commas or control characters; also their `<name> Helper…`
   processes; `""` clears), private networks, `GEOSITE,category-ru` (only if `core/geosite.dat` is
   installed, `Helper/fetch-geodata.sh`, sha256-pinned) and `GEOIP,RU,no-resolve` (only with
-  `core/geoip.metadb`), all DIRECT. The core never downloads geodata (`geo-auto-update: false`); names
+  `core/geoip.metadb`, pinned the same way and shipped in the app), all DIRECT. The core never downloads geodata (`geo-auto-update: false`); names
   of direct sites are still resolved through the tunnel's DoH. Double VPN: `ks set multihop <proxy>|off`
   (`multihop=` in `settings`) sets `dialer-proxy: <proxy>` on every other proxy, so pf lets the core
   reach only the entry server; the entry must be a proxy of the profile without its own dialer-proxy.
@@ -212,7 +212,7 @@ addresses found in dropweb and Happ configs are passed to it). After updating th
    `xcrun notarytool store-credentials killswitch-notary --apple-id <Apple ID> --team-id YR58655PJ7`
    и ввести пароль, когда спросит (в командную строку его не писать). Он хранится в связке ключей.
 4. Ядро: `Helper/fetch-mihomo.sh`; геоданные для «российские сайты мимо VPN»: `Helper/fetch-geodata.sh`
-   (выпуск meta-rules-dat и его sha256 уже закреплены в скрипте; без `Helper/geosite.dat` выпуск не соберётся).
+   (выпуск meta-rules-dat и его sha256 уже закреплены в скрипте; без `Helper/geosite.dat` и `Helper/geoip.metadb` выпуск не соберётся).
 5. Ключ Sparkle: один раз `generate_keys` из `build/spm/artifacts/sparkle/Sparkle/bin/` (появится после
    первой сборки) — закрытый ключ EdDSA ляжет в связку ключей входа, открытый (`generate_keys -p`) уже
    записан в `project.yml` как `SUPublicEDKey`.
