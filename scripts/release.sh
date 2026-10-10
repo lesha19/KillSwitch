@@ -5,6 +5,8 @@
 #   scripts/release.sh           full release
 #   scripts/release.sh --check   only check that certificates, profiles and the notary profile exist
 #   scripts/release.sh --sign-only   build and sign build/release/KillSwitch.app, no notarization
+#   scripts/release.sh --publish     full release, then `gh release create v<version>` in
+#                                    lesha19/KillSwitch-releases with the .dmg and appcast.xml
 #
 # What it needs (found automatically, nothing secret is printed):
 #   - certificate + private key "Developer ID Application: … (YR58655PJ7)" in the login keychain
@@ -16,6 +18,10 @@
 #     ~/Library/Developer/Xcode/UserData/Provisioning Profiles and
 #     ~/Library/MobileDevice/Provisioning Profiles; override with KS_PROFILE_APP / KS_PROFILE_FILTER;
 #   - Helper/mihomo (Helper/fetch-mihomo.sh): the core is signed here as com.lesha19.KillSwitch.core.
+#   - Sparkle EdDSA private key in the login keychain (Sparkle's generate_keys, run once; only the
+#     public key is in project.yml as SUPublicEDKey). generate_appcast signs the .dmg with it.
+#   - --publish only: gh logged in with access to lesha19/KillSwitch-releases, and release notes:
+#     the "## <version>" section of CHANGELOG.md or a file given in KS_RELEASE_NOTES.
 # The widget has no restricted entitlements (its app group is team-prefixed) and needs no profile.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -26,6 +32,8 @@ APP_ID=com.lesha19.KillSwitch
 FILTER_ID=com.lesha19.KillSwitch.Filter
 NE_VALUE=content-filter-provider-systemextension   # Developer ID form of content-filter-provider
 OUT=build/release
+SPM=build/spm   # SwiftPM checkouts + Sparkle's binary tools (generate_appcast), kept between releases
+RELEASES_REPO=lesha19/KillSwitch-releases
 MODE=${1:-}
 
 problems=()
@@ -86,6 +94,30 @@ HOWTO_PROFILES="Скачать: Xcode → Settings → Accounts → $TEAM → Do
 
 [ -f Helper/mihomo ] || problem "Нет Helper/mihomo (ядро VPN): запустите Helper/fetch-mihomo.sh."
 
+# Existence only: nothing is read out of the keychain item.
+security find-generic-password -s https://sparkle-project.org -a ed25519 >/dev/null 2>&1 ||
+  problem "Нет ключа EdDSA Sparkle в связке ключей (им подписываются обновления).
+    Создать один раз: <SourcePackages>/artifacts/sparkle/Sparkle/bin/generate_keys,
+    затем открытый ключ (generate_keys -p) — в project.yml, SUPublicEDKey."
+
+NOTES=${KS_RELEASE_NOTES:-}
+if [ "$MODE" = --publish ]; then
+  command -v gh >/dev/null || problem "Нет gh в PATH (brew install gh)."
+  gh auth status >/dev/null 2>&1 || problem "gh не авторизован: gh auth login."
+  MARKETING_VERSION=$(sed -nE 's/^ *MARKETING_VERSION: "?([^"]+)"?$/\1/p' project.yml | head -1)
+  if [ -z "$NOTES" ] && [ -f CHANGELOG.md ]; then
+    NOTES=build/release-notes.md
+    mkdir -p build
+    # Lines under "## 0.7" / "## [0.7]" / "## v0.7 — …" up to the next "## " heading.
+    awk -v v="$MARKETING_VERSION" '
+      /^## / { h = $0; sub(/^## \[?v?/, "", h); on = (index(h, v) == 1 && substr(h, length(v) + 1, 1) !~ /[0-9.]/); next }
+      on' CHANGELOG.md > "$NOTES"
+    [ -s "$NOTES" ] || NOTES=
+  fi
+  [ -n "$NOTES" ] && [ -s "$NOTES" ] ||
+    problem "Нет описания выпуска $MARKETING_VERSION: раздел «## $MARKETING_VERSION» в CHANGELOG.md или файл в KS_RELEASE_NOTES."
+fi
+
 if [ ${#problems[@]} -gt 0 ]; then
   echo "Выпуск невозможен:" >&2
   for p in "${problems[@]}"; do echo "  - $p" >&2; done
@@ -101,7 +133,8 @@ mkdir -p "$OUT"
 xcodegen generate --quiet
 # Built unsigned; everything is signed below, inside out, with Developer ID entitlements.
 xcodebuild archive -project KillSwitch.xcodeproj -scheme KillSwitch -configuration Release \
-  -destination generic/platform=macOS -archivePath "$OUT/KillSwitch.xcarchive" CODE_SIGNING_ALLOWED=NO -quiet
+  -destination generic/platform=macOS -archivePath "$OUT/KillSwitch.xcarchive" \
+  -clonedSourcePackagesDirPath "$SPM" CODE_SIGNING_ALLOWED=NO -quiet
 APP="$OUT/KillSwitch.app"
 ditto "$OUT/KillSwitch.xcarchive/Products/Applications/KillSwitch.app" "$APP"
 SYSEXT="$APP/Contents/Library/SystemExtensions/$FILTER_ID.systemextension"
@@ -132,6 +165,14 @@ sign --entitlements Widget/KillSwitchWidget.entitlements "$WIDGET"
 entitlements Filter/KillSwitchFilter.entitlements "$PROFILE_FILTER" "$OUT/filter.entitlements"
 cp "$PROFILE_FILTER" "$SYSEXT/Contents/embedded.provisionprofile"
 sign --entitlements "$OUT/filter.entitlements" "$SYSEXT"
+# Sparkle, inside out and without --deep (sparkle-project.org/documentation/sandboxing, "Code
+# Signing"). The app is not sandboxed, so Sparkle's XPC services are unused and removed, as the
+# same page describes; Autoupdate and Updater.app get Developer ID + hardened runtime.
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+rm -rf "$SPARKLE/Versions/B/XPCServices" "$SPARKLE/XPCServices"
+sign "$SPARKLE/Versions/B/Autoupdate"
+sign "$SPARKLE/Versions/B/Updater.app"
+sign "$SPARKLE"
 entitlements App/KillSwitch.entitlements "$PROFILE_APP" "$OUT/app.entitlements"
 cp "$PROFILE_APP" "$APP/Contents/embedded.provisionprofile"
 sign --entitlements "$OUT/app.entitlements" "$APP"
@@ -170,5 +211,24 @@ xcrun stapler staple -q "$DMG"
 
 spctl --assess --type execute "$APP"
 spctl --assess --type open --context context:primary-signature "$DMG"
-echo "Готово: $DMG"
+
+# Sparkle feed: one item for this .dmg, EdDSA-signed with the key from the login keychain.
+# The app reads releases/latest/download/appcast.xml, so each release carries its own appcast.
+echo "appcast.xml…"
+mkdir "$OUT/appcast"
+cp "$DMG" "$OUT/appcast/"
+"$SPM/artifacts/sparkle/Sparkle/bin/generate_appcast" \
+  --download-url-prefix "https://github.com/$RELEASES_REPO/releases/download/v$VERSION/" \
+  --full-release-notes-url "https://github.com/$RELEASES_REPO/releases/tag/v$VERSION" \
+  -o "$OUT/appcast.xml" "$OUT/appcast"
+rm -rf "$OUT/appcast"
+grep -q 'sparkle:edSignature=' "$OUT/appcast.xml" || { echo "appcast.xml без подписи EdDSA" >&2; exit 1; }
+
+echo "Готово: $DMG, $OUT/appcast.xml"
 shasum -a 256 "$DMG"
+
+if [ "$MODE" = --publish ]; then
+  gh release create "v$VERSION" --repo "$RELEASES_REPO" --title "KillSwitch $VERSION" \
+    --notes-file "$NOTES" "$DMG" "$OUT/appcast.xml"
+  echo "Опубликовано: https://github.com/$RELEASES_REPO/releases/tag/v$VERSION"
+fi
