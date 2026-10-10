@@ -72,13 +72,17 @@ private struct GeneralSettings: View {
     @AppStorage("pauseLong") private var pauseLong = 30
     @AppStorage("notifyVPNDropped") private var notifyVPNDropped = true
     @AppStorage("notifyPauseEnded") private var notifyPauseEnded = true
+    @AppStorage("notifySubscription") private var notifySubscription = true
+    @AppStorage("notifyServiceOff") private var notifyServiceOff = true
 
     var body: some View {
         SettingsForm {
             LaunchSection(control: control)
             Section("Уведомления") {
                 Toggle("VPN оборвался и снова подключился", isOn: $notifyVPNDropped)
+                Toggle("Подписка кончается или нужен ответ", isOn: $notifySubscription)
                 Toggle("Пауза защиты закончилась", isOn: $notifyPauseEnded)
+                Toggle("Защита или служба выключены", isOn: $notifyServiceOff)
             }
             Section("Пауза защиты") {
                 Stepper("Короткая: \(pauseShort) мин", value: $pauseShort, in: 1...60)
@@ -117,8 +121,8 @@ private struct LaunchSection: View {
             if auto.enabled && auto.skipTrusted {
                 if !auto.locationAllowed {
                     VStack(alignment: .leading, spacing: 6) {
-                        Footnote(text: "macOS называет сеть Wi-Fi только программам с доступом к геопозиции. Пока его нет, все сети считаются недоверенными.",
-                                 more: "Без доступа к геопозиции VPN подключается в любой сети. Само местоположение KillSwitch не использует и никуда не отправляет.")
+                        Footnote(text: "Без доступа к геопозиции macOS не называет сеть Wi-Fi, и все сети считаются недоверенными.",
+                                 more: "Поэтому VPN подключается в любой сети. Само местоположение KillSwitch не использует и никуда не отправляет.")
                         if auto.location == .notDetermined {
                             Button("Разрешить…") { auto.requestLocation() }
                         } else {

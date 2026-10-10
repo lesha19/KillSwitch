@@ -13,6 +13,8 @@ struct KillSwitchApp: App {
         _control = State(initialValue: control)
         _client = State(initialValue: VPNClient(control: control))
         _autoConnector = State(initialValue: AutoConnector(control: control))
+        Notifier.shared.control = control
+        Notifier.shared.client = _client.wrappedValue
     }
 
     var body: some Scene {
@@ -75,6 +77,7 @@ private struct MenuBarLabel: View {
 
     var body: some View {
         Image(status.icon)
+            .onAppear { Notifier.shared.openWindow = { openWindow(id: $0) } }
             .accessibilityLabel(status.accessibilityLabel)
             .help(status.accessibilityLabel)
             .onChange(of: status.title) { _, title in

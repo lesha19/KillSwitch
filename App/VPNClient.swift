@@ -206,6 +206,7 @@ final class VPNClient {
             retryAt = nil
             Self.cache(profile)
             reloadProfileProxies()
+            noticeLimits()
             return profile
         } catch {
             let raw = Self.describe(error)
@@ -213,6 +214,27 @@ final class VPNClient {
             retryAt = Date().addingTimeInterval(raw.hasPrefix("offline") ? 540 : 3600)
             lastError = UserError.from(raw: raw, context: .subscription)
             return nil
+        }
+    }
+
+    /// «Подписка кончается» at 3 days and at 1 day, «Трафик почти закончился» past 90 %: once per
+    /// threshold and period, not on every update.
+    private func noticeLimits() {
+        guard let usage = status.usage else { return }
+        let defaults = UserDefaults.standard
+        if let expire = usage.expire, let days = UserNotice.endingThreshold(secondsLeft: expire.timeIntervalSinceNow) {
+            let mark = "\(Int(expire.timeIntervalSince1970))-\(days)"
+            if defaults.string(forKey: "noticedEnding") != mark {
+                defaults.set(mark, forKey: "noticedEnding")
+                Notifier.shared.post(.subscriptionEnding(days: days, title: status.title, expire: expire))
+            }
+        }
+        if let total = usage.total, total > 0, Double(usage.used) >= 0.9 * Double(total) {
+            let mark = "\(total)-\(Int(usage.expire?.timeIntervalSince1970 ?? 0))"
+            if defaults.string(forKey: "noticedTraffic") != mark {
+                defaults.set(mark, forKey: "noticedTraffic")
+                Notifier.shared.post(.trafficLow(used: usage.used, total: total))
+            }
         }
     }
 
@@ -317,6 +339,7 @@ final class VPNClient {
             case .applied: imported(profile, hash: hash)
             case .newServers:
                 lastError = nil
+                if !needsConfirmation { Notifier.shared.post(.newServers) }
                 needsConfirmation = true
             case .needsPassword: needsPassword = true
             case .failed(let message): lastError = UserError.from(raw: message, context: .subscription)

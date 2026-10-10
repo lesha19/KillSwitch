@@ -388,7 +388,9 @@ private struct DoneStep: View {
     private func finish() {
         auto.enabled = autoConnect
         if control.launchAtLogin != launchAtLogin { control.launchAtLogin = launchAtLogin }
-        for key in ["notifyVPNDropped", "notifyPauseEnded"] { UserDefaults.standard.set(notifications, forKey: key) }
+        for setting in [UserNotice.Setting.connection, .subscription, .pause, .service] {
+            UserDefaults.standard.set(notifications, forKey: setting.rawValue)
+        }
         if notifications {
             Task { _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) }
         }

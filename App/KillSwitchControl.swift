@@ -219,7 +219,15 @@ final class KillSwitchControl {
         guard let data = UserDefaults.standard.data(forKey: pendingKey) else { return nil }
         return try? JSONDecoder().decode(ServerPicker.Entry.self, from: data)
     }
-    func coreOff() { run(["core", "off"]) }
+    func coreOff() {
+        disconnecting = true
+        run(["core", "off"])
+    }
+
+    /// «Отключить» was pressed: the tunnel going down is no drop.
+    private var disconnecting = false
+    /// Our tunnel dropped by itself; «VPN снова работает» follows when it is back.
+    private var dropped = false
 
     /// «Подключаться автоматически»: like coreOn, but never shows the password prompt; if the
     /// helper wants a password, a notification says so instead. True when the core was started.
@@ -455,8 +463,22 @@ final class KillSwitchControl {
         let wasVPNUp = vpnUp
         let tunnels = Self.vpnTunnels()
         vpnUp = !tunnels.isEmpty
+        let wasOwnUp = ownTunnelUp
+        let manual = disconnecting
         ownTunnelUp = tunnels.contains(.own)
-        if wasVPNUp && !vpnUp && state == .on { notify(.vpnDropped) }
+        if wasOwnUp && !ownTunnelUp {
+            if !disconnecting {
+                dropped = true
+                // with protection on the drop is told above, for any tunnel
+                if state != .on { notify(.vpnDropped(protected: false)) }
+            }
+            disconnecting = false
+        } else if !wasOwnUp && ownTunnelUp {
+            if dropped { notify(.reconnected(server: lastServer.map(ServerName.display))) }
+            dropped = false
+            disconnecting = false
+        }
+        if wasVPNUp && !vpnUp && state == .on && !manual { notify(.vpnDropped(protected: true)) }
         readSettings()
         checkDaemon()
         guard FileManager.default.fileExists(atPath: helper) else {
@@ -696,37 +718,7 @@ final class KillSwitchControl {
         return result
     }
 
-    enum Event { case vpnDropped, pauseEnded, daemonOff, macOSUpdated, autoConnectNeedsPassword }
-
-    private func notify(_ event: Event) {
-        let defaults = UserDefaults.standard
-        let content = UNMutableNotificationContent()
-        switch event {
-        case .vpnDropped:
-            guard defaults.object(forKey: "notifyVPNDropped") as? Bool ?? true else { return }
-            content.title = "VPN отключился"
-            content.body = "Интернет перекрыт, пока VPN не подключится снова."
-        case .pauseEnded:
-            guard defaults.object(forKey: "notifyPauseEnded") as? Bool ?? true else { return }
-            content.title = "Пауза защиты закончилась"
-            content.body = "Защита снова включена."
-        case .daemonOff:
-            content.title = "Служба KillSwitch выключена"
-            content.body = "Включи её в Системных настройках → Основные → Объекты входа."
-        case .macOSUpdated:
-            content.title = "macOS обновилась"
-            content.body = "Перезагрузи Mac и проверь утечки в KillSwitch"
-        case .autoConnectNeedsPassword:
-            content.title = "VPN не подключился сам"
-            content.body = "Для этого нужен пароль. Подключись в KillSwitch вручную или нажми в его настройках «Восстановить службу…»."
-        }
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
-        Task {
-            let center = UNUserNotificationCenter.current()
-            guard (try? await center.requestAuthorization(options: [.alert, .sound])) == true else { return }
-            try? await center.add(request)
-        }
-    }
+    private func notify(_ notice: UserNotice) { Notifier.shared.post(notice) }
 
     private func notifyIfMacOSUpdated() {
         let current = ProcessInfo.processInfo.operatingSystemVersionString
@@ -747,7 +739,7 @@ final class KillSwitchControl {
             if daemonProblem {
                 if !defaults.bool(forKey: "daemonWarned") {
                     defaults.set(true, forKey: "daemonWarned")
-                    notify(.daemonOff)
+                    notify(.serviceOff)
                 }
             } else {
                 defaults.set(false, forKey: "daemonWarned")
