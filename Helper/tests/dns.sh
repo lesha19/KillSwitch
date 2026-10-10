@@ -96,8 +96,35 @@ check "restore leaves a value someone else set" "$(get "$E/DNS")" 8.8.8.8
 dns_apply >/dev/null
 sed -i '' '1s/.*/boot 1/' "$DNS_STATE"   # saved before a reboot
 dns_restore
-check "originals of an earlier boot are not applied" "$(get "$W/DNS")" 127.0.0.1
+check "originals of an earlier boot are not applied, ours is stripped" "$(get "$W/DNS")" ""
 check "  and dropped" "$([ -e "$DNS_STATE" ] && echo yes || echo no)" no
+check "  Setup key of an earlier boot stripped too" "$(get "$WS/DNS")" '!'
+put "$W/DNS" "A|ServerAddresses|192.168.1.1" "A|SearchDomains|lan"
+put "$E/DNS" "A|ServerAddresses|9.9.9.9"
+
+# Our address left behind (a lost or stale dns-state, an older version): never the original.
+put "$WS/DNS" "A|ServerAddresses|127.0.0.1"
+put "$W/DNS" "A|ServerAddresses|127.0.0.1" "A|SearchDomains|lan"
+check "missing state, ours already set: only the others rewritten" "$(dns_apply)" "$E/DNS"
+check "  Setup recorded as no key, not as ours" "$(awk -F'\t' -v p="$WS/DNS" '$1 == p { print $2 }' "$DNS_STATE")" '!'
+check "  State recorded as no servers, not as ours" "$(awk -F'\t' -v p="$W/DNS" '$1 == p { print $2 }' "$DNS_STATE")" -
+dns_restore
+check "  restore removes the Setup key" "$(get "$WS/DNS")" '!'
+check "  restore leaves State without ours" "$(get "$W/DNS")" ""
+check "  search domains kept" "$(get "$W/DNS" SearchDomains)" lan
+
+put "$WS/DNS" "A|ServerAddresses|127.0.0.1 1.1.1.1"
+put "$W/DNS" "A|ServerAddresses|127.0.0.1" "A|SearchDomains|lan"
+rm -f "$DNS_STATE"
+dns_restore
+check "restore without state: ours stripped from a Setup list" "$(get "$WS/DNS")" 1.1.1.1
+check "restore without state: ours stripped from State" "$(get "$W/DNS")" ""
+check "restore without state: others untouched" "$(get "$E/DNS")" 9.9.9.9
+
+put "$WS/DNS" "A|ServerAddresses|127.0.0.1"
+printf 'boot %s\n%s\t127.0.0.1\n' "$(boot_id)" "$WS/DNS" > "$DNS_STATE"   # written by 0.16 and older
+dns_restore
+check "stale state naming ours as the original: still stripped" "$(get "$WS/DNS")" '!'
 put "$W/DNS" "A|ServerAddresses|192.168.1.1"
 
 printf 'Wi-Fi\t192.168.1.1\nEthernet\t\n' > "$CORE_DIR/dns-saved"   # left by the networksetup version

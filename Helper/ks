@@ -1684,7 +1684,10 @@ dns_apply() {  # prints the keys it had to (re)write
       [ -n "$path" ] || continue
       if [ "$cur" = "$DNS_OURS" ]; then
         prev=$(awk -F'\t' -v p="$path" '$1 == p { print $2; exit }' <<<"$old")
-        printf '%s\t%s\n' "$path" "${prev:-$cur}"
+        # ours left behind (lost or stale state) is never the original: no manual DNS (Setup),
+        # no servers until DHCP gives them again (State)
+        [ -n "$prev" ] || { [[ "$path" == Setup:* ]] && prev='!' || prev=-; }
+        printf '%s\t%s\n' "$path" "$prev"
       else
         printf '%s\t%s\n' "$path" "$cur"
         dns_put "$path" "$DNS_OURS"
@@ -1704,9 +1707,8 @@ dns_pending() {
 dns_restore() {
   local snap path val
   dns_migrate
-  [ -f "$DNS_STATE" ] || return 0
   # the store starts empty at boot: originals from an earlier boot are void
-  if [ "$(head -1 "$DNS_STATE")" = "boot $(boot_id)" ]; then
+  if [ -f "$DNS_STATE" ] && [ "$(head -1 "$DNS_STATE")" = "boot $(boot_id)" ]; then
     snap=$(dns_snapshot)
     tail -n +2 "$DNS_STATE" | while IFS=$'\t' read -r path val; do
       [ "$(awk -F'\t' -v p="$path" '$1 == p { print $2; exit }' <<<"$snap")" = "$DNS_OURS" ] &&
@@ -1714,6 +1716,20 @@ dns_restore() {
     done
   fi
   rm -f "$DNS_STATE"
+  dns_strip
+}
+
+# Whatever the state said (missing, stale, written by 0.16 with ours as the original), our
+# address must not outlive the core: it is taken out of every physical service's DNS.
+dns_strip() {
+  local path cur rest
+  dns_snapshot | while IFS=$'\t' read -r path cur; do
+    case " $cur " in *" $DNS_OURS "*) ;; *) continue ;; esac
+    rest=$(tr ' ' '\n' <<<"$cur" | grep -vxF "$DNS_OURS" | paste -sd' ' -)
+    if [ -n "$rest" ]; then dns_put "$path" "$rest"
+    elif [[ "$path" == Setup:* ]]; then dns_put "$path" '!'
+    else dns_put "$path" -; fi
+  done
 }
 
 # The core's log may name servers and, from older versions, visited domains: root-only, and the
