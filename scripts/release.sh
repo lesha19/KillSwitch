@@ -18,6 +18,8 @@
 #     ~/Library/Developer/Xcode/UserData/Provisioning Profiles and
 #     ~/Library/MobileDevice/Provisioning Profiles; override with KS_PROFILE_APP / KS_PROFILE_FILTER;
 #   - Helper/mihomo (Helper/fetch-mihomo.sh): the core is signed here as com.lesha19.KillSwitch.core.
+#   - Helper/geosite.dat (Helper/fetch-geodata.sh): Russian sites outside the VPN (coredirect=1).
+#     Shipped like mihomo, in the app's Resources/Helper; install.sh copies it to /Library/KillSwitch/core.
 #   - Sparkle EdDSA private key in the login keychain (Sparkle's generate_keys, run once; only the
 #     public key is in project.yml as SUPublicEDKey). generate_appcast signs the .dmg with it.
 #   - --publish only: gh logged in with access to lesha19/KillSwitch-releases, and release notes:
@@ -93,6 +95,8 @@ HOWTO_PROFILES="Скачать: Xcode → Settings → Accounts → $TEAM → Do
     $HOWTO_PROFILES"
 
 [ -f Helper/mihomo ] || problem "Нет Helper/mihomo (ядро VPN): запустите Helper/fetch-mihomo.sh."
+[ -f Helper/geosite.dat ] ||
+  problem "Нет Helper/geosite.dat (российские сайты мимо VPN): запустите Helper/fetch-geodata.sh."
 
 # Existence only: nothing is read out of the keychain item.
 security find-generic-password -s https://sparkle-project.org -a ed25519 >/dev/null 2>&1 ||
@@ -140,6 +144,9 @@ ditto "$OUT/KillSwitch.xcarchive/Products/Applications/KillSwitch.app" "$APP"
 SYSEXT="$APP/Contents/Library/SystemExtensions/$FILTER_ID.systemextension"
 WIDGET="$APP/Contents/PlugIns/KillSwitchWidget.appex"
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist")
+for f in mihomo geosite.dat; do
+  cmp -s "Helper/$f" "$APP/Contents/Resources/Helper/$f" || { echo "В приложении нет Helper/$f" >&2; exit 1; }
+done
 
 # Entitlements as in the repo, with the Developer ID NetworkExtension value and the identifiers
 # from the profile (AMFI matches them against the embedded profile at launch).

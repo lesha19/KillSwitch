@@ -3,3 +3,4 @@ build/
 .DS_Store
 Helper/mihomo
 dist/
+Helper/geosite.dat
