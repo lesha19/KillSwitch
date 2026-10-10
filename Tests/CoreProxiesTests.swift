@@ -42,6 +42,22 @@ final class CoreProxiesTests: XCTestCase {
         XCTAssertEqual(state.groups.map(\.name), ["Auto", "PROXY"])
     }
 
+    func testHelperDNSGroupHidden() throws {
+        // ks adds KS-DNS (fallback over all servers, hidden) for DNS and rule downloads: not a server choice
+        let json = """
+        {"proxies": {
+          "PROXY": {"type": "Selector", "now": "A", "all": ["A", "B"], "history": []},
+          "KS-DNS": {"type": "Fallback", "now": "A", "all": ["A", "B"], "hidden": true, "history": []},
+          "Hidden": {"type": "URLTest", "now": "B", "all": ["A", "B"], "hidden": true, "history": []},
+          "A": {"type": "Vless", "history": []}, "B": {"type": "Vless", "history": []}
+        }}
+        """
+        let state = try CoreProxies(data: Data(json.utf8), order: ["KS-DNS", "PROXY"])
+        XCTAssertEqual(state.groups.map(\.name), ["PROXY"])
+        XCTAssertEqual(state.mainGroup?.name, "PROXY")
+        XCTAssertEqual(state.servers, ["A", "B"])
+    }
+
     func testBadJSON() {
         XCTAssertThrowsError(try CoreProxies(data: Data("nope".utf8)))
     }

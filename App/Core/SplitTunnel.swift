@@ -16,16 +16,20 @@ enum SplitApps {
 
     static func argument(_ names: [String]) -> String { names.joined(separator: ",") }
 
-    /// Valid names appended, repeats dropped, order kept.
+    /// Limits of `ks set splitapps` (Helper/ks splitapps_parse).
+    static let maxCount = 50
+    static let maxBytes = 64
+
+    /// Valid names appended, repeats dropped, order kept, at most `maxCount`.
     static func adding(_ names: [String], to list: [String]) -> [String] {
         var result = list
-        for name in names where isValid(name) && !result.contains(name) { result.append(name) }
+        for name in names where result.count < maxCount && isValid(name) && !result.contains(name) { result.append(name) }
         return result
     }
 
-    /// No list separator, path or control characters; the length of a file name.
+    /// No list separator, path or control characters; what the helper accepts as a process name.
     static func isValid(_ name: String) -> Bool {
-        !name.isEmpty && name.utf8.count <= 255 && !name.contains(",") && !name.contains("/")
+        !name.isEmpty && name.utf8.count <= maxBytes && !name.contains(",") && !name.contains("/")
             && !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
     }
 }

@@ -16,6 +16,7 @@ struct CoreProxies: Equatable {
     private var nowByName: [String: String] = [:]
     private var delays: [String: Int] = [:]
 
+    static let helperDNSGroup = "KS-DNS"
     static let groupTypes: Set<String> = ["Selector", "URLTest", "Fallback", "LoadBalance", "Relay"]
 
     /// `order`: group names in profile order (mihomo's JSON object has none); unknown ones follow,
@@ -35,6 +36,8 @@ struct CoreProxies: Equatable {
             let now = info["now"] as? String
             if let now { nowByName[name] = now }
             if name == "GLOBAL" { continue }   // mihomo's built-in group, used only in global mode
+            // the helper's DNS group (Helper/ks KS_DNS) and groups the profile hides are not server choices
+            if name == Self.helperDNSGroup || info["hidden"] as? Bool == true { continue }
             groups.append(Group(name: name, type: type, now: now, all: info["all"] as? [String] ?? []))
         }
         groups.sort { a, b in

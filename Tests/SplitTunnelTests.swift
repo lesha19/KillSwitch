@@ -25,6 +25,16 @@ final class SplitAppsTests: XCTestCase {
     func testAdding() {
         XCTAssertEqual(SplitApps.adding(["Telegram", "Steam"], to: ["Steam"]), ["Steam", "Telegram"])
     }
+
+    func testHelperLimits() {
+        // ks set splitapps refuses a name over 64 bytes and more than 50 names
+        XCTAssertNotNil(SplitApps.processName(infoPlist: ["CFBundleExecutable": String(repeating: "x", count: 64)]))
+        XCTAssertNil(SplitApps.processName(infoPlist: ["CFBundleExecutable": String(repeating: "x", count: 65)]))
+        XCTAssertNil(SplitApps.processName(infoPlist: ["CFBundleExecutable": String(repeating: "я", count: 33)]))
+        let many = (1...60).map { "app\($0)" }
+        XCTAssertEqual(SplitApps.adding(many, to: []).count, 50)
+        XCTAssertEqual(SplitApps.parse(setting: many.joined(separator: ",")).count, 50)
+    }
 }
 
 final class MultihopTests: XCTestCase {
