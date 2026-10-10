@@ -1,10 +1,10 @@
 #!/bin/bash
-# Signs the mihomo binary as our VPN core. The content filter trusts the core only by this
+# Signs a core binary (mihomo or xray, ADR 0020) as our VPN core. The content filter trusts the core only by this
 # signature: team YR58655PJ7 + identifier com.lesha19.KillSwitch.core (Filter/TrustedCode.swift).
 # The upstream binary is ad-hoc signed and would not be trusted.
 #
 #   scripts/sign-core.sh [binary] [identity]
-#     binary    default Helper/mihomo (after Helper/fetch-mihomo.sh)
+#     binary    default Helper/mihomo (after Helper/fetch-mihomo.sh); Helper/xray after fetch-xray.sh
 #     identity  release.sh passes its Developer ID identity. Default: "Developer ID Application" of
 #               team YR58655PJ7 if the keychain has it, else "Apple Development". Both certificates
 #               carry the team in subject.OU, so the filter's requirement accepts either.

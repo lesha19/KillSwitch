@@ -11,14 +11,17 @@ check() { if [ "$2" = "$3" ]; then echo "ok    $1"; else echo "FAIL  $1: got '$2
 
 printf 'pinned geosite\n' > "$tmp/good.dat"
 printf 'pinned geoip\n' > "$tmp/good.metadb"
+printf 'pinned geoipdat\n' > "$tmp/good.ipdat"   # geoip.dat for Xray (ADR 0020)
 printf 'something else\n' > "$tmp/bad"
 pin_site=$(shasum -a 256 < "$tmp/good.dat" | cut -d' ' -f1)
 pin_ip=$(shasum -a 256 < "$tmp/good.metadb" | cut -d' ' -f1)
+pin_ipdat=$(shasum -a 256 < "$tmp/good.ipdat" | cut -d' ' -f1)
 
 # The script writes next to itself: a copy with the test's pins.
 mkdir "$tmp/Helper" "$tmp/bin"
 sed -e "s/^SHA256_GEOSITE=\"[0-9a-f]*\"/SHA256_GEOSITE=\"$pin_site\"/" \
-    -e "s/^SHA256_GEOIP=\"[0-9a-f]*\"/SHA256_GEOIP=\"$pin_ip\"/" "$here/../fetch-geodata.sh" > "$tmp/Helper/fetch-geodata.sh"
+    -e "s/^SHA256_GEOIP=\"[0-9a-f]*\"/SHA256_GEOIP=\"$pin_ip\"/" \
+    -e "s/^SHA256_GEOIP_DAT=\"[0-9a-f]*\"/SHA256_GEOIP_DAT=\"$pin_ipdat\"/" "$here/../fetch-geodata.sh" > "$tmp/Helper/fetch-geodata.sh"
 # curl -q -fsSL -o <file> <url>: serves "$FAKE_COPY.<ext>" or "$FAKE_UPSTREAM.<ext>" (.dat for
 # geosite.dat, .metadb for geoip.metadb; empty FAKE_* for a 404), logs "<file>@<source>".
 cat > "$tmp/bin/curl" <<'EOF'
@@ -32,31 +35,33 @@ case "$url" in
   *) src=""; echo "$url" >> "$LOG" ;;
 esac
 [ -n "$src" ] || exit 22
-cp "$src.${file##*.}" "$out"
+case "$file" in geoip.dat) ext=ipdat ;; *) ext=${file##*.} ;; esac
+cp "$src.$ext" "$out"
 EOF
 chmod +x "$tmp/bin/curl"
-cp "$tmp/bad" "$tmp/bad.dat"; cp "$tmp/bad" "$tmp/bad.metadb"
+cp "$tmp/bad" "$tmp/bad.dat"; cp "$tmp/bad" "$tmp/bad.metadb"; cp "$tmp/bad" "$tmp/bad.ipdat"
 good="$tmp/good" bad="$tmp/bad"
 export LOG="$tmp/log"
-run() {  # run <copy|""> <upstream|"">: "<exit> <files asked, in order> <geosite.dat>/<geoip.metadb>"
-  rm -f "$tmp/Helper/geosite.dat" "$tmp/Helper/geoip.metadb" "$LOG"; : > "$LOG"
+run() {  # run <copy|""> <upstream|"">: "<exit> <files asked, in order> <geosite.dat>/<geoip.metadb>/<geoip.dat>"
+  rm -f "$tmp/Helper/geosite.dat" "$tmp/Helper/geoip.metadb" "$tmp/Helper/geoip.dat" "$LOG"; : > "$LOG"
   FAKE_COPY=$1 FAKE_UPSTREAM=$2 PATH="$tmp/bin:$PATH" bash "$tmp/Helper/fetch-geodata.sh" >/dev/null 2>&1
-  local rc=$? site=none ip=none
+  local rc=$? site=none ip=none ipdat=none
   [ -f "$tmp/Helper/geosite.dat" ] && site=$(cat "$tmp/Helper/geosite.dat")
   [ -f "$tmp/Helper/geoip.metadb" ] && ip=$(cat "$tmp/Helper/geoip.metadb")
-  echo "$rc $(paste -sd, - < "$LOG") $site/$ip"
+  [ -f "$tmp/Helper/geoip.dat" ] && ipdat=$(cat "$tmp/Helper/geoip.dat")
+  echo "$rc $(paste -sd, - < "$LOG") $site/$ip/$ipdat"
 }
 
 check "our releases' copies first" "$(run "$good" "$good")" \
-  "0 geosite.dat@copy,geoip.metadb@copy pinned geosite/pinned geoip"
+  "0 geosite.dat@copy,geoip.metadb@copy,geoip.dat@copy pinned geosite/pinned geoip/pinned geoipdat"
 check "no copies there: the pinned commit" "$(run "" "$good")" \
-  "0 geosite.dat@copy,geosite.dat@upstream,geoip.metadb@copy,geoip.metadb@upstream pinned geosite/pinned geoip"
+  "0 geosite.dat@copy,geosite.dat@upstream,geoip.metadb@copy,geoip.metadb@upstream,geoip.dat@copy,geoip.dat@upstream pinned geosite/pinned geoip/pinned geoipdat"
 check "copies of another pin: the pinned commit" "$(run "$bad" "$good")" \
-  "0 geosite.dat@copy,geosite.dat@upstream,geoip.metadb@copy,geoip.metadb@upstream pinned geosite/pinned geoip"
+  "0 geosite.dat@copy,geosite.dat@upstream,geoip.metadb@copy,geoip.metadb@upstream,geoip.dat@copy,geoip.dat@upstream pinned geosite/pinned geoip/pinned geoipdat"
 check "pinned commit gone: the copies are enough" "$(run "$good" "")" \
-  "0 geosite.dat@copy,geoip.metadb@copy pinned geosite/pinned geoip"
-check "neither: fails, nothing written" "$(run "" "")" "1 geosite.dat@copy,geosite.dat@upstream none/none"
-check "wrong sha256 everywhere: fails, nothing written" "$(run "$bad" "$bad")" "1 geosite.dat@copy,geosite.dat@upstream none/none"
+  "0 geosite.dat@copy,geoip.metadb@copy,geoip.dat@copy pinned geosite/pinned geoip/pinned geoipdat"
+check "neither: fails, nothing written" "$(run "" "")" "1 geosite.dat@copy,geosite.dat@upstream none/none/none"
+check "wrong sha256 everywhere: fails, nothing written" "$(run "$bad" "$bad")" "1 geosite.dat@copy,geosite.dat@upstream none/none/none"
 check "  no temporary file left" "$(ls "$tmp/Helper")" "fetch-geodata.sh"
 check "every download gives up after 3 minutes (#27)" \
   "$(grep -vE '^[[:space:]]*#' "$here/../fetch-geodata.sh" | grep -E '(^|[^-])curl ' | grep -vc -- '--max-time 180')" 0
@@ -74,7 +79,7 @@ check "every download with curl -q (no ~/.curlrc)" \
 # release.sh refuses geodata that is not the pinned one (root installs it, and it is uploaded as the copy).
 # shellcheck source=../../scripts/release.sh
 . "$here/../../scripts/release.sh"
-for f in geosite.dat:good.dat geoip.metadb:good.metadb; do
+for f in geosite.dat:good.dat geoip.metadb:good.metadb geoip.dat:good.ipdat; do
   name=${f%%:*}
   cp "$tmp/${f#*:}" "$tmp/Helper/$name"
   check "release: pinned $name accepted" "$(geodata_pinned "$tmp/Helper" "$name" && echo yes || echo no)" yes

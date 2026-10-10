@@ -5,3 +5,5 @@ Helper/mihomo
 dist/
 Helper/geosite.dat
 Helper/geoip.metadb
+Helper/xray
+Helper/geoip.dat

@@ -18,8 +18,9 @@
 #     content-filter-provider-systemextension. Looked up in
 #     ~/Library/Developer/Xcode/UserData/Provisioning Profiles and
 #     ~/Library/MobileDevice/Provisioning Profiles; override with KS_PROFILE_APP / KS_PROFILE_FILTER;
-#   - Helper/mihomo (Helper/fetch-mihomo.sh): the core is signed here as com.lesha19.KillSwitch.core.
-#   - Helper/geosite.dat and Helper/geoip.metadb (Helper/fetch-geodata.sh): the subscription's
+#   - Helper/mihomo (Helper/fetch-mihomo.sh) and Helper/xray (Helper/fetch-xray.sh, ADR 0020): both
+#     cores are signed here as com.lesha19.KillSwitch.core (one runs at a time).
+#   - Helper/geosite.dat, Helper/geoip.metadb and Helper/geoip.dat (Helper/fetch-geodata.sh): the subscription's
 #     GEOSITE/GEOIP rules and the ad block (ADR 0013).
 #     Shipped like mihomo, in the app's Resources/Helper; install.sh copies them to /Library/KillSwitch/core.
 #     They must be the pinned files: --publish uploads them (with their sha256) as the copies that
@@ -33,11 +34,11 @@
 # com.lesha19.KillSwitch.helper with the hardened runtime before the app; the app and the daemon
 # check each other's designated requirement, so both are verified against it at the end.
 
-# geodata_pinned <dir> <file>: <dir>/<file> (geosite.dat or geoip.metadb) has the sha256 pinned in
+# geodata_pinned <dir> <file>: <dir>/<file> (geosite.dat, geoip.metadb, geoip.dat) has the sha256 pinned in
 # <dir>/fetch-geodata.sh. Root installs them as they are: only the pinned files ship.
 geodata_pinned() {
   local var pin
-  case "$2" in geosite.dat) var=SHA256_GEOSITE ;; geoip.metadb) var=SHA256_GEOIP ;; *) return 1 ;; esac
+  case "$2" in geosite.dat) var=SHA256_GEOSITE ;; geoip.metadb) var=SHA256_GEOIP ;; geoip.dat) var=SHA256_GEOIP_DAT ;; *) return 1 ;; esac
   pin=$(sed -nE "s/^$var=\"([0-9a-f]{64})\".*/\\1/p" "$1/fetch-geodata.sh")
   [ -n "$pin" ] && [ -f "$1/$2" ] && [ "$(shasum -a 256 < "$1/$2" | cut -d' ' -f1)" = "$pin" ]
 }
@@ -136,7 +137,8 @@ if ! plutil -lint -s "$HELPER_PLIST" ||
 fi
 
 [ -f Helper/mihomo ] || problem "Нет Helper/mihomo (ядро VPN): запустите Helper/fetch-mihomo.sh."
-for f in geosite.dat geoip.metadb; do
+[ -f Helper/xray ] || problem "Нет Helper/xray (ядро VPN): запустите Helper/fetch-xray.sh."
+for f in geosite.dat geoip.metadb geoip.dat; do
   if [ ! -f "Helper/$f" ]; then
     problem "Нет Helper/$f (правила GEOSITE и GEOIP подписки): запустите Helper/fetch-geodata.sh."
   elif ! geodata_pinned Helper "$f"; then
@@ -193,7 +195,7 @@ HELPER="$APP/Contents/MacOS/KillSwitchHelper"
 [ -f "$HELPER" ] && [ -f "$APP/Contents/Library/LaunchDaemons/$HELPER_ID.plist" ] ||
   { echo "В приложении нет службы $HELPER_ID (Contents/MacOS, Contents/Library/LaunchDaemons)" >&2; exit 1; }
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist")
-for f in mihomo geosite.dat geoip.metadb; do
+for f in mihomo xray geosite.dat geoip.metadb geoip.dat; do
   cmp -s "Helper/$f" "$APP/Contents/Resources/Helper/$f" || { echo "В приложении нет Helper/$f" >&2; exit 1; }
 done
 
@@ -217,6 +219,7 @@ sign() { codesign --force --sign "$IDENTITY" --options runtime --timestamp "$@";
 
 echo "Подпись…"
 scripts/sign-core.sh "$APP/Contents/Resources/Helper/mihomo" "$IDENTITY"
+scripts/sign-core.sh "$APP/Contents/Resources/Helper/xray" "$IDENTITY"
 sign --identifier "$HELPER_ID" "$HELPER"
 sign --entitlements Widget/KillSwitchWidget.entitlements "$WIDGET"
 entitlements Filter/KillSwitchFilter.entitlements "$PROFILE_FILTER" "$OUT/filter.entitlements"
@@ -289,13 +292,13 @@ rm -rf "$OUT/appcast"
 grep -q 'sparkle:edSignature=' "$OUT/appcast.xml" || { echo "appcast.xml без подписи EdDSA" >&2; exit 1; }
 
 # The copies of the pinned geodata that Helper/fetch-geodata.sh asks first (see there).
-for f in geosite.dat geoip.metadb; do
+for f in geosite.dat geoip.metadb geoip.dat; do
   cp "Helper/$f" "$OUT/$f"
   (cd "$OUT" && shasum -a 256 "$f" > "$f.sha256")
 done
 
 # Checksums of what is published, for people who verify the download (README).
-write_sums "$OUT" "$(basename "$DMG")" appcast.xml geosite.dat geoip.metadb
+write_sums "$OUT" "$(basename "$DMG")" appcast.xml geosite.dat geoip.metadb geoip.dat
 
 echo "Готово: $DMG, $OUT/appcast.xml, $OUT/SHA256SUMS"
 cat "$OUT/SHA256SUMS"
@@ -303,6 +306,6 @@ cat "$OUT/SHA256SUMS"
 if [ "$MODE" = --publish ]; then
   gh release create "v$VERSION" --repo "$RELEASES_REPO" --title "KillSwitch $VERSION" \
     --notes-file "$NOTES" "$DMG" "$OUT/appcast.xml" "$OUT/geosite.dat" "$OUT/geosite.dat.sha256" \
-    "$OUT/geoip.metadb" "$OUT/geoip.metadb.sha256" "$OUT/SHA256SUMS"
+    "$OUT/geoip.metadb" "$OUT/geoip.metadb.sha256" "$OUT/geoip.dat" "$OUT/geoip.dat.sha256" "$OUT/SHA256SUMS"
   echo "Опубликовано: https://github.com/$RELEASES_REPO/releases/tag/v$VERSION"
 fi

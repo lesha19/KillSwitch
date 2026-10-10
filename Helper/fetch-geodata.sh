@@ -1,5 +1,6 @@
 #!/bin/bash
-# Downloads geosite.dat and geoip.metadb of a pinned MetaCubeX/meta-rules-dat release into Helper/
+# Downloads geosite.dat, geoip.metadb (mihomo) and geoip.dat (Xray, ADR 0020) of a pinned
+# MetaCubeX/meta-rules-dat release into Helper/
 # and checks their sha256. They ship inside the app (signed with it); install.sh copies them from
 # the bundle into /Library/KillSwitch/core, never from anywhere the user can write. The
 # subscription's own GEOSITE/GEOIP rules (e.g. GEOIP,RU,DIRECT) and the opt-in ad block read them
@@ -15,13 +16,14 @@ cd "$(dirname "$0")"
 RELEASE="fa4922ac71ae2ac2ae1c1f5b61447b42095fd665"   # commit of the "release" branch
 SHA256_GEOSITE="e0ad83c50ba6bf79d5b872432af581a6ce785d24af61a3ffb00fd9085aadea59"   # its geosite.dat
 SHA256_GEOIP="cc522e05d607c725bdd4b1219b6d80e2b6c3454571ca07157e73a17951ba8c84"     # its geoip.metadb
+SHA256_GEOIP_DAT="116cc0f03d48991962f7f9cdbbcf53d45d89777f9c3cd1a663210853e5df6093" # its geoip.dat (Xray)
 [ -n "$RELEASE" ] || { echo "Set RELEASE (and the SHA256 values) in $0 first" >&2; exit 1; }
 # A force-push can drop the pinned commit, so every published release of KillSwitch carries a copy
 # of both files (scripts/release.sh --publish). The copy is asked first; the commit only when the
 # copy is missing or of another pin (right after the pin was moved). Both must match the pin.
 COPY="https://github.com/lesha19/KillSwitch-releases/releases/latest/download"
 UPSTREAM="https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/$RELEASE"
-trap 'rm -f geosite.dat.tmp geoip.metadb.tmp' EXIT
+trap 'rm -f geosite.dat.tmp geoip.metadb.tmp geoip.dat.tmp' EXIT
 # Each download gives up after 3 minutes (#27); a file only replaces the one here once its sha256
 # is the pinned one, so any failure keeps the old file.
 fetch() {  # fetch <file> <sha256>
@@ -45,3 +47,4 @@ fetch() {  # fetch <file> <sha256>
 }
 fetch geosite.dat "$SHA256_GEOSITE"
 fetch geoip.metadb "$SHA256_GEOIP"
+fetch geoip.dat "$SHA256_GEOIP_DAT"
