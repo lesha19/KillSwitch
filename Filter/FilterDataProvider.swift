@@ -28,9 +28,9 @@ final class FilterDataProvider: NEFilterDataProvider {
         if let token = flow.sourceAppAuditToken, Self.isTrusted(token, config: config) { return .allow() }
         guard let socket = flow as? NEFilterSocketFlow,
               let host = Self.remoteHost(socket) else { return .drop() }
-        if Self.isLocal(host, lan: config["lan"] as? Bool ?? true) { return .allow() }
+        if AddressMatch.isLocal(host, lan: config["lan"] as? Bool ?? true) { return .allow() }
         let allowed = config["addresses"] as? [String] ?? []
-        if allowed.contains(where: { Self.matches(host, $0) }) { return .allow() }
+        if allowed.contains(where: { AddressMatch.matches(host, $0) }) { return .allow() }
         return .drop()
     }
 
@@ -56,32 +56,6 @@ final class FilterDataProvider: NEFilterDataProvider {
         case .tailscale: return config["tailscale"] as? Bool ?? true
         case nil: return false
         }
-    }
-
-    private static func isLocal(_ host: String, lan: Bool) -> Bool {
-        let always = ["127.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4", "255.255.255.255/32", "::1/128", "fe80::/10", "ff00::/8"]
-        let private4 = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
-        return (always + (lan ? private4 : [])).contains { matches(host, $0) }
-    }
-
-    /// host is an IP address; network is an address or address/prefix.
-    static func matches(_ host: String, _ network: String) -> Bool {
-        let parts = network.split(separator: "/", maxSplits: 1).map(String.init)
-        guard let hostBytes = bytes(host), let netBytes = bytes(parts[0]), hostBytes.count == netBytes.count else { return false }
-        let prefix = parts.count == 2 ? Int(parts[1]) ?? -1 : hostBytes.count * 8
-        guard prefix >= 0, prefix <= hostBytes.count * 8 else { return false }
-        for bit in 0..<prefix where (hostBytes[bit / 8] ^ netBytes[bit / 8]) & UInt8(0x80 >> (bit % 8)) != 0 {
-            return false
-        }
-        return true
-    }
-
-    private static func bytes(_ address: String) -> [UInt8]? {
-        var v4 = in_addr()
-        if inet_pton(AF_INET, address, &v4) == 1 { return withUnsafeBytes(of: &v4) { Array($0) } }
-        var v6 = in6_addr()
-        if inet_pton(AF_INET6, address, &v6) == 1 { return withUnsafeBytes(of: &v6) { Array($0) } }
-        return nil
     }
 
     /// VPN TUN interfaces carry an address in 198.18.0.0/16: our core's 198.18.128.1, dropweb's and
