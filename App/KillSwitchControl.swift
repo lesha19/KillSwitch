@@ -110,9 +110,30 @@ final class KillSwitchControl {
     /// Its state in System Settings › Login Items; `.needsApproval` shows HelperApprovalNote.
     private(set) var helperAvailability: HelperService.Availability = .unavailable
 
+    /// «Разреши KillSwitch в Объектах входа…» on the main screen, at most once a day (HelperService).
+    private(set) var helperApprovalBanner = false
+
     private func updateHelperAvailability() {
         let current = helperClient.availability
         if current != helperAvailability { helperAvailability = current }
+        let defaults = UserDefaults.standard
+        if HelperService.showApprovalBanner(helperInstalled: FileManager.default.fileExists(atPath: helper), availability: current,
+                                            lastShown: defaults.object(forKey: "helperApprovalShown") as? Date, now: Date()) {
+            defaults.set(Date(), forKey: "helperApprovalShown")
+            helperApprovalBanner = true
+        }
+    }
+
+    func dismissHelperApprovalBanner() { helperApprovalBanner = false }
+
+    /// ADR 0010 at launch: a helper installed without the daemon (from before 0.13, or its
+    /// registration lost) gets it registered once, so Touch ID and the passwordless upgrade work.
+    private func registerHelperAtLaunch() {
+        let installed = FileManager.default.fileExists(atPath: helper)
+        if HelperService.launchStep(helperInstalled: installed, availability: helperClient.availability) == .register {
+            helperClient.register()
+        }
+        updateHelperAvailability()
     }
 
     /// «Восстановить службу» and the wizard: registers the daemon when it is not yet. While macOS
@@ -137,6 +158,7 @@ final class KillSwitchControl {
 
     init() {
         notifyIfMacOSUpdated()
+        registerHelperAtLaunch()
         refresh()
         listenForWidget()
     }

@@ -326,7 +326,9 @@ private struct NoticeBanner: View {
             otherVPN: control.otherVPNActive,
             usage: client.status.usage, newServers: client.needsConfirmation,
             filterIncomplete: filterIncomplete, filterDismissed: filterDismissed, now: Date(),
-            serversDown: control.serversDown, networkCause: control.networkCause))
+            serversDown: control.serversDown, networkCause: control.networkCause,
+            filterUpdateWaiting: control.filter.updateWaitingForApproval,
+            helperApproval: control.helperApprovalBanner && control.helperAvailability == .needsApproval))
         if let notice {
             switch notice {
             case .otherVPN:
@@ -371,6 +373,15 @@ private struct NoticeBanner: View {
                     } else {
                         Button("Включить…") { control.filter.install() }
                     }
+                }
+            case .filterUpdateWaiting:
+                Banner(icon: "arrow.triangle.2.circlepath", title: notice.title, message: notice.message) {
+                    Button("Открыть Системные настройки") { NSWorkspace.shared.open(SystemSettings.networkExtensions) }
+                }
+            case .helperApproval:
+                Banner(icon: "lock.shield", title: notice.title, message: notice.message,
+                       dismiss: { control.dismissHelperApprovalBanner() }) {
+                    Button("Открыть Объекты входа") { HelperClient.openLoginItems() }
                 }
             }
         }
