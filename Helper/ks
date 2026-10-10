@@ -568,6 +568,37 @@ core_generate() (
     cp "$w/ips.$e" "$w/servers"
   fi
 
+  # Auto-failover (ADR 0005): the app names sets of the profile's servers in one country
+  # ("x-ks-failover", e.g. every Lithuanian server); each becomes a hidden fallback group the main
+  # selector (the first select group) can pick, so when the chosen server stops answering the core
+  # moves to the next one of the set by itself. Health checks go through the proxies themselves.
+  # Only proxies of the profile, so nothing here can send traffic DIRECT; added after direct_sig.
+  grep -q '^KS-FO-' "$w/names" && fail "Имена «KS-FO-…» заняты: так называются наши запасные группы"
+  if has x-ks-failover "$in"; then
+    plutil -extract x-ks-failover json -o "$w/fo.json" "$in" >/dev/null 2>&1 || fail "x-ks-failover: не разобрать"
+    head -n "$nproxies" "$w/names" > "$w/pnames"
+    FO="$w/fo.json" PNAMES="$w/pnames" json_edit "$G" '
+      open my $f, "<", $ENV{FO} or die; my $fo = do { local $/; JSON::PP->new->decode(<$f>) }; close $f;
+      open $f, "<", $ENV{PNAMES} or die; my %p = map { chomp; ($_ => 1) } <$f>; close $f;
+      die "x-ks-failover: не список\n" unless ref $fo eq "ARRAY";
+      die "x-ks-failover: больше 100 групп\n" if @$fo > 100;
+      my ($main) = grep { lc($_->{type} // "") eq "select" } @$j;
+      my ($n, %seen) = (0);
+      for my $set (@$fo) {
+        die "x-ks-failover: группа — не список из 2–500 серверов\n" unless ref $set eq "ARRAY" && @$set >= 2 && @$set <= 500;
+        for (@$set) {
+          die "x-ks-failover: не имя сервера\n" if ref $_;
+          die "x-ks-failover: «$_» — не сервер профиля\n" unless $p{$_};
+          die "x-ks-failover: «$_» в двух группах\n" if $seen{$_}++;
+        }
+        next unless $main;
+        my $name = "KS-FO-" . ++$n;
+        push @$j, { name => $name, type => "fallback", proxies => [@$set], hidden => JSON::PP::true,
+                    url => "https://cp.cloudflare.com/generate_204", interval => 120 };
+        push @{ $main->{proxies} }, $name;
+      }' || exit 1
+  fi
+
   # DNS and rule downloads go through KS-DNS, a group of the profile's proxies only: picking
   # DIRECT in a group of the profile cannot take them out of the tunnel.
   head -n "$nproxies" "$w/names" | KS_DNS=$KS_DNS json_edit "$G" '

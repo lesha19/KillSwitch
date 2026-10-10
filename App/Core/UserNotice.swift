@@ -5,6 +5,10 @@ import Foundation
 enum UserNotice: Equatable {
     case vpnDropped(protected: Bool)
     case reconnected(server: String?)
+    /// Failover moved to another server of the same country (names as displayed).
+    case serverSwitched(from: String, to: String)
+    /// No server of the chosen country answers; another country is the person's choice.
+    case serversDown(country: String)
     case autoConnectNeedsPassword
     case subscriptionEnding(days: Int, title: String?, expire: Date)
     case trafficLow(used: Int64, total: Int64)
@@ -43,6 +47,8 @@ enum UserNotice: Equatable {
         switch self {
         case .vpnDropped: "vpnDropped"
         case .reconnected: "reconnected"
+        case .serverSwitched: "serverSwitched"
+        case .serversDown: "serversDown"
         case .autoConnectNeedsPassword: "autoConnect"
         case .subscriptionEnding(let days, _, _): "ending\(days)"
         case .trafficLow: "traffic"
@@ -55,7 +61,7 @@ enum UserNotice: Equatable {
 
     var setting: Setting? {
         switch self {
-        case .vpnDropped, .reconnected, .autoConnectNeedsPassword: .connection
+        case .vpnDropped, .reconnected, .autoConnectNeedsPassword, .serverSwitched, .serversDown: .connection
         case .subscriptionEnding, .trafficLow, .newServers: .subscription
         case .pauseEnded: .pause
         case .serviceOff: .service
@@ -66,12 +72,12 @@ enum UserNotice: Equatable {
     var action: Action? {
         switch self {
         case .vpnDropped: .connect
-        case .autoConnectNeedsPassword: .openApp
+        case .autoConnectNeedsPassword, .serversDown: .openApp
         case .subscriptionEnding: .renew
         case .newServers: .approve
         case .serviceOff: .openLoginItems
         case .macOSUpdated: .check
-        case .reconnected, .trafficLow, .pauseEnded: nil
+        case .reconnected, .serverSwitched, .trafficLow, .pauseEnded: nil
         }
     }
 
@@ -79,6 +85,8 @@ enum UserNotice: Equatable {
         switch self {
         case .vpnDropped: "VPN оборвался"
         case .reconnected: "VPN снова работает"
+        case .serverSwitched: "VPN переключился на другой сервер"
+        case .serversDown(let country): "Серверы «\(country)» не отвечают"
         case .autoConnectNeedsPassword: "VPN не подключился сам"
         case .subscriptionEnding(let days, _, _): "Подписка кончается через " + Russian.plural(days, "день", "дня", "дней")
         case .trafficLow: "Трафик почти закончился"
@@ -97,6 +105,8 @@ enum UserNotice: Equatable {
             protected ? "Интернет закрыт, пока VPN не подключится. Ничего не утекает."
                       : "Защита выключена — программы идут в интернет напрямую."
         case .reconnected(let server): server ?? "Интернет снова идёт через VPN."
+        case .serverSwitched(let from, let to): "«\(from)» не отвечал. Теперь — «\(to)»."
+        case .serversDown: "Выбери другую страну или «Самый быстрый»."
         case .autoConnectNeedsPassword: "Службу нужно обновить."
         case .subscriptionEnding(_, let title, let expire):
             "\(title ?? "Подписка") до \(Self.day(expire, calendar: calendar))."

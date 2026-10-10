@@ -75,7 +75,7 @@ private struct HomeContent: View {
                 .overlay(alignment: .topTrailing) {
                     if style == .window { ActionsMenu(style: style) }
                 }
-            TopErrorBanner(chooseServer: chooseServer) { NoticeBanner() }
+            TopErrorBanner(chooseServer: chooseServer) { NoticeBanner(chooseServer: chooseServer) }
             if status.showsServer {
                 ServerRow(action: chooseServer)
             }
@@ -115,7 +115,8 @@ private struct HomeContent: View {
 
     private var detail: Status.Detail {
         let server = control.currentServer
-        return Status.Detail(server: server.map(ServerName.display), ping: server.flatMap(control.delay(of:)))
+        return Status.Detail(server: server.map(ServerName.display), ping: server.flatMap(control.delay(of:)),
+                             switched: control.recentSwitch)
     }
 
     @ViewBuilder private func buttons(_ status: Status) -> some View {
@@ -298,6 +299,7 @@ private struct SubscriptionLine: View {
 
 /// Priorities 2–7 of the main screen's notices (the error banner, priority 1, goes first).
 private struct NoticeBanner: View {
+    let chooseServer: () -> Void
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
     @AppStorage("filterNoticeDismissed") private var filterDismissed = false
@@ -310,11 +312,19 @@ private struct NoticeBanner: View {
         let notice = HomeNotice.pick(HomeNotice.Input(
             otherVPN: control.foreignVPN != nil || control.connection == .otherApp,
             usage: client.status.usage, newServers: client.needsConfirmation,
-            filterIncomplete: filterIncomplete, filterDismissed: filterDismissed, now: Date()))
+            filterIncomplete: filterIncomplete, filterDismissed: filterDismissed, now: Date(),
+            serversDown: control.serversDown))
         if let notice {
             switch notice {
             case .otherVPN:
                 Banner(icon: "arrow.left.arrow.right", title: notice.title, message: notice.message) { EmptyView() }
+            case .serversDown:
+                Banner(icon: "antenna.radiowaves.left.and.right.slash", title: notice.title, message: notice.message) {
+                    if let fastest = control.proxies.flatMap({ ServerPicker.entries($0).first(where: \.isFastest) }) {
+                        Button(ServerPicker.fastestTitle) { control.choose(fastest) }.disabled(control.busy)
+                    }
+                    Button("Выбрать сервер…", action: chooseServer)
+                }
             case .expired, .ending:
                 if let url = client.status.accountURL {
                     Banner(icon: "calendar.badge.exclamationmark", title: notice.title, message: notice.message) {

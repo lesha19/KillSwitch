@@ -58,11 +58,14 @@ enum ServerPicker {
         return result
     }
 
-    /// The entry the traffic goes through now: the main group's choice, opened through selectors.
+    /// The entry the traffic goes through now: the main group's choice, opened through selectors
+    /// and failover groups.
     static func selected(_ proxies: CoreProxies) -> String? {
         guard let main = proxies.mainGroup, var current = main.now else { return nil }
         var seen: Set<String> = [main.name]
-        while let group = proxies.groups.first(where: { $0.name == current }), group.selectable,
+        // through selectors and our failover groups (the server the group uses now)
+        while let group = proxies.groups.first(where: { $0.name == current && $0.selectable })
+                ?? proxies.failover.first(where: { $0.name == current }),
               let next = group.now, !seen.contains(current) {
             seen.insert(current)
             current = next

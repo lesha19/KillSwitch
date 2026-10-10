@@ -241,22 +241,91 @@ final class KillSwitchControl {
     private static let pendingKey = "pendingServer"
 
     /// «Выбор сервера»: switches the running core at once, or remembers the choice for «Подключить».
+    /// A server is picked through its country's failover group when it has one (Failover).
     func choose(_ entry: ServerPicker.Entry) {
+        setChosen(entry.name)
+        serversDown = nil
         guard coreRunning else {
             pendingChoice = entry
             if let data = try? JSONEncoder().encode(entry) { UserDefaults.standard.set(data, forKey: Self.pendingKey) }
             return
         }
+        let path = proxies.map { Failover.path(for: entry, in: $0) } ?? entry.path
         busy = true
         Task {
-            for step in entry.path { await select(group: step.group, proxy: step.proxy) }
+            for step in path { await select(group: step.group, proxy: step.proxy) }
             busy = false
+        }
+    }
+
+    // MARK: auto-failover (Failover, ADR 0005)
+
+    /// The server the person picked last, or the last good one after a switch.
+    private(set) var chosenServer = UserDefaults.standard.string(forKey: KillSwitchControl.chosenKey)
+    /// The last switch to another server of the same country.
+    private(set) var lastSwitch: Failover.Switch? = KillSwitchControl.loadSwitch()
+    /// The country whose servers all stopped answering; the person picks what next.
+    private(set) var serversDown: String?
+    /// Servers already moved behind their failover group once (adoption), so a refused select is
+    /// not retried on every refresh.
+    private var adopted: Set<String> = []
+
+    private static let chosenKey = "chosenServer"
+    private static let switchKey = "lastFailover"
+
+    /// Shown in the status line for an hour after the switch, while connected.
+    var recentSwitch: Failover.Switch? {
+        guard coreRunning, let lastSwitch, lastSwitch.isRecent(now: Date()) else { return nil }
+        return lastSwitch
+    }
+
+    private func setChosen(_ name: String?) {
+        chosenServer = name
+        UserDefaults.standard.set(name, forKey: Self.chosenKey)
+    }
+
+    private static func loadSwitch() -> Failover.Switch? {
+        UserDefaults.standard.data(forKey: switchKey).flatMap { try? JSONDecoder().decode(Failover.Switch.self, from: $0) }
+    }
+
+    /// After every server list from the core: puts a server picked straight in the main selector
+    /// behind its group, notices a switch the core made by itself and a country that went silent.
+    /// Only passwordless `ks core select`; never another country.
+    private func checkFailover(_ proxies: CoreProxies) {
+        if let steps = Failover.adoption(proxies), let server = steps.first?.proxy, !adopted.contains(server) {
+            adopted.insert(server)
+            setChosen(server)   // the main selector points at it: it is the current pick
+            Task {
+                for step in steps {
+                    guard case .ok = await callHelper(["core", "select", step.group, step.proxy], interactive: false) else { break }
+                }
+                loadProxies(force: true)
+            }
+            return
+        }
+        switch Failover.state(chosen: chosenServer, proxies: proxies) {
+        case .fine:
+            serversDown = nil
+        case .switched(let from, let to):
+            serversDown = nil
+            let change = Failover.Switch(from: ServerName.display(from), to: ServerName.display(to), at: Date())
+            lastSwitch = change
+            if let data = try? JSONEncoder().encode(change) { UserDefaults.standard.set(data, forKey: Self.switchKey) }
+            setChosen(to)   // the last good one, also for the next connection
+            notify(.serverSwitched(from: change.from, to: change.to))
+            if let group = Failover.group(of: to, in: proxies) {
+                Task { _ = await callHelper(["core", "select", group.name, to], interactive: false) }
+            }
+        case .countryDown(let country):
+            if serversDown != country { notify(.serversDown(country: country)) }
+            serversDown = country
         }
     }
 
     /// The core's API comes up a moment after `ks core on`: a few tries, then give up quietly
     /// (the core keeps its own last choice).
     private func applyPendingChoice() async {
+        adopted = []
         guard let entry = pendingChoice else { return }
         pendingChoice = nil
         UserDefaults.standard.removeObject(forKey: Self.pendingKey)
@@ -333,6 +402,7 @@ final class KillSwitchControl {
 
     /// Picks a server in a selector group of the running core. Always a click.
     func coreSelect(group: String, proxy: String) {
+        if group == proxies?.mainGroup?.name { setChosen(proxy) }
         busy = true
         Task {
             await select(group: group, proxy: proxy)
@@ -422,7 +492,7 @@ final class KillSwitchControl {
     /// `ks core proxies`, at most every 5 s while the app is open (every minute otherwise) unless
     /// forced; only while the core runs. Runs from the timer too, so it never asks for the password.
     func loadProxies(force: Bool = false) {
-        guard coreRunning else { proxies = nil; proxiesError = nil; measured = [:]; return }
+        guard coreRunning else { proxies = nil; proxiesError = nil; measured = [:]; serversDown = nil; return }
         let interval: TimeInterval = openViews > 0 ? 5 : 60
         guard !proxiesLoading, force || Date().timeIntervalSince(proxiesLoadedAt) > interval else { return }
         proxiesLoading = true
@@ -436,6 +506,7 @@ final class KillSwitchControl {
                 if let parsed = try? CoreProxies(data: Data(output.utf8), order: order) {
                     proxiesError = nil
                     if parsed != proxies { proxies = parsed }
+                    checkFailover(parsed)
                     if let server = currentServer, server != lastServer {
                         lastServer = server
                         UserDefaults.standard.set(server, forKey: "lastServer")

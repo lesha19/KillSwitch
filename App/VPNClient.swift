@@ -291,7 +291,7 @@ final class VPNClient {
     }
 
     func prepareImport() -> Prepared? {
-        guard let profile = ProfileMerger.merge(subscription: Self.cachedSubscription(), manual: manual.compactMap(Self.proxy)),
+        guard let profile = forCore(Self.cachedSubscription()),
               let written = write(profile) else { return nil }
         return Prepared(file: written.file, hash: written.hash, profile: profile)
     }
@@ -336,7 +336,7 @@ final class VPNClient {
     /// True when the core has this profile now (imported, or it had it already).
     @discardableResult
     private func apply(subscription: Profile?, interactive: Bool) async -> Bool {
-        guard let profile = ProfileMerger.merge(subscription: subscription, manual: manual.compactMap(Self.proxy)) else {
+        guard let profile = forCore(subscription) else {
             lastError = nil
             return true
         }
@@ -374,6 +374,12 @@ final class VPNClient {
             lastError = UserError.from(raw: message, context: .subscription)
         }
         return false
+    }
+
+    /// What goes to the helper: the subscription with the own servers, plus the same-country sets
+    /// the helper turns into failover groups (Failover).
+    private func forCore(_ subscription: Profile?) -> Profile? {
+        ProfileMerger.merge(subscription: subscription, manual: manual.compactMap(Self.proxy)).map(Failover.adding(to:))
     }
 
     private func reloadProfileProxies() {

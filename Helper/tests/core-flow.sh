@@ -63,6 +63,12 @@ run "$fx/ok-full.json" refresh
 [ "$rc" = 0 ] && grep -qx 198.51.100.20 "$SERVERS_CORE" && [ "$(val proxies.1.server "$cfg")" = 198.51.100.20 ] &&
   ok "refresh: approved name on a new address accepted" || bad "refresh new address: $rc $(cat "$tmp/err")"
 grep -qx 203.0.113.20 "$SERVERS" && bad "refresh: old address still allowed" || ok "refresh: old address dropped from pf"
+# failover sets (ADR 0005) join a group that holds DIRECT, yet need no password
+edit '$j->{"x-ks-failover"} = [["NL reality", "FI ws"]]' < "$fx/ok-full.json" > "$tmp/p.json"
+run "$tmp/p.json" refresh
+[ "$rc" = 0 ] && grep -q '"KS-FO-1"' "$cfg" && ok "refresh: failover groups added without the admin" || bad "refresh with failover: $rc $(cat "$tmp/err")"
+run "$fx/ok-full.json" refresh
+[ "$rc" = 0 ] && ! grep -q 'KS-FO-' "$cfg" && ok "refresh: and dropped again" || bad "refresh without failover: $rc"
 cp "$cfg" "$tmp/cfg.before"
 # a new host name
 edit 'push @{$j->{proxies}}, {name=>"NL", type=>"trojan", server=>"nl.example.com", port=>443, password=>"p"}' < "$fx/ok-full.json" > "$tmp/p.json"

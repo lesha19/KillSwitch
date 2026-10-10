@@ -106,6 +106,8 @@ enum Status: Equatable {
     struct Detail: Equatable {
         var server: String?
         var ping: Int?
+        /// The core moved to another server of the country lately (Failover), names displayed.
+        var switched: Failover.Switch?
     }
 
     enum Action: Equatable {
@@ -191,7 +193,10 @@ enum Status: Equatable {
     /// Under the title of the main screen, which shows the server in its own row.
     func homeLine(_ detail: Detail) -> String {
         switch self {
-        case .protected: "Интернет только через VPN"
+        case .protected:
+            "Интернет только через VPN" + (detail.switched.map {
+                ". В \(Self.time($0.at)) «\($0.from)» перестал отвечать — переключились на «\($0.to)»."
+            } ?? "")
         case .connecting: "Сервер скоро ответит"
         default: line(detail)
         }
