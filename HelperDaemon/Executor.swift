@@ -28,7 +28,7 @@ enum Executor {
         }
         var command = command
         var copy: URL?
-        defer { if let copy { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) } }
+        defer { if let copy { PrivateDirectory.remove(copy.deletingLastPathComponent()) } }
         if let profile {
             guard let path = copyProfile(profile) else {
                 return HelperReply(status: HelperReply.failedToRun, stdout: "", stderr: "Не удалось прочитать профиль")
@@ -57,7 +57,7 @@ enum Executor {
         defer { try? handle.close() }
         var info = stat()
         guard fstat(handle.fileDescriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG,
-              let dir = Runner.privateDirectory() else { return nil }
+              let dir = PrivateDirectory.make() else { return nil }
         let url = dir.appendingPathComponent("profile.json")
         let fd = open(url.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { return nil }
@@ -81,8 +81,11 @@ enum Executor {
         var entry = passwd()
         var result: UnsafeMutablePointer<passwd>?
         var buffer = [CChar](repeating: 0, count: 4096)
-        guard getpwuid_r(uid, &entry, &buffer, buffer.count, &result) == 0, result != nil else { return nil }
-        return String(cString: entry.pw_name)
+        // pw_name points into the buffer: read it while the buffer is still alive
+        return buffer.withUnsafeMutableBufferPointer { storage in
+            guard getpwuid_r(uid, &entry, storage.baseAddress, storage.count, &result) == 0, result != nil else { return nil }
+            return String(cString: entry.pw_name)
+        }
     }
 }
 

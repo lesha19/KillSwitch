@@ -23,7 +23,7 @@ enum Runner {
             case .success(let url): copy = url
             case .failure(let failure): return failure.reply
             }
-            defer { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
+            defer { PrivateDirectory.remove(copy.deletingLastPathComponent()) }
             let script = command.program == .install ? "install.sh" : "uninstall.sh"
             let path = copy.appendingPathComponent("Contents/Resources/Helper/\(script)").path
             return execute("/bin/bash", HelperCommand.scriptArguments(path, command.arguments))
@@ -39,7 +39,7 @@ enum Runner {
         case .success(let url): copy = url
         case .failure(let failure): return failure.reply
         }
-        defer { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
+        defer { PrivateDirectory.remove(copy.deletingLastPathComponent()) }
         let helperDir = copy.appendingPathComponent("Contents/Resources/Helper")
         let installed = isRootOnly(directory, directory: true) && isRootOnly(ks, directory: false)
             ? FileManager.default.contents(atPath: ks) : nil
@@ -89,26 +89,19 @@ enum Runner {
     private static func makeVerifiedCopy() -> Result<URL, CopyFailure> {
         // the kernel's path of this process, not Bundle.main (see DaemonExecutable.current)
         guard let bundle = DaemonExecutable.current().flatMap(DaemonExecutable.appBundle) else { return .failure(.ownPath) }
-        guard let dir = privateDirectory() else { return .failure(.directory) }
+        guard let dir = PrivateDirectory.make() else { return .failure(.directory) }
         let copy = dir.appendingPathComponent(bundle.lastPathComponent)
         do {
             try FileManager.default.copyItem(at: bundle, to: copy)   // a clone on APFS
         } catch {
-            try? FileManager.default.removeItem(at: dir)
+            PrivateDirectory.remove(dir)
             return .failure(.copy(error.localizedDescription))
         }
         guard BundleSignature.isValid(copy, requirement: HelperIdentity.clientRequirement) else {
-            try? FileManager.default.removeItem(at: dir)
+            PrivateDirectory.remove(dir)
             return .failure(.signature)
         }
         return .success(copy)
-    }
-
-    /// A fresh 0700 directory of root's (mkdtemp in root's own temporary directory).
-    static func privateDirectory() -> URL? {
-        var template = Array((NSTemporaryDirectory() as NSString).appendingPathComponent("killswitch.XXXXXX").utf8CString)
-        guard let made = mkdtemp(&template) else { return nil }
-        return URL(fileURLWithPath: String(cString: made), isDirectory: true)
     }
 
     /// Not a symlink, owned by root, not writable by group or others.
