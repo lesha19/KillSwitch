@@ -40,6 +40,7 @@ CORE_CTL="$CORE_DIR/ctl/mihomo.sock" # the core's API; ctl/ is root-only
 CORE_TUN_ADDR="198.18.128.1" # our TUN's address (start of the core's fake-ip-range)
 DNS_STATE="$CORE_DIR/dns-state" # system DNS keys pointed at the core, with their originals
 DNS_OURS="127.0.0.1"
+FOREIGN_VPN="$CORE_DIR/foreign-vpn" # world-readable: other VPN tunnels up next to our core
 ADDR_RE='^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$'
 
 setting() {  # setting <key> <default>
@@ -520,6 +521,35 @@ dns_restore() {
 dns_locked() { lockf -k -t 30 "$CORE_DIR/dns.lock" "$0" _dns "$1"; }
 core_running() { launchctl print "$CORE_JOB" 2>/dev/null | grep -q 'state = running'; }
 
+# Utun interfaces other than ours with a default or wide (/8 or larger, not 10/8) route
+# outside an interface scope: another VPN (Happ, dropweb, a Tailscale exit node) taking traffic next to
+# our core; two TUNs fight over routes and DNS. Unknown while our TUN has no address.
+foreign_tuns() {
+  local ours
+  ours=$(utun_addrs | awk -v a="$CORE_TUN_ADDR" '$2 == a { print $1; exit }')
+  [ -n "$ours" ] || return 0
+  netstat -rn -f inet | awk -v ours="$ours" '
+    $4 ~ /^utun[0-9]+$/ && $4 != ours && $3 !~ /I/ && $1 !~ /^10(\/8)?$/ {
+      d = $1
+      if (d == "default") len = 0
+      else if (d ~ /\//) { len = d; sub(/.*\//, "", len) }
+      else len = 8 * split(d, p, ".")
+      if (len + 0 <= 8) print $4
+    }' | sort -u | paste -sd' ' -
+}
+# Only reported (events.log and $FOREIGN_VPN for the app); other programs are not touched.
+tun_guard() {
+  local f
+  f=$(foreign_tuns)
+  if [ -n "$f" ]; then
+    [ "$(cat "$FOREIGN_VPN" 2>/dev/null)" = "$f" ] && return 0
+    echo "$f" > "$FOREIGN_VPN"; chmod 644 "$FOREIGN_VPN"
+    log_event "another VPN tunnel next to the core: $f"
+  elif [ -f "$FOREIGN_VPN" ]; then
+    rm -f "$FOREIGN_VPN"; log_event "other VPN tunnel gone"
+  fi
+}
+
 # Watchdog part for the core: the system DNS follows it. Set while it runs (and set again if
 # the system overwrote it), restored when it has not been running for 5 s or is unloaded,
 # so a crashed core does not leave the Mac without names.
@@ -527,7 +557,7 @@ CORE_DOWN=""
 core_guard() {
   local p now changed
   if ! p=$(launchctl print "$CORE_JOB" 2>/dev/null); then
-    CORE_DOWN=""
+    CORE_DOWN=""; rm -f "$FOREIGN_VPN"
     [ -f "$DNS_STATE" ] && { dns_locked restore; log_event "core not loaded: DNS restored"; }
     return 0
   fi
@@ -535,7 +565,9 @@ core_guard() {
     CORE_DOWN=""
     changed=$(dns_locked apply)
     [ -n "$changed" ] && log_event "core DNS set: $(paste -sd' ' - <<<"$changed")"
+    tun_guard
   else
+    rm -f "$FOREIGN_VPN"
     now=$(date +%s); CORE_DOWN=${CORE_DOWN:-$now}
     if [ $((now - CORE_DOWN)) -ge 5 ] && [ -f "$DNS_STATE" ]; then
       dns_locked restore; log_event "core not running: DNS restored"

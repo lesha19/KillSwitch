@@ -62,8 +62,9 @@ profile, rewritten on every import, reachable only by our core), `servers` (both
   auto-update. The app switches servers without the API being exposed: `ks core proxies` (JSON of
   groups and proxies), `ks core select <group> <proxy>`, `ks core delay <group|proxy>` talk to the
   controller socket; names are length- and control-character-checked and fully percent-encoded.
-  `Helper/tests/core-config.sh` runs the generator against fixture
-  profiles, attack ones included, and checks the result with `mihomo -t`. `on` refuses while another VPN tunnel is up, then points the system DNS of every
+  `Helper/tests/core-config.sh` runs the generator against fixture profiles, attack ones included,
+  and checks the result with `mihomo -t`.
+  `on` refuses while another VPN tunnel is up, then points the system DNS of every
   physical service to 127.0.0.1; `off` restores it. Like Mullvad, only the volatile dynamic store is
   written (`State:/Network/Service/<id>/DNS` of active and `Setup:/…/DNS` of all services on a
   physical port, ServerAddresses only), never the saved network preferences, so a crash cannot leave
@@ -71,7 +72,11 @@ profile, rewritten on every import, reachable only by our core), `servers` (both
   where 127.0.0.1 is still set. The watchdog sets it again when the system overwrites it (DHCP renew,
   network change), restores it when the core has not been running for 5 s or is unloaded, and puts
   back DNS left by older versions (`core/dns-saved`, set with networksetup) once.
-  `Helper/tests/dns.sh` checks this against a fake store. Start/stop, proxies/select/delay and refresh are passwordless, import is not.
+  `Helper/tests/dns.sh` checks this against a fake store.
+  If Happ or dropweb bring up their own TUN while the core runs (a utun other than ours, 198.18.128.1,
+  with a default or /8-or-wider route), the watchdog logs it and writes the interface names to the
+  world-readable `core/foreign-vpn` for the app to warn; other programs are not touched.
+  Start/stop, proxies/select/delay and refresh are passwordless, import is not.
   Log: `/Library/KillSwitch/core/core.log`.
 - Second layer (`Filter/`, optional, Settings → Общие): a content filter system extension
   (NEFilterDataProvider). It cannot see the outgoing interface, so it does not repeat pf: while no VPN
