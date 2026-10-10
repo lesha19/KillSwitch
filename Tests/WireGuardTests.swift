@@ -25,6 +25,17 @@ final class WireGuardTests: XCTestCase {
         """
     }
 
+    func testLinkWithAmneziaWG() throws {
+        let p = try WireGuard.parse(link: "wireguard://\(priv)@1.2.3.4:51820?publickey=\(pub)&address=10.0.0.2/32&jc=4&jmin=40&jmax=70&s1=15&s2=68&h1=100-200&i1=%3Cr%2032%3E#A")
+        let awg = try XCTUnwrap(p["amnezia-wg-option"] as? [String: Any])
+        XCTAssertEqual(awg["jc"] as? Int, 4)
+        XCTAssertEqual(awg["s2"] as? Int, 68)
+        XCTAssertEqual(awg["h1"] as? String, "100-200")
+        XCTAssertEqual(awg["i1"] as? String, "<r 32>")
+        XCTAssertNil(try WireGuard.parse(link: "wireguard://\(priv)@1.2.3.4:51820?publickey=\(pub)&address=10.0.0.2")["amnezia-wg-option"])
+        XCTAssertThrowsError(try WireGuard.parse(link: "wireguard://\(priv)@1.2.3.4:51820?publickey=\(pub)&address=10.0.0.2&jc=-1"))
+    }
+
     func testConf() throws {
         let p = try WireGuard.parse(conf: conf, name: "Дом")
         XCTAssertEqual(p["type"] as? String, "wireguard")

@@ -34,6 +34,13 @@ final class ServerIdentityTests: XCTestCase {
         XCTAssertNil(ServerIdentity.key(["name": "group", "type": "select"]))
     }
 
+    func testSudokuKeyIsItsSecret() {
+        let a: [String: Any] = ["name": "s", "type": "sudoku", "server": "1.2.3.4", "port": 8443, "key": "one"]
+        var b = a
+        b["key"] = "two"
+        XCTAssertNotEqual(ServerIdentity.key(a), ServerIdentity.key(b))
+    }
+
     private var profile: Profile {
         ["proxies": [lithuania, ["name": "NL", "type": "ss", "server": "9.9.9.9", "port": 1, "password": "x"]]]
     }
