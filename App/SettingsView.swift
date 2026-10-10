@@ -285,7 +285,8 @@ private struct MultihopRows: View {
                 ForEach(candidates, id: \.self) { Text(ServerName.display($0)).tag($0) }
             }
             if let entry, entry == exit {
-                Text("Вход и выход — один и тот же сервер: выбери другой сервер входа.").font(.caption).foregroundStyle(.orange)
+                StatusLabel("Вход и выход — один и тот же сервер: выбери другой сервер входа.",
+                            systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.caption)
             }
         }
     }
@@ -458,7 +459,7 @@ private struct FilterSection: View {
     var body: some View {
         Section {
             HStack {
-                Label(statusText, systemImage: symbol).foregroundStyle(statusColor)
+                StatusLabel(statusText, systemImage: symbol, tint: statusColor)
                 Spacer()
                 switch filter.status {
                 case .notInstalled, .failed:
@@ -712,7 +713,8 @@ private struct ListSheet: View {
                 Button("Добавить", action: add).disabled(newItem.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             if invalid {
-                Text("Нужен адрес IPv4 или IPv6, можно с маской: 10.8.0.0/24.").font(.caption).foregroundStyle(.orange)
+                StatusLabel("Нужен адрес IPv4 или IPv6, можно с маской: 10.8.0.0/24.",
+                            systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.caption)
             }
         }
         .onAppear { draft = original }

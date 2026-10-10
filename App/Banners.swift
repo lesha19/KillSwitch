@@ -171,3 +171,25 @@ struct InlineError: View {
         .textSelection(.enabled)
     }
 }
+
+/// A status line: the colour and the shape are in the icon, the text stays readable in both
+/// themes (spec §9.3, §9.4).
+struct StatusLabel: View {
+    let text: String
+    let systemImage: String
+    let tint: Color
+
+    init(_ text: String, systemImage: String, tint: Color) {
+        self.text = text
+        self.systemImage = systemImage
+        self.tint = tint
+    }
+
+    var body: some View {
+        Label {
+            Text(text).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: systemImage).foregroundStyle(tint)
+        }
+    }
+}

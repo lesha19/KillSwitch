@@ -90,24 +90,6 @@ struct ServerLabel: View {
     }
 }
 
-/// Latency badge: green under 150 ms, orange under 400, red above; "нет ответа" after a failed test.
-struct DelayBadge: View {
-    let delay: Int?
-    var timedOut = false
-
-    var body: some View {
-        if let delay {
-            Text("\(delay) мс")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(delay < 150 ? .green : delay < 400 ? .orange : .red)
-                .accessibilityLabel("Пинг \(delay) миллисекунд")
-        } else if timedOut {
-            Text("нет ответа").font(.caption).foregroundStyle(.red)
-                .accessibilityLabel("Сервер не ответил")
-        }
-    }
-}
-
 /// Servers of the running core, grouped as in the profile. Selector groups take a click.
 struct ServerList: View {
     @Environment(KillSwitchControl.self) private var control
@@ -234,7 +216,7 @@ struct ServerList: View {
                         .accessibilityHidden(true)
                     ServerLabel(name: name)
                     Spacer()
-                    DelayBadge(delay: control.delay(of: name), timedOut: control.timedOut(name))
+                    PingView(ping: ServerPicker.Ping(delay: control.delay(of: name), timedOut: control.timedOut(name)))
                 }
                 .padding(.vertical, 5).padding(.horizontal, 8)
                 .contentShape(Rectangle())
@@ -291,8 +273,8 @@ struct SubscriptionSummary: View {
             }
             if client.needsConfirmation {
                 HStack {
-                    Text("Нужно подтверждение: в подписке новые серверы")
-                        .font(.caption).foregroundStyle(.orange)
+                    StatusLabel("Нужно подтверждение: в подписке новые серверы",
+                                systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.caption)
                     Button("Подтвердить…") { Task { await client.confirmNewServers() } }
                         .controlSize(.small)
                         .disabled(client.updating)
@@ -300,8 +282,8 @@ struct SubscriptionSummary: View {
                 }
             }
             if client.needsPassword {
-                Text("Подписка изменилась. Нажми «Обновить», чтобы применить (спросит пароль).")
-                    .font(.caption).foregroundStyle(.orange)
+                StatusLabel("Подписка изменилась. Нажми «Обновить», чтобы применить (спросит пароль).",
+                            systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.caption)
             }
             if let error = client.lastError {
                 InlineError(error: error)

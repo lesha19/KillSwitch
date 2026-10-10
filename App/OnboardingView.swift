@@ -68,7 +68,7 @@ private struct StepHeader: View {
                 Text(title).font(.title2.bold()).accessibilityAddTraits(.isHeader)
                 Spacer()
                 if let badge {
-                    Text(badge).font(.caption.bold()).foregroundStyle(.green)
+                    Text(badge).font(.caption.bold())
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(.green.opacity(0.12), in: Capsule())
                 }
@@ -144,9 +144,7 @@ private struct SubscriptionStep: View {
                     Spacer()
                     Button("Изменить") { self.found = nil; fieldFocused = true }
                 }
-                Label(found.line(), systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .fixedSize(horizontal: false, vertical: true)
+                StatusLabel(found.line(), systemImage: "checkmark.circle.fill", tint: .green)
             } else {
                 HStack {
                     TextField("https://…", text: $text)
@@ -331,10 +329,10 @@ private struct FilterStep: View {
                 Button("Открыть ещё раз") { NSWorkspace.shared.open(SystemSettings.networkExtensions) }
             }
         case .on, .off:
-            Label("Защита macOS работает", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+            StatusLabel("Защита macOS работает", systemImage: "checkmark.circle.fill", tint: .green)
         case .failed:
-            Label("Не получилось включить. Можно пропустить и включить позже в настройках.", systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            StatusLabel("Не получилось включить. Можно пропустить и включить позже в настройках.",
+                        systemImage: "exclamationmark.triangle.fill", tint: .orange)
         case .unknown, .notInstalled:
             EmptyView()
         }

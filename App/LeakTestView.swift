@@ -34,9 +34,8 @@ struct LeakTestView: View {
                 if !result.verdict.findings.isEmpty {
                     Section {
                         ForEach(Array(result.verdict.findings.enumerated()), id: \.offset) { _, finding in
-                            Label(finding.text, systemImage: finding.isLeak ? "xmark.octagon.fill" : "info.circle")
-                                .foregroundStyle(finding.isLeak ? .red : .secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                            StatusLabel(finding.text, systemImage: finding.isLeak ? "xmark.octagon.fill" : "info.circle",
+                                        tint: finding.isLeak ? .red : .secondary)
                         }
                     }
                 }
@@ -53,7 +52,7 @@ struct LeakTestView: View {
                         if let v6 = result.ipv6 {
                             Text(v6.ip).monospaced().textSelection(.enabled)
                         } else {
-                            Label("недоступен", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                            StatusLabel("недоступен", systemImage: "checkmark.circle.fill", tint: .green)
                         }
                     }
                 }
