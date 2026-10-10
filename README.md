@@ -56,7 +56,8 @@ profile, rewritten on every import, reachable only by our core), `servers` (both
   only `proxies`, `proxy-groups`, `rules` and `rule-providers` are taken, everything else (TUN, DNS on
   127.0.0.1:53 with DoH resolvers reached through the profile's first group, the controller as a unix
   socket in root-only `core/ctl/`, no listeners or proxy ports) comes from a fixed template. Proxies of
-  type direct/dns or unknown types, proxy-providers and file rule-providers are refused; a server given
+  type direct/dns or unknown types, proxy-providers and file rule-providers are refused (WireGuard
+  needs a top-level `server`; pf lets the core reach servers over TCP and UDP); a server given
   by host name is resolved once and pinned to its address (`servername`/`sni` keep the name), and the
   addresses become `servers-core`. `refresh <json>` does the same but is refused (exit 3) when the
   profile brings server addresses that are not in `servers` yet; it is passwordless, for subscription
@@ -91,9 +92,10 @@ profile, rewritten on every import, reachable only by our core), `servers` (both
   the App Store Tailscale runs as the user; with the Tailscale setting on, the
   tailnet itself (100.64.0.0/10, fd7a:115c:a1e0::/48) is allowed on Tailscale's utun, exit-node traffic is not.
 - DNS to LAN resolvers is blocked by default (setting `dns`), so names do not leak via the router.
-- Rules and settings are root-owned. Passwordless sudo covers only `ks state`, `ks on` and the core
-  commands that cannot widen the rules (see above); turning off, pausing and every setting change ask
-  for the admin password.
+- Rules and settings are root-owned. Passwordless sudo covers only `ks state`, `ks on`, `ks core
+  state|on|off|proxies`, `ks core select|delay …` and `ks core refresh …` (refused if it brings new
+  server addresses), none of which can widen the rules; turning off, pausing, `ks core import` and
+  every setting change ask for the admin password.
 - Watchdog (`ks watch`, every 3 s, honours off / pause): checks that pf is enabled, that the main
   ruleset still references the `com.apple/*` anchor (otherwise reloads `/etc/pf.conf`), that the
   sha256 of the loaded anchor equals the hash saved right after our load, and that the set of tunnel

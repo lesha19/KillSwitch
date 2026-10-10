@@ -1,0 +1,5 @@
+{"proxies": [{"name": "WG", "type": "wireguard", "server": "fi.example.com", "port": 51820, "ip": "172.16.0.2",
+  "private-key": "eCtXsJZ27+4PbhDkHnB923tkUn2Gj59wZw5wFA75MnU=", "public-key": "Cr8hWlKvtDt7nrvf+f0brNQQzabAqrjfBvas9pmowjo=",
+  "udp": true, "mtu": 1280}],
+ "proxy-groups": [{"name": "VPN", "type": "select", "proxies": ["WG"]}],
+ "rules": ["MATCH,VPN"]}
