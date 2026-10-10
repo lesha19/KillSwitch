@@ -57,6 +57,13 @@ enum HelperCommand: Equatable, Sendable {
         }
     }
 
+    /// The daemon could not run this bundled script (no verified copy of the app, 0.14.2): nothing
+    /// ran, so the app runs it behind the password prompt instead (ADR 0002), after its own check
+    /// of the bundle. `ks` commands are not retried: there failedToRun means the helper is missing.
+    func fallsBackToPassword(_ reply: HelperReply) -> Bool {
+        program != .ks && reply.status == HelperReply.failedToRun
+    }
+
     /// The arguments after the program.
     var arguments: [String] {
         switch self {

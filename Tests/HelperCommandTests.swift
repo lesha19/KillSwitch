@@ -207,4 +207,19 @@ final class HelperCommandTests: XCTestCase {
         }
         XCTAssertFalse(HelperCommand.install(user: "alex", servers: Array(repeating: "192.0.2.1", count: 513)).isValid)
     }
+
+    /// 0.14.2: the daemon could not make its verified copy of the app and answered failedToRun to
+    /// «Восстановить службу…». Nothing ran: the bundled script goes to the password prompt instead
+    /// of a dead end. Other answers (a failed script, a refused value, no right) stay as they are.
+    func testBundledScriptsFallBackToThePasswordWhenTheDaemonCouldNotRunThem() {
+        let couldNotRun = HelperReply(status: HelperReply.failedToRun, stdout: "", stderr: "Служба KillSwitch не нашла свою программу")
+        XCTAssertTrue(HelperCommand.install(user: "alex", servers: []).fallsBackToPassword(couldNotRun))
+        XCTAssertTrue(HelperCommand.uninstall.fallsBackToPassword(couldNotRun))
+        XCTAssertTrue(HelperCommand.upgrade.fallsBackToPassword(couldNotRun))
+        XCTAssertFalse(HelperCommand.state.fallsBackToPassword(couldNotRun))       // ks itself is missing: repair, not a retry
+        XCTAssertFalse(HelperCommand.protectionOff.fallsBackToPassword(couldNotRun))
+        for status in [0, 1, 2, HelperReply.refused, HelperReply.notAuthorized] {
+            XCTAssertFalse(HelperCommand.uninstall.fallsBackToPassword(HelperReply(status: status, stdout: "", stderr: "")), "\(status)")
+        }
+    }
 }

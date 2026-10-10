@@ -55,6 +55,9 @@ final class KillSwitchControl {
     /// The running daemon is older than this app (it still runs until idle): the app's commands go
     /// around it through sudo, so it leaves and launchd starts the new one.
     private var daemonOutdated = false
+    /// The daemon answered that it cannot run the bundled scripts (no verified copy of the app):
+    /// install.sh / uninstall.sh go straight to the password prompt, without its right's dialog first.
+    private var daemonCannotRunScripts = false
     /// Modification date of the installed helper when it was last compared.
     private var helperComparedAt: Date?
     /// When the current connection attempt started; nil unless connecting.
@@ -882,6 +885,7 @@ final class KillSwitchControl {
                         return
                     case .reply(let reply):
                         recentErrors.append("helper upgrade: " + reply.text(separateStderr: false))
+                        if HelperCommand.upgrade.fallsBackToPassword(reply) { daemonCannotRunScripts = true }
                         return
                     case .cancelled, .unreachable:
                         break
@@ -987,13 +991,15 @@ final class KillSwitchControl {
         guard AdminGate.permit(request) else { return .cancelled }
         if helperAvailability == .ready {
             let typed = commands.compactMap { HelperCommand(command: $0, helper: helper) }
-            if typed.count == commands.count, let outcome = await daemonRun(typed) { return outcome }
+            let skip = daemonCannotRunScripts && typed.contains { $0.program != .ks }
+            if typed.count == commands.count, !skip, let outcome = await daemonRun(typed) { return outcome }
         }
         return await AdminScript.run(commands)
     }
 
     /// The batch in the daemon, stopping at the first failure like `&&`. Nil when the daemon did
-    /// not answer the first command, so nothing ran yet and the password prompt can take over.
+    /// not answer the first command or could not run it (`fallsBackToPassword`), so nothing ran yet
+    /// and the password prompt can take over.
     private func daemonRun(_ commands: [HelperCommand]) async -> AdminScript.Outcome? {
         var output: [String] = []
         for (index, command) in commands.enumerated() {
@@ -1003,6 +1009,12 @@ final class KillSwitchControl {
             case .cancelled:
                 return .cancelled
             case .reply(let reply):
+                if command.fallsBackToPassword(reply) {
+                    recentErrors.append("daemon: " + reply.text(separateStderr: false))
+                    daemonCannotRunScripts = true
+                    // nothing of this command ran: the password prompt runs it (and the rest)
+                    if index == 0 { return nil }
+                }
                 let text = reply.text(separateStderr: false)
                 guard reply.status == 0 else { return .failed(text.isEmpty ? "Не получилось" : text) }
                 if !text.isEmpty { output.append(text) }
