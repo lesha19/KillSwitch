@@ -39,6 +39,8 @@ final class VPNClient {
     private(set) var needsConfirmation = false
     /// Settings › «Дополнительно»: fingerprint and multiplexing per server (Transport, ADR 0007).
     private(set) var transportOverrides = Transport.decode(UserDefaults.standard.data(forKey: Transport.storeKey))
+    /// Servers of the cached profile whose transport can be changed, with the subscription's values.
+    private(set) var transportServers: [Transport.Server] = []
 
     /// Hours between automatic updates; 0 = what the subscription asks for.
     var intervalHours = UserDefaults.standard.integer(forKey: "subscriptionIntervalHours") {
@@ -180,12 +182,6 @@ final class VPNClient {
         manual.removeAll { $0.id == server.id }
         saveManual()
         await apply(subscription: Self.cachedSubscription(), interactive: true)
-    }
-
-    /// Servers of the current profile whose transport can be changed, with the subscription's values.
-    var transportServers: [Transport.Server] {
-        ProfileMerger.merge(subscription: Self.cachedSubscription(), manual: manual.compactMap(Self.proxy))
-            .map(Transport.servers) ?? []
     }
 
     /// Saves the choice and hands the profile to the core by a passwordless refresh: the servers
@@ -403,8 +399,9 @@ final class VPNClient {
     }
 
     private func reloadProfileProxies() {
-        profileProxies = ProfileMerger.merge(subscription: Self.cachedSubscription(), manual: manual.compactMap(Self.proxy))
-            .map(CoreProxies.init(profile:))
+        let profile = ProfileMerger.merge(subscription: Self.cachedSubscription(), manual: manual.compactMap(Self.proxy))
+        profileProxies = profile.map(CoreProxies.init(profile:))
+        transportServers = profile.map(Transport.servers) ?? []
     }
 
     private func imported(_ profile: Profile, hash: String) {

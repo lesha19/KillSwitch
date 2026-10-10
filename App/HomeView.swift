@@ -325,8 +325,9 @@ private struct NoticeBanner: View {
                             Button(ServerPicker.fastestTitle) { control.choose(fastest) }.disabled(control.busy)
                         }
                         Button("Выбрать сервер…", action: chooseServer)
+                    } else {   // three buttons do not fit; the check repeats every minute anyway
+                        Button("Проверить снова") { control.recheckNetwork() }.disabled(control.probing)
                     }
-                    Button("Проверить снова") { control.recheckNetwork() }.disabled(control.probing)
                 }
             case .serversDown:
                 Banner(icon: "antenna.radiowaves.left.and.right.slash", title: notice.title, message: notice.message) {
