@@ -7,6 +7,9 @@ packages:
   Yams:
     url: https://github.com/jpsim/Yams.git
     exactVersion: 6.2.2
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.10.0
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -27,11 +30,23 @@ targets:
       - path: Helper
         type: folder
         buildPhase: resources
-    resources: [Assets.xcassets]
+      # XcodeGen has no target-level `resources:` key: the catalog must be listed as a source,
+      # otherwise it is silently dropped and the app ships without its icon.
+      - Assets.xcassets
     dependencies:
       - target: KillSwitchWidget
       - target: KillSwitchFilter
       - package: Yams
+      - package: Sparkle
+    info:
+      # Merged with the generated Info.plist. Sparkle 2: appcast from the public releases repo,
+      # EdDSA public key (private key: login keychain of the release Mac), daily background checks.
+      path: App/Info.plist
+      properties:
+        SUFeedURL: https://github.com/lesha19/KillSwitch-releases/releases/latest/download/appcast.xml
+        SUPublicEDKey: c9ZEz2ibLJRVCYpynZHOd4UQ5t3u9uWKh7bVULDOD0E=
+        SUEnableAutomaticChecks: true
+        SUScheduledCheckInterval: 86400
     entitlements:
       path: App/KillSwitch.entitlements
       properties:
