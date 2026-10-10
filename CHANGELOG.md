@@ -4,6 +4,25 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Added
+- Every protocol the bundled mihomo 1.19.32 has for one server can be used (#9): MASQUE,
+  TrustTunnel, Sudoku, ShadowQUIC and OpenVPN join VLESS (Reality, Vision, xHTTP with a separate
+  download server, ML-KEM encryption), VMess, Trojan, Shadowsocks/2022 (obfs, v2ray-plugin,
+  gost-plugin, ShadowTLS, Restls, JLS, kcptun), Hysteria, Hysteria2, TUIC, WireGuard with
+  AmneziaWG and a preshared key, AnyTLS, Mieru, SSH, Snell, SOCKS5 and HTTP.
+- Links: vmess:// (v2rayN and URI form), anytls://, socks5:// and http(s):// proxies; xHTTP links
+  bring Xray's `extra` (padding, XMUX, download server); ss:// links with v2ray-plugin or
+  shadow-tls; wireguard:// links with AmneziaWG fields (#21).
+
+### Security
+- The helper keeps only the keys mihomo reads for each protocol and refuses a certificate or
+  private key given as a file path, a `dialer-proxy` outside the profile, hysteria2 realms and
+  unknown shadowsocks plugins (ADR 0014). TUIC's `ip` and the xHTTP download server are pinned
+  and added to the servers pf lets the core reach; nothing else is opened. Tailscale, ZeroTier
+  and EasyTier outbounds stay refused: they need addresses outside the server list.
+
 ## [0.14.2] - 2026-10-10
 
 ### Fixed
