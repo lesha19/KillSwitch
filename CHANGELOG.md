@@ -4,6 +4,19 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [0.14.1] - 2026-10-10
+
+### Fixed
+- The macOS filter extension is now updated with the app: at launch the app reads which version
+  macOS runs and, if the bundled one is newer, asks macOS to replace it (before, an extension from
+  0.6 kept running after every update). Nothing is asked when the version is the same; if macOS
+  wants an approval, a notice opens System Settings while the old version keeps filtering. pf stays
+  the primary layer during the swap (ADR 0012 addendum).
+- The privileged daemon (ADR 0010) is registered at launch when the helper is installed but the
+  daemon is not, so Touch ID, the 5-minute authorization and the passwordless update work on Macs
+  set up before it. While it waits for the switch in Login Items, a dismissible notice «Разреши
+  KillSwitch в Объектах входа…» opens them, at most once a day.
+
 ## [0.14] - 2026-10-10
 
 Updating no longer interrupts the VPN and needs no manual steps (ADR 0012).
