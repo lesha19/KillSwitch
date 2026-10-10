@@ -43,6 +43,7 @@ CORE_GROUP="_ksvpn"      # the core runs with this gid; nothing else can get it
 CORE_JOB="system/local.killswitch.core"
 WATCH_JOB="system/local.killswitch" # the watchdog, "ks watch"
 CORE_CTL="$CORE_DIR/ctl/mihomo.sock" # the core's API; ctl/ is root-only
+CORE_LOG_MAX=2000000 # bytes of core/core.log (launchd's StandardOutPath), see core_log_tidy
 CORE_TUN_ADDR="198.18.128.1"
 DOH_IPS="1.1.1.1, 8.8.8.8"   # DoH resolvers the core group may reach directly (rules, resolve_direct)
 KS_DNS="KS-DNS"          # our group for DNS and rule downloads: the profile's proxies, never DIRECT # our TUN's address (start of the core's fake-ip-range)
@@ -577,7 +578,8 @@ core_generate() (
     # The TUN takes the first address of fake-ip-range: ours differs from dropweb's and Happ's
     # 198.18.0.1, so the watchdog can tell the tunnels apart.
     # The controller is a unix socket in a root-only directory; the app reaches it via ks.
-    printf '{"mode":"rule","log-level":"info","ipv6":false,"allow-lan":false,"geo-auto-update":false,%s' "$fpm"
+    # log-level warning: at info mihomo writes every connection's domain into core.log.
+    printf '{"mode":"rule","log-level":"warning","ipv6":false,"allow-lan":false,"geo-auto-update":false,%s' "$fpm"
     printf '"external-controller-unix":"ctl/mihomo.sock",'
     printf '"tun":{"enable":true,"stack":"gvisor","auto-route":true,"auto-detect-interface":true,'
     printf '"dns-hijack":["any:53"],"route-exclude-address":[%s]},' "$excl"
@@ -962,6 +964,20 @@ dns_restore() {
   rm -f "$DNS_STATE"
 }
 
+# The core's log may name servers and, from older versions, visited domains: root-only, and the
+# core directory not listable by others (the app checks files in it by name). Past CORE_LOG_MAX
+# one older copy is kept and the log is emptied in place: launchd opens it with O_APPEND, so the
+# running core goes on writing at the new end.
+core_log_tidy() {
+  local size log="$CORE_DIR/core.log"
+  chmod 711 "$CORE_DIR" 2>/dev/null
+  [ -f "$log" ] || ( umask 077; : >> "$log" )
+  chmod 600 "$log" 2>/dev/null
+  size=$(stat -f %z "$log" 2>/dev/null) || return 0
+  [ "$size" -gt "$CORE_LOG_MAX" ] || return 0
+  ( umask 077; cp "$log" "$log.1" ) && chmod 600 "$log.1" && : > "$log"
+}
+
 # "ks core on|off" and the watchdog run these at the same time; lockf serialises them.
 dns_locked() { lockf -k -t 30 "$CORE_DIR/dns.lock" "$0" _dns "$1"; }
 core_running() { launchctl print "$CORE_JOB" 2>/dev/null | grep -q 'state = running'; }
@@ -998,7 +1014,7 @@ tun_guard() {
 # Watchdog part for the core: the system DNS follows it. Set while it runs (and set again if
 # the system overwrote it), restored when it has not been running for 5 s or is unloaded,
 # so a crashed core does not leave the Mac without names.
-CORE_DOWN=""; CORE_STATE=off
+CORE_DOWN=""; CORE_STATE=off; LOG_CHECKS=0
 core_guard() {
   local p now changed
   if ! p=$(launchctl print "$CORE_JOB" 2>/dev/null); then
@@ -1014,6 +1030,7 @@ core_guard() {
       [ -n "$changed" ] && log_event "core DNS set: $(paste -sd' ' - <<<"$changed")"
     fi
     tun_guard
+    LOG_CHECKS=$((LOG_CHECKS + 1)); [ $((LOG_CHECKS % 30)) = 1 ] && core_log_tidy   # about once a minute
     # lookups can take seconds: in the background, so the pf checks keep their pace
     if [ -s "$APPROVED_HOSTS" ] && rotate_due "$(date +%s)" "$(net_sig)"; then core_rotate_bg; fi
   else
@@ -1171,6 +1188,7 @@ case "${1:-status}" in
         if ! core_running && { pgrep -x DropwebCore >/dev/null || [ -n "$(vpn_ifaces)" ]; }; then
           echo "Сначала отключи VPN в dropweb или Happ" >&2; exit 1
         fi
+        core_log_tidy
         launchctl enable "$CORE_JOB"
         launchctl bootstrap system /Library/LaunchDaemons/local.killswitch.core.plist 2>/dev/null ||
           launchctl kickstart "$CORE_JOB"

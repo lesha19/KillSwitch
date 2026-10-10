@@ -45,7 +45,10 @@ if ! dscl . -read /Groups/_ksvpn >/dev/null 2>&1; then
   dscl . -create /Groups/_ksvpn PrimaryGroupID "$gid"
   dscl . -create /Groups/_ksvpn RealName "KillSwitch VPN core"
 fi
-install -d -o root -g wheel -m 755 "$DIR/core"
+# 711: the app checks files in it by name; the core's log in it is root-only (ks core_log_tidy)
+install -d -o root -g wheel -m 711 "$DIR/core"
+[ -f "$DIR/core/core.log" ] || install -o root -g wheel -m 600 /dev/null "$DIR/core/core.log"
+chmod 600 "$DIR/core/core.log"
 if [ -f mihomo ]; then
   install -o root -g wheel -m 755 mihomo "$DIR/core/mihomo"
   # the core starts at boot only after "ks core on"; an upgrade keeps a running core running

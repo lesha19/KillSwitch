@@ -38,6 +38,7 @@ check_config() {  # check_config <name> <config> <servers>
   [ "$(val external-controller-unix "$c")" = ctl/mihomo.sock ] && ok "$name: controller" || bad "$name: controller"
   [ "$(val allow-lan "$c")" = false ] && [ "$(val mode "$c")" = rule ] && [ "$(val tun.stack "$c")" = gvisor ] &&
     ok "$name: template values" || bad "$name: template values"
+  [ "$(val log-level "$c")" = warning ] && ok "$name: log-level warning (no visited domains in core.log)" || bad "$name: log-level $(val log-level "$c")"
   n=$(val proxies "$c"); i=0
   while [ "$i" -lt "$n" ]; do
     if plutil -type "proxies.$i.peers" "$c" >/dev/null 2>&1; then

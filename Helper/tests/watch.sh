@@ -120,5 +120,21 @@ net_restore >/dev/null && [ ! -e "$WIFI_MARK" ] && ok "netrestore: watchdog runs
 : > "$tmp/net"
 net_restore >/dev/null && [ ! -s "$tmp/net" ] && ok "netrestore without the mark: nothing to do" || bad "netrestore without mark"
 
+# --- the core's log: root-only, capped
+CORE_DIR="$tmp/core"; mkdir -m 755 "$CORE_DIR"; CORE_LOG_MAX=1000; CORE_LOG="$CORE_DIR/core.log"
+core_log_tidy
+[ "$(stat -f %Lp "$CORE_LOG")" = 600 ] && ok "core log created root-only" || bad "core log mode $(stat -f %Lp "$CORE_LOG" 2>/dev/null)"
+[ "$(stat -f %Lp "$CORE_DIR")" = 711 ] && ok "core dir not listable by others" || bad "core dir mode $(stat -f %Lp "$CORE_DIR")"
+chmod 644 "$CORE_LOG"; echo small > "$CORE_LOG"
+core_log_tidy
+[ "$(stat -f %Lp "$CORE_LOG")" = 600 ] && [ "$(cat "$CORE_LOG")" = small ] && [ ! -e "$CORE_LOG.1" ] &&
+  ok "core log: world-readable one from an older version fixed, small one kept" || bad "core log small: $(ls -l "$CORE_DIR")"
+head -c 1500 /dev/zero | tr '\0' x > "$CORE_LOG"; exec 7>>"$CORE_LOG"
+core_log_tidy
+echo after >&7; exec 7>&-
+[ "$(stat -f %z "$CORE_LOG.1")" = 1500 ] && [ "$(stat -f %Lp "$CORE_LOG.1")" = 600 ] && [ "$(cat "$CORE_LOG")" = after ] &&
+  ok "core log over the cap: one older copy, truncated in place (launchd's O_APPEND fd keeps writing)" ||
+  bad "core log rotate: $(ls -l "$CORE_DIR"; head -c 20 "$CORE_LOG")"
+
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
