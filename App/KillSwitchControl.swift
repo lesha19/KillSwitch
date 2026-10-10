@@ -681,10 +681,8 @@ final class KillSwitchControl {
                   String(cString: ifa.ifa_name).hasPrefix("utun"), ifa.ifa_flags & UInt32(IFF_UP) != 0 else { continue }
             var sin = sockaddr_in()
             memcpy(&sin, addr, MemoryLayout<sockaddr_in>.size)
-            var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-            guard inet_ntop(AF_INET, &sin.sin_addr, &text, socklen_t(text.count)) != nil,
-                  let kind = TunnelAddress.kind(String(cString: text)) else { continue }
-            result.append(kind)
+            let octets = withUnsafeBytes(of: sin.sin_addr) { Array($0) }
+            if let kind = TunnelAddress.kind(octets.map(String.init).joined(separator: ".")) { result.append(kind) }
         }
         return result
     }
