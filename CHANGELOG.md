@@ -4,6 +4,28 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [0.12.1] - 2026-10-10
+
+Security fixes from the internal audit of everything that runs as root
+(docs/security/audit-2026-10.md). The helper changed, so «Восстановить службу…» is asked once:
+it also rewrites the sudoers entry.
+
+### Безопасность
+- The helper no longer runs with the environment of the program that calls it through sudo. It
+  sets its own `PATH` and `HOME` and drops the rest. The user's `~/.curlrc` and similar files can no
+  longer change what root downloads.
+- Subscription profiles are checked key by key. A rule provider whose name has a line break in
+  it could get past the checks before. Unknown provider fields and types are now refused.
+- `geoip.metadb` (Russian addresses outside the VPN) is no longer copied by root from dropweb's
+  folder. It ships inside the app, pinned by sha256, like `geosite.dat`.
+- The administrator prompt no longer passes the app's environment to the root shell. Bundled
+  scripts run with `bash -p`.
+- The copy of the profile and the core's config (server passwords) are root-only from the moment
+  they are written.
+- The installer accepts only a real user account for the passwordless commands. The helper refuses
+  extra or malformed arguments to those commands.
+- «Отключить Happ и подключить KillSwitch» passes only a real VPN service id to `scutil`.
+
 ## [0.12] - 2026-10-10
 
 Another program's VPN (Happ and the like) is named and can be replaced with one click (ADR 0009).
