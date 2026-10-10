@@ -104,14 +104,18 @@ final class VPNClient {
 
     // MARK: manual servers
 
-    func addLink(_ text: String) async {
-        let links = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    /// Share links, one per line, or the text of a wg-quick `.conf` (`name`: the file's name).
+    func addLink(_ text: String, name: String? = nil) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let links = ProxyLink.isWireGuardConf(trimmed)
+            ? [trimmed]
+            : trimmed.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         guard !links.isEmpty else { return }
         var added: [ManualServer] = []
         for link in links {
             do {
                 let proxy = try ProxyLink.parse(link)
-                added.append(ManualServer(link: link, name: proxy["name"] as? String ?? "Сервер"))
+                added.append(ManualServer(link: link, name: name ?? proxy["name"] as? String ?? "Сервер"))
             } catch {
                 lastError = error.localizedDescription
                 return
@@ -120,6 +124,23 @@ final class VPNClient {
         manual += added
         saveManual()
         await apply(subscription: Self.cachedSubscription(), interactive: true)
+    }
+
+    /// A wg-quick `.conf` picked in the file dialog; the file name becomes the server name.
+    func importWireGuard(file url: URL) async {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              (attributes[.size] as? Int ?? 0) < 64 * 1024,
+              let text = try? String(contentsOf: url, encoding: .utf8) else {
+            lastError = "Не получилось прочитать файл WireGuard."
+            return
+        }
+        guard ProxyLink.isWireGuardConf(text) else {
+            lastError = "Это не файл WireGuard: в нём нет раздела [Interface]."
+            return
+        }
+        await addLink(text, name: url.deletingPathExtension().lastPathComponent)
     }
 
     func removeManual(_ server: ManualServer) async {
@@ -165,7 +186,7 @@ final class VPNClient {
 
     /// Merges with the manual servers and imports, unless the core already has exactly this.
     private func apply(subscription: Profile?, interactive: Bool) async {
-        guard let profile = ProfileMerger.merge(subscription: subscription, manual: manual.compactMap { try? ProxyLink.parse($0.link) }) else {
+        guard let profile = ProfileMerger.merge(subscription: subscription, manual: manual.compactMap(Self.proxy)) else {
             lastError = nil
             return
         }
@@ -203,6 +224,13 @@ final class VPNClient {
         case .failed(let message):
             lastError = message
         }
+    }
+
+    /// The stored name wins: a `.conf` carries none, and it is what the list shows.
+    private static func proxy(_ server: ManualServer) -> [String: Any]? {
+        guard var proxy = try? ProxyLink.parse(server.link) else { return nil }
+        proxy["name"] = server.name
+        return proxy
     }
 
     // MARK: network

@@ -6,16 +6,18 @@ enum ProxyLinkError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .unsupported(let scheme): "Ссылки \(scheme):// не поддерживаются. Подходят vless, trojan, ss, hysteria2, tuic."
+        case .unsupported(let scheme): "Ссылки \(scheme):// не поддерживаются. Подходят vless, trojan, ss, hysteria2, tuic, wireguard."
         case .malformed(let what): "Ссылка неполная: \(what)."
         }
     }
 }
 
-/// Share links (vless://, trojan://, ss://, hysteria2://, tuic://) → mihomo proxy entries.
+/// Share links (vless://, trojan://, ss://, hysteria2://, tuic://, wireguard://) and wg-quick
+/// `.conf` text → mihomo proxy entries.
 enum ProxyLink {
     static func parse(_ raw: String) throws -> [String: Any] {
         let link = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isWireGuardConf(link) { return try WireGuard.parse(conf: link, name: nil) }
         guard let schemeEnd = link.range(of: "://") else { throw ProxyLinkError.malformed("нет схемы") }
         let scheme = link[..<schemeEnd.lowerBound].lowercased()
         switch scheme {
@@ -24,8 +26,14 @@ enum ProxyLink {
         case "ss": return try shadowsocks(link)
         case "hysteria2", "hy2": return try hysteria2(link)
         case "tuic": return try tuic(link)
+        case "wireguard", "wg": return try WireGuard.parse(link: link)
         default: throw ProxyLinkError.unsupported(scheme)
         }
+    }
+
+    /// A wg-quick file is one entry, not a list of links.
+    static func isWireGuardConf(_ text: String) -> Bool {
+        text.range(of: "[Interface]", options: .caseInsensitive) != nil
     }
 
     // MARK: protocols
