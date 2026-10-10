@@ -25,9 +25,9 @@ Rules are loaded at boot, before login.
   notification and the running app performs the switch; state reaches it via app group `YR58655PJ7.killswitch`.
 
 Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, coredirect),
-`allow` (addresses reachable by any process), `servers` (VPN server IPs, reachable by any process;
-generated from `servers-manual`, filled by `server-add` and install.sh, and `servers-core`, the proxy
-addresses of the imported core profile, rewritten on every import),
+`allow` (addresses reachable by any process), `servers-manual` (VPN server IPs added by `server-add`
+and install.sh, reachable by any process), `servers-core` (proxy addresses of the imported core
+profile, rewritten on every import, reachable only by our core), `servers` (both merged),
 `rules.sha256` and `tunnels` (state of the last load, for tamper checks), `events.log`
 (world-readable, last 500 corrective actions).
 
@@ -38,8 +38,9 @@ addresses of the imported core profile, rewritten on every import),
   with `ifconfig` on every load. Other `utun` interfaces (iCloud Private Relay, other VPNs, a
   Tailscale exit node) get nothing. New interface types (iPhone USB, PPP, Thunderbolt) are covered
   automatically.
-- VPN server addresses (`servers`) are reachable by any process. That is needed for Happ, whose
-  tunnel runs as the user and cannot be told apart from other apps. Only these addresses are open.
+- VPN server addresses added by hand (`servers-manual`) are reachable by any process. That is needed
+  for Happ, whose tunnel runs as the user and cannot be told apart from other apps. Only these
+  addresses are open. The servers of our core's profile (`servers-core`) are open to the core only.
 - The dropweb core is **not** trusted by default. DropwebCore is setuid root + setgid admin and is
   executable by anyone, so a rule on uid 0 / gid 80 would let any local program start it with its own
   config and escape. The rule exists only with `direct=1` ("Сайты мимо VPN через dropweb"), a weaker mode

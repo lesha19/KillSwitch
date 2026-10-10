@@ -60,25 +60,27 @@ tunnel_sig() { echo "vpn:$(vpn_ifaces | paste -sd, -) ts:$(ts_ifaces | paste -sd
 # in 198.18.0.0/16); what goes into a tunnel still has to leave through a physical
 # interface, and that is filtered. Other utun interfaces (iCloud Private Relay, third-party
 # VPNs, a Tailscale exit node) get nothing.
-# VPN servers (file "servers") are reachable by any process: Happ's tunnel runs as the user.
+# VPN servers added by hand ("servers-manual") are reachable by any process: Happ's tunnel runs
+# as the user. Servers of our core's profile ("servers-core") only by the core.
 # The dropweb core can reach any address only with direct=1. It is recognised by its socket
 # credentials: DropwebCore is setuid root + setgid admin, so it runs as uid 0 with gid 80.
 # That is weak (anyone can start it with their own config), hence off by default.
 # Output is deterministic (interfaces sorted) so its hash can be compared.
-rules() {  # rules [allow-file] [servers-file]
-  local allow_file="${1:-$ALLOW}" servers_file="${2:-$SERVERS}" vpn ts
+rules() {  # rules [allow-file] [servers-file] [manual-servers-file]
+  local allow_file="${1:-$ALLOW}" servers_file="${2:-$SERVERS}" manual_file="${3:-$SERVERS_MANUAL}" vpn ts
+  [ -e "$manual_file" ] || manual_file=$servers_file   # before the first servers_migrate
   vpn=$(vpn_ifaces | paste -sd' ' -)
   ts=$(ts_ifaces | paste -sd' ' -)
   # tables go before the filter rules
   [ "$(setting tailscale 1)" = 1 ] && [ -s "$TSRELAYS" ] &&
     echo "table <ts_relays> const { $(grep -vE '^(#|$)' "$TSRELAYS" | paste -sd, -) }"
   echo "pass out quick on { lo0 awdl0 llw0 $vpn } all flags any"
-  [ -s "$servers_file" ] && echo "pass out quick to { $(paste -sd, "$servers_file") } flags any keep state"
+  [ -s "$manual_file" ] && echo "pass out quick to { $(paste -sd, "$manual_file") } flags any keep state"
   [ "$(setting direct 0)" = 1 ] && echo 'pass out quick proto { tcp udp } user 0 group 80 keep state'
   # Our own core: launchd starts it from a root-owned path with a root-owned config and gid
   # _ksvpn. The group has no members and no setgid binary, so no other process carries it.
   # The core may only reach the VPN servers, so a DIRECT rule or proxy in a profile cannot leak
-  # past the tunnel (the servers rule above already allows that; repeated to state the intent).
+  # past the tunnel.
   # coredirect=1 is the explicit split-tunnel switch: direct sites of the profile then work
   # without trusting dropweb's setuid core. "flags any" as above: connections that predate
   # the load must survive.
@@ -372,10 +374,19 @@ servers_migrate() {  # before the split every server was added by hand
 }
 
 core_import() {  # core_import <profile.json>
-  local tmp="$CORE_DIR/config.yaml.tmp" srv="$SERVERS_CORE.tmp"
+  local src=${1:-} in="$CORE_DIR/profile.json" tmp="$CORE_DIR/config.yaml.tmp" srv="$SERVERS_CORE.tmp"
   servers_migrate
   install -d -o root -g wheel -m 700 "$CORE_DIR/ctl"
-  core_generate "${1:-}" "$tmp" "$srv" "$SERVERS_MANUAL" || { rm -f "$tmp" "$srv"; return 1; }
+  # Read once, with the caller's rights (root must not open files for the user), into our
+  # directory; everything after works on that copy.
+  [ -n "$src" ] || { echo "usage: ks core import <json>" >&2; return 1; }
+  local as=()
+  [ -n "${SUDO_UID:-}" ] && [ "$SUDO_UID" != 0 ] && as=(sudo -n -u "#$SUDO_UID")
+  ${as[@]+"${as[@]}"} /bin/cat -- "$src" | head -c 20000001 > "$in"
+  [ "${PIPESTATUS[0]}" = 0 ] || { rm -f "$in"; echo "Не удалось прочитать $src" >&2; return 1; }
+  chmod 600 "$in"
+  core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" || { rm -f "$in" "$tmp" "$srv"; return 1; }
+  rm -f "$in"
   chmod 600 "$tmp"
   "$CORE_DIR/mihomo" -t -d "$CORE_DIR" -f "$tmp" >/dev/null 2>&1 || {
     "$CORE_DIR/mihomo" -t -d "$CORE_DIR" -f "$tmp" 2>&1 | tail -3 >&2; rm -f "$tmp" "$srv"; return 1; }
@@ -470,7 +481,7 @@ case "${1:-status}" in
     grep -qxF "$addr" "$SERVERS_MANUAL" && exit 0
     { cat "$SERVERS_MANUAL"; echo "$addr"; } > "$SERVERS_MANUAL.tmp"
     SERVERS_MANUAL="$SERVERS_MANUAL.tmp" servers_merge > "$SERVERS.tmp"
-    rules "$ALLOW" "$SERVERS.tmp" | pfctl -n -a "$ANCHOR" -f - >/dev/null 2>&1 || {
+    rules "$ALLOW" "$SERVERS.tmp" "$SERVERS_MANUAL.tmp" | pfctl -n -a "$ANCHOR" -f - >/dev/null 2>&1 || {
       rm -f "$SERVERS.tmp" "$SERVERS_MANUAL.tmp"; echo "Не похоже на адрес: $addr" >&2; exit 1; }
     mv "$SERVERS_MANUAL.tmp" "$SERVERS_MANUAL"; mv "$SERVERS.tmp" "$SERVERS"
     reload_if_on
