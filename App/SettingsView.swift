@@ -552,6 +552,8 @@ private struct AdvancedSettings: View {
             }
             .disabled(control.busy || control.state == .notInstalled)
 
+            TransportSection()
+
             Section("Старая схема с dropweb") {
                 Toggle(isOn: Binding(get: { control.allowDirect }, set: { control.set("direct", $0) })) {
                     Text("Пускать dropweb мимо VPN (слабее защиты)")
@@ -574,6 +576,51 @@ private struct AdvancedSettings: View {
                       placeholder: "Адрес сервера", original: control.manualServers,
                       suggestions: control.foundServers, apply: control.setManualServers)
         }
+    }
+}
+
+/// «Подключение к серверу»: TLS fingerprint and multiplexing per server (Transport, ADR 0007).
+private struct TransportSection: View {
+    @Environment(VPNClient.self) private var client
+    @State private var selected: String?
+
+    var body: some View {
+        let servers = client.transportServers
+        Section {
+            if servers.isEmpty {
+                Text("В подписке нет серверов, у которых это можно менять.").foregroundStyle(.secondary)
+            } else {
+                let server = servers.first { $0.name == selected } ?? servers[0]
+                let override = client.transportOverrides[server.name] ?? .init()
+                Picker("Сервер", selection: Binding(get: { server.name }, set: { selected = $0 })) {
+                    ForEach(servers) { Text(ServerName.display($0.name)).tag($0.name) }
+                }
+                if server.canFingerprint {
+                    Picker("Отпечаток TLS", selection: Binding(get: { override.fingerprint }, set: { value in
+                        var o = override; o.fingerprint = value
+                        Task { await client.setTransport(o, for: server.name) }
+                    })) {
+                        Text(Transport.fingerprintTitle(nil, subscription: server.fingerprint)).tag(String?.none)
+                        ForEach(Transport.fingerprints, id: \.self) { Text($0).tag(String?.some($0)) }
+                    }
+                }
+                if server.canMux {
+                    Picker("Мультиплексирование", selection: Binding(get: { override.mux }, set: { value in
+                        var o = override; o.mux = value
+                        Task { await client.setTransport(o, for: server.name) }
+                    })) {
+                        Text(Transport.muxTitle(nil, subscription: server.mux)).tag(String?.none)
+                        Text(Transport.muxTitle(Transport.off, subscription: nil)).tag(String?.some(Transport.off))
+                        ForEach(Transport.muxProtocols, id: \.self) { Text($0).tag(String?.some($0)) }
+                    }
+                }
+                Footnote(text: "Меняй, только если сервер перестал подключаться. Трафик всё равно идёт только через VPN.",
+                         more: "Отпечаток TLS — каким браузером представляется подключение; иногда другой отпечаток проходит блокировку. Мультиплексирование работает, только если его поддерживает сервер (sing-mux): иначе сервер не подключится — верни «Как в подписке». Фрагментации TLS в ядре mihomo нет.")
+            }
+        } header: {
+            Text("Подключение к серверу")
+        }
+        .disabled(client.updating)
     }
 }
 

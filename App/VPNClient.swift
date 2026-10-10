@@ -37,6 +37,8 @@ final class VPNClient {
     /// An automatic update brought new server addresses: the helper refused `core refresh`, and
     /// only a click (`confirmNewServers`) may import it with the admin password.
     private(set) var needsConfirmation = false
+    /// Settings › «Дополнительно»: fingerprint and multiplexing per server (Transport, ADR 0007).
+    private(set) var transportOverrides = Transport.decode(UserDefaults.standard.data(forKey: Transport.storeKey))
 
     /// Hours between automatic updates; 0 = what the subscription asks for.
     var intervalHours = UserDefaults.standard.integer(forKey: "subscriptionIntervalHours") {
@@ -178,6 +180,23 @@ final class VPNClient {
         manual.removeAll { $0.id == server.id }
         saveManual()
         await apply(subscription: Self.cachedSubscription(), interactive: true)
+    }
+
+    /// Servers of the current profile whose transport can be changed, with the subscription's values.
+    var transportServers: [Transport.Server] {
+        ProfileMerger.merge(subscription: Self.cachedSubscription(), manual: manual.compactMap(Self.proxy))
+            .map(Transport.servers) ?? []
+    }
+
+    /// Saves the choice and hands the profile to the core by a passwordless refresh: the servers
+    /// stay the same. Not connected yet: the next import takes it.
+    func setTransport(_ override: Transport.Override, for server: String) async {
+        transportOverrides[server] = override.isEmpty ? nil : override
+        UserDefaults.standard.set(Transport.encode(transportOverrides), forKey: Transport.storeKey)
+        guard control.coreConfigured, !updating else { return }
+        updating = true
+        defer { updating = false }
+        await apply(subscription: Self.cachedSubscription(), interactive: false)
     }
 
     // MARK: updating
@@ -377,9 +396,10 @@ final class VPNClient {
     }
 
     /// What goes to the helper: the subscription with the own servers, plus the same-country sets
-    /// the helper turns into failover groups (Failover).
+    /// the helper turns into failover groups (Failover) and the transport overrides (Transport).
     private func forCore(_ subscription: Profile?) -> Profile? {
-        ProfileMerger.merge(subscription: subscription, manual: manual.compactMap(Self.proxy)).map(Failover.adding(to:))
+        ProfileMerger.merge(subscription: subscription, manual: manual.compactMap(Self.proxy))
+            .map { Transport.adding(transportOverrides, to: Failover.adding(to: $0)) }
     }
 
     private func reloadProfileProxies() {

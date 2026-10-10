@@ -520,6 +520,52 @@ core_generate() (
   done
   nproxies=$n
 
+  # Transport overrides (ADR 0007): «Дополнительно» in the app, per server, as "x-ks-overrides"
+  # {"<proxy>": {"client-fingerprint": "...", "smux": {"enabled": bool, "protocol": "..."}}}.
+  # Only these two keys and only known values, only where mihomo supports them: the uTLS
+  # fingerprint on vmess/vless/trojan/anytls, sing-mux on ss/vmess/trojan and vless without a
+  # flow (TCP transports). Neither changes the server, so the kill switch and refresh are as before.
+  if has x-ks-overrides "$in"; then
+    plutil -extract x-ks-overrides json -o "$w/ov.json" "$in" >/dev/null 2>&1 || fail "x-ks-overrides: не разобрать"
+    OV="$w/ov.json" json_edit "$P" '
+      open my $f, "<", $ENV{OV} or die; my $ov = do { local $/; JSON::PP->new->decode(<$f>) }; close $f;
+      die "x-ks-overrides: не объект\n" unless ref $ov eq "HASH";
+      my %by = map { ($_->{name} => $_) } @$j;
+      my %fp = map { ($_ => 1) } qw(chrome firefox safari iOS android edge 360 qq random);
+      my %mux = map { ($_ => 1) } qw(smux yamux h2mux);
+      for my $name (sort keys %$ov) {
+        my ($o, $p) = ($ov->{$name}, $by{$name});
+        die "x-ks-overrides: «$name» — не сервер профиля\n" unless $p;
+        die "x-ks-overrides: «$name»: не объект\n" unless ref $o eq "HASH";
+        my $t = lc($p->{type} // "");
+        for my $k (sort keys %$o) {
+          my $v = $o->{$k};
+          if ($k eq "client-fingerprint") {
+            die "x-ks-overrides: «$name»: отпечаток только для vmess, vless, trojan, anytls\n"
+              unless $t =~ /^(vmess|vless|trojan|anytls)$/;
+            die "x-ks-overrides: «$name»: неизвестный отпечаток\n" unless !ref $v && $fp{$v};
+            $p->{$k} = $v;
+          } elsif ($k eq "smux") {
+            die "x-ks-overrides: «$name»: мультиплексирование только для ss, vmess, trojan, vless\n"
+              unless $t =~ /^(ss|vmess|trojan|vless)$/;
+            die "x-ks-overrides: «$name»: мультиплексирование не работает с flow\n" if length($p->{flow} // "");
+            die "x-ks-overrides: «$name»: smux — не объект\n" unless ref $v eq "HASH";
+            die "x-ks-overrides: «$name»: в smux только enabled и protocol\n" if grep { !/^(enabled|protocol)$/ } keys %$v;
+            die "x-ks-overrides: «$name»: smux.enabled — не да/нет\n" unless JSON::PP::is_bool($v->{enabled});
+            if ($v->{enabled}) {
+              die "x-ks-overrides: «$name»: неизвестный протокол мультиплексирования\n"
+                unless defined $v->{protocol} && !ref $v->{protocol} && $mux{$v->{protocol}};
+              $p->{smux} = { enabled => JSON::PP::true, protocol => $v->{protocol} };
+            } else {
+              $p->{smux} = { enabled => JSON::PP::false };
+            }
+          } else {
+            die "x-ks-overrides: «$name»: «$k» менять нельзя\n";
+          }
+        }
+      }' || exit 1
+  fi
+
   G="$w/groups.json"
   if has proxy-groups "$in"; then
     [ "$(plutil -type proxy-groups "$in")" = array ] || fail "proxy-groups: не список"
