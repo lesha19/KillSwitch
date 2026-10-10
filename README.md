@@ -57,9 +57,14 @@ profile, rewritten on every import, reachable only by our core), `servers` (both
   socket in root-only `core/ctl/`, no listeners or proxy ports) comes from a fixed template. Proxies of
   type direct/dns or unknown types, proxy-providers and file rule-providers are refused; a server given
   by host name is resolved once and pinned to its address (`servername`/`sni` keep the name), and the
-  addresses become `servers-core`. `Helper/tests/core-config.sh` runs the generator against fixture
+  addresses become `servers-core`. `refresh <json>` does the same but is refused (exit 3) when the
+  profile brings server addresses that are not in `servers` yet; it is passwordless, for subscription
+  auto-update. The app switches servers without the API being exposed: `ks core proxies` (JSON of
+  groups and proxies), `ks core select <group> <proxy>`, `ks core delay <group|proxy>` talk to the
+  controller socket; names are length- and control-character-checked and fully percent-encoded.
+  `Helper/tests/core-config.sh` runs the generator against fixture
   profiles, attack ones included, and checks the result with `mihomo -t`. `on` refuses while another VPN tunnel is up, then points the system DNS of every
-  physical service to 127.0.0.1; `off` restores the saved DNS. Start/stop are passwordless, import is not.
+  physical service to 127.0.0.1; `off` restores the saved DNS. Start/stop, proxies/select/delay and refresh are passwordless, import is not.
   Log: `/Library/KillSwitch/core/core.log`.
 - Second layer (`Filter/`, optional, Settings → Общие): a content filter system extension
   (NEFilterDataProvider). It cannot see the outgoing interface, so it does not repeat pf: while no VPN
@@ -73,8 +78,9 @@ profile, rewritten on every import, reachable only by our core), `servers` (both
   the App Store Tailscale runs as the user; with the Tailscale setting on, the
   tailnet itself (100.64.0.0/10, fd7a:115c:a1e0::/48) is allowed on Tailscale's utun, exit-node traffic is not.
 - DNS to LAN resolvers is blocked by default (setting `dns`), so names do not leak via the router.
-- Rules and settings are root-owned. Passwordless sudo covers only `ks state` and `ks on`; turning
-  off, pausing and every setting change ask for the admin password.
+- Rules and settings are root-owned. Passwordless sudo covers only `ks state`, `ks on` and the core
+  commands that cannot widen the rules (see above); turning off, pausing and every setting change ask
+  for the admin password.
 - Watchdog (`ks watch`, every 3 s, honours off / pause): checks that pf is enabled, that the main
   ruleset still references the `com.apple/*` anchor (otherwise reloads `/etc/pf.conf`), that the
   sha256 of the loaded anchor equals the hash saved right after our load, and that the set of tunnel

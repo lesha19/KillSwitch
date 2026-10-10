@@ -12,6 +12,9 @@
 #   ks server-remove <addr>
 #   ks core on|off|state    our own VPN core (mihomo run by launchd as group _ksvpn)
 #   ks core import <json>   build the core's config from a mihomo profile converted to JSON
+#   ks core refresh <json>  the same, refused if the profile brings new server addresses
+#   ks core proxies         groups and proxies of the running core (JSON)
+#   ks core select <group> <proxy> | delay <group|proxy>
 #   ks apply                (re)load rules once unless disabled
 #   ks watch                used by the LaunchDaemon: apply + tamper checks every 3 s
 set -u
@@ -373,8 +376,8 @@ servers_migrate() {  # before the split every server was added by hand
   if [ -f "$SERVERS" ]; then cp "$SERVERS" "$SERVERS_MANUAL"; else : > "$SERVERS_MANUAL"; fi
 }
 
-core_import() {  # core_import <profile.json>
-  local src=${1:-} in="$CORE_DIR/profile.json" tmp="$CORE_DIR/config.yaml.tmp" srv="$SERVERS_CORE.tmp"
+core_import() {  # core_import <profile.json> [refresh]
+  local src=${1:-} new in="$CORE_DIR/profile.json" tmp="$CORE_DIR/config.yaml.tmp" srv="$SERVERS_CORE.tmp"
   servers_migrate
   install -d -o root -g wheel -m 700 "$CORE_DIR/ctl"
   # Read once, with the caller's rights (root must not open files for the user), into our
@@ -387,6 +390,12 @@ core_import() {  # core_import <profile.json>
   chmod 600 "$in"
   core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" || { rm -f "$in" "$tmp" "$srv"; return 1; }
   rm -f "$in"
+  # refresh is passwordless (subscription auto-update): it may not open any new address
+  if [ "${2:-}" = refresh ]; then
+    if [ -s "$SERVERS" ]; then new=$(grep -vxF -f "$SERVERS" "$srv"); else new=$(cat "$srv"); fi
+    [ -z "$new" ] || { rm -f "$tmp" "$srv"
+      echo "В профиле новые адреса серверов ($(paste -sd" " - <<<"$new")): нужен пароль администратора" >&2; return 3; }
+  fi
   chmod 600 "$tmp"
   "$CORE_DIR/mihomo" -t -d "$CORE_DIR" -f "$tmp" >/dev/null 2>&1 || {
     "$CORE_DIR/mihomo" -t -d "$CORE_DIR" -f "$tmp" 2>&1 | tail -3 >&2; rm -f "$tmp" "$srv"; return 1; }
@@ -416,6 +425,33 @@ core_dns_restore() {
   rm -f "$CORE_DIR/dns-saved"
 }
 core_running() { launchctl print "$CORE_JOB" 2>/dev/null | grep -q 'state = running'; }
+
+# The core's API, only through these commands: names are checked and encoded here.
+core_api() {  # core_api <method> <path> [json-body-file]: prints the reply, fails on HTTP errors
+  local out code
+  [ -S "$CORE_CTL" ] || { echo "Ядро не запущено" >&2; return 1; }
+  out=$(mktemp) || return 1
+  code=$(curl -s --max-time 15 --unix-socket "$CORE_CTL" -X "$1" ${3:+--data-binary "@$3"} \
+    -H 'Content-Type: application/json' -o "$out" -w '%{http_code}' "http://ks$2")
+  if [ "${code:-0}" -ge 200 ] && [ "$code" -lt 300 ]; then cat "$out"; rm -f "$out"; return 0; fi
+  { cat "$out"; echo; } >&2; rm -f "$out"; return 1
+}
+core_select() {  # core_select <group> <proxy>: switch a select group, e.g. to another server
+  local body rc
+  body=$(mktemp) || return 1
+  echo '{"name":""}' > "$body"
+  plutil -replace name -string "$2" "$body" && core_api PUT "/proxies/$(urlencode "$1")" "$body"
+  rc=$?; rm -f "$body"; return "$rc"
+}
+core_delay() {  # core_delay <group|proxy>: latency test through it, JSON
+  local name q info
+  name=$(urlencode "$1"); q="url=$(urlencode http://cp.cloudflare.com/generate_204)&timeout=3000"
+  info=$(core_api GET "/proxies/$name") || return 1
+  if grep -q '"all":' <<<"$info"; then core_api GET "/group/$name/delay?$q"
+  else core_api GET "/proxies/$name/delay?$q"; fi
+}
+valid_name() { [ -n "$1" ] && [ "${#1}" -le 256 ] && [[ "$1" != *[[:cntrl:]]* ]]; }
+urlencode() { printf '%s' "$1" | od -An -v -tx1 | tr -s ' \n' '%%' | sed 's/%$//'; }  # every byte
 
 valid_addr() {  # a bare name must not reach pfctl, it would be resolved through DNS
   [[ "$1" =~ $ADDR_RE ]] && { [[ "$1" == *:* ]] || [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?$ ]]; }
@@ -515,14 +551,25 @@ case "${1:-status}" in
         launchctl disable "$CORE_JOB"
         core_dns_restore
         log_event "core off" ;;
-      import)
-        core_import "${3:-}" || exit 1
+      import|refresh)
+        [ $# -eq 3 ] || { echo "usage: ks core $2 <json>" >&2; exit 1; }
+        core_import "$3" "$2" || exit $?
         reload_if_on   # the servers list changed
         launchctl print "$CORE_JOB" >/dev/null 2>&1 && launchctl kickstart -k "$CORE_JOB"
         log_event "core config imported" ;;
       state)
         if core_running; then echo on; else echo off; fi ;;
-      *) echo "usage: ks core on|off|state|import <json>" >&2; exit 1 ;;
+      proxies)
+        [ $# -eq 2 ] || { echo "usage: ks core proxies" >&2; exit 1; }
+        core_api GET /proxies || exit 1 ;;
+      select)
+        [ $# -eq 4 ] && valid_name "$3" && valid_name "$4" || { echo "usage: ks core select <group> <proxy>" >&2; exit 1; }
+        core_select "$3" "$4" || exit 1
+        log_event "core: $3 -> $4" ;;
+      delay)
+        [ $# -eq 3 ] && valid_name "$3" || { echo "usage: ks core delay <group|proxy>" >&2; exit 1; }
+        core_delay "$3" || exit 1 ;;
+      *) echo "usage: ks core on|off|state|import <json>|refresh <json>|proxies|select <group> <proxy>|delay <name>" >&2; exit 1 ;;
     esac
     ;;
   state)
@@ -536,5 +583,5 @@ case "${1:-status}" in
     [ -f "$FLAG" ] && { u=$(cat "$FLAG"); [ "$u" = 0 ] && echo "disabled by hand" || echo "back on at $(date -r "$u" +%H:%M)"; }
     pfctl -a "$ANCHOR" -s rules 2>/dev/null
     ;;
-  *) sed -n '2,14p' "$0"; exit 1 ;;
+  *) sed -n '2,17p' "$0"; exit 1 ;;
 esac
