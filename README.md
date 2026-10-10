@@ -28,7 +28,11 @@ Rules are loaded at boot, before login.
   `ks core select`), latency tests and «Лучший» (`ks core delay <group>`), non-secret diagnostics. The subscription
   is fetched with a mihomo User-Agent and Remnawave's device headers (`x-hwid` = hash of the Mac's
   hardware UUID, `x-device-os`, `x-ver-os`, `x-device-model`), reduced to proxies, proxy-groups, rules
-  and rule-providers and handed to `ks core import <file.json>`; a failed update keeps the old config.
+  and rule-providers and handed to the helper; a failed update keeps the old config. A click (adding the
+  subscription, «Обновить», a new server) runs `ks core import <file.json>`, with the admin prompt if
+  needed. The timer only runs `sudo -n ks core refresh <file.json>` and never prompts; if the helper
+  refuses it (exit 3: new server addresses) the app shows «Нужно подтверждение: в подписке новые
+  серверы» and imports only after the user clicks «Подтвердить».
 - `App/Core/` — pure parsers (no AppKit), unit-tested by the `KillSwitchTests` target:
   `xcodegen generate && xcodebuild -scheme KillSwitch test CODE_SIGNING_ALLOWED=NO`.
 - `Widget/` — WidgetKit widget with on/off button. It is sandboxed, so its button posts a Darwin
