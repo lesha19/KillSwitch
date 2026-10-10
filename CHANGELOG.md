@@ -4,6 +4,29 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [0.12] - 2026-10-10
+
+Another program's VPN (Happ and the like) is named and can be replaced with one click (ADR 0009).
+The helper changed only its version line, but the app compares the whole file, so «Восстановить
+службу…» is asked once.
+
+### Fixed
+- With Happ connected and protection on, sites Happ sends directly (often Russian ones: lava.ru,
+  ggsel, digiseller…) stopped opening without a word of why. The main screen and the popover now
+  say «Работает другой VPN (Happ)» and «KillSwitch не подключён. Сайты, которые тот VPN пускает
+  напрямую (часто российские), защита блокирует.» — an orange warning, never «Защищено».
+- The «почему ничего не отвечает» check no longer blames the provider while another VPN took the
+  routes.
+- The leak test says when the tunnel it checked was another program's («Проверен другой VPN»)
+  instead of a plain «Утечек нет».
+- The widget's VPN mark shows our VPN only.
+
+### Added
+- «Отключить Happ и подключить KillSwitch»: stops the other VPN without a password
+  (`scutil --nc stop`) and connects ours. If it cannot be stopped from here, the button opens
+  that app instead.
+- Auto-connect still never stops another VPN by itself; it now says so in a notification.
+
 ## [0.11] - 2026-10-10
 
 One app, one window. The helper changed only its version line, but the app compares the whole
