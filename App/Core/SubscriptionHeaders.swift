@@ -27,16 +27,21 @@ struct SubscriptionUsage: Codable, Equatable {
 }
 
 enum SubscriptionHeaders {
-    /// Remnawave picks the response format by User-Agent; a mihomo client name gets mihomo YAML.
-    /// clash-verge is in Remnawave's default Mihomo rule. The panel's reverse proxy may also
-    /// filter by User-Agent (StorkVPN's Caddy did): it has to let this one through.
-    static let userAgent = "clash-verge/v2.4.2"
+    /// The core the helper installs (Helper/fetch-mihomo.sh); keep in step with it.
+    static let coreVersion = "1.19.32"
     static let defaultInterval: TimeInterval = 12 * 3600
 
+    /// Remnawave picks the response format by User-Agent; "mihomo" in it gets mihomo YAML. The
+    /// panel's reverse proxy may also filter by User-Agent: StorkVPN's Caddy passes anything with
+    /// "mihomo" or "clash.meta" and blocks "KillSwitch/1.0", "Clash" and "sing-box".
+    static func userAgent(appVersion: String) -> String {
+        "KillSwitch/\(appVersion) (macOS; mihomo/\(coreVersion))"
+    }
+
     /// Headers Remnawave reads for its per-device (HWID) limit, same names as Happ and the mihomo clients send.
-    static func request(hwid: String, osVersion: String, model: String) -> [String: String] {
+    static func request(appVersion: String, hwid: String, osVersion: String, model: String) -> [String: String] {
         [
-            "User-Agent": userAgent,
+            "User-Agent": userAgent(appVersion: appVersion),
             "Accept": "application/yaml, text/plain, */*",
             "x-hwid": hwid,
             "x-device-os": "macOS",

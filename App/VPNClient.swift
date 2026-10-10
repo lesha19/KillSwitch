@@ -268,7 +268,7 @@ final class VPNClient {
 
     private static func fetch(_ url: URL) async throws -> (String, [String: String]) {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
-        for (name, value) in SubscriptionHeaders.request(hwid: DeviceInfo.hwid, osVersion: DeviceInfo.osVersion, model: DeviceInfo.model) {
+        for (name, value) in SubscriptionHeaders.request(appVersion: DeviceInfo.appVersion, hwid: DeviceInfo.hwid, osVersion: DeviceInfo.osVersion, model: DeviceInfo.model) {
             request.setValue(value, forHTTPHeaderField: name)
         }
         // ephemeral: the URL and the profile must not land in a disk cache or cookie store

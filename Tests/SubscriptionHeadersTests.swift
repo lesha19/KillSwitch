@@ -44,11 +44,16 @@ final class SubscriptionHeadersTests: XCTestCase {
     }
 
     func testRequestHeaders() {
-        let headers = SubscriptionHeaders.request(hwid: "abc", osVersion: "15.6", model: "Mac14,6")
+        let headers = SubscriptionHeaders.request(appVersion: "0.7", hwid: "abc", osVersion: "15.6", model: "Mac14,6")
         XCTAssertEqual(headers["x-hwid"], "abc")
         XCTAssertEqual(headers["x-device-os"], "macOS")
         XCTAssertEqual(headers["x-ver-os"], "15.6")
         XCTAssertEqual(headers["x-device-model"], "Mac14,6")
-        XCTAssertTrue(headers["User-Agent"]?.hasPrefix("clash-verge/") == true)
+        // panels and their reverse proxies pass a UA with "mihomo" in it (StorkVPN's Caddy blocks "KillSwitch/1.0")
+        XCTAssertEqual(headers["User-Agent"], "KillSwitch/0.7 (macOS; mihomo/1.19.32)")
+    }
+
+    func testUserAgentNamesMihomo() {
+        XCTAssertTrue(SubscriptionHeaders.userAgent(appVersion: "1.0").contains("mihomo/\(SubscriptionHeaders.coreVersion)"))
     }
 }
