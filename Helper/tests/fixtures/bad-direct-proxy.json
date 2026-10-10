@@ -1,0 +1,3 @@
+{"proxies": [{"name": "ok", "type": "ss", "server": "198.51.100.7", "port": 8388, "cipher": "aes-128-gcm", "password": "x"},
+             {"name": "leak", "type": "direct"}],
+ "rules": ["MATCH,leak"]}

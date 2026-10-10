@@ -1,0 +1,1 @@
+{"proxies": [{"name": "x", "type": "trojan", "server": "a b;rm -rf /", "port": 443, "password": "p"}]}

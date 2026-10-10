@@ -25,7 +25,9 @@ Rules are loaded at boot, before login.
   notification and the running app performs the switch; state reaches it via app group `YR58655PJ7.killswitch`.
 
 Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, coredirect),
-`allow` (addresses reachable by any process), `servers` (VPN server IPs, reachable by any process),
+`allow` (addresses reachable by any process), `servers` (VPN server IPs, reachable by any process;
+generated from `servers-manual`, filled by `server-add` and install.sh, and `servers-core`, the proxy
+addresses of the imported core profile, rewritten on every import),
 `rules.sha256` and `tunnels` (state of the last load, for tamper checks), `events.log`
 (world-readable, last 500 corrective actions).
 
@@ -47,9 +49,15 @@ Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale
   a root-owned config as uid 0, gid `_ksvpn` (created by install.sh, no members, no setgid binary), and the
   rules let that gid reach only the addresses in `servers`, so a DIRECT rule or proxy in a profile
   cannot leak past the tunnel. `coredirect=1` is the explicit split-tunnel switch: the gid may then reach
-  any address and the profile's direct rules (Russian sites and so on) work. `import` takes a mihomo profile (the app uses dropweb's newest), drops local proxy ports and the
-  controller API (any local program could swap the rules through it), adds TUN and makes the core's DNS
-  listen on 127.0.0.1:53. `on` refuses while another VPN tunnel is up, then points the system DNS of every
+  any address and the profile's direct rules (Russian sites and so on) work. `import <json>` takes a
+  mihomo profile as a JSON object (the app converts dropweb's newest from YAML) and generates the config:
+  only `proxies`, `proxy-groups`, `rules` and `rule-providers` are taken, everything else (TUN, DNS on
+  127.0.0.1:53 with DoH resolvers reached through the profile's first group, the controller as a unix
+  socket in root-only `core/ctl/`, no listeners or proxy ports) comes from a fixed template. Proxies of
+  type direct/dns or unknown types, proxy-providers and file rule-providers are refused; a server given
+  by host name is resolved once and pinned to its address (`servername`/`sni` keep the name), and the
+  addresses become `servers-core`. `Helper/tests/core-config.sh` runs the generator against fixture
+  profiles, attack ones included, and checks the result with `mihomo -t`. `on` refuses while another VPN tunnel is up, then points the system DNS of every
   physical service to 127.0.0.1; `off` restores the saved DNS. Start/stop are passwordless, import is not.
   Log: `/Library/KillSwitch/core/core.log`.
 - Second layer (`Filter/`, optional, Settings → Общие): a content filter system extension

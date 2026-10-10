@@ -1,0 +1,2 @@
+{"proxies": [{"name": "x", "type": "ss", "server": "198.51.100.7", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}],
+ "rule-providers": {"f": {"type": "file", "behavior": "domain", "path": "/etc/hosts"}}, "rules": ["RULE-SET,f,x", "MATCH,x"]}

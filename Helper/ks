@@ -11,19 +11,20 @@
 #   ks server-add <addr>    VPN server: reachable by any process (needed by Happ)
 #   ks server-remove <addr>
 #   ks core on|off|state    our own VPN core (mihomo run by launchd as group _ksvpn)
-#   ks core import <yaml>   take a mihomo profile (e.g. dropweb's) as the core's config
+#   ks core import <json>   build the core's config from a mihomo profile converted to JSON
 #   ks apply                (re)load rules once unless disabled
 #   ks watch                used by the LaunchDaemon: apply + tamper checks every 3 s
 set -u
 umask 022
-[ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
 
 DIR="/Library/KillSwitch"
 ANCHOR="com.apple/killswitch"
 FLAG="$DIR/disabled"     # contains epoch when to re-enable, 0 = never
 SETTINGS="$DIR/settings" # key=value, root-owned
 ALLOW="$DIR/allow"       # one address or network per line, root-owned
-SERVERS="$DIR/servers"   # VPN server addresses, one per line, root-owned
+SERVERS="$DIR/servers"   # VPN server addresses, one per line, root-owned: the two below merged
+SERVERS_MANUAL="$DIR/servers-manual" # added by hand (server-add, install.sh)
+SERVERS_CORE="$DIR/servers-core"     # servers of the imported core profile, rewritten by import
 EVENTS="$DIR/events.log" # corrective actions of the watchdog, world-readable
 HASHF="$DIR/rules.sha256" # hash of the anchor as loaded by us
 WIFI_MARK="$DIR/wifi-off-by-ks" # Wi-Fi was switched off by us at shutdown
@@ -32,6 +33,8 @@ TSRELAYS="$DIR/tsrelays" # Tailscale DERP relays + control plane, root-owned
 CORE_DIR="$DIR/core"     # mihomo, config.yaml, geoip.metadb, root-owned
 CORE_GROUP="_ksvpn"      # the core runs with this gid; nothing else can get it
 CORE_JOB="system/local.killswitch.core"
+CORE_CTL="$CORE_DIR/ctl/mihomo.sock" # the core's API; ctl/ is root-only
+CORE_TUN_ADDR="198.18.128.1" # our TUN's address (start of the core's fake-ip-range)
 ADDR_RE='^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$'
 
 setting() {  # setting <key> <default>
@@ -176,47 +179,210 @@ guard() {
   load || log_event "reload failed"
 }
 
-# Writes the core config from a mihomo profile. Our keys replace the profile's: no local
-# proxy ports and no controller API (it would let any local program swap the rules).
-core_import() {  # core_import <profile.yaml>
-  local src="$1" tmp="$CORE_DIR/config.yaml.tmp"
-  [ -f "$src" ] || { echo "no such file: $src" >&2; return 1; }
-  awk '
-    /^[A-Za-z0-9_-]+:/ { k=$1; sub(/:.*/, "", k)
-      skip = (k ~ /^(tun|port|socks-port|redir-port|tproxy-port|mixed-port|allow-lan|bind-address|external-controller|external-controller-tls|external-controller-unix|external-controller-pipe|external-ui|external-ui-url|external-ui-name|secret|interface-name|routing-mark|listeners|profile)$/) }
-    !skip' "$src" |
-  # mihomo answers the system's DNS on 127.0.0.1:53 (set by "ks core on"); LAN resolvers are
-  # blocked by the rules and queries to them never reach the tunnel
-  awk '
-    /^[A-Za-z0-9_-]+:/ { indns = ($0 ~ /^dns:/); seen = seen || indns }
-    indns && /^[ \t]+(listen|enable):/ { next }
-    { print }
-    /^dns:/ { print "  enable: true"; print "  listen: 127.0.0.1:53" }
-    END { if (!seen) { print "dns:"; print "  enable: true"; print "  listen: 127.0.0.1:53";
-                       print "  enhanced-mode: fake-ip"; print "  nameserver:"; print "    - https://1.1.1.1/dns-query" } }' > "$tmp"
-  # gvisor, not system: the system stack hands tunnel TCP to mihomo as incoming connections,
-  # and the macOS firewall in "block all incoming" mode drops them silently.
+# The core config is generated, not filtered: from the profile only proxies, proxy-groups,
+# rules and rule-providers are taken; everything else (listeners, ports, controller, DNS,
+# TUN) comes from the fixed template below. The profile must be JSON (the app converts
+# subscription YAML), so plutil can parse it and no YAML trick (quoted or flow-style keys,
+# anchors) can slip a key past us.
+PROXY_TYPES='ss|ssr|vmess|vless|trojan|hysteria|hysteria2|tuic|wireguard|snell|http|socks5|ssh|mieru|anytls'
+
+is_ipv4() { [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; }
+is_fake_ip() { [[ "$1" =~ ^198\.1[89]\. ]]; }   # fake-ip answers of a running mihomo
+
+# First IPv4 address of a host name. Our core's resolver if it runs (system DNS would give a
+# fake-ip), else DoH (goes through whatever tunnel is up), else the system resolver.
+resolve_host() {  # resolve_host <name>
+  local ip="" j
+  j=$(mktemp) || return 1
+  if [ -S "$CORE_CTL" ] &&
+     curl -sf --max-time 5 --unix-socket "$CORE_CTL" "http://ks/dns/query?name=$1&type=A" -o "$j"; then
+    ip=$(json_first_a "$j")
+  fi
+  if ! is_ipv4 "$ip" || is_fake_ip "$ip"; then
+    curl -sf --max-time 5 -H 'accept: application/dns-json' "https://1.1.1.1/dns-query?name=$1&type=A" -o "$j" &&
+      ip=$(json_first_a "$j")
+  fi
+  rm -f "$j"
+  if ! is_ipv4 "$ip" || is_fake_ip "$ip"; then
+    ip=$(dscacheutil -q host -a name "$1" | awk '/^ip_address: [0-9.]+$/ { print $2; exit }')
+  fi
+  is_ipv4 "$ip" && ! is_fake_ip "$ip" && echo "$ip"
+}
+json_first_a() {  # first A record of a DNS JSON answer (mihomo /dns/query and DoH share the format)
+  local k=0 t
+  while t=$(plutil -extract "Answer.$k.type" raw -o - "$1" 2>/dev/null); do
+    [ "$t" = 1 ] && { plutil -extract "Answer.$k.data" raw -o - "$1"; return; }
+    k=$((k + 1))
+  done
+}
+
+# core_generate <profile.json> <config-out> <servers-out> [manual-servers]
+# Writes the config and the IPv4 addresses of its proxies. Prints a reason and fails on a
+# profile it will not take. Runs in a subshell: "exit" leaves only the generator.
+core_generate() (
+  in=$1 out=$2 srv_out=$3 manual=${4:-}
+  w=$(mktemp -d) || exit 1
+  trap 'rm -rf "$w"' EXIT
+  fail() { echo "$*" >&2; exit 1; }
+  str() { plutil -extract "$1" raw -expect string -o - "$2" 2>/dev/null; }
+  has() { plutil -type "$1" "$2" >/dev/null 2>&1; }
+  jstr() { echo '{"s":""}' > "$w/s.json"; plutil -replace s -string "$1" "$w/s.json" &&
+           sed -e 's/^{"s"://' -e 's/}$//' "$w/s.json"; }
+
+  [ -f "$in" ] || fail "Нет файла профиля: $in"
+  [ "$(wc -c < "$in")" -le 20000000 ] || fail "Профиль слишком большой"
+  cp "$in" "$w/in.json" || exit 1
+  in="$w/in.json"
+  # plutil also reads XML and binary plists; only a JSON object is a profile
+  [ "$(LC_ALL=C tr -d ' \t\r\n' < "$in" | head -c 1)" = "{" ] &&
+    plutil -convert json -o /dev/null "$in" >/dev/null 2>&1 || fail "Профиль ядра должен быть JSON-объектом"
+
+  P="$w/proxies.json"
+  [ "$(plutil -type proxies "$in" 2>/dev/null)" = array ] && plutil -extract proxies json -o "$P" "$in" ||
+    fail "В профиле нет proxies"
+  n=$(plutil -extract proxies raw -o - "$in")
+  [ "$n" -gt 0 ] 2>/dev/null || fail "В профиле нет proxies"
+  : > "$w/servers"
+  i=0
+  while [ "$i" -lt "$n" ]; do
+    [ "$(plutil -type "$i" "$P")" = dictionary ] || fail "proxies[$i]: не объект"
+    name=$(str "$i.name" "$P"); t=$(str "$i.type" "$P"); server=$(str "$i.server" "$P")
+    [ -n "$name" ] || fail "proxies[$i]: нет имени"
+    case "$t" in
+      direct|dns|reject|reject-drop|pass|compatible) fail "Прокси «$name»: тип «$t» не допускается" ;;
+    esac
+    [[ "$t" =~ ^($PROXY_TYPES)$ ]] || fail "Прокси «$name»: неизвестный тип «$t»"
+    [ -n "$server" ] || fail "Прокси «$name»: нет server"
+    plutil -remove "$i.interface-name" "$P" >/dev/null 2>&1
+    plutil -remove "$i.routing-mark" "$P" >/dev/null 2>&1
+    if is_ipv4 "$server" || [[ "$server" =~ ^[0-9A-Fa-f:]+$ && "$server" == *:* ]]; then
+      ip=$server
+    elif [[ "$server" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ ]]; then
+      # pf works on addresses, so the server is pinned to the one we let through; TLS and
+      # Reality still see the name
+      ip=$(resolve_host "$server") || ip=""
+      is_ipv4 "$ip" || fail "Прокси «$name»: не удалось узнать адрес сервера $server"
+      plutil -replace "$i.server" -string "$ip" "$P"
+      has "$i.servername" "$P" || plutil -insert "$i.servername" -string "$server" "$P"
+      has "$i.sni" "$P" || plutil -insert "$i.sni" -string "$server" "$P"
+      if [ "$(plutil -type "$i.ws-opts" "$P" 2>/dev/null)" = dictionary ]; then
+        if ! has "$i.ws-opts.headers" "$P"; then
+          plutil -insert "$i.ws-opts.headers" -json "{\"Host\":\"$server\"}" "$P"
+        elif ! has "$i.ws-opts.headers.Host" "$P"; then
+          plutil -insert "$i.ws-opts.headers.Host" -string "$server" "$P"
+        fi
+      fi
+    else
+      fail "Прокси «$name»: плохой server «$server»"
+    fi
+    [[ "$name" == *[\#\&]* ]] || [ -n "${first_proxy:-}" ] || first_proxy=$name
+    echo "$ip" >> "$w/servers"
+    i=$((i + 1))
+  done
+
+  G="$w/groups.json"
+  if has proxy-groups "$in"; then
+    [ "$(plutil -type proxy-groups "$in")" = array ] || fail "proxy-groups: не список"
+    plutil -extract proxy-groups json -o "$G" "$in"
+    n=$(plutil -extract proxy-groups raw -o - "$in"); i=0
+    while [ "$i" -lt "$n" ]; do
+      [ "$(plutil -type "$i" "$G")" = dictionary ] || fail "proxy-groups[$i]: не объект"
+      name=$(str "$i.name" "$G")
+      [ -n "$name" ] || fail "proxy-groups[$i]: нет имени"
+      has "$i.use" "$G" && fail "Группа «$name»: proxy-providers не поддерживаются"
+      plutil -remove "$i.interface-name" "$G" >/dev/null 2>&1
+      plutil -remove "$i.routing-mark" "$G" >/dev/null 2>&1
+      [[ "$name" == *[\#\&]* ]] || [ -n "${first_group:-}" ] || first_group=$name
+      i=$((i + 1))
+    done
+  else
+    echo '[]' > "$G"
+  fi
+  # DNS and rule downloads go through the profile's main group (its first one) or the first
+  # proxy; "#" and "&" would break the nameserver URL
+  tunnel=${first_group:-${first_proxy:-}}
+  [ -n "$tunnel" ] || fail "Нет группы или прокси для DNS"
+
+  R="$w/rules.json"
+  if has rules "$in"; then
+    [ "$(plutil -type rules "$in")" = array ] || fail "rules: не список"
+    plutil -extract rules json -o "$R" "$in"
+  else
+    echo "[$(jstr "MATCH,$tunnel")]" > "$R"   # mihomo's default is DIRECT
+  fi
+
+  RP="$w/providers.json"
+  if has rule-providers "$in"; then
+    [ "$(plutil -type rule-providers "$in")" = dictionary ] || fail "rule-providers: не объект"
+    plutil -extract rule-providers json -o "$RP" "$in"
+    plutil -convert xml1 -o - "$RP" | sed -n 's/^	<key>\(.*\)<\/key>$/\1/p' > "$w/rp-names"
+    while IFS= read -r name; do
+      [[ "$name" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || fail "rule-provider «$name»: плохое имя"
+      t=$(str "$name.type" "$RP")
+      case "$t" in
+        http) has "$name.proxy" "$RP" || plutil -insert "$name.proxy" -string "$tunnel" "$RP" ;;
+        inline) ;;
+        *) fail "rule-provider «$name»: тип «$t» не допускается (только http и inline)" ;;
+      esac
+      plutil -remove "$name.path" "$RP" >/dev/null 2>&1   # mihomo picks its own path in its directory
+    done < "$w/rp-names"
+  else
+    echo '{"_":0}' > "$RP"; plutil -remove _ "$RP"
+  fi
+
+  sort -u "$w/servers" > "$w/servers.u"
   # Server, LAN and Tailscale routes stay outside the tunnel, so a flow re-made by another
   # program (AdGuard's proxy, Tailscale) cannot loop back into the core.
-  cat >> "$tmp" <<'TUN'
-tun:
-  enable: true
-  stack: gvisor
-  auto-route: true
-  auto-detect-interface: true
-  dns-hijack:
-    - any:53
-  route-exclude-address:
-    - 10.0.0.0/8
-    - 172.16.0.0/12
-    - 192.168.0.0/16
-    - 100.64.0.0/10
-TUN
-  local server
-  grep -E '^[0-9.]+$' "$SERVERS" 2>/dev/null | while IFS= read -r server; do echo "    - $server/32"; done >> "$tmp"
+  excl='"10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","100.64.0.0/10"'
+  for a in $( { cat "$w/servers.u"; [ -n "$manual" ] && cat "$manual" 2>/dev/null; } | sort -u); do
+    is_ipv4 "$a" && excl="$excl,\"$a/32\""
+  done
+  {
+    # gvisor, not system: the system stack hands tunnel TCP to mihomo as incoming connections,
+    # and the macOS firewall in "block all incoming" mode drops them silently.
+    # The TUN takes the first address of fake-ip-range: ours differs from dropweb's and Happ's
+    # 198.18.0.1, so the watchdog can tell the tunnels apart.
+    # The controller is a unix socket in a root-only directory; the app reaches it via ks.
+    printf '{"mode":"rule","log-level":"info","ipv6":false,"allow-lan":false,'
+    printf '"external-controller-unix":"ctl/mihomo.sock",'
+    printf '"tun":{"enable":true,"stack":"gvisor","auto-route":true,"auto-detect-interface":true,'
+    printf '"dns-hijack":["any:53"],"route-exclude-address":[%s]},' "$excl"
+    # answers the system's DNS on 127.0.0.1:53; the resolvers are reached through the tunnel
+    printf '"dns":{"enable":true,"listen":"127.0.0.1:53","ipv6":false,"enhanced-mode":"fake-ip",'
+    printf '"fake-ip-range":"%s/17","nameserver":[%s,%s]},' "$CORE_TUN_ADDR" \
+      "$(jstr "https://1.1.1.1/dns-query#$tunnel")" "$(jstr "https://8.8.8.8/dns-query#$tunnel")"
+    printf '"proxies":'; cat "$P"
+    printf ',"proxy-groups":'; cat "$G"
+    printf ',"rules":'; cat "$R"
+    printf ',"rule-providers":'; cat "$RP"
+    printf '}\n'
+  } > "$w/config.json"
+  plutil -convert json -o /dev/null "$w/config.json" >/dev/null 2>&1 || fail "Не удалось собрать конфиг"
+  # plutil writes "/" as "\/", which is JSON but not YAML; pairs are taken left to right, so
+  # an escaped backslash before "/" stays as it is
+  perl -pi -e 's{\\(.)}{$1 eq "/" ? "/" : "\\$1"}ge' "$w/config.json" || exit 1
+  cp "$w/config.json" "$out" && cp "$w/servers.u" "$srv_out"
+)
+
+# Servers: those added by hand (server-add, install.sh) plus those of the core profile.
+servers_merge() { cat "$SERVERS_MANUAL" "${1:-$SERVERS_CORE}" 2>/dev/null | awk 'NF && !seen[$0]++'; }
+servers_migrate() {  # before the split every server was added by hand
+  [ -e "$SERVERS_MANUAL" ] && return 0
+  if [ -f "$SERVERS" ]; then cp "$SERVERS" "$SERVERS_MANUAL"; else : > "$SERVERS_MANUAL"; fi
+}
+
+core_import() {  # core_import <profile.json>
+  local tmp="$CORE_DIR/config.yaml.tmp" srv="$SERVERS_CORE.tmp"
+  servers_migrate
+  install -d -o root -g wheel -m 700 "$CORE_DIR/ctl"
+  core_generate "${1:-}" "$tmp" "$srv" "$SERVERS_MANUAL" || { rm -f "$tmp" "$srv"; return 1; }
   chmod 600 "$tmp"
   "$CORE_DIR/mihomo" -t -d "$CORE_DIR" -f "$tmp" >/dev/null 2>&1 || {
-    "$CORE_DIR/mihomo" -t -d "$CORE_DIR" -f "$tmp" 2>&1 | tail -3 >&2; rm -f "$tmp"; return 1; }
+    "$CORE_DIR/mihomo" -t -d "$CORE_DIR" -f "$tmp" 2>&1 | tail -3 >&2; rm -f "$tmp" "$srv"; return 1; }
+  servers_merge "$srv" > "$SERVERS.tmp"
+  rules "$ALLOW" "$SERVERS.tmp" | pfctl -n -a "$ANCHOR" -f - >/dev/null 2>&1 || {
+    rm -f "$tmp" "$srv" "$SERVERS.tmp"; echo "pf не принял адреса серверов" >&2; return 1; }
+  mv "$srv" "$SERVERS_CORE"; mv "$SERVERS.tmp" "$SERVERS"
   mv "$tmp" "$CORE_DIR/config.yaml"
 }
 
@@ -243,6 +409,9 @@ core_running() { launchctl print "$CORE_JOB" 2>/dev/null | grep -q 'state = runn
 valid_addr() {  # a bare name must not reach pfctl, it would be resolved through DNS
   [[ "$1" =~ $ADDR_RE ]] && { [[ "$1" == *:* ]] || [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?$ ]]; }
 }
+
+[ "${BASH_SOURCE[0]}" = "$0" ] || return 0   # sourced by Helper/tests
+[ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
 
 case "${1:-status}" in
   apply) guard ;;
@@ -297,15 +466,20 @@ case "${1:-status}" in
   server-add)
     addr=${2:-}
     valid_addr "$addr" || { echo "Не похоже на адрес: $addr" >&2; exit 1; }
-    grep -qxF "$addr" "$SERVERS" 2>/dev/null && exit 0
-    { cat "$SERVERS" 2>/dev/null; echo "$addr"; } > "$SERVERS.tmp"
-    rules "$ALLOW" "$SERVERS.tmp" | pfctl -n -a "$ANCHOR" -f - >/dev/null 2>&1 || { rm -f "$SERVERS.tmp"; echo "Не похоже на адрес: $addr" >&2; exit 1; }
-    mv "$SERVERS.tmp" "$SERVERS"
+    servers_migrate
+    grep -qxF "$addr" "$SERVERS_MANUAL" && exit 0
+    { cat "$SERVERS_MANUAL"; echo "$addr"; } > "$SERVERS_MANUAL.tmp"
+    SERVERS_MANUAL="$SERVERS_MANUAL.tmp" servers_merge > "$SERVERS.tmp"
+    rules "$ALLOW" "$SERVERS.tmp" | pfctl -n -a "$ANCHOR" -f - >/dev/null 2>&1 || {
+      rm -f "$SERVERS.tmp" "$SERVERS_MANUAL.tmp"; echo "Не похоже на адрес: $addr" >&2; exit 1; }
+    mv "$SERVERS_MANUAL.tmp" "$SERVERS_MANUAL"; mv "$SERVERS.tmp" "$SERVERS"
     reload_if_on
     ;;
   server-remove)
     addr=${2:-}
-    grep -vxF "$addr" "$SERVERS" > "$SERVERS.tmp" 2>/dev/null; mv "$SERVERS.tmp" "$SERVERS"
+    servers_migrate
+    grep -vxF "$addr" "$SERVERS_MANUAL" > "$SERVERS_MANUAL.tmp"; mv "$SERVERS_MANUAL.tmp" "$SERVERS_MANUAL"
+    servers_merge > "$SERVERS.tmp"; mv "$SERVERS.tmp" "$SERVERS"
     reload_if_on
     ;;
   core)
@@ -332,11 +506,12 @@ case "${1:-status}" in
         log_event "core off" ;;
       import)
         core_import "${3:-}" || exit 1
+        reload_if_on   # the servers list changed
         launchctl print "$CORE_JOB" >/dev/null 2>&1 && launchctl kickstart -k "$CORE_JOB"
         log_event "core config imported" ;;
       state)
         if core_running; then echo on; else echo off; fi ;;
-      *) echo "usage: ks core on|off|state|import <yaml>" >&2; exit 1 ;;
+      *) echo "usage: ks core on|off|state|import <json>" >&2; exit 1 ;;
     esac
     ;;
   state)

