@@ -34,6 +34,31 @@ expect "no servers yet: the resolvers still reachable by the core" "^pass out qu
 echo 192.0.2.1 > "$SERVERS_MANUAL"; echo 203.0.113.10 > "$SERVERS_CORE"
 servers_merge > "$SERVERS"
 
+# IPv6: the core has it off (ipv6: false, no IPv6 in the TUN), so IPv6 leaves through the physical
+# interface, where only link-local/multicast (neighbour discovery, AirDrop, Bonjour) and the
+# tailnet pass; everything else hits the final block.
+expect "ends in block drop out quick all" '^block drop out quick all$'
+[ "$(tail -1 "$tmp/out")" = "block drop out quick all" ] && echo "ok    the block is the last rule" ||
+  { echo "FAIL  the block is not the last rule"; fails=$((fails + 1)); }
+grep -E 'inet6' "$tmp/out" | grep -vE 'fe80::/10, ff00::/8|fd7a:115c:a1e0::/48' > "$tmp/v6"
+[ ! -s "$tmp/v6" ] && echo "ok    no IPv6 pass beyond link-local, multicast and the tailnet" ||
+  { echo "FAIL  IPv6 rules: $(cat "$tmp/v6")"; fails=$((fails + 1)); }
+expect "no pass to any address except fixed ports (DHCP, Tailscale)" '^pass out quick (inet6? )?(proto [^ ]+ )?(proto \{[^}]*\} )?(from any )?to any( flags| keep| group|$)' absent
+# the router's DNS over IPv6 link-local (RDNSS) is the router's DNS too: closed unless allowed
+v6dns=$(grep -nE '^block drop out quick inet6 proto \{ tcp udp \} to \{ fe80::/10, ff00::/8 \} port 53$' "$tmp/out" | cut -d: -f1)
+v6ll=$(grep -nE '^pass out quick inet6 to \{ fe80::/10, ff00::/8 \}' "$tmp/out" | cut -d: -f1)
+[ -n "$v6dns" ] && [ -n "$v6ll" ] && [ "$v6dns" -lt "$v6ll" ] && echo "ok    router DNS over IPv6 link-local blocked before link-local passes" ||
+  { echo "FAIL  router DNS over IPv6 link-local (block line ${v6dns:-none}, pass line ${v6ll:-none})"; fails=$((fails + 1)); }
+printf 'lan=1\ndns=1\n' > "$SETTINGS"; rules > "$tmp/out"
+expect "dns=1: router DNS over IPv6 allowed" 'inet6 .*port 53' absent
+printf 'lan=0\ndns=1\n' > "$SETTINGS"; rules > "$tmp/out"
+expect "lan=0: router DNS over IPv6 blocked (dns needs the home network)" '^block drop out quick inet6 .*port 53'
+# «Домашняя сеть» (lan, on by default): private IPv4 networks pass, without it they are blocked
+expect "lan=0: no private networks" '10\.0\.0\.0/8|192\.168\.0\.0/16' absent
+rm -f "$SETTINGS"; rules > "$tmp/out"
+expect "lan default on: private networks reachable" '^pass out quick inet to \{ 10\.0\.0\.0/8, 172\.16\.0\.0/12, 192\.168\.0\.0/16 \} flags any keep state$'
+expect "lan default on: the router's DNS stays closed (dns default off)" '^block drop out quick proto \{ tcp udp \} to \{ 10\.0\.0\.0/8, 172\.16\.0\.0/12, 192\.168\.0\.0/16 \} port 53$'
+
 echo coredirect=1 > "$SETTINGS"
 rules > "$tmp/out"
 expect "coredirect=1: broad core rule" "^pass out quick group $CORE_GROUP flags any keep state"

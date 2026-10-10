@@ -126,6 +126,11 @@ rules() {  # rules [allow-file] [servers-file] [manual-servers-file]
   fi
   echo 'pass out quick inet proto udp from any port 68 to any port 67 keep state'
   echo 'pass out quick inet to { 169.254.0.0/16, 224.0.0.0/4, 255.255.255.255 } keep state'
+  # IPv6: the core runs without it (ipv6: false), so IPv6 is never tunnelled and only link-local
+  # and multicast pass here (neighbour discovery, Bonjour, AirDrop), plus the tailnet below. A
+  # router announcing its DNS on a link-local address (RDNSS) is the router's DNS as well.
+  [ "$(setting lan 1)" = 1 ] && [ "$(setting dns 0)" = 1 ] ||
+    echo 'block drop out quick inet6 proto { tcp udp } to { fe80::/10, ff00::/8 } port 53'
   echo 'pass out quick inet6 to { fe80::/10, ff00::/8 } keep state'
   if [ "$(setting lan 1)" = 1 ]; then
     [ "$(setting dns 0)" = 1 ] || echo 'block drop out quick proto { tcp udp } to { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } port 53'

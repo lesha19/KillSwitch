@@ -382,7 +382,7 @@ private struct ProtectionSettings: View {
             .disabled(control.busy || control.state == .notInstalled)
 
             Section {
-                accessRow("Домашняя сеть (роутер, NAS, принтер, AirPlay)", control.allowLAN)
+                accessRow("Доступ к домашней сети (роутер, NAS, принтер, AirPlay)", control.allowLAN)
                 accessRow("Tailscale", control.allowTailscale)
                 accessRow("Адреса сайтов через роутер, пока VPN выключен", control.allowRouterDNS)
                 accessRow("Отключать сеть при выключении Mac", control.wifiGuard)
@@ -435,7 +435,7 @@ private struct AccessSheet: View {
         BatchSheet(title: "Что можно без VPN", changed: !draft.isEmpty && draft != control.switches,
                    apply: { control.setSwitches(draft) }) {
             Form {
-                toggle("lan", "Домашняя сеть", "Роутер, NAS, принтер, AirPlay.")
+                toggle("lan", "Доступ к домашней сети", "Роутер, NAS, принтер, AirPlay — без VPN. AirDrop работает и без этого.")
                 toggle("dns", "Адреса сайтов через роутер", "Пока VPN выключен, роутер видит, какие сайты открывает Mac.")
                     .disabled(draft["lan"] == false)
                 toggle("tailscale", "Tailscale", "Связь между своими устройствами без VPN.")

@@ -38,6 +38,13 @@ check_config() {  # check_config <name> <config> <servers>
   [ "$(val external-controller-unix "$c")" = ctl/mihomo.sock ] && ok "$name: controller" || bad "$name: controller"
   [ "$(val allow-lan "$c")" = false ] && [ "$(val mode "$c")" = rule ] && [ "$(val tun.stack "$c")" = gvisor ] &&
     ok "$name: template values" || bad "$name: template values"
+  # no IPv6 in the core: IPv6 stays out of the tunnel and pf lets only link-local of it out (rules.sh)
+  [ "$(val ipv6 "$c")" = false ] && [ "$(val dns.ipv6 "$c")" = false ] && ! plutil -type tun.inet6-address "$c" >/dev/null 2>&1 &&
+    ok "$name: IPv6 off in the core and its DNS" || bad "$name: IPv6 settings"
+  # the home network and Tailscale never enter the TUN: with «Домашняя сеть» off pf blocks them
+  for a in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10; do
+    grep -q "\"$a\"" "$c" || bad "$name: $a not excluded from the TUN routes"
+  done
   [ "$(val log-level "$c")" = warning ] && ok "$name: log-level warning (no visited domains in core.log)" || bad "$name: log-level $(val log-level "$c")"
   n=$(val proxies "$c"); i=0
   while [ "$i" -lt "$n" ]; do
