@@ -19,7 +19,8 @@ Rules are loaded at boot, before login.
   `/Library/KillSwitch`. install.sh is safe to re-run: it upgrades the helper in place and keeps
   `settings`, `allow` and `servers`. The app's "Обновить защиту" button does exactly that.
 - `Helper/local.killswitch.core.plist` + `Helper/mihomo` (downloaded by `Helper/fetch-mihomo.sh`, pinned
-  version and sha256, not in git) — our own VPN core, see below.
+  version and sha256, not in git, then signed by `scripts/sign-core.sh` with our Developer ID or, without
+  it, Apple Development, so the content filter trusts it) — our own VPN core, see below.
 - `App/` — SwiftUI app: window, menu bar icon, settings, notifications, install / upgrade / uninstall,
   leak test, and the VPN client for our core: subscription URL (Remnawave or any mihomo/Clash
   subscription, kept in the keychain), auto-update by `profile-update-interval` (default 12 h), traffic
