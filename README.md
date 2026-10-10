@@ -23,7 +23,8 @@ Rules are loaded at boot, before login.
   leak test, and the VPN client for our core: subscription URL (Remnawave or any mihomo/Clash
   subscription, kept in the keychain), auto-update by `profile-update-interval` (default 12 h), traffic
   and expiry from `subscription-userinfo`, servers added from share links (vless, trojan, ss, hysteria2,
-  tuic), server list with latency and selection (`ks core proxies` / `ks core select`). The subscription
+  tuic, wireguard) or a wg-quick `.conf`, server list with latency and selection (`ks core proxies` /
+  `ks core select`), latency tests and «Лучший» (`ks core delay <group>`), non-secret diagnostics. The subscription
   is fetched with a mihomo User-Agent and Remnawave's device headers (`x-hwid` = hash of the Mac's
   hardware UUID, `x-device-os`, `x-ver-os`, `x-device-model`), reduced to proxies, proxy-groups, rules
   and rule-providers and handed to `ks core import <file.json>`; a failed update keeps the old config.

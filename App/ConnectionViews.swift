@@ -247,6 +247,8 @@ struct SubscriptionSummary: View {
                 }
                 .buttonStyle(.borderless)
                 .disabled(client.updating || !client.hasURL)
+                .help("Обновить подписку (⌘R)")
+                .accessibilityLabel(client.updating ? "Подписка обновляется" : "Обновить подписку")
             }
             if let usage = client.status.usage {
                 if let total = usage.total {
@@ -292,6 +294,7 @@ struct SubscriptionOnboarding: View {
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 SecureField("https://…", text: $url).onSubmit(save)
+                    .accessibilityLabel("Ссылка подписки")
                 Button("Добавить", action: save).disabled(url.isEmpty || client.updating)
             }
             if client.updating { ProgressView().controlSize(.small) }

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     var body: some View {
@@ -82,6 +83,7 @@ private struct ServerSettings: View {
 
 private struct CheckSettings: View {
     @Environment(KillSwitchControl.self) private var control
+    @Environment(VPNClient.self) private var client
 
     var body: some View {
         Form {
@@ -112,6 +114,12 @@ private struct CheckSettings: View {
                 } else {
                     Text(control.events.joined(separator: "\n")).monospaced().font(.caption).textSelection(.enabled)
                 }
+            }
+            Section {
+                Button("Скопировать диагностику") { DiagnosticsCopy.copy(control: control, client: client) }
+            } footer: {
+                Text("Версия, состояние защиты и ядра, последние ошибки — без ссылок, ключей и адресов серверов. Можно отправить в поддержку.")
+                    .foregroundStyle(.secondary)
             }
             Section("Советы") {
                 Text("Выключи «Частный узел iCloud» (Private Relay): он может обходить фильтр.")
@@ -246,6 +254,7 @@ private struct VPNSettings: View {
     @State private var newURL = ""
     @State private var newLink = ""
     @State private var confirmRemove = false
+    @State private var importingWireGuard = false
 
     var body: some View {
         @Bindable var client = client
@@ -297,13 +306,24 @@ private struct VPNSettings: View {
                     }
                 }
                 HStack {
-                    SecureField("vless://, trojan://, ss://, hysteria2://, tuic://", text: $newLink).onSubmit(addLink)
+                    SecureField("vless://, trojan://, ss://, hysteria2://, tuic://, wireguard://", text: $newLink).onSubmit(addLink)
+                        .accessibilityLabel("Ссылка на сервер")
                     Button("Добавить", action: addLink).disabled(newLink.isEmpty)
+                }
+                HStack {
+                    Button("Вставить из буфера") { pasteFromClipboard() }
+                        .help("Ссылки или текст файла WireGuard из буфера обмена, не показывая их на экране")
+                    Button("Файл WireGuard…") { importingWireGuard = true }
+                        .help("Файл .conf из WireGuard или от провайдера")
+                }
+                // with a subscription the summary above shows the same error
+                if !client.hasURL, let error = client.lastError {
+                    Text(error).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                 }
             } header: {
                 Text("Свои серверы")
             } footer: {
-                Text("Серверы по ссылкам появятся в списке отдельной группой «\(ProfileMerger.manualGroup)». Ссылки тоже хранятся в связке ключей. Каждое изменение спросит пароль.")
+                Text("Серверы по ссылкам и из файлов WireGuard появятся в списке отдельной группой «\(ProfileMerger.manualGroup)». Ссылки и ключи хранятся в связке ключей. DNS из файла WireGuard не используется: адреса узнаёт само ядро. Каждое изменение может спросить пароль.")
                     .foregroundStyle(.secondary)
             }
 
@@ -318,6 +338,10 @@ private struct VPNSettings: View {
             }
         }
         .formStyle(.grouped)
+        .fileImporter(isPresented: $importingWireGuard,
+                      allowedContentTypes: [UTType(filenameExtension: "conf") ?? .plainText, .plainText]) { result in
+            if case .success(let url) = result { Task { await client.importWireGuard(file: url) } }
+        }
         .confirmationDialog("Удалить подписку?", isPresented: $confirmRemove) {
             Button("Удалить", role: .destructive) { revealed = nil; Task { await client.removeURL() } }
         } message: {
@@ -336,5 +360,11 @@ private struct VPNSettings: View {
         let value = newLink
         newLink = ""
         Task { await client.addLink(value) }
+    }
+
+    /// A wg-quick file is several lines, which a text field would flatten.
+    private func pasteFromClipboard() {
+        guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else { return }
+        Task { await client.addLink(text) }
     }
 }

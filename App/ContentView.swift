@@ -61,7 +61,9 @@ struct ContentView: View {
                     .foregroundStyle(connection.color)
                     .contentTransition(.symbolEffect(.replace))
             }
+            .accessibilityHidden(true)
             Text(connection.title).font(.title.bold())
+                .accessibilityAddTraits(.isHeader)
             if connection == .connected || connection == .connecting, let server = control.currentServer {
                 HStack(spacing: 8) {
                     ServerLabel(name: server, font: .title3)

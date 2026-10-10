@@ -46,10 +46,21 @@ struct MenuView: View {
                 }
             }
         }
+        if control.coreRunning, let proxies = control.proxies, !proxies.groups.isEmpty {
+            Button(control.testing.isEmpty ? "Проверить пинг" : "Проверяю пинг…") {
+                Task { await control.testAllDelays() }
+            }
+            .disabled(!control.testing.isEmpty)
+            if let main = proxies.mainGroup, main.selectable {
+                Button("Выбрать лучший сервер") { Task { await control.selectBest(group: main) } }
+                    .disabled(!control.testing.isEmpty || control.busy)
+            }
+        }
         if client.hasURL {
             Button(client.updating ? "Обновляю подписку…" : "Обновить подписку") {
                 Task { await client.update(interactive: true) }
             }
+            .keyboardShortcut("r")
             .disabled(client.updating)
         }
 
@@ -73,7 +84,8 @@ struct MenuView: View {
             openWindow(id: "main")
             NSApp.activate()
         }
-        SettingsLink { Text("Настройки…") }
-        Button("Выйти") { NSApp.terminate(nil) }
+        SettingsLink { Text("Настройки…") }.keyboardShortcut(",")
+        Button("Скопировать диагностику") { DiagnosticsCopy.copy(control: control, client: client) }
+        Button("Выйти") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
 }
