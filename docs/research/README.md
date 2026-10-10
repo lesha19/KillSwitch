@@ -26,3 +26,12 @@ Research notes written by agents for the owner, one file per topic. Decisions li
 
 - 0.15 (2026-10-10): routing only from the subscription + «Трафик» (#8), all mihomo protocols and
   links (#9), daemon self-location fix for the passwordless helper upgrade.
+- 0.15.1 (2026-10-10): 0.15 crashed at launch (XPC error block trapped on the main-actor check);
+  fixed. 0.15 cannot update itself — install 0.15.1 from the .dmg by hand.
+
+## State at the pause (2026-10-10 evening)
+
+Development paused by the owner after 0.15.1. Next when resumed: #10/#31 Xray core + core
+selector. Waiting on the owner: install 0.15.1 by hand and check the helper upgrades without a
+password; run the panel template `apply.sh`; save the signing keys from the Desktop folder to
+Vaultwarden; decide the licence.
