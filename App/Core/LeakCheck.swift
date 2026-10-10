@@ -98,6 +98,9 @@ enum LeakCheck {
         /// Physical interfaces through which an ordinary program reached the internet directly
         /// while protection was on (LeakTester probes them only then).
         var directExits: [String] = []
+        /// Another program's VPN is up instead of ours (ADR 0009): the check sees that one.
+        var otherVPN = false
+        var otherVPNName: String?
     }
 
     enum Finding: Equatable {
@@ -110,11 +113,12 @@ enum LeakCheck {
         case dnsUnknown
         case offline
         case vpnOff
+        case otherVPN(String?)
 
         var isLeak: Bool {
             switch self {
             case .directExit, .realIPv4, .ipv4Mismatch, .ipv6Leak, .dnsLeak: true
-            case .ipv6Unexpected, .dnsUnknown, .offline, .vpnOff: false
+            case .ipv6Unexpected, .dnsUnknown, .offline, .vpnOff, .otherVPN: false
             }
         }
 
@@ -128,6 +132,9 @@ enum LeakCheck {
             case .dnsLeak(let ips): "Адреса сайтов узнаются у твоего провайдера (\(ips.joined(separator: ", "))): он видит, куда ты ходишь."
             case .dnsUnknown: "Проверка DNS не дала ответа. Повтори позже."
             case .offline: "Интернета нет. Если VPN выключен, а защита включена, так и должно быть: мимо VPN ничего не уходит."
+            case .otherVPN(let name):
+                "Сейчас работает VPN другой программы\(name.map { " (\($0))" } ?? ""), а не KillSwitch: проверен он. "
+                    + "Сайты, которые он пускает напрямую, при включённой защите не открываются."
             case .vpnOff: "VPN не подключён: это твой обычный адрес. Он запомнен, чтобы потом сравнить с ним проверку через VPN."
             }
         }
@@ -142,9 +149,13 @@ enum LeakCheck {
 
         var clean: Bool { !findings.contains(where: \.isLeak) }
 
+        /// The tunnel checked was another program's (ADR 0009).
+        var otherVPN: Bool { findings.contains { if case .otherVPN = $0 { true } else { false } } }
+
         var title: String {
             if !clean { return "Есть утечки" }
             if findings.contains(.vpnOff) { return "VPN не подключён" }
+            if otherVPN { return "Проверен другой VPN" }
             if findings.contains(.offline) { return "Нет интернета" }
             return "Утечек нет"
         }
@@ -163,7 +174,7 @@ enum LeakCheck {
             return Verdict(findings: exits + [.vpnOff], home: home)
         }
         let direct = input.direct
-        var findings = exits
+        var findings: [Finding] = (input.otherVPN ? [.otherVPN(input.otherVPNName)] : []) + exits
         if let home = direct?.ipv4, seen.contains(home) || input.exit?.ip == home { findings.append(.realIPv4) }
         if seen.count > 1 { findings.append(.ipv4Mismatch(seen)) }
 

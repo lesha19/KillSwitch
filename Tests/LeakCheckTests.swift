@@ -72,6 +72,24 @@ final class LeakCheckTests: XCTestCase {
         XCTAssertEqual(verdict.title, "Утечек нет")
     }
 
+    /// Happ up instead of ours: the addresses are Happ's. Said first, never «Утечек нет» alone.
+    func testAnotherVPNIsSaid() {
+        var happ = input()
+        happ.otherVPN = true
+        happ.otherVPNName = "Happ"
+        let verdict = LeakCheck.verdict(happ)
+        XCTAssertEqual(verdict.findings, [.otherVPN("Happ")])
+        XCTAssertTrue(verdict.clean)
+        XCTAssertEqual(verdict.title, "Проверен другой VPN")
+        XCTAssertEqual(LeakCheck.Finding.otherVPN("Happ").text,
+                       "Сейчас работает VPN другой программы (Happ), а не KillSwitch: проверен он. Сайты, которые он пускает напрямую, при включённой защите не открываются.")
+        XCTAssertEqual(LeakCheck.Finding.otherVPN(nil).text,
+                       "Сейчас работает VPN другой программы, а не KillSwitch: проверен он. Сайты, которые он пускает напрямую, при включённой защите не открываются.")
+        happ.ipv4 = [home.ipv4, home.ipv4]
+        XCTAssertEqual(LeakCheck.verdict(happ).findings, [.otherVPN("Happ"), .realIPv4])
+        XCTAssertEqual(LeakCheck.verdict(happ).title, "Есть утечки")
+    }
+
     func testRealIPv4() {
         let verdict = LeakCheck.verdict(input(ipv4: [home.ipv4, home.ipv4]))
         XCTAssertEqual(verdict.findings, [.realIPv4])

@@ -12,7 +12,8 @@ struct LeakTestView: View {
                     verdictHeader
                     Button {
                         Task {
-                            await tester.run(vpnConnected: control.vpnUp,
+                            await tester.run(vpnConnected: control.vpnUp, otherVPN: control.otherVPNActive,
+                                             otherVPNName: control.otherVPNName,
                                              probe: control.state == .on ? { await control.probeDirectExits() } : nil)
                         }
                     } label: {
@@ -98,7 +99,7 @@ struct LeakTestView: View {
 
     @ViewBuilder private var verdictHeader: some View {
         if let verdict = tester.result?.verdict {
-            let color: Color = !verdict.clean ? .red : verdict.findings.contains(.vpnOff) ? .orange : .green
+            let color: Color = !verdict.clean ? .red : verdict.findings.contains(.vpnOff) || verdict.otherVPN ? .orange : .green
             Image(systemName: verdict.clean ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
                 .font(.system(size: 44)).foregroundStyle(color)
                 .accessibilityHidden(true)
