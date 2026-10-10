@@ -133,7 +133,7 @@ upgrade() {  # upgrade [args]: runs main of install.sh in the bundle directory o
     ks_run() { echo "ks $*" >> "$root/calls"; [ "$1" = state ] && echo on; [ "$1" = _regen ] && echo "core config: kept"; return 0; }
     lockf() { echo "lockf $*" >> "$root/calls"; }
     dscl() { return 0; }
-    sudo() { echo "sudo $*" >> "$root/calls"; }
+    sudo() { echo "sudo $*" >> "$root/calls"; [ "${SUDO_FAILS:-0}" = 0 ]; }
     visudo() { [ "${VISUDO_FAILS:-0}" = 0 ] || return 1; /usr/sbin/visudo "$@"; }
     chmod() { /bin/chmod "$@"; }
     id() { if [ "$1" = -u ] && [ -n "${2:-}" ]; then echo 501; else /usr/bin/id "$@"; fi; }
@@ -177,6 +177,14 @@ out=$(KEEP_E=1 VISUDO_FAILS=1 upgrade --upgrade 2>&1); rc=$?
 check "stopped half-way: fails" "$([ "$rc" != 0 ] && echo failed || echo ok)" failed
 check "stopped half-way: ks already replaced" "$(tail -1 "$root/lib/ks")" "echo new"
 check "stopped half-way: no completion marker" "$([ -e "$root/lib/installed" ] && echo there || echo none)" none
+check "stopped half-way: says where on stderr, not silently" "$(grep -cE '^install\.sh:[0-9]+: exit 1$' <<<"$out")" 1
+
+# the user's passwordless ks, the last check: a failure says so and fails the install
+setup noaccess
+out=$(KEEP_E=1 SUDO_FAILS=1 upgrade --upgrade 2>&1); rc=$?
+check "no app access: fails" "$rc" 1
+check "no app access: says so" "$(grep -c '^app access: failed' <<<"$out")" 1
+check "no app access: no completion marker" "$([ -e "$root/lib/installed" ] && echo there || echo none)" none
 
 setup onlycoredirect
 printf 'coredirect=1\n' > "$root/lib/settings"
@@ -188,6 +196,7 @@ check "settings with only coredirect: the rest of the install ran" "$(grep -c '^
 setup strict
 out=$(KEEP_E=1 upgrade --upgrade 2>&1); rc=$?
 check "upgrade under set -e: succeeds" "$rc" 0
+check "upgrade under set -e: no error line on the way" "$(grep -c '^install\.sh:' <<<"$out")" 0
 
 setup again
 upgrade --upgrade >/dev/null 2>&1

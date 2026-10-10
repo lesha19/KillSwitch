@@ -18,7 +18,10 @@
 # program running as the user cannot silently open a hole. Starting and stopping our own
 # VPN core, listing and switching its servers and refreshing its profile with known server
 # addresses are passwordless too: they never widen the rules; importing a new profile is not.
-set -eu
+set -Eeu
+# set -e alone stops without a word (the app showed only «exited with a non-zero status»): the
+# failing line goes to stderr, which the app shows. -E: also inside the functions (all of main).
+trap 'echo "install.sh:$LINENO: exit $?" >&2' ERR
 # as root: system tools only, nothing of the caller's environment (see ks_clean_env in ks)
 PATH=/usr/bin:/bin:/usr/sbin:/sbin; export PATH
 export HOME=/var/root LC_ALL=C
@@ -234,7 +237,12 @@ main() {
   fi
 
   # The app relies on this working without a password
-  sudo -u "$USER_NAME" sudo -n "$DIR/ks" state >/dev/null && echo "app access: ok"
+  if sudo -u "$USER_NAME" sudo -n "$DIR/ks" state >/dev/null; then
+    echo "app access: ok"
+  else
+    echo "app access: failed: $USER_NAME cannot run ks state without a password" >&2
+    exit 1
+  fi
   write_marker
 }
 

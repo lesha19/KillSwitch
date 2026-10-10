@@ -1022,8 +1022,8 @@ final class KillSwitchControl {
                     // nothing of this command ran: the password prompt runs it (and the rest)
                     if index == 0 { return nil }
                 }
-                let text = reply.text(separateStderr: false)
-                guard reply.status == 0 else { return .failed(text.isEmpty ? "Не получилось" : text) }
+                let text = reply.text(separateStderr: false), failure = reply.failureText(command.program)
+                guard reply.status == 0 else { return .failed(failure.isEmpty ? "Не получилось" : failure) }
                 if !text.isEmpty { output.append(text) }
             }
         }

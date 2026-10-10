@@ -112,4 +112,18 @@ final class HelperDaemonTests: XCTestCase {
         XCTAssertTrue(HelperReply(status: HelperReply.notAuthorized, stdout: "", stderr: "").needsAuthorization)
         XCTAssertFalse(HelperReply(status: 1, stdout: "", stderr: "").needsAuthorization)
     }
+
+    /// A failed install.sh through the daemon reads as through the password prompt: its stderr,
+    /// where it says why, not its progress on stdout (0.15.1: «Не получилось установить —
+    /// core: kept»). Without stderr, both. A ks command keeps both, as `sudo -n` gave them.
+    func testFailedScriptsShowTheirStderr() {
+        let stopped = HelperReply(status: 1, stdout: "core: kept\nwatchdog: new helper\n", stderr: "install.sh:214: exit 1\n")
+        XCTAssertEqual(stopped.failureText(.install), "install.sh:214: exit 1")
+        XCTAssertEqual(stopped.failureText(.upgrade), "install.sh:214: exit 1")
+        XCTAssertEqual(stopped.failureText(.uninstall), "install.sh:214: exit 1")
+        XCTAssertEqual(stopped.failureText(.ks), "core: kept\nwatchdog: new helper\ninstall.sh:214: exit 1")
+        XCTAssertEqual(HelperReply(status: 1, stdout: "core: kept", stderr: "").failureText(.install), "core: kept")
+        XCTAssertEqual(HelperReply(status: 1, stdout: "", stderr: "").failureText(.install), "")
+        XCTAssertEqual(UserError.from(raw: stopped.failureText(.upgrade), context: .install)?.message, "install.sh:214: exit 1")
+    }
 }

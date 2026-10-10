@@ -96,4 +96,12 @@ struct HelperReply: Equatable, Sendable {
                 .joined(separator: "\n")
         return raw.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    /// A failure as the app shows it. install.sh and uninstall.sh say why on stderr (their stdout is
+    /// progress), as the password prompt's path shows it; a ks command keeps both. Empty without text.
+    func failureText(_ program: HelperCommand.Program) -> String {
+        let both = text(separateStderr: false)
+        let errors = program == .ks ? both : text(separateStderr: true)
+        return errors.isEmpty ? both : errors
+    }
 }
