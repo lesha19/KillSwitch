@@ -130,6 +130,10 @@ final class AutoConnector: NSObject, CLLocationManagerDelegate {
             }
         case .skip(.trusted(let name)):
             lastAction = "Не подключался: «\(name)» — доверенная сеть (\(Self.now))"
+        case .skip(.otherVPN):
+            // never stopped silently: the main screen offers «Отключить … и подключить KillSwitch» (ADR 0009)
+            lastAction = "Не подключался: работает \(control.otherVPNName ?? "другой VPN") (\(Self.now))"
+            Notifier.shared.post(.otherVPN(name: control.otherVPNName))
         case .skip:
             break
         }

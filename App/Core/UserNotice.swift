@@ -10,6 +10,8 @@ enum UserNotice: Equatable {
     /// No server of the chosen country answers; another country is the person's choice.
     case serversDown(country: String)
     case autoConnectNeedsPassword
+    /// Auto-connect found another program's VPN up and left it alone (ADR 0009).
+    case otherVPN(name: String?)
     case subscriptionEnding(days: Int, title: String?, expire: Date)
     case trafficLow(used: Int64, total: Int64)
     case newServers
@@ -50,6 +52,7 @@ enum UserNotice: Equatable {
         case .serverSwitched: "serverSwitched"
         case .serversDown: "serversDown"
         case .autoConnectNeedsPassword: "autoConnect"
+        case .otherVPN: "otherVPN"
         case .subscriptionEnding(let days, _, _): "ending\(days)"
         case .trafficLow: "traffic"
         case .newServers: "newServers"
@@ -61,7 +64,7 @@ enum UserNotice: Equatable {
 
     var setting: Setting? {
         switch self {
-        case .vpnDropped, .reconnected, .autoConnectNeedsPassword, .serverSwitched, .serversDown: .connection
+        case .vpnDropped, .reconnected, .autoConnectNeedsPassword, .serverSwitched, .serversDown, .otherVPN: .connection
         case .subscriptionEnding, .trafficLow, .newServers: .subscription
         case .pauseEnded: .pause
         case .serviceOff: .service
@@ -72,7 +75,7 @@ enum UserNotice: Equatable {
     var action: Action? {
         switch self {
         case .vpnDropped: .connect
-        case .autoConnectNeedsPassword, .serversDown: .openApp
+        case .autoConnectNeedsPassword, .serversDown, .otherVPN: .openApp
         case .subscriptionEnding: .renew
         case .newServers: .approve
         case .serviceOff: .openLoginItems
@@ -88,6 +91,7 @@ enum UserNotice: Equatable {
         case .serverSwitched: "VPN переключился на другой сервер"
         case .serversDown(let country): "Серверы «\(country)» не отвечают"
         case .autoConnectNeedsPassword: "VPN не подключился сам"
+        case .otherVPN(let name): OtherVPN.title(name: name)
         case .subscriptionEnding(let days, _, _): "Подписка кончается через " + Russian.plural(days, "день", "дня", "дней")
         case .trafficLow: "Трафик почти закончился"
         case .newServers: "В подписке новые серверы"
@@ -108,6 +112,7 @@ enum UserNotice: Equatable {
         case .serverSwitched(let from, let to): "«\(from)» не отвечал. Теперь — «\(to)»."
         case .serversDown: "Выбери другую страну или «Самый быстрый»."
         case .autoConnectNeedsPassword: "Службу нужно обновить."
+        case .otherVPN: "KillSwitch не подключился сам, чтобы не выключать его без спроса. Переключиться можно в KillSwitch."
         case .subscriptionEnding(_, let title, let expire):
             "\(title ?? "Подписка") до \(Self.day(expire, calendar: calendar))."
         case .trafficLow(let used, let total): Russian.traffic(used: used, total: total) + "."

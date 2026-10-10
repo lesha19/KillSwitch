@@ -41,6 +41,17 @@ final class UserNoticeTests: XCTestCase {
         XCTAssertEqual(UserNotice.macOSUpdated.action, .check)
     }
 
+    /// Auto-connect found Happ up: it does not stop it silently, it says so (ADR 0009).
+    func testAnotherVPNAtAutoConnect() {
+        let notice = UserNotice.otherVPN(name: "Happ")
+        XCTAssertEqual(notice.title, "Работает другой VPN (Happ)")
+        XCTAssertEqual(notice.body, "KillSwitch не подключился сам, чтобы не выключать его без спроса. Переключиться можно в KillSwitch.")
+        XCTAssertEqual(UserNotice.otherVPN(name: nil).title, "Работает другой VPN")
+        XCTAssertEqual(notice.action, .openApp)
+        XCTAssertEqual(notice.setting, .connection)
+        XCTAssertEqual(notice.key, UserNotice.otherVPN(name: nil).key)
+    }
+
     /// Thresholds: one notice at 3 days left and one at 1 day, not every update in between.
     func testEndingThresholds() {
         XCTAssertNil(UserNotice.endingThreshold(secondsLeft: 5 * 86400))
