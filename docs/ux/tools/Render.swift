@@ -267,6 +267,34 @@ func main() {
         w.client.lastError = UserError.from(raw: "HTTP 404", context: .subscription)
         window("16-window-subscription-expired", height: 1000, w)
     }
+    do { // 17 failover: switched to another server of the country (status line)
+        let w = World()
+        w.subscribe()
+        w.connect(selected: "🇱🇹 Литва")
+        w.control.lastSwitch = Failover.Switch(from: "🇱🇹 Литва 1", to: "🇱🇹 Литва 2", at: Date().addingTimeInterval(-12 * 60))
+        window("17-window-failover-switched", height: 760, w)
+    }
+    do { // 18 the whole chosen country is down
+        let w = World()
+        w.subscribe()
+        w.connect(selected: "🇱🇹 Литва")
+        w.control.serversDown = "Литва"
+        window("18-window-country-down", height: 860, w)
+    }
+    do { // 19 nothing answers: mobile «white lists»
+        let w = World()
+        w.subscribe()
+        w.connect()
+        w.control.networkCause = .whitelist
+        window("19-window-cause-whitelist", height: 900, w)
+    }
+    do { // 19b nothing answers: our servers are blocked
+        let w = World()
+        w.subscribe()
+        w.connect()
+        w.control.networkCause = .serversBlocked
+        window("19b-window-cause-servers-blocked", height: 900, w)
+    }
 
     // MARK: first-run wizard
 
@@ -446,7 +474,12 @@ func main() {
         let w = World()
         w.control.exceptions = ["1.2.3.46", "10.8.0.0/24"]
         w.control.manualServers = ["1.2.3.10"]
-        settings("44-settings-advanced", w) { AdvancedSettings() }
+        w.client.transportServers = [
+            Transport.Server(name: "🇱🇹 Литва", canFingerprint: true, canMux: true, fingerprint: "chrome", mux: nil),
+            Transport.Server(name: "🇩🇪 Германия", canFingerprint: false, canMux: true, fingerprint: nil, mux: nil),
+        ]
+        w.client.transportOverrides = ["🇱🇹 Литва": Transport.Override(fingerprint: "firefox", mux: nil)]
+        settings("44-settings-advanced", height: 760, w) { AdvancedSettings() }
     }
     do {
         let w = World()

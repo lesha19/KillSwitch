@@ -51,7 +51,11 @@ patches = {
         ("    init() {", "    "),
         ("    func loadProxies(force: Bool = false) {", "        return"),
         ("    func refreshEvents() {", "        return"),
+        # the state is set by Render.swift; a real refresh would ask ks and show its absence
+        ("    func refresh() {", "        return"),
         ("    private static func exec(", "        (-1, \"\")"),
+        # reading Happ's group container makes macOS ask "access data from other apps" and hangs
+        ("    private static func readHappServers() -> [String] {", "        return []"),
     ],
     "VPNClient.swift": [("    init(control: KillSwitchControl) {", "        self.control = control")],
     "AutoConnector.swift": [("    init(control: KillSwitchControl) {", "        self.control = control\n        super.init()")],
@@ -78,6 +82,16 @@ enum Keychain {
     static func read(_ account: String) -> Data? { nil }
     @discardableResult static func write(_ account: String, _ data: Data) -> Bool { false }
     static func delete(_ account: String) {}
+}
+"""
+    if path.name == "Notifier.swift":   # UNUserNotificationCenter throws outside an app bundle
+        text = """import AppKit
+@MainActor final class Notifier {
+    static let shared = Notifier()
+    weak var control: KillSwitchControl?
+    weak var client: VPNClient?
+    var openWindow: ((String) -> Void)?
+    func post(_ notice: UserNotice) {}
 }
 """
     if path.name == "Updater.swift":   # Sparkle is not linked into the renderer
