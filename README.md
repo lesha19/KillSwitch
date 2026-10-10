@@ -9,7 +9,7 @@ Rules are loaded at boot, before login.
 
 - `Helper/ks` — root helper: generates the pf rules from settings and loads them into anchor
   `com.apple/killswitch` (`/etc/pf.conf` untouched). `status | state | on | off | pause [min] |
-  set lan|tailscale|dns|direct 0|1 | allow <addr> | unallow <addr> | server-add <ip> |
+  set lan|tailscale|dns|direct|coredirect 0|1 | allow <addr> | unallow <addr> | server-add <ip> |
   server-remove <ip> | apply | watch`.
 - `Helper/local.killswitch.plist` — LaunchDaemon: runs `ks watch` (RunAtLoad + KeepAlive), so rules
   are loaded at boot, before login, and checked every 3 s. `AssociatedBundleIdentifiers` makes it
@@ -24,7 +24,7 @@ Rules are loaded at boot, before login.
 - `Widget/` — WidgetKit widget with on/off button. It is sandboxed, so its button posts a Darwin
   notification and the running app performs the switch; state reaches it via app group `YR58655PJ7.killswitch`.
 
-Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct),
+Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, coredirect),
 `allow` (addresses reachable by any process), `servers` (VPN server IPs, reachable by any process),
 `rules.sha256` and `tunnels` (state of the last load, for tamper checks), `events.log`
 (world-readable, last 500 corrective actions).
@@ -45,8 +45,9 @@ Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale
   rules (Russian sites and so on) do not.
 - Own VPN core (`ks core on|off|state|import <yaml>`): launchd runs `/Library/KillSwitch/core/mihomo` with
   a root-owned config as uid 0, gid `_ksvpn` (created by install.sh, no members, no setgid binary), and the
-  rules let only that gid out. Direct rules of the profile (Russian sites and so on) then work without
-  `direct=1`. `import` takes a mihomo profile (the app uses dropweb's newest), drops local proxy ports and the
+  rules let that gid reach only the addresses in `servers`, so a DIRECT rule or proxy in a profile
+  cannot leak past the tunnel. `coredirect=1` is the explicit split-tunnel switch: the gid may then reach
+  any address and the profile's direct rules (Russian sites and so on) work. `import` takes a mihomo profile (the app uses dropweb's newest), drops local proxy ports and the
   controller API (any local program could swap the rules through it), adds TUN and makes the core's DNS
   listen on 127.0.0.1:53. `on` refuses while another VPN tunnel is up, then points the system DNS of every
   physical service to 127.0.0.1; `off` restores the saved DNS. Start/stop are passwordless, import is not.

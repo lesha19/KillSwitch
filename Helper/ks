@@ -5,7 +5,7 @@
 #   ks on                   enable (also after reboot)
 #   ks off                  disable until "ks on"
 #   ks pause [min]          disable for N minutes (default 5), e.g. for a captive Wi-Fi portal
-#   ks set <key> <0|1>      lan, tailscale, dns, direct (see rules() below)
+#   ks set <key> <0|1>      lan, tailscale, dns, direct, coredirect (see rules() below)
 #   ks allow <addr[/n]>     always let this address or network out without VPN
 #   ks unallow <addr[/n]>
 #   ks server-add <addr>    VPN server: reachable by any process (needed by Happ)
@@ -74,9 +74,18 @@ rules() {  # rules [allow-file] [servers-file]
   [ "$(setting direct 0)" = 1 ] && echo 'pass out quick proto { tcp udp } user 0 group 80 keep state'
   # Our own core: launchd starts it from a root-owned path with a root-owned config and gid
   # _ksvpn. The group has no members and no setgid binary, so no other process carries it.
-  # Direct sites of the profile work without trusting dropweb's setuid core.
-  dscl . -read "/Groups/$CORE_GROUP" PrimaryGroupID >/dev/null 2>&1 &&
-    echo "pass out quick group $CORE_GROUP flags any keep state"
+  # The core may only reach the VPN servers, so a DIRECT rule or proxy in a profile cannot leak
+  # past the tunnel (the servers rule above already allows that; repeated to state the intent).
+  # coredirect=1 is the explicit split-tunnel switch: direct sites of the profile then work
+  # without trusting dropweb's setuid core. "flags any" as above: connections that predate
+  # the load must survive.
+  if dscl . -read "/Groups/$CORE_GROUP" PrimaryGroupID >/dev/null 2>&1; then
+    if [ "$(setting coredirect 0)" = 1 ]; then
+      echo "pass out quick group $CORE_GROUP flags any keep state"
+    elif [ -s "$servers_file" ]; then
+      echo "pass out quick proto { tcp udp } to { $(paste -sd, "$servers_file") } group $CORE_GROUP flags any keep state"
+    fi
+  fi
   echo 'pass out quick inet proto udp from any port 68 to any port 67 keep state'
   echo 'pass out quick inet to { 169.254.0.0/16, 224.0.0.0/4, 255.255.255.255 } keep state'
   echo 'pass out quick inet6 to { fe80::/10, ff00::/8 } keep state'
@@ -267,7 +276,7 @@ case "${1:-status}" in
          disable $(( $(date +%s) + min * 60 )); echo "kill switch: paused for $min min" ;;
   set)
     key=${2:-}; val=${3:-}
-    [[ "$key" =~ ^(lan|tailscale|dns|direct|wifiguard)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns|direct|wifiguard 0|1" >&2; exit 1; }
+    [[ "$key" =~ ^(lan|tailscale|dns|direct|coredirect|wifiguard)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns|direct|coredirect|wifiguard 0|1" >&2; exit 1; }
     { grep -vE "^$key=" "$SETTINGS" 2>/dev/null; echo "$key=$val"; } > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
     reload_if_on
     ;;
