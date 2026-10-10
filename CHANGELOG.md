@@ -4,6 +4,29 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [0.11] - 2026-10-10
+
+One app, one window. The helper changed only its version line, but the app compares the whole
+file, so «Восстановить службу…» is asked once.
+
+### Changed
+- One window with a sidebar instead of four windows (ADR 0008): «Главная», «Серверы»,
+  «Проверка утечек», «Журнал защиты», «Настройки» (Общие, VPN, Защита, Дополнительно) and
+  «О программе». The separate Settings window, leak-test window and wizard window are gone.
+- «Начало работы» is a sheet of the window and can be closed with ✕ or Esc.
+- The 0.10 «Помощь» tab is split: the log and «Скопировать диагностику» are in «Журнал защиты»;
+  version, updates and tips in «О программе».
+- Everything that leads further — the popover's «⋯» items, notification buttons, error buttons,
+  ⌘, ⌘0 ⌘L ⇧⌘L — opens the same window at the right section and brings it forward if it is
+  already open. The window remembers its section, size and place.
+- The menu bar popover stays as quick access: status, connect, server choice.
+
+### Added
+- «Главная» in the sidebar carries the summary as a colour dot (and its title for VoiceOver).
+- `killswitch://` links open a section (`killswitch://settings/vpn`, `killswitch://leaks`, …);
+  a click on the widget outside its button opens «Главная». Links never change protection or
+  the VPN.
+
 ## [0.10] - 2026-10-10
 
 For people in Russia: blocked servers, «white lists», captive Wi‑Fi. Needs «Восстановить службу…»
