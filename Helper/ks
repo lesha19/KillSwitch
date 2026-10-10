@@ -233,13 +233,16 @@ json_a() {  # usable A records of a DNS JSON answer (mihomo /dns/query and DoH s
     k=$((k + 1))
   done
 }
-# First address of a host name for the admin import: as above, else the system resolver.
-# "ks core refresh" sets KS_STRICT_DNS: it is passwordless, so the LAN's DNS has no say.
+# First address of a host name for the admin import: as above. Only on a first import with no
+# tunnel at all (DoH then cannot get out) the system resolver is asked, and that is logged: the
+# provider's DNS sees the server name once. "ks core refresh" sets KS_STRICT_DNS: it is
+# passwordless, so the LAN's DNS never has a say there.
 resolve_host() {  # resolve_host <name>
   local ip
   ip=$(resolve_all "$1" | head -1)
-  if [ -z "$ip" ] && [ -z "${KS_STRICT_DNS:-}" ]; then
+  if [ -z "$ip" ] && [ -z "${KS_STRICT_DNS:-}" ] && [ ! -S "$CORE_CTL" ] && [ -z "$(vpn_ifaces)" ]; then
     ip=$(dscacheutil -q host -a name "$1" | awk '/^ip_address: [0-9.]+$/ { print $2; exit }')
+    [ -n "$ip" ] && log_event "server name $1 resolved by the system resolver (no tunnel yet)"
   fi
   good_server_ip "$ip" && echo "$ip"
 }

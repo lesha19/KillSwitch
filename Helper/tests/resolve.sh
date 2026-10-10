@@ -36,7 +36,14 @@ CORE_ANS=""; DOH_ANS=""
 check "nothing answers: nothing" "$(resolve_all de.example.com)" ""
 check "rotation never asks the LAN's DNS" "$([ -e "$tmp/lan" ] && echo asked)" ""
 check "refresh (strict) never asks the LAN's DNS" "$(KS_STRICT_DNS=1 resolve_host de.example.com; [ -e "$tmp/lan" ] && echo asked)" ""
-check "admin import falls back to the system resolver" "$(resolve_host de.example.com)" 192.0.2.66
+EVENTS="$tmp/events.log"; VPN=""
+vpn_ifaces() { echo "$VPN"; }
+check "import with our core up: no system resolver" "$(resolve_host de.example.com; [ -e "$tmp/lan" ] && echo asked)" ""
+rm -f "$CORE_CTL"; VPN=utun5
+check "import with another tunnel up: no system resolver" "$(resolve_host de.example.com; [ -e "$tmp/lan" ] && echo asked)" ""
+VPN=""
+check "first import, no tunnel at all: system resolver" "$(resolve_host de.example.com)" 192.0.2.66
+grep -q 'de.example.com.*system resolver' "$EVENTS" && echo "ok    system resolver use logged" || { echo "FAIL  not logged"; fails=$((fails + 1)); }
 check "odd names are not looked up" "$(resolve_all 'a&type=AAAA'; echo rc=$?)" rc=1
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

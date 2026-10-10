@@ -68,14 +68,41 @@ profile, rewritten on every import, reachable only by our core), `servers` (both
   any address and the profile's direct rules (Russian sites and so on) work. `import <json>` takes a
   mihomo profile as a JSON object (the app converts dropweb's newest from YAML) and generates the config:
   only `proxies`, `proxy-groups`, `rules` and `rule-providers` are taken, everything else (TUN, DNS on
-  127.0.0.1:53 with DoH resolvers reached through the profile's first group, the controller as a unix
-  socket in root-only `core/ctl/`, no listeners or proxy ports) comes from a fixed template. Proxies of
-  type direct/dns or unknown types, proxy-providers and file rule-providers are refused (WireGuard
-  needs a top-level `server`; pf lets the core reach servers over TCP and UDP); a server given
-  by host name is resolved once and pinned to its address (`servername`/`sni` keep the name), and the
-  addresses become `servers-core`. `refresh <json>` does the same but is refused (exit 3) when the
-  profile brings server addresses that are not in `servers` yet; it is passwordless, for subscription
-  auto-update. The app switches servers without the API being exposed: `ks core proxies` (JSON of
+  127.0.0.1:53, the controller as a unix socket in root-only `core/ctl/`, no listeners or proxy ports)
+  comes from a fixed template. The DoH resolvers and rule-provider downloads go through `KS-DNS`, a
+  generated hidden fallback group over the profile's proxies only, so picking DIRECT in a profile group
+  cannot take DNS out of the tunnel (a profile using the name `KS-DNS` is refused). Proxies of
+  type direct/dns or unknown types, proxy-providers and file rule-providers are refused; WireGuard may
+  carry `amnezia-wg-option` (passed through, checked by `mihomo -t`) and a `peers:` list, each peer's
+  server pinned like any other (pf lets the core reach servers over TCP and UDP). A server given
+  by host name is pinned to its address (`servername`/`sni` keep the name), resolved by our core or
+  DoH (the system resolver only on a first import with no tunnel at all, logged), fake-ip answers
+  refused; the addresses become
+  `servers-core`. Import keeps root-only (600) in `core/`: the profile (`profile.json`, for rebuilds),
+  the pins (`pins`) and what the admin approved: the host names (`approved-hosts`) and everything that
+  can send traffic DIRECT (`approved-direct`: rules naming DIRECT, GLOBAL or COMPATIBLE or a group that
+  can reach them, and those groups). `refresh <json>` does the same but is refused (exit 3, «нужно
+  подтверждение») for a host name not in the last import, an address that is neither in `servers` nor
+  the address of an approved name, or any change to the DIRECT set; it is passwordless, for subscription
+  auto-update. Installs from before this have no record: their first refresh with DIRECT rules asks for
+  one import.
+  Server IP rotation: the watchdog re-resolves the approved names a minute after start, every 30 min and
+  15 s after the primary interface or router changes (at most once a minute), in the background under
+  the config lock. A name whose pinned address is no longer among its answers is re-pinned; the config
+  is rebuilt from the kept profile, `servers-core`, `servers` and pf follow and the core rereads its
+  config through the API (selections survive; restart if that fails). Logged in `events.log`. If every
+  server of the profile moved at once, the tunnel that carries the lookups is gone too: the next admin
+  import fixes it.
+  Split tunnel (`coredirect=1` only, new installs default to it, upgrades keep their setting): before the
+  profile's rules the generator puts the apps of `ks set splitapps <a,b>` (stored as `splitapps=` in
+  `settings`; ≤50 names, ≤64 bytes, no commas or control characters; also their `<name> Helper…`
+  processes; `""` clears), private networks, `GEOSITE,category-ru` (only if `core/geosite.dat` is
+  installed, `Helper/fetch-geodata.sh`, sha256-pinned) and `GEOIP,RU,no-resolve` (only with
+  `core/geoip.metadb`), all DIRECT. The core never downloads geodata (`geo-auto-update: false`); names
+  of direct sites are still resolved through the tunnel's DoH. Double VPN: `ks set multihop <proxy>|off`
+  (`multihop=` in `settings`) sets `dialer-proxy: <proxy>` on every other proxy, so pf lets the core
+  reach only the entry server; the entry must be a proxy of the profile without its own dialer-proxy.
+  Both need the admin password (not in sudoers: splitapps widens direct egress). The app switches servers without the API being exposed: `ks core proxies` (JSON of
   groups and proxies), `ks core select <group> <proxy>`, `ks core delay <group|proxy>` talk to the
   controller socket; names are length- and control-character-checked and fully percent-encoded.
   `Helper/tests/core-config.sh` runs the generator against fixture profiles, attack ones included,
@@ -111,7 +138,7 @@ profile, rewritten on every import, reachable only by our core), `servers` (both
 - DNS to LAN resolvers is blocked by default (setting `dns`), so names do not leak via the router.
 - Rules and settings are root-owned. Passwordless sudo covers only `ks state`, `ks on`, `ks core
   state|on|off|proxies`, `ks core select|delay …` and `ks core refresh …` (refused if it brings new
-  server addresses), none of which can widen the rules; turning off, pausing, `ks core import` and
+  server names or addresses or changes what goes DIRECT), none of which can widen the rules; turning off, pausing, `ks core import` and
   every setting change ask for the admin password.
 - Watchdog (`ks watch`, every 3 s, honours off / pause): checks that pf is enabled, that the main
   ruleset still references the `com.apple/*` anchor (otherwise reloads `/etc/pf.conf`), that the
@@ -159,7 +186,7 @@ addresses found in dropweb and Happ configs are passed to it). After updating th
    «Пароли приложений», затем в Терминале
    `xcrun notarytool store-credentials killswitch-notary --apple-id <Apple ID> --team-id YR58655PJ7`
    и ввести пароль, когда спросит (в командную строку его не писать). Он хранится в связке ключей.
-4. Ядро: `Helper/fetch-mihomo.sh`.
+4. Ядро: `Helper/fetch-mihomo.sh`; геоданные для «российские сайты мимо VPN»: `Helper/fetch-geodata.sh` (сначала закрепить в нём RELEASE и SHA256).
 
 Выпуск: `scripts/release.sh`. Сначала проверяет всё перечисленное и без этого ничего не собирает
 (`scripts/release.sh --check` — только проверка), затем собирает Release, подписывает изнутри наружу
