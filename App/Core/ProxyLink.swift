@@ -6,8 +6,8 @@ enum ProxyLinkError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
-        case .unsupported(let scheme): "Ссылки \(scheme):// не поддерживаются. Подходят vless, trojan, ss, hysteria2, tuic, wireguard."
-        case .malformed(let what): "Ссылка неполная: \(what)."
+        case .unsupported(let scheme): String(localized: "Ссылки \(scheme):// не поддерживаются. Подходят vless, trojan, ss, hysteria2, tuic, wireguard.")
+        case .malformed(let what): String(localized: "Ссылка неполная: \(what).")
         }
     }
 }
@@ -18,7 +18,7 @@ enum ProxyLink {
     static func parse(_ raw: String) throws -> [String: Any] {
         let link = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if isWireGuardConf(link) { return try WireGuard.parse(conf: link, name: nil) }
-        guard let schemeEnd = link.range(of: "://") else { throw ProxyLinkError.malformed("нет схемы") }
+        guard let schemeEnd = link.range(of: "://") else { throw ProxyLinkError.malformed(String(localized: "нет схемы")) }
         let scheme = link[..<schemeEnd.lowerBound].lowercased()
         switch scheme {
         case "vless": return try vless(link)
@@ -40,7 +40,7 @@ enum ProxyLink {
 
     private static func vless(_ link: String) throws -> [String: Any] {
         let parts = try Parts(link)
-        guard let uuid = parts.user, !uuid.isEmpty else { throw ProxyLinkError.malformed("нет UUID") }
+        guard let uuid = parts.user, !uuid.isEmpty else { throw ProxyLinkError.malformed(String(localized: "нет UUID")) }
         var proxy = parts.base(type: "vless")
         proxy["uuid"] = uuid
         proxy["udp"] = true
@@ -57,7 +57,7 @@ enum ProxyLink {
 
     private static func trojan(_ link: String) throws -> [String: Any] {
         let parts = try Parts(link)
-        guard let password = parts.user, !password.isEmpty else { throw ProxyLinkError.malformed("нет пароля") }
+        guard let password = parts.user, !password.isEmpty else { throw ProxyLinkError.malformed(String(localized: "нет пароля")) }
         var proxy = parts.base(type: "trojan")
         proxy["password"] = password
         proxy["udp"] = true
@@ -74,7 +74,7 @@ enum ProxyLink {
             link = "ss://" + decoded + (body.count > 1 ? "#" + body[1] : "")
         }
         // userinfo can contain "/" or "=" from base64 or a 2022 key; split it off by hand
-        guard let at = link.range(of: "@", options: .backwards) else { throw ProxyLinkError.malformed("нет сервера") }
+        guard let at = link.range(of: "@", options: .backwards) else { throw ProxyLinkError.malformed(String(localized: "нет сервера")) }
         let userinfo = String(link[link.index(link.startIndex, offsetBy: 5)..<at.lowerBound])
         let parts = try Parts("ss://x@" + link[at.upperBound...])
         let credentials: String
@@ -84,7 +84,7 @@ enum ProxyLink {
             credentials = userinfo.removingPercentEncoding ?? userinfo
         }
         let pair = credentials.split(separator: ":", maxSplits: 1).map(String.init)
-        guard pair.count == 2, !pair[0].isEmpty else { throw ProxyLinkError.malformed("нет шифра или пароля") }
+        guard pair.count == 2, !pair[0].isEmpty else { throw ProxyLinkError.malformed(String(localized: "нет шифра или пароля")) }
         var proxy = parts.base(type: "ss")
         proxy["cipher"] = pair[0]
         proxy["password"] = pair[1]
@@ -92,7 +92,7 @@ enum ProxyLink {
         if let plugin = parts.query["plugin"], !plugin.isEmpty {
             let options = plugin.split(separator: ";").map(String.init)
             guard let kind = options.first, kind == "obfs-local" || kind == "simple-obfs" else {
-                throw ProxyLinkError.malformed("плагин \(options.first ?? "") не поддерживается")
+                throw ProxyLinkError.malformed(String(localized: "плагин \(options.first ?? "") не поддерживается"))
             }
             var opts: [String: Any] = [:]
             for option in options.dropFirst() {
@@ -112,7 +112,7 @@ enum ProxyLink {
         var proxy = parts.base(type: "hysteria2")
         // auth may be "user:pass" in the userinfo
         let auth = [parts.user, parts.password].compactMap { $0 }.joined(separator: ":")
-        guard !auth.isEmpty else { throw ProxyLinkError.malformed("нет пароля") }
+        guard !auth.isEmpty else { throw ProxyLinkError.malformed(String(localized: "нет пароля")) }
         proxy["password"] = auth
         if let sni = parts.query["sni"] { proxy["sni"] = sni }
         if let obfs = parts.query["obfs"], !obfs.isEmpty, obfs != "none" {
@@ -128,7 +128,7 @@ enum ProxyLink {
 
     private static func tuic(_ link: String) throws -> [String: Any] {
         let parts = try Parts(link)
-        guard let uuid = parts.user, !uuid.isEmpty, let password = parts.password else { throw ProxyLinkError.malformed("нет UUID или пароля") }
+        guard let uuid = parts.user, !uuid.isEmpty, let password = parts.password else { throw ProxyLinkError.malformed(String(localized: "нет UUID или пароля")) }
         var proxy = parts.base(type: "tuic")
         proxy["uuid"] = uuid
         proxy["password"] = password
@@ -190,10 +190,10 @@ enum ProxyLink {
         let name: String?
 
         init(_ link: String) throws {
-            guard let components = URLComponents(string: link) else { throw ProxyLinkError.malformed("не разбирается как адрес") }
-            guard var host = components.host, !host.isEmpty else { throw ProxyLinkError.malformed("нет сервера") }
+            guard let components = URLComponents(string: link) else { throw ProxyLinkError.malformed(String(localized: "не разбирается как адрес")) }
+            guard var host = components.host, !host.isEmpty else { throw ProxyLinkError.malformed(String(localized: "нет сервера")) }
             if host.hasPrefix("[") && host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
-            guard let port = components.port, (1...65535).contains(port) else { throw ProxyLinkError.malformed("нет порта") }
+            guard let port = components.port, (1...65535).contains(port) else { throw ProxyLinkError.malformed(String(localized: "нет порта")) }
             self.host = host
             self.port = port
             user = components.user

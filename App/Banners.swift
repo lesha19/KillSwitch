@@ -16,7 +16,7 @@ struct ErrorBanner: View {
                 Button(action.title) { perform(action) }
             }
             if !error.details.isEmpty && error.details != error.message {
-                Button(showDetails ? "Скрыть подробности" : "Подробнее") { showDetails.toggle() }
+                Button(showDetails ? String(localized: "Скрыть подробности") : String(localized: "Подробнее")) { showDetails.toggle() }
                     .buttonStyle(.link)
             }
         } footer: {
@@ -101,6 +101,8 @@ enum SystemSettings {
     static let loginItems = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!
     /// Login Items & Extensions, where «Сетевые расширения» are allowed.
     static let networkExtensions = loginItems
+    /// Apple Account › iCloud, where «Частный узел iCloud» is switched.
+    static let iCloud = URL(string: "x-apple.systempreferences:com.apple.systempreferences.AppleIDSettings:icloud")!
 }
 
 /// A notice on a tinted background. The colour is only in the icon and the background; the text
@@ -111,7 +113,7 @@ struct Banner<Buttons: View, Footer: View>: View {
     let title: String
     let message: String
     var dismiss: (() -> Void)?
-    var dismissHelp = "Скрыть"
+    var dismissHelp = String(localized: "Скрыть")
     @ViewBuilder var buttons: () -> Buttons
     @ViewBuilder var footer: () -> Footer
 
@@ -146,7 +148,7 @@ struct Banner<Buttons: View, Footer: View>: View {
 
 extension Banner where Footer == EmptyView {
     init(icon: String, tint: Color = .orange, title: String, message: String, dismiss: (() -> Void)? = nil,
-         dismissHelp: String = "Скрыть", @ViewBuilder buttons: @escaping () -> Buttons) {
+         dismissHelp: String = String(localized: "Скрыть"), @ViewBuilder buttons: @escaping () -> Buttons) {
         self.init(icon: icon, tint: tint, title: title, message: message, dismiss: dismiss, dismissHelp: dismissHelp,
                   buttons: buttons, footer: { EmptyView() })
     }
@@ -175,12 +177,22 @@ struct InlineError: View {
 
 /// A status line: the colour and the shape are in the icon, the text stays readable in both
 /// themes (spec §9.3, §9.4).
+/// Like `Text`, a literal is a key of the string catalog and a `String` is shown as it is.
 struct StatusLabel: View {
-    let text: String
+    let text: Text
     let systemImage: String
     let tint: Color
 
-    init(_ text: String, systemImage: String, tint: Color) {
+    init(_ key: LocalizedStringKey, systemImage: String, tint: Color) {
+        self.init(text: Text(key), systemImage: systemImage, tint: tint)
+    }
+
+    @_disfavoredOverload
+    init(_ string: some StringProtocol, systemImage: String, tint: Color) {
+        self.init(text: Text(string), systemImage: systemImage, tint: tint)
+    }
+
+    private init(text: Text, systemImage: String, tint: Color) {
         self.text = text
         self.systemImage = systemImage
         self.tint = tint
@@ -188,7 +200,7 @@ struct StatusLabel: View {
 
     var body: some View {
         Label {
-            Text(text).fixedSize(horizontal: false, vertical: true)
+            text.fixedSize(horizontal: false, vertical: true)
         } icon: {
             Image(systemName: systemImage).foregroundStyle(tint)
         }

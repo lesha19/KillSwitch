@@ -126,13 +126,13 @@ final class AutoConnector: NSObject, CLLocationManagerDelegate {
         case .connect:
             Task {
                 let ok = await control.coreOnAutomatically()
-                lastAction = ok ? "Подключился сам \(Self.now)" : "Не получилось подключиться сам \(Self.now)"
+                lastAction = ok ? String(localized: "Подключился сам \(Self.now)") : String(localized: "Не получилось подключиться сам \(Self.now)")
             }
         case .skip(.trusted(let name)):
-            lastAction = "Не подключался: «\(name)» — доверенная сеть (\(Self.now))"
+            lastAction = String(localized: "Не подключался: «\(name)» — доверенная сеть (\(Self.now))")
         case .skip(.otherVPN):
             // never stopped silently: the main screen offers «Отключить … и подключить KillSwitch» (ADR 0009)
-            lastAction = "Не подключался: работает \(control.otherVPNName ?? "другой VPN") (\(Self.now))"
+            lastAction = String(localized: "Не подключался: работает \(control.otherVPNName ?? String(localized: "другой VPN")) (\(Self.now))")
             Notifier.shared.post(.otherVPN(name: control.otherVPNName))
         case .skip:
             break

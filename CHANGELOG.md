@@ -4,6 +4,57 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Added
+- Shortcuts, Spotlight and Siri (App Intents): «Подключить VPN», «Отключить VPN», «Сменить
+  страну» (a server of the «Серверы» list, searchable in Russian) and «Статус VPN» (also returns
+  the text), with Russian phrases. They do what the menu does and say back what needs the window.
+- Right click (or ⌃-click) on the menu bar icon: a compact menu with Подключить/Отключить, Самый
+  быстрый, Открыть KillSwitch, Проверка утечек and Выход. A left click still opens the popover.
+  The icon is now an AppKit status item with an NSPopover hosting the same main screen
+  (ADR 0010).
+- Another program's VPN is recognised beyond the 198.18 address: any utun, ipsec or ppp tunnel
+  (WireGuard, IKEv2, L2TP…) that takes the default route or splits it, IPv4 or IPv6, both by the
+  app (`netstat -rn`) and by the watchdog (`core/foreign-vpn`). Ours and Tailscale's (100.64/10,
+  fd7a:115c:a1e0::/48, exit node included) are not counted. What pf lets through is unchanged.
+- «Стоит знать» in «Проверка утечек» and «О программе»: a non-blocking tip when iCloud Private
+  Relay is on (the system's own status; unknown means no tip) or Tailscale, ZeroTier or NetBird
+  runs, explaining how each works with the protection.
+- Split tunnel integrity: Settings › VPN warns under «Программы без VPN» when an app in the list
+  (or the folder it sits in) can be changed without the admin password, since everything run from
+  that path goes around the VPN.
+- «Скорость VPN в строке меню» in Settings › Общие (off by default): ↓/↑ next to the icon, read
+  once a second only while it is on and our VPN is connected, through the new passwordless-safe
+  `ks core traffic` (only the totals of mihomo's /connections leave the helper). It needs
+  `ks core traffic` in the helper's sudoers list; without it the app says so and never prompts.
+- «Блокировать рекламу и трекеры» in Settings › Дополнительно (off by default): the core refuses
+  `GEOSITE,category-ads-all` of the shipped, sha256-pinned geosite.dat (nothing is downloaded).
+  REJECT sends nothing anywhere, so the DIRECT signature and pf are unchanged. Helper setting
+  `ks set adblock 0|1` (needs the updated helper).
+- Release transparency: every release carries `SHA256SUMS` of the .dmg, appcast.xml and
+  geosite.dat (`scripts/release.sh` writes it and `--publish` uploads it); README «Проверка
+  загрузки» tells how to check it and the Developer ID signature.
+
+### Changed
+- The string catalog is complete: the texts built in code (status, errors, notifications, the
+  protection log, leak test findings, menus, settings rows…) go through `String(localized:)` and
+  are in `Localizable.xcstrings` (224 → 596 keys); `StatusLabel` takes a literal as a catalog key.
+  A test keeps App/Core free of texts outside the catalog.
+- Favourites and «Подключение к серверу» overrides are kept by a server's identity (type, address,
+  port and a hash of its uuid/password; the secret itself is not stored), not by its name, so a
+  rename in the subscription keeps them. Name-keyed data from earlier versions is moved over once
+  the server is in the profile.
+- `Helper/fetch-geodata.sh` takes geosite.dat from our own releases first (`scripts/release.sh
+  --publish` now uploads the pinned file and its sha256 to lesha19/KillSwitch-releases) and from
+  the pinned meta-rules-dat commit only when that copy is missing or of another pin, so a
+  force-push upstream no longer breaks the build. Both are checked against the pinned sha256;
+  `release.sh` refuses a Helper/geosite.dat that is not the pinned one.
+
+### Fixed
+- `xcodebuild test` from a fresh DerivedData no longer fails with «Unable to find module
+  dependency: 'KillSwitch'»: the test target depends on the app (built first, not hosted).
+
 ## [0.12.1] - 2026-10-10
 
 Security fixes from the internal audit of everything that runs as root

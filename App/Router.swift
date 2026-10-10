@@ -24,6 +24,8 @@ final class Router {
     /// SwiftUI's openWindow for the main window, handed over by the menu bar label (which always
     /// exists). A `Window` scene has one instance: this fronts it when it is already open.
     @ObservationIgnored var openWindow: (() -> Void)?
+    /// Closes the menu bar popover before the window comes forward (StatusItem).
+    @ObservationIgnored var willShowWindow: (() -> Void)?
 
     private init() {
         section = UserDefaults.standard.string(forKey: Self.sectionKey).flatMap(AppSection.init(id:)) ?? .home
@@ -35,6 +37,7 @@ final class Router {
         case .section(let section): self.section = section
         case .onboarding: onboarding = true
         }
+        willShowWindow?()
         openWindow?()
         NSApp.activate()
     }

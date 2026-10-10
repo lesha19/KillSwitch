@@ -17,7 +17,7 @@ struct LeakTestView: View {
                                              probe: control.state == .on ? { await control.probeDirectExits() } : nil)
                         }
                     } label: {
-                        Text(tester.running ? "Проверяю…" : "Проверить").frame(maxWidth: .infinity)
+                        Text(tester.running ? String(localized: "Проверяю…") : String(localized: "Проверить")).frame(maxWidth: .infinity)
                     }
                     .controlSize(.large).buttonStyle(.borderedProminent)
                     .disabled(tester.running)
@@ -28,6 +28,8 @@ struct LeakTestView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
             }
+
+            NetworkHintsSection()
 
             if let result = tester.result {
                 if !result.verdict.findings.isEmpty {
@@ -41,7 +43,7 @@ struct LeakTestView: View {
                 Section("Адрес в интернете") {
                     ForEach(result.ipv4, id: \.source) { row in
                         LabeledContent("IPv4 (\(row.source))") {
-                            Text(row.ip ?? "нет ответа").monospaced().textSelection(.enabled)
+                            Text(row.ip ?? String(localized: "нет ответа")).monospaced().textSelection(.enabled)
                         }
                     }
                     if let exit = result.exit, exit.country != nil || exit.org != nil {
@@ -117,5 +119,33 @@ struct LeakTestView: View {
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// Tips about «Частный узел iCloud» and overlay networks (NetworkHints): only what is there, never
+/// blocking; nothing shows when there is nothing to say. In «Проверка утечек» and «О программе».
+struct NetworkHintsSection: View {
+    @Environment(KillSwitchControl.self) private var control
+    @State private var hints: [NetworkHints.Hint] = []
+
+    var body: some View {
+        Group {
+            if !hints.isEmpty {
+                Section("Стоит знать") {
+                    ForEach(hints, id: \.title) { hint in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Label(hint.title, systemImage: hint == .privateRelay ? "icloud" : "point.3.connected.trianglepath.dotted")
+                                .font(.callout.bold())
+                            Text(hint.text).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            if hint == .privateRelay {
+                                Button("Открыть настройки iCloud") { NSWorkspace.shared.open(SystemSettings.iCloud) }
+                            }
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+            }
+        }
+        .onAppear { hints = control.networkHints() }
     }
 }

@@ -46,6 +46,12 @@ core_reload
 core_api GET "/proxies/NEW" >/dev/null 2>&1 && ok "reload: new config in use" || bad "reload: NEW missing"
 grep -q kickstart "$tmp/launchd" 2>/dev/null && bad "reload fell back to a restart" || ok "reload without restart"
 [ "$(now)" = "DE/2 🚀" ] && ok "reload keeps the selection" || bad "selection after reload: $(now)"
+out=$(core_traffic) && [[ "$out" =~ ^up=[0-9]+\ down=[0-9]+$ ]] && ok "traffic: $out" || bad "traffic: $out"
+# only the totals leave ks: never the connections' hosts, addresses or processes
+core_api() { printf '%s' '{"downloadTotal":123456,"uploadTotal":7890,"connections":[{"id":"a","metadata":{"host":"secret.example","destinationIP":"203.0.113.5","process":"Safari"},"upload":5,"download":9}],"memory":1}'; }
+[ "$(core_traffic)" = "up=7890 down=123456" ] && ok "traffic: totals only" || bad "traffic: $(core_traffic)"
+core_api() { printf '%s' '{"connections":[]}'; }
+core_traffic >/dev/null 2>&1 && bad "traffic without totals accepted" || ok "traffic without totals fails"
 valid_name "$(printf 'a\nb')" && bad "newline in a name accepted" || ok "newline in a name refused"
 valid_name "" && bad "empty name accepted" || ok "empty name refused"
 

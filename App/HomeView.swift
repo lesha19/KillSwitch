@@ -5,6 +5,8 @@ import SwiftUI
 struct HomeView: View {
     enum Style { case popover, window }
     var style: Style = .window
+    /// Closes the popover (StatusItem); `dismiss` cannot reach an AppKit popover.
+    var close: (() -> Void)?
 
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
@@ -28,7 +30,7 @@ struct HomeView: View {
         .onDisappear { control.viewDisappeared() }
         // Esc: back from the server list, then closes the popover
         .onExitCommand {
-            if showingServers { showingServers = false } else if style == .popover { dismiss() }
+            if showingServers { showingServers = false } else if style == .popover { if let close { close() } else { dismiss() } }
         }
     }
 
@@ -45,9 +47,9 @@ struct WidgetRequestAlert: ViewModifier {
 
     func body(content: Content) -> some View {
         let request = control.widgetRequest
-        content.alert(request == .pause5 ? "Поставить защиту на паузу?" : "Выключить защиту?",
+        content.alert(request == .pause5 ? String(localized: "Поставить защиту на паузу?") : String(localized: "Выключить защиту?"),
                       isPresented: Binding(get: { request != nil }, set: { if !$0 { control.answerWidgetRequest(nil) } })) {
-            Button(request == .pause5 ? "Пауза на 5 минут" : "Выключить", role: .destructive) {
+            Button(request == .pause5 ? String(localized: "Пауза на 5 минут") : String(localized: "Выключить"), role: .destructive) {
                 control.answerWidgetRequest(request)
             }
             Button("Отмена", role: .cancel) { control.answerWidgetRequest(nil) }
@@ -204,7 +206,7 @@ private struct ServerRow: View {
             : control.pendingChoice?.title ?? control.lastServer.map(ServerName.display)
         Button(action: action) {
             HStack {
-                Text(title ?? "Выбрать сервер").lineLimit(1)
+                Text(title ?? String(localized: "Выбрать сервер")).lineLimit(1)
                 Spacer()
                 if let server {
                     PingView(ping: ServerPicker.Ping(delay: control.delay(of: server), timedOut: control.timedOut(server)))
@@ -217,7 +219,7 @@ private struct ServerRow: View {
         }
         .buttonStyle(.plain)
         .keyboardShortcut("l")
-        .accessibilityLabel("Сервер: " + (title.map { _ in spoken } ?? "не выбран"))
+        .accessibilityLabel(String(localized: "Сервер: \(title.map { _ in spoken } ?? String(localized: "не выбран"))"))
         .accessibilityHint("Открыть выбор сервера")
         .help("Выбрать сервер (⌘L)")
     }
@@ -227,7 +229,7 @@ private struct ServerRow: View {
         if let pending = control.pendingChoice {
             return pending.isFastest ? ServerPicker.fastestTitle : ServerName.spoken(pending.name)
         }
-        return control.lastServer.map(ServerName.spoken) ?? "не выбран"
+        return control.lastServer.map(ServerName.spoken) ?? String(localized: "не выбран")
     }
 }
 
@@ -239,10 +241,10 @@ private struct QuickSwitches: View {
         let exit = control.currentServer
         let candidates = Multihop.candidates(control.proxies?.servers ?? [], exit: exit)
         VStack(spacing: 6) {
-            row(Text("Российские сайты напрямую"), "Российские сайты напрямую",
+            row(Text("Российские сайты напрямую"), String(localized: "Российские сайты напрямую"),
                 isOn: Binding(get: { control.coreDirect }, set: { control.set("coredirect", $0) }))
                 .help("Банки и Госуслуги — без VPN, остальное через VPN. Спросит пароль.")
-            row(Text(multihopTitle(exit: exit)), "Двойной VPN",
+            row(Text(multihopTitle(exit: exit)), String(localized: "Двойной VPN"),
                 isOn: Binding(get: { control.multihopEntry != nil },
                               set: { control.setMultihop(entry: $0 ? candidates.first : nil) }))
                 .disabled(control.multihopEntry == nil && candidates.isEmpty)
@@ -262,9 +264,9 @@ private struct QuickSwitches: View {
     }
 
     private func multihopTitle(exit: String?) -> String {
-        guard let entry = control.multihopEntry else { return "Двойной VPN" }
+        guard let entry = control.multihopEntry else { return String(localized: "Двойной VPN") }
         let flag = { (name: String?) in name.flatMap { ServerName($0).flag } ?? "🌐" }
-        return "Двойной VPN: \(flag(entry)) → \(flag(exit))"
+        return String(localized: "Двойной VPN: \(flag(entry)) → \(flag(exit))")
     }
 }
 
@@ -276,13 +278,13 @@ private struct SubscriptionLine: View {
         let usage = client.status.usage
         VStack(spacing: 2) {
             HStack {
-                Text(client.status.title ?? "Подписка").lineLimit(1)
+                Text(client.status.title ?? String(localized: "Подписка")).lineLimit(1)
                 Spacer()
                 if let usage { Text(Russian.traffic(used: usage.used, total: usage.total)).foregroundStyle(.secondary) }
             }
             HStack {
                 if let expire = usage?.expire {
-                    Text(expire < Date() ? "закончилась \(Self.day(expire))" : "до \(Self.day(expire))").foregroundStyle(.secondary)
+                    Text(expire < Date() ? String(localized: "закончилась \(Self.day(expire))") : String(localized: "до \(Self.day(expire))")).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button {
@@ -293,7 +295,7 @@ private struct SubscriptionLine: View {
                 .buttonStyle(.borderless)
                 .disabled(client.updating)
                 .help("Обновить подписку (⌘R)")
-                .accessibilityLabel(client.updating ? "Подписка обновляется" : "Обновить подписку")
+                .accessibilityLabel(client.updating ? String(localized: "Подписка обновляется") : String(localized: "Обновить подписку"))
             }
         }
         .font(.callout)
@@ -363,7 +365,7 @@ private struct NoticeBanner: View {
                 }
             case .filterOff:
                 Banner(icon: "lock.trianglebadge.exclamationmark", tint: .yellow, title: notice.title, message: notice.message,
-                       dismiss: { filterDismissed = true }, dismissHelp: "Не напоминать") {
+                       dismiss: { filterDismissed = true }, dismissHelp: String(localized: "Не напоминать")) {
                     if control.filter.status == .waitingForApproval {
                         Button("Открыть Системные настройки") { NSWorkspace.shared.open(SystemSettings.networkExtensions) }
                     } else {
@@ -442,11 +444,11 @@ struct ActionsMenu: View {
         switch control.state {
         case .paused(let until):
             let minutes = max(1, Int((until.timeIntervalSinceNow / 60).rounded(.up)))
-            Button("Возобновить защиту (осталось \(Russian.plural(minutes, "минута", "минуты", "минут")))") { control.turnOn() }
+            Button("Возобновить защиту (осталось \(Russian.plural(minutes, String(localized: "минута"), String(localized: "минуты"), String(localized: "минут"))))") { control.turnOn() }
         case .on:
             Menu("Пауза защиты") {
                 ForEach(Array(Set([pauseShort, pauseLong, 60])).sorted(), id: \.self) { minutes in
-                    Button(minutes == 60 ? "1 час" : Russian.plural(minutes, "минута", "минуты", "минут")) {
+                    Button(minutes == 60 ? String(localized: "1 час") : Russian.plural(minutes, String(localized: "минута"), String(localized: "минуты"), String(localized: "минут"))) {
                         control.pause(minutes: minutes)
                     }
                 }

@@ -222,6 +222,30 @@ if [ -n "$mmdb" ] && [ -n "$site" ] && [ -x "$MIHOMO" ]; then
 else echo "skip  ru: mihomo -t with GEOSITE (no geosite.dat: Helper/fetch-geodata.sh)"; fi
 rm -f "$SETTINGS"
 
+# --- ads and trackers blocked (adblock=1), from the shipped geosite.dat only; REJECT is not DIRECT
+put adblock 1
+rm -f "$CORE_DIR/geosite.dat"
+gen "$fx/ok-minimal.json"
+[ "$(rules_of "$tmp/c")" = "MATCH,only" ] && ok "ads: no geodata, no rule (never downloaded)" || bad "ads without geodata: $(rules_of "$tmp/c")"
+if [ -n "$site" ]; then cp "$site" "$CORE_DIR/geosite.dat"; else echo fake > "$CORE_DIR/geosite.dat"; fi
+gen "$fx/ok-minimal.json"
+[ "$(rules_of "$tmp/c")" = "GEOSITE,category-ads-all,REJECT MATCH,only" ] && ok "ads: REJECT first" || bad "ads: $(rules_of "$tmp/c")"
+[ ! -s "$tmp/c.direct" ] && ok "ads: not in the DIRECT signature" || bad "ads: signature $(cat "$tmp/c.direct")"
+[ "$(val geo-auto-update "$tmp/c")" = false ] && ok "ads: geodata never auto-updated" || bad "ads: geo-auto-update"
+put coredirect 1
+gen "$fx/ok-minimal.json"
+[ "$(rules_of "$tmp/c" | cut -d' ' -f1)" = "GEOSITE,category-ads-all,REJECT" ] && ok "ads: before the split-tunnel rules" ||
+  bad "ads with coredirect: $(rules_of "$tmp/c")"
+if [ -n "$site" ] && [ -x "$MIHOMO" ]; then
+  if out=$("$MIHOMO" -t -d "$CORE_DIR" -f "$tmp/c" 2>&1); then ok "ads: mihomo -t with geosite.dat"; else bad "ads: mihomo -t: $(tail -2 <<<"$out")"; fi
+else echo "skip  ads: mihomo -t (no geosite.dat or mihomo)"; fi
+put adblock 0
+gen "$fx/ok-minimal.json"
+[ "$(rules_of "$tmp/c" | grep -c REJECT)" = 0 ] && ok "ads: off, no rule" || bad "ads off: $(rules_of "$tmp/c")"
+printf '[]' > "$tmp/g.json"; printf '["GEOSITE,category-ads-all,REJECT","DOMAIN,ad.example,REJECT-DROP","MATCH,only"]' > "$tmp/r.json"
+[ -z "$(direct_sig "$tmp/g.json" "$tmp/r.json")" ] && ok "direct_sig: REJECT rules are not direct" || bad "direct_sig: $(direct_sig "$tmp/g.json" "$tmp/r.json")"
+rm -f "$SETTINGS"
+
 # --- pins
 gen "$fx/ok-full.json"
 [ "$(sort "$tmp/c.pins" | paste -sd' ' -)" = "de.example.com	203.0.113.20 fi.example.com	203.0.113.30" ] &&

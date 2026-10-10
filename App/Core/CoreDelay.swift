@@ -12,8 +12,8 @@ enum CoreDelay {
 
         var errorDescription: String? {
             switch self {
-            case .core(let message): "Проверка не удалась: \(message)"
-            case .notJSON: "Ядро ответило непонятно."
+            case .core(let message): String(localized: "Проверка не удалась: \(message)")
+            case .notJSON: String(localized: "Ядро ответило непонятно.")
             }
         }
     }

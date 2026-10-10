@@ -23,7 +23,7 @@ enum ServerPicker {
     }
 
     static let builtIn: Set<String> = ["DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE", "GLOBAL"]
-    static let fastestTitle = "Самый быстрый"
+    static let fastestTitle = String(localized: "Самый быстрый")
 
     static func entries(_ proxies: CoreProxies) -> [Entry] {
         guard let main = proxies.mainGroup else { return [] }
@@ -48,7 +48,7 @@ enum ServerPicker {
                     return
                 }
             }
-            let title = ServerName.display(member) + (own ? " (свой)" : "")
+            let title = ServerName.display(member) + (own ? String(localized: " (свой)") : "")
             result.append(Entry(name: member, title: title, own: own, path: path))
         }
 
@@ -119,17 +119,17 @@ enum ServerPicker {
 
         var text: String {
             switch self {
-            case .fast(let ms), .medium(let ms), .slow(let ms): "\(ms) мс"
-            case .noAnswer: "нет ответа"
+            case .fast(let ms), .medium(let ms), .slow(let ms): String(localized: "\(ms) мс")
+            case .noAnswer: String(localized: "нет ответа")
             case .unknown: ""
             }
         }
 
         var spoken: String {
             switch self {
-            case .fast(let ms), .medium(let ms): "\(ms) миллисекунд"
-            case .slow(let ms): "\(ms) миллисекунд, медленно"
-            case .noAnswer: "не отвечает"
+            case .fast(let ms), .medium(let ms): String(localized: "\(ms) миллисекунд")
+            case .slow(let ms): String(localized: "\(ms) миллисекунд, медленно")
+            case .noAnswer: String(localized: "не отвечает")
             case .unknown: ""
             }
         }

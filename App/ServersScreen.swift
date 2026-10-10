@@ -11,7 +11,7 @@ struct ServersScreen: View {
     @Environment(VPNClient.self) private var client
     @AppStorage("sortByLatency") private var sortByPing = false
     @AppStorage("showProfileGroups") private var showProfileGroups = false
-    @AppStorage("favouriteServers") private var favouritesText = ""
+    @AppStorage(VPNClient.favouritesKey) private var favouritesText = ""
     @State private var query = ""
     @State private var highlighted: String?
     @State private var choosingEntry = false
@@ -63,7 +63,7 @@ struct ServersScreen: View {
             Spacer()
             // the window titles the section «Серверы» already
             if back != nil || choosingEntry {
-                Text(choosingEntry ? "Сервер входа" : "Сервер").font(.headline).accessibilityAddTraits(.isHeader)
+                Text(choosingEntry ? String(localized: "Сервер входа") : String(localized: "Сервер")).font(.headline).accessibilityAddTraits(.isHeader)
             }
             Spacer()
             Button {
@@ -77,7 +77,7 @@ struct ServersScreen: View {
             }
             .buttonStyle(.borderless)
             .disabled(!control.coreRunning || control.proxies == nil || !control.testing.isEmpty)
-            .help(control.coreRunning ? "Проверить пинг всех серверов (⇧⌘P)" : "Пинг проверяется при подключённом VPN")
+            .help(control.coreRunning ? String(localized: "Проверить пинг всех серверов (⇧⌘P)") : String(localized: "Пинг проверяется при подключённом VPN"))
             .accessibilityLabel("Проверить пинг всех серверов")
             .frame(width: 60, alignment: .trailing)
         }
@@ -92,7 +92,7 @@ struct ServersScreen: View {
                                                  delays: delays(all))
             let current = choosingEntry ? control.multihopEntry : currentName(proxies)
             if sections.fastest == nil && sections.favourites.isEmpty && sections.all.isEmpty {
-                empty(query.isEmpty ? "В подписке нет серверов." : "Ничего не нашлось.")
+                empty(query.isEmpty ? String(localized: "В подписке нет серверов.") : String(localized: "Ничего не нашлось."))
             } else {
                 List(selection: $highlighted) {
                     if let fastest = sections.fastest {
@@ -107,7 +107,7 @@ struct ServersScreen: View {
                 .frame(minHeight: 280, maxHeight: back == nil ? .infinity : 420)
                 .contextMenu(forSelectionType: String.self) { ids in
                     if let id = ids.first {
-                        Button(favourites.contains(id) ? "Убрать из избранного" : "Добавить в избранное") { toggleFavourite(id) }
+                        Button(favourites.contains(id) ? String(localized: "Убрать из избранного") : String(localized: "Добавить в избранное")) { toggleFavourite(id) }
                     }
                 } primaryAction: { ids in
                     if let id = ids.first, let entry = all.first(where: { $0.id == id }) { choose(entry) }
@@ -124,7 +124,7 @@ struct ServersScreen: View {
             }
             .frame(maxWidth: .infinity, minHeight: 120)
         } else {
-            empty("Список появится после первого обновления подписки.")
+            empty(String(localized: "Список появится после первого обновления подписки."))
         }
     }
 
@@ -173,11 +173,15 @@ struct ServersScreen: View {
         return result
     }
 
-    private var favourites: Set<String> { Set(favouritesText.split(separator: "\n").map(String.init)) }
+    /// Names of the favourites now: they are kept by server identity, so a rename keeps them.
+    private var favourites: Set<String> {
+        ServerIdentity.names(favouritesText.split(separator: "\n").map(String.init), keys: client.serverKeys)
+    }
 
     private func toggleFavourite(_ name: String) {
+        let key = client.serverKeys[name] ?? name
         var list = favouritesText.split(separator: "\n").map(String.init)
-        if let index = list.firstIndex(of: name) { list.remove(at: index) } else { list.append(name) }
+        if list.contains(key) || list.contains(name) { list.removeAll { $0 == key || $0 == name } } else { list.append(key) }
         favouritesText = list.joined(separator: "\n")
     }
 }
@@ -210,20 +214,20 @@ private struct ServerPickerRow: View {
                     Image(systemName: favourite ? "star.fill" : "star").foregroundStyle(favourite ? .yellow : .secondary)
                 }
                 .buttonStyle(.borderless)
-                .help(favourite ? "Убрать из избранного" : "Добавить в избранное")
-                .accessibilityLabel(favourite ? "Убрать из избранного" : "Добавить в избранное")
+                .help(favourite ? String(localized: "Убрать из избранного") : String(localized: "Добавить в избранное"))
+                .accessibilityLabel(favourite ? String(localized: "Убрать из избранного") : String(localized: "Добавить в избранное"))
             }
         }
         .contentShape(Rectangle())
         .onTapGesture(perform: choose)
         .onHover { hovering = $0 }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(entry.isFastest ? ServerPicker.fastestTitle : ServerName.spoken(entry.name) + (entry.own ? ", свой" : ""))
-        .accessibilityValue([ping.spoken, current ? "выбран" : "", favourite ? "в избранном" : ""]
+        .accessibilityLabel(entry.isFastest ? ServerPicker.fastestTitle : ServerName.spoken(entry.name) + (entry.own ? String(localized: ", свой") : ""))
+        .accessibilityValue([ping.spoken, current ? String(localized: "выбран") : "", favourite ? String(localized: "в избранном") : ""]
             .filter { !$0.isEmpty }.joined(separator: ", "))
         .accessibilityAddTraits(current ? [.isSelected, .isButton] : .isButton)
         .accessibilityHint("Подключиться через этот сервер")
-        .accessibilityAction(named: favourite ? "Убрать из избранного" : "Добавить в избранное", toggleFavourite)
+        .accessibilityAction(named: favourite ? String(localized: "Убрать из избранного") : String(localized: "Добавить в избранное"), toggleFavourite)
     }
 }
 

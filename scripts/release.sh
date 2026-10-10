@@ -6,7 +6,8 @@
 #   scripts/release.sh --check   only check that certificates, profiles and the notary profile exist
 #   scripts/release.sh --sign-only   build and sign build/release/KillSwitch.app, no notarization
 #   scripts/release.sh --publish     full release, then `gh release create v<version>` in
-#                                    lesha19/KillSwitch-releases with the .dmg and appcast.xml
+#                                    lesha19/KillSwitch-releases with the .dmg, appcast.xml,
+#                                    geosite.dat and geoip.metadb (+ .sha256), and SHA256SUMS of them all
 #
 # What it needs (found automatically, nothing secret is printed):
 #   - certificate + private key "Developer ID Application: … (YR58655PJ7)" in the login keychain
@@ -21,6 +22,8 @@
 #   - Helper/geosite.dat and Helper/geoip.metadb (Helper/fetch-geodata.sh): Russian sites and
 #     addresses outside the VPN (coredirect=1).
 #     Shipped like mihomo, in the app's Resources/Helper; install.sh copies them to /Library/KillSwitch/core.
+#     They must be the pinned files: --publish uploads them (with their sha256) as the copies that
+#     fetch-geodata.sh asks first, in case the pinned meta-rules-dat commit disappears.
 #   - Sparkle EdDSA private key in the login keychain (Sparkle's generate_keys, run once; only the
 #     public key is in project.yml as SUPublicEDKey). generate_appcast signs the .dmg with it.
 #   - --publish only: gh logged in with access to lesha19/KillSwitch-releases, and release notes:
@@ -29,6 +32,26 @@
 # The privileged daemon (ADR 0010) is Contents/MacOS/KillSwitchHelper, signed as
 # com.lesha19.KillSwitch.helper with the hardened runtime before the app; the app and the daemon
 # check each other's designated requirement, so both are verified against it at the end.
+
+# geodata_pinned <dir> <file>: <dir>/<file> (geosite.dat or geoip.metadb) has the sha256 pinned in
+# <dir>/fetch-geodata.sh. Root installs them as they are: only the pinned files ship.
+geodata_pinned() {
+  local var pin
+  case "$2" in geosite.dat) var=SHA256_GEOSITE ;; geoip.metadb) var=SHA256_GEOIP ;; *) return 1 ;; esac
+  pin=$(sed -nE "s/^$var=\"([0-9a-f]{64})\".*/\\1/p" "$1/fetch-geodata.sh")
+  [ -n "$pin" ] && [ -f "$1/$2" ] && [ "$(shasum -a 256 < "$1/$2" | cut -d' ' -f1)" = "$pin" ]
+}
+
+# write_sums <dir> <file>...: <dir>/SHA256SUMS for files in <dir>, by bare name, in the format
+# `shasum -a 256 -c SHA256SUMS` checks (README, «Проверка загрузки»). Fails if one is missing.
+write_sums() {
+  local dir=$1
+  shift
+  (cd "$dir" && shasum -a 256 "$@" > SHA256SUMS.tmp) && mv "$dir/SHA256SUMS.tmp" "$dir/SHA256SUMS" ||
+    { rm -f "$dir/SHA256SUMS.tmp"; return 1; }
+}
+
+[ "${BASH_SOURCE[0]}" = "$0" ] || return 0   # sourced by Helper/tests
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -113,13 +136,12 @@ if ! plutil -lint -s "$HELPER_PLIST" ||
 fi
 
 [ -f Helper/mihomo ] || problem "Нет Helper/mihomo (ядро VPN): запустите Helper/fetch-mihomo.sh."
-[ -f Helper/geosite.dat ] && [ -f Helper/geoip.metadb ] ||
-  problem "Нет Helper/geosite.dat или Helper/geoip.metadb (российские сайты мимо VPN): запустите Helper/fetch-geodata.sh."
-# root installs them as they are: only the pinned files
-for f in geosite.dat:SHA256_GEOSITE geoip.metadb:SHA256_GEOIP; do
-  pin=$(sed -nE "s/^${f#*:}=\"([0-9a-f]{64})\".*/\1/p" Helper/fetch-geodata.sh)
-  [ ! -f "Helper/${f%%:*}" ] || echo "$pin  Helper/${f%%:*}" | shasum -a 256 -c - >/dev/null 2>&1 ||
-    problem "Helper/${f%%:*} не совпадает с sha256 из Helper/fetch-geodata.sh: запустите его заново."
+for f in geosite.dat geoip.metadb; do
+  if [ ! -f "Helper/$f" ]; then
+    problem "Нет Helper/$f (российские сайты и адреса мимо VPN): запустите Helper/fetch-geodata.sh."
+  elif ! geodata_pinned Helper "$f"; then
+    problem "Helper/$f не совпадает с sha256 из Helper/fetch-geodata.sh: запустите его заново."
+  fi
 done
 
 # Existence only: nothing is read out of the keychain item.
@@ -266,11 +288,21 @@ cp "$DMG" "$OUT/appcast/"
 rm -rf "$OUT/appcast"
 grep -q 'sparkle:edSignature=' "$OUT/appcast.xml" || { echo "appcast.xml без подписи EdDSA" >&2; exit 1; }
 
-echo "Готово: $DMG, $OUT/appcast.xml"
-shasum -a 256 "$DMG"
+# The copies of the pinned geodata that Helper/fetch-geodata.sh asks first (see there).
+for f in geosite.dat geoip.metadb; do
+  cp "Helper/$f" "$OUT/$f"
+  (cd "$OUT" && shasum -a 256 "$f" > "$f.sha256")
+done
+
+# Checksums of what is published, for people who verify the download (README).
+write_sums "$OUT" "$(basename "$DMG")" appcast.xml geosite.dat geoip.metadb
+
+echo "Готово: $DMG, $OUT/appcast.xml, $OUT/SHA256SUMS"
+cat "$OUT/SHA256SUMS"
 
 if [ "$MODE" = --publish ]; then
   gh release create "v$VERSION" --repo "$RELEASES_REPO" --title "KillSwitch $VERSION" \
-    --notes-file "$NOTES" "$DMG" "$OUT/appcast.xml"
+    --notes-file "$NOTES" "$DMG" "$OUT/appcast.xml" "$OUT/geosite.dat" "$OUT/geosite.dat.sha256" \
+    "$OUT/geoip.metadb" "$OUT/geoip.metadb.sha256" "$OUT/SHA256SUMS"
   echo "Опубликовано: https://github.com/$RELEASES_REPO/releases/tag/v$VERSION"
 fi

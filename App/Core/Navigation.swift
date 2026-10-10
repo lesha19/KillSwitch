@@ -6,10 +6,10 @@ enum SettingsPane: String, CaseIterable {
 
     var title: String {
         switch self {
-        case .general: "Общие"
+        case .general: String(localized: "Общие")
         case .vpn: "VPN"
-        case .protection: "Защита"
-        case .advanced: "Дополнительно"
+        case .protection: String(localized: "Защита")
+        case .advanced: String(localized: "Дополнительно")
         }
     }
 
@@ -34,11 +34,11 @@ enum AppSection: Hashable {
 
     var title: String {
         switch self {
-        case .home: "Главная"
-        case .servers: "Серверы"
-        case .leakTest: "Проверка утечек"
-        case .log: "Журнал защиты"
-        case .about: "О программе"
+        case .home: String(localized: "Главная")
+        case .servers: String(localized: "Серверы")
+        case .leakTest: String(localized: "Проверка утечек")
+        case .log: String(localized: "Журнал защиты")
+        case .about: String(localized: "О программе")
         case .settings(let pane): pane.title
         }
     }

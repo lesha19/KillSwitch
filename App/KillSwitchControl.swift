@@ -63,6 +63,8 @@ final class KillSwitchControl {
     private(set) var coreRunning = false
     /// «Российские сайты — напрямую (мимо VPN)»: the core sends Russian sites around the tunnel.
     private(set) var coreDirect = false
+    /// «Блокировать рекламу и трекеры»: the core refuses category-ads-all of the shipped geosite.dat.
+    private(set) var adBlock = false
     /// «Раздельный туннель»: process names that go around the VPN (only with coreDirect).
     private(set) var splitApps: [String] = []
     /// «Двойной VPN»: the entry server; the exit is the selected one. Nil = off.
@@ -88,7 +90,7 @@ final class KillSwitchControl {
             do {
                 if newValue { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             } catch {
-                self.error = UserError(title: "Не получилось изменить запуск при входе", message: error.localizedDescription,
+                self.error = UserError(title: String(localized: "Не получилось изменить запуск при входе"), message: error.localizedDescription,
                                        details: error.localizedDescription)
             }
         }
@@ -487,7 +489,7 @@ final class KillSwitchControl {
         case .needsPassword:
             notify(.autoConnectNeedsPassword)
         case .failed(let message):
-            error = UserError.from(raw: message.isEmpty ? "Не получилось подключиться автоматически" : message, context: .helper)
+            error = UserError.from(raw: message.isEmpty ? String(localized: "Не получилось подключиться автоматически") : message, context: .helper)
         case .cancelled:
             break
         }
@@ -507,7 +509,7 @@ final class KillSwitchControl {
         case .ok: measured = [:]; return .ok
         case .needsPassword: return .needsPassword
         case .cancelled: return .cancelled
-        case .failed(let message): return .failed(message.isEmpty ? "Не получилось" : message)
+        case .failed(let message): return .failed(message.isEmpty ? String(localized: "Не получилось") : message)
         }
     }
 
@@ -759,7 +761,8 @@ final class KillSwitchControl {
         if wasVPNUp && !vpnUp && state == .on && !manual && !stoppingOtherVPN { notify(.vpnDropped(protected: true)) }
         readSettings()
         updateHelperAvailability()
-        defer { scheduleTimer(); readOtherVPN() }
+        readOtherTunnels()
+        defer { scheduleTimer(); readOtherVPN(); syncSpeed() }
         guard FileManager.default.fileExists(atPath: helper) else {
             daemonProblem = false; networkLeftOff = false
             daemonStateLive = false
@@ -822,6 +825,7 @@ final class KillSwitchControl {
         let modified = (try? FileManager.default.attributesOfItem(atPath: helper))?[.modificationDate] as? Date
         guard modified != helperComparedAt else { return }
         helperComparedAt = modified
+        speedUnavailable = false   // another helper may allow `core traffic`
         let bundled = Bundle.main.path(forResource: "ks", ofType: nil, inDirectory: "Helper").flatMap(FileManager.default.contents(atPath:))
         helperOutdated = HelperVersion.matches(installed: FileManager.default.contents(atPath: helper), bundled: bundled) == false
     }
@@ -974,6 +978,7 @@ final class KillSwitchControl {
         allowRouterDNS = (values["dns"] ?? "0") == "1"
         allowDirect = (values["direct"] ?? "0") == "1"
         coreDirect = (values["coredirect"] ?? "0") == "1"
+        adBlock = (values["adblock"] ?? "0") == "1"
         splitApps = SplitApps.parse(setting: values["splitapps"])
         multihopEntry = Multihop.entry(setting: values["multihop"])
         exceptions = Self.readLines("/Library/KillSwitch/allow")
@@ -1215,6 +1220,96 @@ final class KillSwitchControl {
             memcpy(&sin, addr, MemoryLayout<sockaddr_in>.size)
             let octets = withUnsafeBytes(of: sin.sin_addr) { Array($0) }
             if let kind = TunnelAddress.kind(octets.map(String.init).joined(separator: ".")) { result.append(kind) }
+        }
+        return result
+    }
+
+    // MARK: speed in the menu bar (TrafficSpeed)
+
+    /// «Скорость в строке меню» (Settings › Общие), off by default.
+    static let speedKey = "menuBarSpeed"
+    /// ↓/↑ while connected and the setting is on; nil otherwise.
+    private(set) var speed: TrafficSpeed.Speed?
+    /// The installed helper does not let `ks core traffic` run without a password.
+    private(set) var speedUnavailable = false
+    private var speedMeter = TrafficSpeed()
+    private var speedTimer: Timer?
+    private var readingSpeed = false
+
+    /// Asks the core once a second, only while the setting is on and our VPN is connected.
+    func syncSpeed() {
+        let wanted = UserDefaults.standard.bool(forKey: Self.speedKey) && connection == .connected && !speedUnavailable
+        if wanted, speedTimer == nil {
+            speedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.readSpeed() }
+            }
+            readSpeed()
+        } else if !wanted, let timer = speedTimer {
+            timer.invalidate()
+            speedTimer = nil
+            speed = nil
+            speedMeter = TrafficSpeed()
+        }
+    }
+
+    private func readSpeed() {
+        guard !readingSpeed else { return }
+        readingSpeed = true
+        Task {
+            // never the password prompt: a timer asks
+            switch await callHelper(["core", "traffic"], interactive: false) {
+            case .ok(let output):
+                if let totals = TrafficSpeed.Totals(output), let value = speedMeter.add(totals, at: Date()) { speed = value }
+            case .needsPassword:
+                speedUnavailable = true
+                syncSpeed()
+            case .failed, .cancelled:
+                break
+            }
+            readingSpeed = false
+        }
+    }
+
+    /// Another VPN's tunnels beyond the 198.18 address (OtherVPN.tunnels): `netstat -rn` as the
+    /// user, after every refresh.
+    private(set) var otherTunnels: [String] = []
+    private var readingTunnels = false
+
+    private func readOtherTunnels() {
+        guard !readingTunnels else { return }
+        readingTunnels = true
+        Task {
+            let routes = await Self.exec("/usr/sbin/netstat", ["-rn"]).output
+            let found = OtherVPN.tunnels(routes: routes, addresses: Self.interfaceAddresses())
+            if found != otherTunnels { otherTunnels = found }
+            readingTunnels = false
+        }
+    }
+
+    /// «Частный узел iCloud» and overlay networks on this Mac (NetworkHints), read when a screen
+    /// with tips appears: the system's relay status (only that key) and the interfaces and apps.
+    func networkHints() -> [NetworkHints.Hint] {
+        let archive = CFPreferencesCopyAppValue("NSPServiceStatusManagerInfo" as CFString,
+                                                "com.apple.networkserviceproxy" as CFString) as? Data
+        let relay = NetworkHints.relayOn(status: archive.flatMap(NetworkHints.relayStatus))
+        let apps = NSWorkspace.shared.runningApplications.compactMap(\.localizedName)
+        return NetworkHints.hints(relayOn: relay, overlays: NetworkHints.overlays(addresses: Self.interfaceAddresses(), runningApps: apps))
+    }
+
+    /// IPv4 and IPv6 addresses of every interface, without the `%scope`.
+    private static func interfaceAddresses() -> [OtherVPN.Address] {
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0, let first = list else { return [] }
+        defer { freeifaddrs(list) }
+        var result: [OtherVPN.Address] = []
+        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            guard let addr = ptr.pointee.ifa_addr,
+                  addr.pointee.sa_family == UInt8(AF_INET) || addr.pointee.sa_family == UInt8(AF_INET6) else { continue }
+            var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(addr, socklen_t(addr.pointee.sa_len), &buf, socklen_t(buf.count), nil, 0, NI_NUMERICHOST) == 0
+            else { continue }
+            let address = String(decoding: buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self).split(separator: "%").first.map(String.init) ?? ""
+            result.append(OtherVPN.Address(interface: String(cString: ptr.pointee.ifa_name), address: address))
         }
         return result
     }

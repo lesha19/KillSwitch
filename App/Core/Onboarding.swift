@@ -39,15 +39,15 @@ enum Onboarding {
 
         /// «Подписка «StorkVPN · Премиум»: 6 серверов, до 2 ноября».
         func line(calendar: Calendar = .current) -> String {
-            var text = ownServers ? "Свои серверы" : "Подписка" + (title.map { " «\($0)»" } ?? "")
-            text += ": " + Russian.plural(servers, "сервер", "сервера", "серверов")
+            var text = ownServers ? String(localized: "Свои серверы") : String(localized: "Подписка") + (title.map { " «\($0)»" } ?? "")
+            text += ": " + Russian.plural(servers, String(localized: "сервер"), String(localized: "сервера"), String(localized: "серверов"))
             if let expire {
                 let formatter = DateFormatter()
                 formatter.locale = Locale(identifier: "ru_RU")
                 formatter.calendar = calendar
                 formatter.timeZone = calendar.timeZone
                 formatter.setLocalizedDateFormatFromTemplate("dMMMM")
-                text += ", до " + formatter.string(from: expire)
+                text += String(localized: ", до ") + formatter.string(from: expire)
             }
             return text
         }

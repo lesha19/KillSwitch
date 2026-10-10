@@ -213,6 +213,9 @@ addresses found in dropweb and Happ configs are passed to it). After updating th
    и ввести пароль, когда спросит (в командную строку его не писать). Он хранится в связке ключей.
 4. Ядро: `Helper/fetch-mihomo.sh`; геоданные для «российские сайты мимо VPN»: `Helper/fetch-geodata.sh`
    (выпуск meta-rules-dat и его sha256 уже закреплены в скрипте; без `Helper/geosite.dat` и `Helper/geoip.metadb` выпуск не соберётся).
+   Скрипт сначала берёт копию каждого файла из последнего выпуска `lesha19/KillSwitch-releases` (их кладёт туда
+   `--publish`), а закреплённый коммит meta-rules-dat — только если копии нет или она другого sha256:
+   meta-rules-dat переписывает ветку `release`, и старый коммит может исчезнуть.
 5. Ключ Sparkle: один раз `generate_keys` из `build/spm/artifacts/sparkle/Sparkle/bin/` (появится после
    первой сборки) — закрытый ключ EdDSA ляжет в связку ключей входа, открытый (`generate_keys -p`) уже
    записан в `project.yml` как `SUPublicEDKey`.
@@ -234,10 +237,30 @@ addresses found in dropweb and Happ configs are passed to it). After updating th
 
 Кроме `.dmg` выпуск делает `build/release/appcast.xml` для Sparkle, подписанный ключом EdDSA.
 `scripts/release.sh --publish` — то же, а затем `gh release create v<версия>` в
-`lesha19/KillSwitch-releases` с `.dmg` и `appcast.xml`; описание берётся из раздела «## <версия>»
+`lesha19/KillSwitch-releases` с `.dmg`, `appcast.xml`, копией `geosite.dat` (с `geosite.dat.sha256`)
+и `SHA256SUMS` всех трёх; описание берётся из раздела «## <версия>»
 `CHANGELOG.md` (или из файла в `KS_RELEASE_NOTES`). Нужен `gh`, вошедший с доступом к этому
 репозиторию. Приложение читает `releases/latest/download/appcast.xml`, поэтому опубликованный выпуск
 сразу становится обновлением для всех.
+
+### Проверка загрузки
+
+Каждый выпуск в `lesha19/KillSwitch-releases` несёт `SHA256SUMS` — суммы `.dmg`, `appcast.xml`,
+`geosite.dat` и `geoip.metadb`. Скачать `.dmg` и `SHA256SUMS` в одну папку и в ней:
+
+```bash
+shasum -a 256 -c SHA256SUMS --ignore-missing      # KillSwitch-<версия>.dmg: OK
+spctl -a -t open --context context:primary-signature -v KillSwitch-<версия>.dmg
+                                                  # accepted, source=Notarized Developer ID
+codesign -dv /Volumes/KillSwitch\ <версия>/KillSwitch.app 2>&1 | grep TeamIdentifier
+                                                  # TeamIdentifier=YR58655PJ7
+```
+
+Суммы лежат там же, где файлы, поэтому защищают от битой или подменённой по дороге загрузки, но не
+от подмены самого выпуска. От неё — подпись: приложение и образ подписаны Developer ID команды
+`YR58655PJ7` и нотаризованы Apple, а обновления через Sparkle ещё и подписью EdDSA, открытый ключ
+которой зашит в приложение (`SUPublicEDKey`). Суммы стоит сверить и с теми, что печатает
+`scripts/release.sh` в конце выпуска.
 
 ## Emergency off
 

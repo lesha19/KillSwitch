@@ -7,7 +7,7 @@
 #   ks off                  disable until "ks on"
 #   ks pause [min]          disable for N minutes (default 5), e.g. for a captive Wi-Fi portal
 #   ks netrestore           network services turned off at shutdown back on (if the watchdog is gone)
-#   ks set <key> <0|1>      lan, tailscale, dns, direct, coredirect (see rules() below)
+#   ks set <key> <0|1>      lan, tailscale, dns, direct, coredirect (see rules() below), adblock
 #   ks set splitapps <a,b>  apps outside the VPN (coredirect=1 only); "" clears
 #   ks set multihop <proxy>|off  double VPN: every other proxy is reached through this one
 #   ks allow <addr[/n]>     always let this address or network out without VPN
@@ -20,6 +20,7 @@
 #                           addresses or changes what goes DIRECT
 #   ks core proxies         groups and proxies of the running core (JSON)
 #   ks core select <group> <proxy> | delay <group|proxy>
+#   ks core traffic         "up=<bytes> down=<bytes>" through the core so far (the menu bar speed)
 #   ks probe                "link=0|1 ru=0|1 foreign=0|1": why nothing works (ADR 0006)
 #   ks apply                (re)load rules once unless disabled
 #   ks watch                used by the LaunchDaemon: tunnels every second, pf every 2 s, the core every 2 s
@@ -758,6 +759,12 @@ core_generate() (
     } > "$w/ours"
     json_edit "$R" 'unshift @$j, map { chomp; $_ } <STDIN>;' < "$w/ours" || exit 1
   fi
+  # Ads and trackers (adblock=1, «Дополнительно» in the app): refused before anything else, from the
+  # shipped geosite.dat only (never downloaded). REJECT sends nothing anywhere, so the DIRECT
+  # signature and the kill switch are as before.
+  if [ "$(setting adblock 0)" = 1 ] && [ -s "$CORE_DIR/geosite.dat" ]; then
+    json_edit "$R" 'unshift @$j, "GEOSITE,category-ads-all,REJECT";' || exit 1
+  fi
 
   sort -u "$w/servers" > "$w/servers.u"
   # Server, LAN and Tailscale routes stay outside the tunnel, so a flow re-made by another
@@ -1184,17 +1191,31 @@ core_log_tidy() {
 dns_locked() { lockf -k -t 30 "$CORE_DIR/dns.lock" "$0" _dns "$1"; }
 core_running() { launchctl print "$CORE_JOB" 2>/dev/null | grep -q 'state = running'; }
 
-# Utun interfaces other than ours with a default or wide (/8 or larger, not 10/8) route
-# outside an interface scope: another VPN (Happ, dropweb, a Tailscale exit node) taking traffic next to
-# our core; two TUNs fight over routes and DNS. Unknown while our TUN has no address.
+# "interface address" for every tunnel interface (utun, ipsec, ppp), IPv4 and IPv6, sorted.
+tun_addrs() {
+  ifconfig 2>/dev/null | awk '/^[A-Za-z0-9]+:/ { i=$1; sub(/:$/,"",i) }
+    i ~ /^(utun|ipsec|ppp)[0-9]+$/ && ($1 == "inet" || $1 == "inet6") { a=$2; sub(/%.*/,"",a); print i, a }' | sort
+}
+# Tunnel interfaces (utun, ipsec, ppp) other than ours with a default or wide route outside an
+# interface scope: another VPN (Happ, dropweb, WireGuard, IKEv2, L2TP…) taking traffic next to our
+# core; two of them fight over routes and DNS. Wide: IPv4 /8 or larger but not 10/8 (corporate
+# VPNs), IPv6 /3 or larger (::/1, 2000::/3). Tailscale's interface (an address in 100.64/10 or
+# fd7a:115c:a1e0::/48) is not one, exit node or not: the kill switch lets it through on purpose.
+# Unknown while our TUN has no address.
 foreign_tuns() {
-  local ours
+  local ours ts
   ours=$(utun_addrs | awk -v a="$CORE_TUN_ADDR" '$2 == a { print $1; exit }')
   [ -n "$ours" ] || return 0
-  netstat -rn -f inet | awk -v ours="$ours" '
-    $4 ~ /^utun[0-9]+$/ && $4 != ours && $3 !~ /I/ && $1 !~ /^10(\/8)?$/ {
+  ts=$(tun_addrs | awk '$2 ~ /^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./ || tolower($2) ~ /^fd7a:115c:a1e0:/ { print $1 }' |
+    sort -u | paste -sd' ' -)
+  netstat -rn 2>/dev/null | awk -v ours="$ours" -v ts=" $ts " '
+    /^Internet6:/ { v6 = 1; next }
+    /^Internet:/ { v6 = 0; next }
+    $4 ~ /^(utun|ipsec|ppp)[0-9]+$/ && $4 != ours && index(ts, " " $4 " ") == 0 && $3 !~ /I/ {
       d = $1
       if (d == "default") len = 0
+      else if (v6) { if (d !~ /\//) next; len = d; sub(/.*\//, "", len); if (len + 0 > 3) next; len = 0 }
+      else if (d ~ /^10(\/8)?$/) next
       else if (d ~ /\//) { len = d; sub(/.*\//, "", len) }
       else len = 8 * split(d, p, ".")
       if (len + 0 <= 8) print $4
@@ -1268,6 +1289,16 @@ core_delay() {  # core_delay <group|proxy>: latency test through it, JSON
   if grep -q '"all":' <<<"$info"; then core_api GET "/group/$name/delay?$q"
   else core_api GET "/proxies/$name/delay?$q"; fi
 }
+# core_traffic: the totals of /connections and nothing else of it (no hosts, addresses or
+# processes leave ks); the app takes the speed from two readings.
+core_traffic() {
+  local j up down
+  j=$(core_api GET /connections) || return 1
+  up=$(sed -nE 's/.*"uploadTotal":([0-9]+).*/\1/p' <<<"$j")
+  down=$(sed -nE 's/.*"downloadTotal":([0-9]+).*/\1/p' <<<"$j")
+  [ -n "$up" ] && [ -n "$down" ] || { echo "Ядро не сказало, сколько передано" >&2; return 1; }
+  echo "up=$up down=$down"
+}
 valid_name() { [ -n "$1" ] && [ "${#1}" -le 256 ] && [[ "$1" != *[[:cntrl:]]* ]]; }
 
 # splitapps_parse <comma list>: apps one per line (trimmed, deduplicated), each an app bundle's
@@ -1330,7 +1361,7 @@ passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,24p' "$0"
 # Everything that writes the core's config runs under one lock (the watchdog's rotation skips
 # its turn while it is held).
 case "${1:-}:${2:-}" in
-  core:import|core:refresh|set:splitapps|set:multihop|set:coredirect)
+  core:import|core:refresh|set:splitapps|set:multihop|set:coredirect|set:adblock)
     [ -n "${KS_LOCKED:-}" ] || [ ! -d "$CORE_DIR" ] || KS_LOCKED=1 exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@" ;;
 esac
 
@@ -1374,11 +1405,11 @@ case "${1:-status}" in
         set_multihop "$val" || exit 1
         log_event "double VPN: $val"; exit 0 ;;
     esac
-    [[ "$key" =~ ^(lan|tailscale|dns|direct|coredirect|wifiguard)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns|direct|coredirect|wifiguard 0|1" >&2; exit 1; }
+    [[ "$key" =~ ^(lan|tailscale|dns|direct|coredirect|wifiguard|adblock)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns|direct|coredirect|wifiguard|adblock 0|1" >&2; exit 1; }
     { grep -vE "^$key=" "$SETTINGS" 2>/dev/null; echo "$key=$val"; } > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
     reload_if_on
-    # the generator adds the split-tunnel rules only with coredirect=1
-    if [ "$key" = coredirect ]; then core_apply_settings || exit 1; fi
+    # the generator adds the split-tunnel rules only with coredirect=1, the ad block with adblock=1
+    if [ "$key" = coredirect ] || [ "$key" = adblock ]; then core_apply_settings || exit 1; fi
     ;;
   allow)
     addr=${2:-}
@@ -1454,7 +1485,10 @@ case "${1:-status}" in
       delay)
         [ $# -eq 3 ] && valid_name "$3" || { echo "usage: ks core delay <group|proxy>" >&2; exit 1; }
         core_delay "$3" || exit 1 ;;
-      *) echo "usage: ks core on|off|state|import <json>|refresh <json>|proxies|select <group> <proxy>|delay <name>" >&2; exit 1 ;;
+      traffic)
+        [ $# -eq 2 ] || { echo "usage: ks core traffic" >&2; exit 1; }
+        core_traffic || exit 1 ;;
+      *) echo "usage: ks core on|off|state|import <json>|refresh <json>|proxies|select <group> <proxy>|delay <name>|traffic" >&2; exit 1 ;;
     esac
     ;;
   probe) net_probe ;;
@@ -1469,5 +1503,5 @@ case "${1:-status}" in
     [ -f "$FLAG" ] && { u=$(cat "$FLAG"); [ "$u" = 0 ] && echo "disabled by hand" || echo "back on at $(date -r "$u" +%H:%M)"; }
     pfctl -a "$ANCHOR" -s rules 2>/dev/null
     ;;
-  *) sed -n '2,24p' "$0"; exit 1 ;;
+  *) sed -n '2,25p' "$0"; exit 1 ;;
 esac

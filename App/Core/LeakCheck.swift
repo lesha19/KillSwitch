@@ -124,18 +124,18 @@ enum LeakCheck {
 
         var text: String {
             switch self {
-            case .directExit(let names): "Программы могут выйти в интернет мимо VPN (\(names.joined(separator: ", "))): защита пропускает их напрямую."
-            case .realIPv4: "Сайты видят твой настоящий адрес, а не адрес VPN."
-            case .ipv4Mismatch(let ips): "Два сервиса видят разные адреса (\(ips.joined(separator: ", "))): часть трафика идёт другим путём."
-            case .ipv6Leak(let ip): "IPv6 идёт мимо VPN: сайты видят адрес твоей сети \(ip)."
-            case .ipv6Unexpected(let ip): "Доступен IPv6 (\(ip)), хотя VPN его не пропускает. Проверь, не работает ли другой VPN или прокси."
-            case .dnsLeak(let ips): "Адреса сайтов узнаются у твоего провайдера (\(ips.joined(separator: ", "))): он видит, куда ты ходишь."
-            case .dnsUnknown: "Проверка DNS не дала ответа. Повтори позже."
-            case .offline: "Интернета нет. Если VPN выключен, а защита включена, так и должно быть: мимо VPN ничего не уходит."
+            case .directExit(let names): String(localized: "Программы могут выйти в интернет мимо VPN (\(names.joined(separator: ", "))): защита пропускает их напрямую.")
+            case .realIPv4: String(localized: "Сайты видят твой настоящий адрес, а не адрес VPN.")
+            case .ipv4Mismatch(let ips): String(localized: "Два сервиса видят разные адреса (\(ips.joined(separator: ", "))): часть трафика идёт другим путём.")
+            case .ipv6Leak(let ip): String(localized: "IPv6 идёт мимо VPN: сайты видят адрес твоей сети \(ip).")
+            case .ipv6Unexpected(let ip): String(localized: "Доступен IPv6 (\(ip)), хотя VPN его не пропускает. Проверь, не работает ли другой VPN или прокси.")
+            case .dnsLeak(let ips): String(localized: "Адреса сайтов узнаются у твоего провайдера (\(ips.joined(separator: ", "))): он видит, куда ты ходишь.")
+            case .dnsUnknown: String(localized: "Проверка DNS не дала ответа. Повтори позже.")
+            case .offline: String(localized: "Интернета нет. Если VPN выключен, а защита включена, так и должно быть: мимо VPN ничего не уходит.")
             case .otherVPN(let name):
-                "Сейчас работает VPN другой программы\(name.map { " (\($0))" } ?? ""), а не KillSwitch: проверен он. "
-                    + "Сайты, которые он пускает напрямую, при включённой защите не открываются."
-            case .vpnOff: "VPN не подключён: это твой обычный адрес. Он запомнен, чтобы потом сравнить с ним проверку через VPN."
+                String(localized: "Сейчас работает VPN другой программы\(name.map { " (\($0))" } ?? ""), а не KillSwitch: проверен он. ")
+                    + String(localized: "Сайты, которые он пускает напрямую, при включённой защите не открываются.")
+            case .vpnOff: String(localized: "VPN не подключён: это твой обычный адрес. Он запомнен, чтобы потом сравнить с ним проверку через VPN.")
             }
         }
     }
@@ -153,11 +153,11 @@ enum LeakCheck {
         var otherVPN: Bool { findings.contains { if case .otherVPN = $0 { true } else { false } } }
 
         var title: String {
-            if !clean { return "Есть утечки" }
-            if findings.contains(.vpnOff) { return "VPN не подключён" }
-            if otherVPN { return "Проверен другой VPN" }
-            if findings.contains(.offline) { return "Нет интернета" }
-            return "Утечек нет"
+            if !clean { return String(localized: "Есть утечки") }
+            if findings.contains(.vpnOff) { return String(localized: "VPN не подключён") }
+            if otherVPN { return String(localized: "Проверен другой VPN") }
+            if findings.contains(.offline) { return String(localized: "Нет интернета") }
+            return String(localized: "Утечек нет")
         }
     }
 
