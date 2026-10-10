@@ -23,16 +23,22 @@ enum ProfileError: LocalizedError, Equatable {
 }
 
 enum ProfileConverter {
-    static let keptKeys = ["proxies", "proxy-groups", "rules", "rule-providers"]
+    /// What goes to the helper: the routing, plus the sniffer and DNS policy it validates (ADR 0013).
+    static let keptKeys = ["proxies", "proxy-groups", "rules", "rule-providers", "sniffer", "dns"]
 
     /// Body of a subscription response: mihomo/Clash YAML, or a base64 (or plain) list of links.
     static func profile(fromSubscription body: String) throws -> Profile {
+        try read(subscription: body).profile
+    }
+
+    /// The profile and the top-level keys of the subscription left out of it (sorted), for «Трафик».
+    static func read(subscription body: String) throws -> (profile: Profile, leftOut: [String]) {
         let text = body.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.hasPrefix("<") { throw ProfileError.html }
         if let links = linkList(text) {
             let proxies = links.compactMap { try? ProxyLink.parse($0) }
             guard let profile = ProfileMerger.merge(subscription: nil, manual: proxies) else { throw ProfileError.noProxies }
-            return profile
+            return (profile, [])
         }
         let loaded: Any?
         do {
@@ -44,7 +50,7 @@ enum ProfileConverter {
         var profile: Profile = [:]
         for key in keptKeys { if let value = map[key] { profile[key] = value } }
         guard let proxies = profile["proxies"] as? [Any], !proxies.isEmpty else { throw ProfileError.noProxies }
-        return profile
+        return (profile, map.keys.filter { !keptKeys.contains($0) }.sorted())
     }
 
     static func json(_ profile: Profile) throws -> Data {

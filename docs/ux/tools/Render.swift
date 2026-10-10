@@ -64,6 +64,65 @@ func proxies(selected: String = "⚡ Авто", auto: String = "🇱🇹 Лит�
 
 /// The wizard's step and install state for the next snapshot (prepare.py wires OnboardingView to it).
 @MainActor var renderOnboarding: (step: Onboarding.Step, installed: Bool) = (.welcome, false)
+/// What «Проверить адрес» starts with (prepare.py wires TrafficView to it).
+@MainActor var renderTrafficQuery = ""
+
+/// A typical Russian subscription as the helper reports it (Helper/ks core_report), with ad blocking on.
+func routingReport() -> RoutingReport {
+    let json = """
+    {"version":1,
+     "rules":[{"rule":"GEOSITE,category-ads-all,REJECT","from":"killswitch"},
+              {"rule":"AND,((NETWORK,UDP),(DST-PORT,443)),REJECT","from":"subscription","index":0},
+              {"rule":"DOMAIN-SUFFIX,storkvpn.online,DIRECT","from":"subscription","index":1},
+              {"rule":"RULE-SET,ru-inline,DIRECT","from":"subscription","index":2},
+              {"rule":"RULE-SET,ru-blocked,🚀 Выбор сервера","from":"subscription","index":3},
+              {"rule":"GEOSITE,category-ru,DIRECT","from":"subscription","index":4},
+              {"rule":"GEOIP,RU,DIRECT","from":"subscription","index":5},
+              {"rule":"PROCESS-NAME,Telegram,🚀 Выбор сервера","from":"subscription","index":7},
+              {"rule":"MATCH,🚀 Выбор сервера","from":"subscription","index":8}],
+     "dropped":[{"section":"rules","index":6,"item":"IP-ASN,13238,DIRECT","reason":"geodata:asn"},
+                {"section":"sniffer","item":"sniff.SSH","reason":"not-allowed"}],
+     "providers":[{"name":"ru-inline","type":"inline","behavior":"domain","count":6,
+                   "payload":["+.gosuslugi.ru","+.sberbank.ru","+.tbank.ru","+.yandex.ru","+.vk.com","+.ozon.ru"]},
+                  {"name":"ru-blocked","type":"http","behavior":"domain","format":"mrs","host":"raw.githubusercontent.com","interval":86400,"proxy":"KS-DNS"}],
+     "groups":[{"name":"🚀 Выбор сервера","type":"select","proxies":["⚡ Авто","🇱🇹 Литва","🇩🇪 Германия","DIRECT"],"from":"subscription"},
+               {"name":"KS-DNS","type":"fallback","proxies":["🇱🇹 Литва","🇩🇪 Германия"],"from":"killswitch","hidden":true}],
+     "proxies":[{"name":"🇱🇹 Литва","type":"vless"},{"name":"🇩🇪 Германия","type":"vless"}],
+     "added":[{"kind":"dns-group","name":"KS-DNS","items":["🇱🇹 Литва","🇩🇪 Германия"]},
+              {"kind":"dns-servers","items":["https://1.1.1.1/dns-query#KS-DNS","https://8.8.8.8/dns-query#KS-DNS"]},
+              {"kind":"failover","name":"🇱🇹 Литва ↻","items":["🇱🇹 Литва","🇱🇹 Литва 2"]},
+              {"kind":"pinning","items":[{"host":"lt.example.net","address":"1.2.3.10"}]},
+              {"kind":"provider-proxy","items":["ru-blocked"]},
+              {"kind":"sniffer","items":[]},
+              {"kind":"adblock","items":["GEOSITE,category-ads-all,REJECT"]}],
+     "sniffer":{"from":"killswitch","value":{"enable":true,"override-destination":false}},
+     "dns":{"servers":["https://1.1.1.1/dns-query#KS-DNS","https://8.8.8.8/dns-query#KS-DNS"],
+            "taken":{"direct-nameserver":["77.88.8.8"]}},
+     "egress":["rules","dns"]}
+    """
+    return try! RoutingReport(data: Data(json.utf8))
+}
+
+/// Open connections of a usual evening: banks direct, the rest through the VPN, an ad blocked.
+func connections() -> CoreConnections {
+    func c(_ id: String, _ host: String, _ ip: String, _ process: String, _ path: String, _ rule: String, _ payload: String,
+           _ chains: [String], _ down: Int64, _ up: Int64, _ ago: TimeInterval) -> CoreConnections.Connection {
+        CoreConnections.Connection(id: id, host: host, ip: ip, port: "443", network: "tcp", process: process, processPath: path,
+                                   rule: rule, rulePayload: payload, chains: chains, upload: up, download: down,
+                                   start: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-ago)))
+    }
+    let vpn = ["🇱🇹 Литва", "⚡ Авто", "🚀 Выбор сервера"]
+    let safari = "/Applications/Safari.app/Contents/MacOS/Safari"
+    return CoreConnections(connections: [
+        c("1", "www.youtube.com", "142.250.74.14", "Safari", safari, "Match", "", vpn, 48_300_000, 410_000, 312),
+        c("2", "online.sberbank.ru", "194.54.14.168", "Safari", safari, "RuleSet", "ru-inline", ["DIRECT"], 1_240_000, 88_000, 45),
+        c("3", "", "149.154.167.51", "Telegram", "/Applications/Telegram.app/Contents/MacOS/Telegram", "ProcessName", "Telegram", vpn, 3_100_000, 640_000, 4_210),
+        c("4", "music.yandex.ru", "213.180.204.62", "Music", "/System/Applications/Music.app/Contents/MacOS/Music", "RuleSet", "ru-inline", ["DIRECT"], 22_500_000, 120_000, 1_830),
+        c("5", "mc.yandex.ru", "", "Safari", safari, "GeoSite", "category-ads-all", ["REJECT"], 0, 0, 3),
+        c("6", "api.example.org", "140.82.121.5", "curl", "/usr/bin/curl", "Match", "", vpn, 52_000, 9_000, 12),
+        c("7", "www.gosuslugi.ru", "213.59.254.7", "Firefox", "/Applications/Firefox.app/Contents/MacOS/firefox", "RuleSet", "ru-inline", ["DIRECT"], 860_000, 41_000, 96),
+    ], providers: ["ru-blocked": .init(count: 74_812, updatedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-3 * 3600)))])
+}
 
 // MARK: rendering
 
@@ -402,6 +461,33 @@ func main() {
         popover("28-popover-other-vpn-unknown", w)
     }
 
+    // MARK: «Трафик» (ADR 0013)
+
+    do {
+        let w = World(); w.subscribe(); w.connect(selected: "⚡ Авто")
+        w.control.routing = routingReport()
+        w.control.connections = connections()
+        UserDefaults.standard.set(["tun", "listeners"], forKey: RoutingReport.leftOutKey)
+        UserDefaults.standard.set("rules", forKey: "trafficTab")
+        shot("37-traffic-rules", .traffic, height: 760, w)
+        UserDefaults.standard.set("connections", forKey: "trafficTab")
+        shot("38-traffic-connections", .traffic, w)
+        UserDefaults.standard.set("check", forKey: "trafficTab")
+        renderTrafficQuery = "music.yandex.ru"
+        shot("39-traffic-check", .traffic, w)
+        renderTrafficQuery = "example.com"
+        shot("39b-traffic-check-approximate", .traffic, w)
+        renderTrafficQuery = ""
+        UserDefaults.standard.removeObject(forKey: RoutingReport.leftOutKey)
+    }
+    do {
+        let w = World(); w.subscribe()
+        UserDefaults.standard.set("connections", forKey: "trafficTab")
+        shot("38b-traffic-connections-vpn-off", .traffic, w)
+        UserDefaults.standard.set("rules", forKey: "trafficTab")
+        shot("37b-traffic-no-report", .traffic, w)
+    }
+
     // MARK: leak test window
 
     func leak(_ name: String, _ w: World, height: CGFloat = 640) {
@@ -505,7 +591,6 @@ func main() {
         let w = World(); w.subscribe(); w.connect(selected: "🇳🇱 Нидерланды")
         w.client.manual = [VPNClient.ManualServer(link: "vless://x", name: "🇵🇱 Варшава (свой)"),
                            VPNClient.ManualServer(link: "wireguard://x", name: "Дом WireGuard")]
-        w.control.coreDirect = true
         w.control.multihopEntry = "🇱🇹 Литва"
         w.control.splitApps = ["Telegram", "zoom.us"]
         settings("42-settings-vpn-full", w, .settings(.vpn))

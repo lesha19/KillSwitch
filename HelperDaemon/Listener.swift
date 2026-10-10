@@ -40,6 +40,7 @@ final class Endpoint: NSObject, HelperProtocol, Sendable {
     func coreOff(reply: @escaping Reply) { Executor.perform(.coreOff, reply: reply) }
     func coreProxies(reply: @escaping Reply) { Executor.perform(.coreProxies, reply: reply) }
     func coreTraffic(reply: @escaping Reply) { Executor.perform(.coreTraffic, reply: reply) }
+    func coreConnections(reply: @escaping Reply) { Executor.perform(.coreConnections, reply: reply) }
     func coreSelect(group: String, proxy: String, reply: @escaping Reply) {
         Executor.perform(.coreSelect(group: group, proxy: proxy), reply: reply)
     }

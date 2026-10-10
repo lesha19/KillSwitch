@@ -9,7 +9,7 @@ Rules are loaded at boot, before login.
 
 - `Helper/ks` — root helper: generates the pf rules from settings and loads them into anchor
   `com.apple/killswitch` (`/etc/pf.conf` untouched). `status | state | on | off | pause [min] |
-  set lan|tailscale|dns|direct|coredirect 0|1 | allow <addr> | unallow <addr> | server-add <ip> |
+  set lan|tailscale|dns|direct|wifiguard|adblock 0|1 | allow <addr> | unallow <addr> | server-add <ip> |
   server-remove <ip> | core … | apply | watch`. Tests (no root, nothing on the system changes):
   `for t in Helper/tests/*.sh; do bash "$t"; done`.
 - `Helper/local.killswitch.plist` — LaunchDaemon: runs `ks watch` (RunAtLoad + KeepAlive), so rules
@@ -42,7 +42,7 @@ Rules are loaded at boot, before login.
   run with the VPN off and compared later); «Подключаться автоматически» on start and network change,
   never prompting (a notification instead), with trusted Wi-Fi networks (the name needs Location access
   on macOS 14+; without it every network is untrusted); «Запускать при входе» (SMAppService);
-  «Программы без VPN» (apps by CFBundleExecutable → `ks set splitapps <list>`, only with coredirect);
+  «Программы без VPN» (apps by CFBundleExecutable → `ks set splitapps <list>`);
   «Двойной VPN» (`ks set multihop <entry>|off`, chain shown in the window).
 - `App/Core/` — pure parsers (no AppKit), unit-tested by the `KillSwitchTests` target:
   `xcodegen generate && xcodebuild -scheme KillSwitch test CODE_SIGNING_ALLOWED=NO`.
@@ -61,7 +61,7 @@ the app target's `.stringsdata` files from DerivedData. Check before a release:
 `rg -n 'ядр|pf |туннел|utun|mihomo|Clash|Remnawave|Обновить защиту' App/*.swift` — only comments
 and code may match. Technical names stay in «Скопировать диагностику» (for support).
 
-Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, coredirect),
+Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, wifiguard, adblock, splitapps, multihop),
 `allow` (addresses reachable by any process), `servers-manual` (VPN server IPs added by `server-add`
 and install.sh, reachable by any process), `servers-core` (proxy addresses of the imported core
 profile, rewritten on every import, reachable only by our core), `servers` (both merged),
@@ -86,10 +86,15 @@ profile, rewritten on every import, reachable only by our core), `servers` (both
 - Own VPN core (`ks core on|off|state|import <json>|refresh <json>|proxies|select|delay`): launchd runs `/Library/KillSwitch/core/mihomo` with
   a root-owned config as uid 0, gid `_ksvpn` (created by install.sh, no members, no setgid binary), and the
   rules let that gid reach only the addresses in `servers` (plus 1.1.1.1 and 8.8.8.8 on tcp 443, see
-  rotation below), so a DIRECT rule or proxy in a profile cannot leak past the tunnel. `coredirect=1` is the explicit split-tunnel switch: the gid may then reach
-  any address and the profile's direct rules (Russian sites and so on) work. `import <json>` takes a
+  rotation below). Routing is the subscription's (ADR 0013): the gid may reach any address only while
+  `core/egress` (644) names a reason: the profile has DIRECT rules or group members (`rules`), its DNS
+  policy reaches servers outside the tunnel (`dns`), or the user chose programs without VPN
+  (`splitapps`); otherwise a DIRECT rule or proxy in a profile cannot leak past the tunnel. The app adds
+  no site routing of its own. `import <json>` takes a
   mihomo profile as a JSON object (the app converts dropweb's newest from YAML) and generates the config:
-  only `proxies`, `proxy-groups`, `rules` and `rule-providers` are taken, everything else (TUN, DNS on
+  `proxies`, `proxy-groups`, `rules` and `rule-providers` are taken (rules mihomo cannot take are left
+  out with a reason, not the whole import), from `sniffer` and `dns` only validated keys (ADR 0013;
+  without a sniffer a routing-only default is added); everything else (TUN, DNS on
   127.0.0.1:53, the controller as a unix socket in root-only `core/ctl/`, no listeners or proxy ports)
   comes from a fixed template. The DoH resolvers and rule-provider downloads go through `KS-DNS`, a
   generated hidden fallback group over the profile's proxies only, so picking DIRECT in a profile group
@@ -118,13 +123,17 @@ profile, rewritten on every import, reachable only by our core), `servers` (both
   bound to the primary interface and run with gid `_ksvpn` (logged). pf lets that gid reach exactly
   these two addresses on tcp 443 for this; the core's own DNS still goes through `KS-DNS`, and a profile
   rule sending them DIRECT needs the admin's approval like any DIRECT rule. Never the LAN's DNS.
-  Split tunnel (`coredirect=1` only, new installs default to it, upgrades keep their setting): before the
-  profile's rules the generator puts the apps of `ks set splitapps <a,b>` (stored as `splitapps=` in
-  `settings`; ≤50 names, ≤64 bytes, no commas or control characters; also their `<name> Helper…`
-  processes; `""` clears), private networks, `GEOSITE,category-ru` (only if `core/geosite.dat` is
-  installed, `Helper/fetch-geodata.sh`, sha256-pinned) and `GEOIP,RU,no-resolve` (only with
-  `core/geoip.metadb`, pinned the same way and shipped in the app), all DIRECT. The core never downloads geodata (`geo-auto-update: false`); names
-  of direct sites are still resolved through the tunnel's DoH. Double VPN: `ks set multihop <proxy>|off`
+  Programs without VPN: before the profile's rules the generator puts the apps of
+  `ks set splitapps <a,b>` (stored as `splitapps=` in `settings`; ≤50 names, ≤64 bytes, no commas or
+  control characters; also their `<name> Helper…` processes; `""` clears), DIRECT; ad blocking
+  (`adblock=1`) puts `GEOSITE,category-ads-all,REJECT` first. Both are the user's own choices and are
+  reported as such. `core/geosite.dat` and `core/geoip.metadb` (`Helper/fetch-geodata.sh`,
+  sha256-pinned, shipped in the app) serve the profile's `GEOSITE`/`GEOIP` rules; without them such
+  rules are left out. The core never downloads geodata (`geo-auto-update: false`).
+  Every generation writes `core/routing.json` (644, no secrets): the rules in order, what was left out
+  and why, what KillSwitch added, the sniffer and DNS taken, the egress reasons; the app's «Трафик»
+  shows it. `ks core connections` (passwordless) gives the open connections (program, host, rule,
+  route, bytes; no source addresses) for its «Соединения» tab. Double VPN: `ks set multihop <proxy>|off`
   (`multihop=` in `settings`) sets `dialer-proxy: <proxy>` on every other proxy, so pf lets the core
   reach only the entry server; the entry must be a proxy of the profile without its own dialer-proxy.
   Both need the admin password (not in sudoers: splitapps widens direct egress). The app switches servers without the API being exposed: `ks core proxies` (JSON of
@@ -211,7 +220,7 @@ addresses found in dropweb and Happ configs are passed to it). After updating th
    «Пароли приложений», затем в Терминале
    `xcrun notarytool store-credentials killswitch-notary --apple-id <Apple ID> --team-id YR58655PJ7`
    и ввести пароль, когда спросит (в командную строку его не писать). Он хранится в связке ключей.
-4. Ядро: `Helper/fetch-mihomo.sh`; геоданные для «российские сайты мимо VPN»: `Helper/fetch-geodata.sh`
+4. Ядро: `Helper/fetch-mihomo.sh`; геоданные для правил подписки GEOSITE/GEOIP и блокировки рекламы: `Helper/fetch-geodata.sh`
    (выпуск meta-rules-dat и его sha256 уже закреплены в скрипте; без `Helper/geosite.dat` и `Helper/geoip.metadb` выпуск не соберётся).
    Скрипт сначала берёт копию каждого файла из последнего выпуска `lesha19/KillSwitch-releases` (их кладёт туда
    `--publish`), а закреплённый коммит meta-rules-dat — только если копии нет или она другого sha256:

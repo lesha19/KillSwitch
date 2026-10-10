@@ -115,15 +115,11 @@ grep -q '^provider	.*"local-inline"' "$tmp/logical.direct" && ok "providers: pro
 # --- splitapps
 put splitapps "Telegram,Google Chrome"
 gen "$fx/ok-full.json"
-[ "$(val rules.0 "$tmp/c")" = "RULE-SET,ru-blocked,🚀 Выбор сервера" ] && ! plutil -type find-process-mode "$tmp/c" >/dev/null 2>&1 &&
-  ok "splitapps ignored without coredirect" || bad "splitapps without coredirect: $(val rules.0 "$tmp/c")"
-put coredirect 1
-gen "$fx/ok-full.json"
 [ "$(val rules.0 "$tmp/c")" = "PROCESS-NAME,Telegram,DIRECT" ] && [ "$(val rules.1 "$tmp/c")" = "PROCESS-NAME,Google Chrome,DIRECT" ] &&
   [ "$(val rules.2 "$tmp/c")" = 'PROCESS-NAME-REGEX,^Telegram Helper.*$,DIRECT' ] &&
   [ "$(val rules.3 "$tmp/c")" = 'PROCESS-NAME-REGEX,^Google Chrome Helper.*$,DIRECT' ] &&
-  [ "$(val rules.4 "$tmp/c")" = "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve" ] && [ "$(val find-process-mode "$tmp/c")" = always ] &&
-  ok "splitapps with coredirect: PROCESS-NAME and their helpers first, find-process-mode always" || bad "splitapps: $(val rules.0 "$tmp/c")"
+  [ "$(val rules.4 "$tmp/c")" = "RULE-SET,ru-blocked,🚀 Выбор сервера" ] &&
+  ok "splitapps: PROCESS-NAME and their helpers, then the subscription's own rules" || bad "splitapps: $(val rules.0 "$tmp/c") | $(val rules.4 "$tmp/c")"
 cmp -s "$tmp/c.direct" "$tmp/full.direct" && ok "splitapps rules stay out of the DIRECT signature" || bad "splitapps in signature"
 mt "splitapps" "$tmp/c"
 put splitapps 'a.b (x)+[y]'
@@ -186,56 +182,49 @@ put multihop off
 gen "$fx/ok-full.json" && ! plutil -type proxies.1.dialer-proxy "$tmp/c" >/dev/null 2>&1 && ok "multihop=off: plain" || bad "multihop=off"
 rm -f "$SETTINGS"
 
-# --- Russian sites and private networks outside the VPN (coredirect=1), from local geodata only
-
-PRIV="IP-CIDR,10.0.0.0/8,DIRECT,no-resolve IP-CIDR,172.16.0.0/12,DIRECT,no-resolve IP-CIDR,192.168.0.0/16,DIRECT,no-resolve IP-CIDR,169.254.0.0/16,DIRECT,no-resolve"
-rules_of() { local i=0 out=""; while r=$(val "rules.$i" "$1"); do out+="$r "; i=$((i + 1)); done; echo "${out% }"; }
+# --- ADR 0013: KillSwitch writes no routing of its own. With every old switch on and the geodata
+# in place, the config holds the subscription's rules exactly, in its order, and nothing else.
+rules_of() { local i=0 out=""; while r=$(val "rules.$i" "$1"); do out+="$r|"; i=$((i + 1)); done; echo "${out%|}"; }
+for f in geoip.metadb geosite.dat; do
+  if [ -r "$here/../$f" ]; then cp "$here/../$f" "$CORE_DIR/$f"; else echo fake > "$CORE_DIR/$f"; fi
+done
+printf 'coredirect=1\nlan=1\n' > "$SETTINGS"
 gen "$fx/ok-minimal.json"
 [ "$(rules_of "$tmp/c")" = "MATCH,only" ] && [ "$(val geo-auto-update "$tmp/c")" = false ] &&
-  ok "ru: nothing added without coredirect; geodata never auto-updated" || bad "ru without coredirect: $(rules_of "$tmp/c")"
-echo coredirect=1 > "$SETTINGS"
-gen "$fx/ok-minimal.json"
-[ "$(rules_of "$tmp/c")" = "$PRIV MATCH,only" ] && ok "ru: no geodata, no geo rules (the core never downloads it)" ||
-  bad "ru without geodata: $(rules_of "$tmp/c")"
-mmdb=""
-for f in "$here/../geoip.metadb" /Library/KillSwitch/core/geoip.metadb; do
-  [ -r "$f" ] && { mmdb=$f; break; }
-done
-if [ -n "$mmdb" ]; then cp "$mmdb" "$CORE_DIR/geoip.metadb"; else echo fake > "$CORE_DIR/geoip.metadb"; fi
-gen "$fx/ok-minimal.json"
-[ "$(rules_of "$tmp/c")" = "$PRIV GEOIP,RU,DIRECT,no-resolve MATCH,only" ] && ok "ru: GEOIP,RU with geoip.metadb" ||
-  bad "ru with mmdb: $(rules_of "$tmp/c")"
-if [ -n "$mmdb" ] && [ -x "$MIHOMO" ]; then
-  if out=$("$MIHOMO" -t -d "$CORE_DIR" -f "$tmp/c" 2>&1); then ok "ru: mihomo -t with geoip.metadb"; else bad "ru: mihomo -t: $(tail -2 <<<"$out")"; fi
-else echo "skip  ru: mihomo -t (no geoip.metadb: Helper/fetch-geodata.sh, or no mihomo)"; fi
-site=""
-for f in /Library/KillSwitch/core/geosite.dat "$here/../geosite.dat"; do [ -r "$f" ] && { site=$f; break; }; done
-if [ -n "$site" ]; then cp "$site" "$CORE_DIR/geosite.dat"; else echo fake > "$CORE_DIR/geosite.dat"; fi
-put splitapps Telegram
-gen "$fx/ok-minimal.json"
-[ "$(rules_of "$tmp/c")" = "PROCESS-NAME,Telegram,DIRECT PROCESS-NAME-REGEX,^Telegram Helper.*$,DIRECT $PRIV GEOSITE,category-ru,DIRECT GEOIP,RU,DIRECT,no-resolve MATCH,only" ] &&
-  ok "ru: apps, private nets, GEOSITE, GEOIP, then the profile" || bad "ru with geosite: $(rules_of "$tmp/c")"
-[ ! -s "$tmp/c.direct" ] && ok "ru: our rules stay out of the DIRECT signature" || bad "ru: signature $(cat "$tmp/c.direct")"
-[ "$(val dns.nameserver.0 "$tmp/c")" = "https://1.1.1.1/dns-query#KS-DNS" ] && ok "ru: DNS still through the tunnel" || bad "ru: DNS"
-if [ -n "$mmdb" ] && [ -n "$site" ] && [ -x "$MIHOMO" ]; then
-  if out=$("$MIHOMO" -t -d "$CORE_DIR" -f "$tmp/c" 2>&1); then ok "ru: mihomo -t with geosite.dat"; else bad "ru: mihomo -t: $(tail -2 <<<"$out")"; fi
-else echo "skip  ru: mihomo -t with GEOSITE (no geosite.dat: Helper/fetch-geodata.sh)"; fi
+  ok "no app routing: coredirect=1 adds nothing (no GEOSITE/GEOIP RU, no private networks)" || bad "app routing: $(rules_of "$tmp/c")"
+gen "$fx/ok-full.json"
+want=$(/usr/bin/perl -MJSON::PP -e 'local $/; print join "|", @{ JSON::PP->new->decode(<STDIN>)->{rules} }' < "$fx/ok-full.json")
+[ "$(rules_of "$tmp/c")" = "$want" ] && ok "no app routing: the subscription's rules exactly, in order" || bad "order: $(rules_of "$tmp/c")"
+gen "$fx/ok-routing.json"
+want="AND,((NETWORK,UDP),(DST-PORT,443)),REJECT|IP-CIDR,10.0.0.0/8,DIRECT,no-resolve|RULE-SET,ru-inline,DIRECT|RULE-SET,ru-http,DIRECT|DOMAIN-SUFFIX,storkvpn.online,DIRECT"
+want="$want|GEOSITE,category-ru,DIRECT|GEOIP,RU,DIRECT,no-resolve|OR,((DOMAIN,a.example),(GEOSITE,youtube)),Сервер|MATCH,Сервер"
+[ "$(rules_of "$tmp/c")" = "$want" ] && ok "routing: the subscription's GEOSITE/GEOIP rules kept with the shipped geodata, order kept" ||
+  bad "routing rules: $(rules_of "$tmp/c")"
+if [ -r "$here/../geoip.metadb" ] && [ -r "$here/../geosite.dat" ] && [ -x "$MIHOMO" ]; then
+  if out=$("$MIHOMO" -t -d "$CORE_DIR" -f "$tmp/c" 2>&1); then ok "routing: mihomo -t with the shipped geodata"; else bad "routing: mihomo -t: $(tail -2 <<<"$out")"; fi
+else echo "skip  routing: mihomo -t with geodata (Helper/fetch-geodata.sh, Helper/fetch-mihomo.sh)"; fi
+rm -f "$CORE_DIR/geosite.dat" "$CORE_DIR/geoip.metadb"
+gen "$fx/ok-routing.json"
+grep -q GEOSITE "$tmp/c" || grep -q 'GEOIP,' "$tmp/c" && bad "no geodata: GEOSITE/GEOIP rules kept" ||
+  ok "no geodata: GEOSITE/GEOIP rules left out (the core never downloads geodata)"
+mt "routing without geodata" "$tmp/c"
 rm -f "$SETTINGS"
 
 # --- ads and trackers blocked (adblock=1), from the shipped geosite.dat only; REJECT is not DIRECT
+site=""; [ -r "$here/../geosite.dat" ] && site="$here/../geosite.dat"
 put adblock 1
 rm -f "$CORE_DIR/geosite.dat"
 gen "$fx/ok-minimal.json"
 [ "$(rules_of "$tmp/c")" = "MATCH,only" ] && ok "ads: no geodata, no rule (never downloaded)" || bad "ads without geodata: $(rules_of "$tmp/c")"
 if [ -n "$site" ]; then cp "$site" "$CORE_DIR/geosite.dat"; else echo fake > "$CORE_DIR/geosite.dat"; fi
 gen "$fx/ok-minimal.json"
-[ "$(rules_of "$tmp/c")" = "GEOSITE,category-ads-all,REJECT MATCH,only" ] && ok "ads: REJECT first" || bad "ads: $(rules_of "$tmp/c")"
+[ "$(rules_of "$tmp/c")" = "GEOSITE,category-ads-all,REJECT|MATCH,only" ] && ok "ads: REJECT first" || bad "ads: $(rules_of "$tmp/c")"
 [ ! -s "$tmp/c.direct" ] && ok "ads: not in the DIRECT signature" || bad "ads: signature $(cat "$tmp/c.direct")"
 [ "$(val geo-auto-update "$tmp/c")" = false ] && ok "ads: geodata never auto-updated" || bad "ads: geo-auto-update"
-put coredirect 1
+put splitapps Telegram
 gen "$fx/ok-minimal.json"
-[ "$(rules_of "$tmp/c" | cut -d' ' -f1)" = "GEOSITE,category-ads-all,REJECT" ] && ok "ads: before the split-tunnel rules" ||
-  bad "ads with coredirect: $(rules_of "$tmp/c")"
+[ "$(rules_of "$tmp/c" | cut -d'|' -f1)" = "GEOSITE,category-ads-all,REJECT" ] && ok "ads: before the apps outside the VPN" ||
+  bad "ads with splitapps: $(rules_of "$tmp/c")"
 if [ -n "$site" ] && [ -x "$MIHOMO" ]; then
   if out=$("$MIHOMO" -t -d "$CORE_DIR" -f "$tmp/c" 2>&1); then ok "ads: mihomo -t with geosite.dat"; else bad "ads: mihomo -t: $(tail -2 <<<"$out")"; fi
 else echo "skip  ads: mihomo -t (no geosite.dat or mihomo)"; fi

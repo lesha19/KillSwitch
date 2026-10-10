@@ -231,7 +231,8 @@ final class VPNClient {
     private func fetchProfile(_ url: URL) async -> Profile? {
         do {
             let (body, headers) = try await Self.fetch(url)
-            let profile = try ProfileConverter.profile(fromSubscription: body)
+            let (profile, leftOut) = try ProfileConverter.read(subscription: body)
+            UserDefaults.standard.set(leftOut, forKey: RoutingReport.leftOutKey)
             status.title = SubscriptionHeaders.title(headers["profile-title"]) ?? status.title ?? url.host
             status.usage = SubscriptionUsage(header: headers["subscription-userinfo"])
             status.serverInterval = SubscriptionHeaders.updateInterval(headers["profile-update-interval"])

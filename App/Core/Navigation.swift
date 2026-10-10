@@ -25,17 +25,18 @@ enum SettingsPane: String, CaseIterable {
 
 /// A section of the one window of the app (spec §3, ADR 0008), picked in its sidebar.
 enum AppSection: Hashable {
-    case home, servers, leakTest, log, about
+    case home, servers, traffic, leakTest, log, about
     case settings(SettingsPane)
 
     /// The sidebar above «Настройки»; «О программе» closes the list.
-    static let sidebar: [AppSection] = [.home, .servers, .leakTest, .log]
+    static let sidebar: [AppSection] = [.home, .servers, .traffic, .leakTest, .log]
     static let settingsPanes: [AppSection] = SettingsPane.allCases.map { .settings($0) }
 
     var title: String {
         switch self {
         case .home: String(localized: "Главная")
         case .servers: String(localized: "Серверы")
+        case .traffic: String(localized: "Трафик")
         case .leakTest: String(localized: "Проверка утечек")
         case .log: String(localized: "Журнал защиты")
         case .about: String(localized: "О программе")
@@ -47,6 +48,7 @@ enum AppSection: Hashable {
         switch self {
         case .home: "shield.lefthalf.filled"
         case .servers: "globe"
+        case .traffic: "arrow.left.arrow.right"
         case .leakTest: "checkmark.shield"
         case .log: "list.bullet.rectangle"
         case .about: "info.circle"
@@ -59,6 +61,7 @@ enum AppSection: Hashable {
         switch self {
         case .home: "home"
         case .servers: "servers"
+        case .traffic: "traffic"
         case .leakTest: "leaks"
         case .log: "log"
         case .about: "about"

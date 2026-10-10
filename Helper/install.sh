@@ -42,7 +42,9 @@ valid_user() {
 # "core import" may add servers the core can reach, so it keeps asking for the password.
 # "netrestore" only turns back on the network services ks itself turned off, and refuses while the
 # watchdog runs without its rules.
-# "core traffic" (the menu bar speed) prints two byte totals of the core and changes nothing.
+# "core traffic" (the menu bar speed) prints two byte totals of the core and changes nothing;
+# "core connections" (the «Трафик» window) lists the user's own connections through the core and
+# changes nothing either.
 # "set" (ad blocking included) changes what the core and pf do, so it keeps the password.
 # The environment: secure_path and env_reset for ks whatever the system's sudoers says, and none
 # of the variables macOS keeps by default (HOME would hand curl the user's ~/.curlrc).
@@ -52,7 +54,7 @@ sudoers_text() {  # sudoers_text <user> <ks>
   echo "Defaults!$ks env_keep-=\"HOME MAIL CHARSET LANG LANGUAGE LC_ALL LC_COLLATE LC_CTYPE LC_MESSAGES LC_MONETARY LC_NUMERIC LC_TIME SSH_AUTH_SOCK TZ EDITOR VISUAL\""
   echo "Defaults!$ks env_delete+=\"HOME CURL_HOME BASH_ENV ENV LC_ALL\""
   echo "$1 ALL=(root) NOPASSWD: $ks state, $ks probe, $ks on, $ks netrestore, $ks core state, $ks core on, $ks core off," \
-    "$ks core proxies, $ks core traffic, $ks core select *, $ks core delay *, $ks core refresh *"
+    "$ks core proxies, $ks core traffic, $ks core connections, $ks core select *, $ks core delay *, $ks core refresh *"
 }
 
 # --upgrade: the user the installed entry names (install.sh wrote it), so nobody gains anything.
@@ -121,7 +123,7 @@ watchdog_update() {
 core_update() {
   local restart=0 plist=0
   if put_file mihomo "$DIR/core/mihomo" 755; then restart=1; fi
-  # Russian sites and addresses outside the VPN (coredirect=1): the pinned files of the app bundle
+  # the subscription's GEOSITE/GEOIP rules and the ad block (ADR 0013): the pinned files of the app bundle
   # (fetch-geodata.sh), never a copy from a place the user can write. A geoip.metadb that older
   # versions took from dropweb's folder is replaced, or removed if the bundle has none. The core
   # reads them when it starts.
@@ -152,7 +154,7 @@ core_update() {
 }
 
 main() {
-  local upgrade=0 fresh=0 ks_new=0 plist_new=0 old new USER_NAME ip
+  local upgrade=0 ks_new=0 plist_new=0 old new USER_NAME ip
   if [ "${1:-}" = --upgrade ]; then
     [ $# -eq 1 ] || { echo "usage: install.sh --upgrade" >&2; exit 1; }
     upgrade=1; shift
@@ -178,13 +180,12 @@ main() {
     [[ "$ip" =~ ^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$ ]] || { echo "bad server address: $ip" >&2; exit 1; }
   done
 
-  [ -e "$DIR/ks" ] || fresh=1
   install -d -o root -g wheel -m 755 "$DIR"
   if put_file ks "$DIR/ks" 755; then ks_new=1; fi
-  # Operator's choice (0.7): on a new install Russian sites go outside the VPN, everything else
-  # through it (coredirect=1, see ks core_generate). An upgrade keeps the setting it had.
-  if [ "$fresh" = 1 ] && ! grep -q '^coredirect=' "$DIR/settings" 2>/dev/null; then
-    echo coredirect=1 >> "$DIR/settings"
+  # «Российские сайты напрямую» (coredirect, 0.7–0.14) is gone (ADR 0013): what goes outside the
+  # VPN comes from the subscription's rules only. Its line is dropped; every other setting stays.
+  if grep -q '^coredirect=' "$DIR/settings" 2>/dev/null; then
+    grep -v '^coredirect=' "$DIR/settings" > "$DIR/settings.tmp"; chmod 644 "$DIR/settings.tmp"; mv "$DIR/settings.tmp" "$DIR/settings"
   fi
   if put_file local.killswitch.plist "$WATCH_PLIST" 644; then plist_new=1; fi
   put_file tsrelays "$DIR/tsrelays" 644 || true

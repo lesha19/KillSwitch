@@ -39,6 +39,7 @@ enum HelperIdentity {
     func coreOff(reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreProxies(reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreTraffic(reply: @escaping @Sendable (Int32, String, String) -> Void)
+    func coreConnections(reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreSelect(group: String, proxy: String, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreDelay(name: String, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreRefresh(profile: FileHandle, reply: @escaping @Sendable (Int32, String, String) -> Void)

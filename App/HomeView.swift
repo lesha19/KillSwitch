@@ -233,7 +233,8 @@ private struct ServerRow: View {
     }
 }
 
-/// «Российские сайты напрямую», «Двойной VPN»: each change asks for the password.
+/// «Двойной VPN»: each change asks for the password. Which sites go around the VPN is the
+/// subscription's business (ADR 0013), shown in «Трафик».
 private struct QuickSwitches: View {
     @Environment(KillSwitchControl.self) private var control
 
@@ -241,9 +242,6 @@ private struct QuickSwitches: View {
         let exit = control.currentServer
         let candidates = Multihop.candidates(control.proxies?.servers ?? [], exit: exit)
         VStack(spacing: 6) {
-            row(Text("Российские сайты напрямую"), String(localized: "Российские сайты напрямую"),
-                isOn: Binding(get: { control.coreDirect }, set: { control.set("coredirect", $0) }))
-                .help("Банки и Госуслуги — без VPN, остальное через VPN. Спросит пароль.")
             row(Text(multihopTitle(exit: exit)), String(localized: "Двойной VPN"),
                 isOn: Binding(get: { control.multihopEntry != nil },
                               set: { control.setMultihop(entry: $0 ? candidates.first : nil) }))

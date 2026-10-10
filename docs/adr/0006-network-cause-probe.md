@@ -18,7 +18,8 @@ everything outside the tunnel, so the app itself cannot look past it.
   needed — `time_connect` > 0 counts) to `77.88.8.8`/`77.88.8.1` (Yandex DNS, kept open in the
   white lists) and to `1.1.1.1`/`8.8.8.8`, from the physical interface (`--interface`, past the
   TUN), as the core's group `_ksvpn`, first answer wins.
-- **pf**: one new line, only without coredirect (with it the core's group passes anyway):
+- **pf**: one new line, only while the core's group is not passed broadly (since ADR 0013: while
+  `core/egress` is empty; before, without coredirect):
   `pass out quick proto tcp to { 77.88.8.8, 77.88.8.1 } port 443 group _ksvpn`. The foreign
   addresses already pass for the DoH fallback. No process but the helper and the core carries
   `_ksvpn`, and the core never dials these addresses DIRECT unless a profile rule approved by

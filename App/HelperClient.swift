@@ -128,6 +128,7 @@ final class HelperClient {
             case .coreOff: helper.coreOff(reply: reply)
             case .coreProxies: helper.coreProxies(reply: reply)
             case .coreTraffic: helper.coreTraffic(reply: reply)
+            case .coreConnections: helper.coreConnections(reply: reply)
             case .coreSelect(let group, let proxy): helper.coreSelect(group: group, proxy: proxy, reply: reply)
             case .coreDelay(let name): helper.coreDelay(name: name, reply: reply)
             case .coreRefresh: helper.coreRefresh(profile: profile!, reply: reply)

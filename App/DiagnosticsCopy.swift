@@ -32,7 +32,7 @@ enum DiagnosticsCopy {
             ("Туннель поднят", yes(control.vpnUp)),
             ("VPN KillSwitch поднят (198.18.128.1)", yes(control.ownTunnelUp)),
             ("VPN другой программы", control.foreignVPN ?? "нет"),
-            ("Российские сайты — напрямую", yes(control.coreDirect)),
+            ("Правил подписки", control.routing.map { "\($0.subscriptionRules.count), не взято \($0.dropped.count)" } ?? "нет данных"),
             ("Двойной VPN", yes(control.multihopEntry != nil)),
             ("Программ мимо VPN", "\(control.splitApps.count)"),
             ("Групп серверов", "\(control.proxies?.groups.count ?? 0)"),

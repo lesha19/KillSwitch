@@ -9,7 +9,9 @@ Patches (copies only):
 - init bodies of KillSwitchControl / VPNClient / AutoConnector / FilterControl / LeakTester do
   nothing (no timers, no sudo, no keychain, no network monitor);
 - the helper runner, proxy loading and the event log reader are no-ops; the keychain is a stub;
-- the wizard opens on the step and install state set by Render.swift and does not run the leak test.
+- the wizard opens on the step and install state set by Render.swift and does not run the leak test;
+- «Трафик» does not read the helper's report or poll connections; «Проверить адрес» starts with
+  `renderTrafficQuery`.
 
 Usage: prepare.py <repo> <out-dir>
 """
@@ -56,6 +58,9 @@ patches = {
         ("    private static func exec(", "        (-1, \"\")"),
         # reading Happ's group container makes macOS ask "access data from other apps" and hangs
         ("    private static func readHappServers() -> [String] {", "        return []"),
+        # «Трафик»: the report and the connections are set by Render.swift
+        ("    func readRouting() {", "        return"),
+        ("    func watchConnections(_ on: Bool) {", "        return"),
     ],
     "VPNClient.swift": [("    init(control: KillSwitchControl) {", "        self.control = control")],
     "AutoConnector.swift": [("    init(control: KillSwitchControl) {", "        self.control = control\n        super.init()")],
@@ -71,6 +76,8 @@ for path in files:
     text = re.sub(r"(?m)^private struct", "struct", text)
     # no asset catalog in the renderer: the status icons are NSImages registered by name (Render.swift)
     text = text.replace("Image(status.icon)", "Image(nsImage: NSImage(named: status.icon) ?? NSImage())")
+    if path.name == "TrafficView.swift":   # «Проверить адрес» opens with the address set by Render.swift
+        text = text.replace("@State private var query = \"\"", "@State private var query = renderTrafficQuery")
     if path.name == "OnboardingView.swift":
         text = text.replace("control.serviceInstalled", "renderOnboarding.installed")
         text = text.replace("        index = 0\n", "        index = steps.firstIndex(of: renderOnboarding.step) ?? 0\n")
@@ -98,6 +105,7 @@ enum Keychain {
         text = """import SwiftUI
 @MainActor @Observable final class Updater {
     var canCheck = true
+    var automaticallyUpdates = true
     func check() {}
 }
 struct CheckForUpdatesButton: View {

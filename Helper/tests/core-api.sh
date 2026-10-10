@@ -47,11 +47,31 @@ core_api GET "/proxies/NEW" >/dev/null 2>&1 && ok "reload: new config in use" ||
 grep -q kickstart "$tmp/launchd" 2>/dev/null && bad "reload fell back to a restart" || ok "reload without restart"
 [ "$(now)" = "DE/2 🚀" ] && ok "reload keeps the selection" || bad "selection after reload: $(now)"
 out=$(core_traffic) && [[ "$out" =~ ^up=[0-9]+\ down=[0-9]+$ ]] && ok "traffic: $out" || bad "traffic: $out"
+core_connections > "$tmp/conn.json" && [ "$(plutil -type connections "$tmp/conn.json")" = array ] &&
+  [ "$(plutil -type providers "$tmp/conn.json")" = dictionary ] && ok "connections: JSON from the running core" || bad "connections: $(cat "$tmp/conn.json")"
 # only the totals leave ks: never the connections' hosts, addresses or processes
 core_api() { printf '%s' '{"downloadTotal":123456,"uploadTotal":7890,"connections":[{"id":"a","metadata":{"host":"secret.example","destinationIP":"203.0.113.5","process":"Safari"},"upload":5,"download":9}],"memory":1}'; }
 [ "$(core_traffic)" = "up=7890 down=123456" ] && ok "traffic: totals only" || bad "traffic: $(core_traffic)"
 core_api() { printf '%s' '{"connections":[]}'; }
 core_traffic >/dev/null 2>&1 && bad "traffic without totals accepted" || ok "traffic without totals fails"
+# connections (the «Трафик» window): what the app shows, and nothing else of the core's reply
+core_api() {
+  case "$2" in
+    /connections) printf '%s' '{"downloadTotal":10,"uploadTotal":20,"memory":1,"connections":[{"id":"c-1","metadata":{"network":"tcp","type":"Tun","sourceIP":"198.18.128.1","sourcePort":"50000","destinationIP":"203.0.113.5","destinationPort":"443","host":"ya\u0007.ru","process":"Safari","processPath":"/Applications/Safari.app/Contents/MacOS/Safari","uid":501,"inboundIP":"x","dnsMode":"fakeip"},"upload":5,"download":9,"start":"2026-10-10T10:00:00Z","chains":["DIRECT"],"rule":"DomainSuffix","rulePayload":"ru"}]}' ;;
+    /providers/rules) printf '%s' '{"providers":{"ru-http":{"behavior":"Domain","format":"MrsRule","name":"ru-http","ruleCount":1234,"type":"Rule","updatedAt":"2026-10-10T09:00:00Z","vehicleType":"HTTP"}}}' ;;
+  esac
+}
+x() { plutil -extract "$1" raw -o - "$tmp/c2.json" 2>/dev/null; }
+core_connections > "$tmp/c2.json" || bad "connections: failed on a full reply"
+[ "$(x connections.0.host)" = "ya?.ru" ] && [ "$(x connections.0.rule)" = DomainSuffix ] && [ "$(x connections.0.chains.0)" = DIRECT ] &&
+  [ "$(x connections.0.download)" = 9 ] && [ "$(x connections.0.process)" = Safari ] &&
+  ok "connections: host (control characters replaced), rule, route, bytes, program" || bad "connections: $(cat "$tmp/c2.json")"
+grep -qE 'sourceIP|sourcePort|198\.18\.128\.1|inboundIP|"uid"|memory' "$tmp/c2.json" &&
+  bad "connections: more than the window needs: $(cat "$tmp/c2.json")" || ok "connections: no source address, port or uid"
+[ "$(x providers.ru-http.count)" = 1234 ] && [ "$(x downloadTotal)" = 10 ] && ok "connections: provider sizes and totals" ||
+  bad "connections providers: $(cat "$tmp/c2.json")"
+core_api() { return 1; }
+core_connections >/dev/null 2>&1 && bad "connections without a core accepted" || ok "connections: fails when the core does not answer"
 valid_name "$(printf 'a\nb')" && bad "newline in a name accepted" || ok "newline in a name refused"
 valid_name "" && bad "empty name accepted" || ok "empty name refused"
 

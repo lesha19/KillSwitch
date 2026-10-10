@@ -19,8 +19,8 @@
 #     ~/Library/Developer/Xcode/UserData/Provisioning Profiles and
 #     ~/Library/MobileDevice/Provisioning Profiles; override with KS_PROFILE_APP / KS_PROFILE_FILTER;
 #   - Helper/mihomo (Helper/fetch-mihomo.sh): the core is signed here as com.lesha19.KillSwitch.core.
-#   - Helper/geosite.dat and Helper/geoip.metadb (Helper/fetch-geodata.sh): Russian sites and
-#     addresses outside the VPN (coredirect=1).
+#   - Helper/geosite.dat and Helper/geoip.metadb (Helper/fetch-geodata.sh): the subscription's
+#     GEOSITE/GEOIP rules and the ad block (ADR 0013).
 #     Shipped like mihomo, in the app's Resources/Helper; install.sh copies them to /Library/KillSwitch/core.
 #     They must be the pinned files: --publish uploads them (with their sha256) as the copies that
 #     fetch-geodata.sh asks first, in case the pinned meta-rules-dat commit disappears.
@@ -138,7 +138,7 @@ fi
 [ -f Helper/mihomo ] || problem "Нет Helper/mihomo (ядро VPN): запустите Helper/fetch-mihomo.sh."
 for f in geosite.dat geoip.metadb; do
   if [ ! -f "Helper/$f" ]; then
-    problem "Нет Helper/$f (российские сайты и адреса мимо VPN): запустите Helper/fetch-geodata.sh."
+    problem "Нет Helper/$f (правила GEOSITE и GEOIP подписки): запустите Helper/fetch-geodata.sh."
   elif ! geodata_pinned Helper "$f"; then
     problem "Helper/$f не совпадает с sha256 из Helper/fetch-geodata.sh: запустите его заново."
   fi

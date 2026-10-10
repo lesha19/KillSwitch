@@ -1,0 +1,39 @@
+{
+  "mixed-port": 7890,
+  "proxies": [
+    {"name": "LT", "type": "vless", "server": "203.0.113.10", "port": 443, "uuid": "a3482e88-686a-4a58-8126-99c9df64b7bf",
+     "network": "tcp", "tls": true, "servername": "www.microsoft.com"},
+    {"name": "DE", "type": "trojan", "server": "de.example.com", "port": 443, "password": "secret-pass"}
+  ],
+  "proxy-groups": [
+    {"name": "Сервер", "type": "select", "proxies": ["LT", "DE", "DIRECT"]}
+  ],
+  "rule-providers": {
+    "ru-inline": {"type": "inline", "behavior": "domain", "payload": ["+.yandex.ru", "+.vk.com"]},
+    "ru-http": {"type": "http", "behavior": "domain", "format": "mrs", "url": "https://user:token@rules.example.com/ru.mrs?k=secret", "interval": 86400}
+  },
+  "sniffer": {"enable": true, "parse-pure-ip": true, "override-destination": false, "force-dns-mapping": true,
+              "sniff": {"TLS": {"ports": [443, 8443]}, "HTTP": {"ports": [80, "8080-8880"], "override-destination": true}, "SSH": {"ports": [22]}},
+              "force-domain": ["+.v2ex.com"], "skip-domain": ["Mijia Cloud", "rule-set:missing"], "skip-src-address": ["10.0.0.0/8"]},
+  "dns": {"enable": true, "listen": "0.0.0.0:53", "nameserver": ["192.168.1.1"], "default-nameserver": ["192.168.1.1"],
+          "fake-ip-filter": ["+.lan", "+.local", "rule-set:ru-inline", "geosite:category-ru", "bad pattern"],
+          "nameserver-policy": {"+.ru": "https://dns.yandex.ru/dns-query", "rule-set:ru-inline": ["77.88.8.8", "dhcp://en0"], "geoip:ru": "1.1.1.1"},
+          "direct-nameserver": ["77.88.8.8", "https://common.dot.dns.yandex.net/dns-query#DIRECT", "system"],
+          "respect-rules": true},
+  "rules": [
+    "AND,((NETWORK,UDP),(DST-PORT,443)),REJECT",
+    "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
+    "RULE-SET,ru-inline,DIRECT",
+    "RULE-SET,ru-http,DIRECT",
+    "DOMAIN-SUFFIX,storkvpn.online,DIRECT",
+    "FOO,bar,DIRECT",
+    "DOMAIN,x.example,NoSuchGroup",
+    "RULE-SET,nope,DIRECT",
+    "SUB-RULE,(NETWORK,TCP),sub",
+    "IP-ASN,13335,DIRECT",
+    "GEOSITE,category-ru,DIRECT",
+    "GEOIP,RU,DIRECT,no-resolve",
+    "OR,((DOMAIN,a.example),(GEOSITE,youtube)),Сервер",
+    "MATCH,Сервер"
+  ]
+}

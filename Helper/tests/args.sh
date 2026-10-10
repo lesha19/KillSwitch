@@ -15,8 +15,9 @@ refuses() { if passwordless_args_ok "$@"; then bad "took: ks $(printf '%q ' "$@"
 # every passwordless command of install.sh's sudoers, as written there
 eval "$(sed -n '/^sudoers_text() {/,/^}/p' "$here/../install.sh")"
 cmds=$(sudoers_text someone /k | sed -n 's/^someone ALL=(root) NOPASSWD: //p' | tr ',' '\n' | sed 's/^ *\/k //')
-[ "$(wc -l <<<"$cmds")" -eq 12 ] && ok "sudoers lists 12 passwordless commands" || bad "sudoers commands: $cmds"
+[ "$(wc -l <<<"$cmds")" -eq 13 ] && ok "sudoers lists 13 passwordless commands" || bad "sudoers commands: $cmds"
 grep -qx 'core traffic' <<<"$cmds" && ok "sudoers: core traffic (the menu bar speed)" || bad "sudoers: no core traffic"
+grep -qx 'core connections' <<<"$cmds" && ok "sudoers: core connections (the «Трафик» window)" || bad "sudoers: no core connections"
 # settings, ad blocking included, keep asking for the password (ADR 0010 right in the daemon)
 grep -q '^set' <<<"$cmds" && bad "sudoers: a set command without password" || ok "sudoers: no set command"
 while IFS= read -r c; do
@@ -31,6 +32,8 @@ refuses core select g p extra
 refuses core select $'g\nx' p
 refuses core select g "$(printf 'p%.0s' $(seq 300))"
 refuses core traffic now
+refuses core connections all
+refuses core connections ""
 takes core delay "DE trojan \"q\""
 refuses core delay
 refuses core delay a b

@@ -22,6 +22,7 @@ resolve_host() {
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 SETTINGS="$tmp/settings"
+CORE_DIR="$tmp/core"; mkdir "$CORE_DIR"   # no geodata: GEOSITE/GEOIP rules are left out, never downloaded
 fails=0
 ok()   { echo "ok    $*"; }
 bad()  { echo "FAIL  $*"; fails=$((fails + 1)); }
@@ -30,7 +31,7 @@ top_keys() { plutil -convert xml1 -o - "$1" | sed -n 's/^	<key>\(.*\)<\/key>$/\1
 
 check_config() {  # check_config <name> <config> <servers>
   local name=$1 c=$2 s=$3 n i want got
-  want="dns external-controller-unix geo-auto-update ipv6 log-level mode allow-lan proxies proxy-groups rule-providers rules tun"
+  want="dns external-controller-unix find-process-mode geo-auto-update ipv6 log-level mode allow-lan proxies proxy-groups rule-providers rules sniffer tun"
   want=$(tr ' ' '\n' <<<"$want" | sort | paste -sd' ' -)
   got=$(top_keys "$c")
   [ "$got" = "$want" ] && ok "$name: top-level keys" || bad "$name: top-level keys: $got"
