@@ -1,6 +1,8 @@
 // Checks Filter/TrustedCode.swift against real binaries. Run with scripts/test-filter-trust.sh.
 // Fixtures (made by the script): FIXTURES/forged (ad-hoc, our core's identifier), FIXTURES/unsigned,
-// FIXTURES/dev-core and FIXTURES/dev-other (signed with our Apple Development identity, if any).
+// FIXTURES/dev-core and FIXTURES/dev-other (signed with our Apple Development identity, if any),
+// FIXTURES/devid-core (our Developer ID, if any), FIXTURES/signed-core (scripts/sign-core.sh's
+// default identity), FIXTURES/adhoc-mihomo (Helper/mihomo re-signed ad-hoc, if present).
 import Foundation
 import Security
 
@@ -31,7 +33,7 @@ let fixtures = CommandLine.arguments[1]
 // The audit's bypass: a binary at a trusted path or with a trusted name proves nothing.
 expect("\(fixtures)/forged", nil, "ad-hoc binary with our core's identifier is not trusted")
 expect("\(fixtures)/unsigned", nil, "unsigned binary is not trusted")
-expect("/Library/KillSwitch/core/mihomo", nil, "ad-hoc mihomo at the core path is not trusted")
+expect("\(fixtures)/adhoc-mihomo", nil, "ad-hoc (upstream) mihomo is not trusted")
 expect("/opt/homebrew/opt/tailscale/bin/tailscaled", nil, "ad-hoc Homebrew tailscaled is not trusted")
 expect("\(NSHomeDirectory())/Library/Application Support/app.dropweb/cores/DropwebCore", nil,
        "ad-hoc DropwebCore is not trusted")
@@ -40,6 +42,8 @@ expect("/usr/bin/true", nil, "Apple's own binaries are not trusted")
 // Real signatures still match.
 expect("\(fixtures)/dev-core", .core, "core signed by team YR58655PJ7 is trusted")
 expect("\(fixtures)/dev-other", nil, "other code of our team is not the core")
+expect("\(fixtures)/devid-core", .core, "core signed with our Developer ID is trusted")
+expect("\(fixtures)/signed-core", .core, "core signed by scripts/sign-core.sh is trusted")
 expect("/Applications/Tailscale.app", .tailscale, "Tailscale app (App Store) is trusted")
 expect("/Applications/Tailscale.app/Contents/PlugIns/IPNExtension.appex", .tailscale,
        "Tailscale network extension is trusted")

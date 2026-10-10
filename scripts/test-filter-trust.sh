@@ -18,5 +18,19 @@ if security find-identity -v -p codesigning | grep -q "Apple Development"; then
   codesign -f -s "Apple Development" -i com.lesha19.KillSwitch.other "$work/dev-other" 2>/dev/null || rm -f "$work/dev-other"
 fi
 
+if security find-identity -v -p codesigning | grep -q "Developer ID Application: .*(YR58655PJ7)"; then
+  cp /usr/bin/true "$work/devid-core"
+  codesign -f -s "Developer ID Application: " --timestamp=none -i com.lesha19.KillSwitch.core "$work/devid-core" 2>/dev/null ||
+    rm -f "$work/devid-core"
+fi
+# What scripts/sign-core.sh signs with by default (Developer ID if present, else Apple Development).
+cp /usr/bin/true "$work/signed-core"
+scripts/sign-core.sh "$work/signed-core" >/dev/null 2>&1 || rm -f "$work/signed-core"
+# The upstream core, as Helper/fetch-mihomo.sh downloads it before signing: ad-hoc.
+if [ -f Helper/mihomo ]; then
+  cp Helper/mihomo "$work/adhoc-mihomo"
+  codesign -f -s - "$work/adhoc-mihomo" 2>/dev/null
+fi
+
 swiftc -swift-version 6 -o "$work/test" Filter/TrustedCode.swift scripts/filter-trust-test/main.swift
 "$work/test" "$work"
