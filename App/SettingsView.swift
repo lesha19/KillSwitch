@@ -716,10 +716,11 @@ struct AboutView: View {
                     CheckForUpdatesButton(updater: updater)
                 }
             }
+            NetworkHintsSection()
             Section("Советы") {
                 LabeledContent("Выключи «Частный узел iCloud»: он может обходить защиту.") {
                     Button("Открыть настройки iCloud") {
-                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.systempreferences.AppleIDSettings:icloud")!)
+                        NSWorkspace.shared.open(SystemSettings.iCloud)
                     }
                 }
                 LabeledContent("После обновления macOS перезагрузи Mac и запусти проверку утечек.") {

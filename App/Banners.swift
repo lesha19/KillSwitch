@@ -101,6 +101,8 @@ enum SystemSettings {
     static let loginItems = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!
     /// Login Items & Extensions, where «Сетевые расширения» are allowed.
     static let networkExtensions = loginItems
+    /// Apple Account › iCloud, where «Частный узел iCloud» is switched.
+    static let iCloud = URL(string: "x-apple.systempreferences:com.apple.systempreferences.AppleIDSettings:icloud")!
 }
 
 /// A notice on a tinted background. The colour is only in the icon and the background; the text

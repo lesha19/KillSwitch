@@ -15,6 +15,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   (WireGuard, IKEv2, L2TP…) that takes the default route or splits it, IPv4 or IPv6, both by the
   app (`netstat -rn`) and by the watchdog (`core/foreign-vpn`). Ours and Tailscale's (100.64/10,
   fd7a:115c:a1e0::/48, exit node included) are not counted. What pf lets through is unchanged.
+- «Стоит знать» in «Проверка утечек» and «О программе»: a non-blocking tip when iCloud Private
+  Relay is on (the system's own status; unknown means no tip) or Tailscale, ZeroTier or NetBird
+  runs, explaining how each works with the protection.
 - Split tunnel integrity: Settings › VPN warns under «Программы без VPN» when an app in the list
   (or the folder it sits in) can be changed without the admin password, since everything run from
   that path goes around the VPN.

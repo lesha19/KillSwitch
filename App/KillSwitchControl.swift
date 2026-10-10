@@ -1210,6 +1210,16 @@ final class KillSwitchControl {
         }
     }
 
+    /// «Частный узел iCloud» and overlay networks on this Mac (NetworkHints), read when a screen
+    /// with tips appears: the system's relay status (only that key) and the interfaces and apps.
+    func networkHints() -> [NetworkHints.Hint] {
+        let archive = CFPreferencesCopyAppValue("NSPServiceStatusManagerInfo" as CFString,
+                                                "com.apple.networkserviceproxy" as CFString) as? Data
+        let relay = NetworkHints.relayOn(status: archive.flatMap(NetworkHints.relayStatus))
+        let apps = NSWorkspace.shared.runningApplications.compactMap(\.localizedName)
+        return NetworkHints.hints(relayOn: relay, overlays: NetworkHints.overlays(addresses: Self.interfaceAddresses(), runningApps: apps))
+    }
+
     /// IPv4 and IPv6 addresses of every interface, without the `%scope`.
     private static func interfaceAddresses() -> [OtherVPN.Address] {
         var list: UnsafeMutablePointer<ifaddrs>?
