@@ -29,7 +29,7 @@ top_keys() { plutil -convert xml1 -o - "$1" | sed -n 's/^	<key>\(.*\)<\/key>$/\1
 
 check_config() {  # check_config <name> <config> <servers>
   local name=$1 c=$2 s=$3 n i want got
-  want="dns external-controller-unix ipv6 log-level mode allow-lan proxies proxy-groups rule-providers rules tun"
+  want="dns external-controller-unix geo-auto-update ipv6 log-level mode allow-lan proxies proxy-groups rule-providers rules tun"
   want=$(tr ' ' '\n' <<<"$want" | sort | paste -sd' ' -)
   got=$(top_keys "$c")
   [ "$got" = "$want" ] && ok "$name: top-level keys" || bad "$name: top-level keys: $got"

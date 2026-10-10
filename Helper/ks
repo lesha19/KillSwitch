@@ -415,11 +415,23 @@ core_generate() (
     push @$j, { name => $ENV{KS_DNS}, type => "fallback", proxies => \@p, hidden => JSON::PP::true,
                 url => "https://cp.cloudflare.com/generate_204", interval => 300 };' || exit 1
 
-  # Apps that bypass the core (only with coredirect=1: otherwise pf drops their DIRECT flows)
+  # Split tunnel, only with coredirect=1 (otherwise pf drops DIRECT flows of the core), before
+  # the profile's rules: apps from "ks set splitapps", private networks, then Russian sites
+  # (operator's choice). Geodata is used only if installed (fetch-geodata.sh, sha256-pinned):
+  # the core must not download it itself. Names of direct sites are still resolved by our DoH
+  # through the tunnel, never by the provider's DNS.
   fpm=""
-  if [ "$(setting coredirect 0)" = 1 ] && [ -s "$SPLITAPPS" ]; then
-    json_edit "$R" 'unshift @$j, map { chomp; "PROCESS-NAME,$_,DIRECT" } <STDIN>;' < "$SPLITAPPS" || exit 1
-    fpm='"find-process-mode":"always",'
+  if [ "$(setting coredirect 0)" = 1 ]; then
+    {
+      if [ -s "$SPLITAPPS" ]; then
+        while IFS= read -r a; do [ -n "$a" ] && echo "PROCESS-NAME,$a,DIRECT"; done < "$SPLITAPPS"
+        fpm='"find-process-mode":"always",'
+      fi
+      for a in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do echo "IP-CIDR,$a,DIRECT,no-resolve"; done
+      [ -s "$CORE_DIR/geosite.dat" ] && echo "GEOSITE,category-ru,DIRECT"
+      [ -s "$CORE_DIR/geoip.metadb" ] && echo "GEOIP,RU,DIRECT,no-resolve"
+    } > "$w/ours"
+    json_edit "$R" 'unshift @$j, map { chomp; $_ } <STDIN>;' < "$w/ours" || exit 1
   fi
 
   sort -u "$w/servers" > "$w/servers.u"
@@ -435,7 +447,7 @@ core_generate() (
     # The TUN takes the first address of fake-ip-range: ours differs from dropweb's and Happ's
     # 198.18.0.1, so the watchdog can tell the tunnels apart.
     # The controller is a unix socket in a root-only directory; the app reaches it via ks.
-    printf '{"mode":"rule","log-level":"info","ipv6":false,"allow-lan":false,%s' "$fpm"
+    printf '{"mode":"rule","log-level":"info","ipv6":false,"allow-lan":false,"geo-auto-update":false,%s' "$fpm"
     printf '"external-controller-unix":"ctl/mihomo.sock",'
     printf '"tun":{"enable":true,"stack":"gvisor","auto-route":true,"auto-detect-interface":true,'
     printf '"dns-hijack":["any:53"],"route-exclude-address":[%s]},' "$excl"
@@ -722,6 +734,23 @@ core_delay() {  # core_delay <group|proxy>: latency test through it, JSON
   else core_api GET "/proxies/$name/delay?$q"; fi
 }
 valid_name() { [ -n "$1" ] && [ "${#1}" -le 256 ] && [[ "$1" != *[[:cntrl:]]* ]]; }
+
+# splitapps_parse <comma list>: process names one per line (trimmed, deduplicated); fails on an
+# empty entry, a control character, a name over 64 bytes or more than 50 names. "" clears.
+splitapps_parse() {
+  local list=$1 a n=0 out="" LC_ALL=C
+  [[ "$list" != *[[:cntrl:]]* ]] || { echo "Управляющие символы в списке приложений" >&2; return 1; }
+  [ -n "$list" ] || return 0
+  while IFS= read -r -d, a; do
+    a="${a#"${a%%[![:space:]]*}"}"; a="${a%"${a##*[![:space:]]}"}"
+    [ -n "$a" ] || { echo "Пустое имя в списке приложений" >&2; return 1; }
+    [ "${#a}" -le 64 ] || { echo "Слишком длинное имя процесса: $a" >&2; return 1; }
+    grep -qxF -- "$a" <<<"$out" && continue
+    n=$((n + 1)); [ "$n" -le 50 ] || { echo "Больше 50 приложений" >&2; return 1; }
+    out+="$a"$'\n'
+  done <<<"$list,"
+  printf '%s' "$out"
+}
 urlencode() { printf '%s' "$1" | od -An -v -tx1 | tr -s ' \n' '%%' | sed 's/%$//'; }  # every byte
 
 valid_addr() {  # a bare name must not reach pfctl, it would be resolved through DNS

@@ -1,0 +1,154 @@
+#!/bin/bash
+# Generator features of Helper/ks on top of the fixtures: DIRECT signature, apps outside the
+# core (splitapps), double VPN (multihop), rebuilding from pinned addresses. No root, no network.
+#   Helper/tests/core-features.sh   (MIHOMO=/path/to/mihomo for "mihomo -t")
+set -u
+here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=../ks
+. "$here/../ks"
+MIHOMO=${MIHOMO:-/Library/KillSwitch/core/mihomo}; [ -x "$MIHOMO" ] || [ ! -x "$here/../mihomo" ] || MIHOMO="$here/../mihomo"
+fx="$here/fixtures"
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+mkdir "$tmp/home"
+SETTINGS="$tmp/settings"; SPLITAPPS="$tmp/splitapps"; MULTIHOP="$tmp/multihop"
+CORE_DIR="$tmp/core"; mkdir "$CORE_DIR"   # no geodata until the Russian-sites part
+resolve_host() {
+  case "$1" in
+    de.example.com) echo 203.0.113.20 ;;
+    fi.example.com) echo 203.0.113.30 ;;
+    *) return 1 ;;
+  esac
+}
+fails=0
+ok()  { echo "ok    $*"; }
+bad() { echo "FAIL  $*"; fails=$((fails + 1)); }
+val() { plutil -extract "$1" raw -o - "$2" 2>/dev/null; }
+mt()  {  # mt <desc> <config>
+  [ -x "$MIHOMO" ] || { echo "skip  $1: mihomo -t"; return; }
+  local out
+  if out=$("$MIHOMO" -t -d "$tmp/home" -f "$2" 2>&1); then ok "$1: mihomo -t"; else bad "$1: mihomo -t: $(tail -2 <<<"$out")"; fi
+}
+gen() { core_generate "$1" "$tmp/c" "$tmp/s" 2>"$tmp/err"; }
+profile() { printf '%s' "$1" > "$tmp/p.json"; }
+SS='"type":"ss","port":8388,"cipher":"aes-128-gcm","password":"x"'
+
+# --- DIRECT signature
+gen "$fx/ok-minimal.json" && [ ! -s "$tmp/c.direct" ] && ok "minimal: nothing direct" || bad "minimal: direct: $(cat "$tmp/c.direct")"
+gen "$fx/ok-full.json"
+grep -q '^group	.*"name":"🚀 Выбор сервера"' "$tmp/c.direct" && ok "full: group holding DIRECT listed" || bad "full: group"
+[ "$(grep -c '^rule	' "$tmp/c.direct")" = 4 ] && ok "full: all 4 rules can go direct (3 via the group)" ||
+  bad "full: rules: $(cat "$tmp/c.direct")"
+grep -q 'auto' "$tmp/c.direct" && bad "full: url-test group without DIRECT listed" || ok "full: proxy-only group not listed"
+grep -q 'KS-DNS' "$tmp/c.direct" && bad "full: KS-DNS in the signature" || ok "full: KS-DNS not in the signature"
+cp "$tmp/c.direct" "$tmp/full.direct"
+profile "{\"proxies\":[{\"name\":\"a\",\"server\":\"198.51.100.1\",$SS}],
+  \"proxy-groups\":[{\"name\":\"inner\",\"type\":\"select\",\"proxies\":[\"a\",\"DIRECT\"]},
+                    {\"name\":\"outer\",\"type\":\"select\",\"proxies\":[\"inner\"]},
+                    {\"name\":\"filt\",\"type\":\"select\",\"include-all\":true,\"filter\":\"zzz\"}],
+  \"rules\":[\"DOMAIN,x.com,outer\",\"DOMAIN,y.com,GLOBAL\",\"AND,((DOMAIN,z.com),(NETWORK,UDP)),DIRECT\",
+             \"DOMAIN,v.com,filt\",\"DOMAIN,u.com,a\",\"MATCH,a\"]}"
+gen "$tmp/p.json" || bad "nested: refused: $(cat "$tmp/err")"
+for r in x.com y.com z.com v.com; do
+  grep -q "^rule	.*$r" "$tmp/c.direct" || bad "nested: rule $r not in the signature"
+done
+grep -qE 'u\.com|MATCH' "$tmp/c.direct" && bad "nested: proxy-only rules listed" || ok "nested/GLOBAL/logical/filter groups caught"
+mt "nested groups" "$tmp/c"
+
+# --- splitapps
+printf 'Telegram\nGoogle Chrome\n' > "$SPLITAPPS"
+gen "$fx/ok-full.json"
+[ "$(val rules.0 "$tmp/c")" = "RULE-SET,ru-blocked,🚀 Выбор сервера" ] && ! plutil -type find-process-mode "$tmp/c" >/dev/null 2>&1 &&
+  ok "splitapps ignored without coredirect" || bad "splitapps without coredirect: $(val rules.0 "$tmp/c")"
+echo coredirect=1 > "$SETTINGS"
+gen "$fx/ok-full.json"
+[ "$(val rules.0 "$tmp/c")" = "PROCESS-NAME,Telegram,DIRECT" ] && [ "$(val rules.1 "$tmp/c")" = "PROCESS-NAME,Google Chrome,DIRECT" ] &&
+  [ "$(val rules.2 "$tmp/c")" = "IP-CIDR,10.0.0.0/8,DIRECT,no-resolve" ] && [ "$(val find-process-mode "$tmp/c")" = always ] &&
+  ok "splitapps with coredirect: PROCESS-NAME rules first, find-process-mode always" || bad "splitapps: $(val rules.0 "$tmp/c")"
+cmp -s "$tmp/c.direct" "$tmp/full.direct" && ok "splitapps rules stay out of the DIRECT signature" || bad "splitapps in signature"
+mt "splitapps" "$tmp/c"
+rm -f "$SPLITAPPS" "$SETTINGS"
+
+valid_apps() { splitapps_parse "$1" >/dev/null 2>&1; }
+[ "$(splitapps_parse ' Telegram , Google Chrome,Telegram')" = "$(printf 'Telegram\nGoogle Chrome')" ] &&
+  ok "splitapps_parse trims and dedupes" || bad "splitapps_parse: $(splitapps_parse ' Telegram , Google Chrome,Telegram')"
+[ -z "$(splitapps_parse '')" ] && valid_apps '' && ok "empty list clears" || bad "empty list"
+valid_apps "$(printf 'a\tb')" && bad "control char accepted" || ok "control char refused"
+valid_apps "$(printf 'a\nb')" && bad "newline accepted" || ok "newline refused"
+valid_apps 'a,,b' && bad "empty entry accepted" || ok "empty entry refused"
+valid_apps "$(printf 'x%.0s' $(seq 65))" && bad "65 bytes accepted" || ok "name over 64 bytes refused"
+valid_apps "$(printf 'x%.0s' $(seq 64))" && ok "64 bytes accepted" || bad "64 bytes refused"
+valid_apps "$(printf 'я%.0s' $(seq 33))" && bad "66 bytes of Cyrillic accepted" || ok "length counted in bytes"
+valid_apps "$(seq 1 51 | paste -sd, -)" && bad "51 entries accepted" || ok "51 entries refused"
+valid_apps "$(seq 1 50 | paste -sd, -)" && ok "50 entries accepted" || bad "50 entries refused"
+
+# --- multihop
+echo "NL reality" > "$MULTIHOP"
+gen "$fx/ok-full.json" || bad "multihop: refused: $(cat "$tmp/err")"
+plutil -type proxies.0.dialer-proxy "$tmp/c" >/dev/null 2>&1 && bad "multihop: entry dials through itself" || ok "multihop: entry dials directly"
+[ "$(val proxies.1.dialer-proxy "$tmp/c")" = "NL reality" ] && [ "$(val proxies.2.dialer-proxy "$tmp/c")" = "NL reality" ] &&
+  ok "multihop: exits dial through the entry" || bad "multihop: dialer-proxy"
+[ "$(cat "$tmp/s")" = 203.0.113.10 ] && ok "multihop: core reaches only the entry server" || bad "multihop: servers $(paste -sd' ' "$tmp/s")"
+grep -q '"203.0.113.20/32"' "$tmp/c" && bad "multihop: exit excluded from the TUN" || ok "multihop: exits not excluded from the TUN"
+[ "$(cut -f1 "$tmp/c.pins" | sort | paste -sd' ' -)" = "de.example.com fi.example.com" ] && ok "multihop: exit names still pinned" ||
+  bad "multihop: pins"
+mt "multihop" "$tmp/c"
+echo "nope" > "$MULTIHOP"
+gen "$fx/ok-full.json" && bad "multihop: missing entry accepted" || ok "multihop: missing entry refused: $(cat "$tmp/err")"
+echo "🚀 Выбор сервера" > "$MULTIHOP"
+gen "$fx/ok-full.json" && bad "multihop: group as entry accepted" || ok "multihop: group as entry refused"
+profile "{\"proxies\":[{\"name\":\"in\",\"server\":\"198.51.100.1\",\"dialer-proxy\":\"out\",$SS},{\"name\":\"out\",\"server\":\"198.51.100.2\",$SS}]}"
+echo in > "$MULTIHOP"
+gen "$tmp/p.json" && bad "multihop: entry with its own dialer-proxy accepted" || ok "multihop: entry with dialer-proxy refused"
+rm -f "$MULTIHOP"
+
+# --- Russian sites and private networks outside the VPN (coredirect=1), from local geodata only
+
+PRIV="IP-CIDR,10.0.0.0/8,DIRECT,no-resolve IP-CIDR,172.16.0.0/12,DIRECT,no-resolve IP-CIDR,192.168.0.0/16,DIRECT,no-resolve IP-CIDR,169.254.0.0/16,DIRECT,no-resolve"
+rules_of() { local i=0 out=""; while r=$(val "rules.$i" "$1"); do out+="$r "; i=$((i + 1)); done; echo "${out% }"; }
+gen "$fx/ok-minimal.json"
+[ "$(rules_of "$tmp/c")" = "MATCH,only" ] && [ "$(val geo-auto-update "$tmp/c")" = false ] &&
+  ok "ru: nothing added without coredirect; geodata never auto-updated" || bad "ru without coredirect: $(rules_of "$tmp/c")"
+echo coredirect=1 > "$SETTINGS"
+gen "$fx/ok-minimal.json"
+[ "$(rules_of "$tmp/c")" = "$PRIV MATCH,only" ] && ok "ru: no geodata, no geo rules (the core never downloads it)" ||
+  bad "ru without geodata: $(rules_of "$tmp/c")"
+mmdb=""
+for f in /Library/KillSwitch/core/geoip.metadb "$HOME/Library/Application Support/org.dropweb.vpn/geoip.metadb"; do
+  [ -r "$f" ] && { mmdb=$f; break; }
+done
+if [ -n "$mmdb" ]; then cp "$mmdb" "$CORE_DIR/geoip.metadb"; else echo fake > "$CORE_DIR/geoip.metadb"; fi
+gen "$fx/ok-minimal.json"
+[ "$(rules_of "$tmp/c")" = "$PRIV GEOIP,RU,DIRECT,no-resolve MATCH,only" ] && ok "ru: GEOIP,RU with geoip.metadb" ||
+  bad "ru with mmdb: $(rules_of "$tmp/c")"
+if [ -n "$mmdb" ] && [ -x "$MIHOMO" ]; then
+  if out=$("$MIHOMO" -t -d "$CORE_DIR" -f "$tmp/c" 2>&1); then ok "ru: mihomo -t with geoip.metadb"; else bad "ru: mihomo -t: $(tail -2 <<<"$out")"; fi
+else echo "skip  ru: mihomo -t (no geoip.metadb or mihomo)"; fi
+site=""
+for f in /Library/KillSwitch/core/geosite.dat "$here/../geosite.dat"; do [ -r "$f" ] && { site=$f; break; }; done
+if [ -n "$site" ]; then cp "$site" "$CORE_DIR/geosite.dat"; else echo fake > "$CORE_DIR/geosite.dat"; fi
+printf 'Telegram\n' > "$SPLITAPPS"
+gen "$fx/ok-minimal.json"
+[ "$(rules_of "$tmp/c")" = "PROCESS-NAME,Telegram,DIRECT $PRIV GEOSITE,category-ru,DIRECT GEOIP,RU,DIRECT,no-resolve MATCH,only" ] &&
+  ok "ru: apps, private nets, GEOSITE, GEOIP, then the profile" || bad "ru with geosite: $(rules_of "$tmp/c")"
+[ ! -s "$tmp/c.direct" ] && ok "ru: our rules stay out of the DIRECT signature" || bad "ru: signature $(cat "$tmp/c.direct")"
+[ "$(val dns.nameserver.0 "$tmp/c")" = "https://1.1.1.1/dns-query#KS-DNS" ] && ok "ru: DNS still through the tunnel" || bad "ru: DNS"
+if [ -n "$mmdb" ] && [ -n "$site" ] && [ -x "$MIHOMO" ]; then
+  if out=$("$MIHOMO" -t -d "$CORE_DIR" -f "$tmp/c" 2>&1); then ok "ru: mihomo -t with geosite.dat"; else bad "ru: mihomo -t: $(tail -2 <<<"$out")"; fi
+else echo "skip  ru: mihomo -t with GEOSITE (no geosite.dat: Helper/fetch-geodata.sh)"; fi
+rm -f "$SETTINGS" "$SPLITAPPS"
+
+# --- pins
+gen "$fx/ok-full.json"
+[ "$(sort "$tmp/c.pins" | paste -sd' ' -)" = "de.example.com	203.0.113.20 fi.example.com	203.0.113.30" ] &&
+  ok "pins: one line per host name" || bad "pins: $(cat "$tmp/c.pins")"
+printf 'de.example.com\t198.51.100.20\nfi.example.com\t203.0.113.30\n' > "$tmp/pins"
+resolve_host() { echo "DNS asked for $1" >> "$tmp/dns"; return 1; }
+KS_PINS="$tmp/pins" gen "$fx/ok-full.json" || bad "rebuild from pins refused: $(cat "$tmp/err")"
+[ "$(val proxies.1.server "$tmp/c")" = 198.51.100.20 ] && [ "$(val proxies.1.sni "$tmp/c")" = de.example.com ] &&
+  grep -qx 198.51.100.20 "$tmp/s" && ! grep -qx 203.0.113.20 "$tmp/s" && ok "rebuild uses the pinned address" || bad "rebuild"
+[ -e "$tmp/dns" ] && bad "rebuild asked DNS" || ok "rebuild asks no DNS"
+printf 'fi.example.com\t203.0.113.30\n' > "$tmp/pins"
+KS_PINS="$tmp/pins" gen "$fx/ok-full.json" && bad "rebuild with an unpinned name accepted" || ok "rebuild with an unpinned name refused"
+
+echo
+[ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

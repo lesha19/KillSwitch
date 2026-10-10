@@ -27,8 +27,14 @@ for ip in "$@"; do
   [[ "$ip" =~ ^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$ ]] || { echo "bad server address: $ip" >&2; exit 1; }
 done
 
+fresh=0; [ -e "$DIR/ks" ] || fresh=1
 install -d -o root -g wheel -m 755 "$DIR"
 install -o root -g wheel -m 755 ks "$DIR/ks"
+# Operator's choice (0.7): on a new install Russian sites go outside the VPN, everything else
+# through it (coredirect=1, see ks core_generate). An upgrade keeps the setting it had.
+if [ "$fresh" = 1 ] && ! grep -q '^coredirect=' "$DIR/settings" 2>/dev/null; then
+  echo coredirect=1 >> "$DIR/settings"
+fi
 install -o root -g wheel -m 644 local.killswitch.plist /Library/LaunchDaemons/local.killswitch.plist
 install -o root -g wheel -m 644 tsrelays "$DIR/tsrelays"
 # Own VPN core (optional: only if Helper/mihomo is present, see fetch-mihomo.sh).
@@ -48,6 +54,8 @@ if [ -f mihomo ]; then
   install -o root -g wheel -m 644 local.killswitch.core.plist /Library/LaunchDaemons/local.killswitch.core.plist
   GEOIP="/Users/$USER_NAME/Library/Application Support/org.dropweb.vpn/geoip.metadb"
   [ -f "$DIR/core/geoip.metadb" ] || [ ! -f "$GEOIP" ] || install -o root -g wheel -m 644 "$GEOIP" "$DIR/core/geoip.metadb"
+  # Russian sites outside the VPN (coredirect=1); see fetch-geodata.sh
+  [ ! -f geosite.dat ] || install -o root -g wheel -m 644 geosite.dat "$DIR/core/geosite.dat"
   launchctl print system/local.killswitch.core >/dev/null 2>&1 && launchctl kickstart -k system/local.killswitch.core
 fi
 [ -e "$DIR/events.log" ] || install -o root -g wheel -m 644 /dev/null "$DIR/events.log"
