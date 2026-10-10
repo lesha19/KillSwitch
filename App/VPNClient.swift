@@ -412,6 +412,8 @@ final class VPNClient {
         transportServers = profile.map(Transport.servers) ?? []
         serverKeys = profile.map(ServerIdentity.keys) ?? [:]
         migrateToServerKeys()
+        // «Сменить страну на …» in Spotlight and Siri knows the new list
+        KillSwitchShortcuts.updateAppShortcutParameters()
     }
 
     /// The override for a server of the list, by its identity (or, not migrated yet, its name).

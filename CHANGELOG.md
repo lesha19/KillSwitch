@@ -7,6 +7,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 ## [Unreleased]
 
 ### Added
+- Shortcuts, Spotlight and Siri (App Intents): «Подключить VPN», «Отключить VPN», «Сменить
+  страну» (a server of the «Серверы» list, searchable in Russian) and «Статус VPN» (also returns
+  the text), with Russian phrases. They do what the menu does and say back what needs the window.
 - Right click (or ⌃-click) on the menu bar icon: a compact menu with Подключить/Отключить, Самый
   быстрый, Открыть KillSwitch, Проверка утечек and Выход. A left click still opens the popover.
   The icon is now an AppKit status item with an NSPopover hosting the same main screen

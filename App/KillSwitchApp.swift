@@ -19,6 +19,8 @@ struct KillSwitchApp: App {
         _autoConnector = State(initialValue: AutoConnector(control: control))
         Notifier.shared.control = control
         Notifier.shared.client = client
+        ShortcutTarget.control = control
+        ShortcutTarget.client = client
         // spec §5.1, Р3: the menu bar icon; a click opens the main screen as a popover, a right
         // click a compact menu (ADR 0010)
         DispatchQueue.main.async { StatusItem.install(control: control, client: client, updater: updater) }
