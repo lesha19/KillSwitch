@@ -200,3 +200,21 @@ SMAppService agents and daemons). Now `.notFound` with the plist present in
 службу…» call `register()`); `unavailable` only without the plist. The notice also shows while the
 daemon is still not registered after that attempt. `register()` logs the status before and after
 and any error (`category == "helper"`).
+
+## Addendum (0.15.2): an install that stops half-way is run again
+
+Measured on the owner's Mac with 0.15.1: `install.sh` stopped under `set -e` right after replacing
+`ks` (a settings file with only `coredirect=1`, `grep -v` exited 1). The app compared only `ks`
+with the bundled one, saw them equal and never ran it again: the core, sudoers and the watchdog's
+HUP were left out.
+
+- `install.sh` removes `/Library/KillSwitch/installed` before it replaces anything and writes it
+  (`version …`, `sha256 <hex of ks>`, root's, 644, by rename) as its last step, after the
+  passwordless-access check.
+- The app (`HelperVersion.check`): the right `ks` without a marker naming it is outdated, so the
+  daemon's `upgrade` runs. For two minutes after `ks` changed it is `installing` instead: that
+  install may still be running, and a second one must not start next to it.
+- The daemon (`HelperUpgrade.decide(…, completed:)`): the same `ks` without the marker is
+  `.upgrade`, not `.current`; the downgrade check is unchanged.
+- A helper from before 0.15.2 has no marker and its `ks` differs anyway: upgraded as before.
+

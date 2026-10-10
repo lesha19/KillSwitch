@@ -4,6 +4,27 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [0.15.2] - 2026-10-10
+
+### Fixed
+- The privileged daemon read `mkdtemp`'s path after its buffer was released: in the release
+  build the path came back empty, «Восстановить службу…» and the update after an app update
+  failed («Cannot make directory /KillSwitch.app»), and the failure path tried to remove `/` as
+  root (the read-only system volume stopped it). The path is read inside the buffer's scope, and
+  the daemon removes only its own `killswitch.*` directories in its temporary directory
+  (`PrivateDirectory`). The same lifetime bug in `getpwuid_r` is fixed too.
+- `install.sh` stopped half-way when the settings held only the old `coredirect=1`
+  (`grep -v` leaves nothing and exits 1 under `set -e`): the new `ks` was in place, the core,
+  sudoers and the watchdog were not, and the app never retried. It now writes
+  `/Library/KillSwitch/installed` (version and SHA-256 of `ks`) as its last step; the app and the
+  daemon run the install again when it is missing or names another `ks` (ADR 0012 addendum).
+- `install.sh` no longer stops silently: an ERR trap prints `install.sh:<line>: exit <status>`,
+  the passwordless-access check fails the install explicitly, and a failed script run through the
+  daemon shows its stderr in the banner instead of its progress lines.
+- The update check's KVO handler hopped onto the main actor by assertion
+  (`MainActor.assumeIsolated`), which traps when called off the main thread; it now hops with a
+  task.
+
 ## [0.15.1] - 2026-10-10
 
 ### Fixed

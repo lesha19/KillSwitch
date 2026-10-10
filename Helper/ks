@@ -50,7 +50,7 @@ ks_clean_env
 set -u
 umask 022
 
-KS_VERSION="0.15.1" # the app's version (project.yml); the app compares the whole file anyway
+KS_VERSION="0.15.2" # the app's version (project.yml); the app compares the whole file anyway
 DIR="/Library/KillSwitch"
 ANCHOR="com.apple/killswitch"
 FLAG="$DIR/disabled"     # contains epoch when to re-enable, 0 = never
