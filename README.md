@@ -92,8 +92,11 @@ profile, rewritten on every import, reachable only by our core), `servers` (both
 - Second layer (`Filter/`, optional, Settings → Общие): a content filter system extension
   (NEFilterDataProvider). It cannot see the outgoing interface, so it does not repeat pf: while no VPN
   tunnel is up it drops every new flow except to the LAN, to the addresses pf lets out (servers, Tailscale
-  relays, exceptions) and from trusted programs by code-signature path (our core, Homebrew tailscaled,
-  DropwebCore with `direct=1`). With a tunnel up it allows everything and leaves the rest to pf. The app
+  relays, exceptions) and from trusted programs. Those are recognised by code signature, never by path
+  (`Filter/TrustedCode.swift`): our core signed by team YR58655PJ7 as `com.lesha19.KillSwitch.core`
+  (`scripts/sign-core.sh`), Tailscale's app and network extension (Developer ID or App Store). Ad-hoc
+  and unsigned binaries never match, so Homebrew tailscaled and DropwebCore are not trusted by the
+  filter (their traffic still passes to listed addresses; pf rules are unchanged). With a tunnel up it allows everything and leaves the rest to pf. The app
   keeps its lists in sync and turns it on and off with the protection. Signed with Apple Development:
   works on Macs registered in the team, not notarised.
 - Tailscale: direct UDP and STUN only for root (system tailscaled); DERP relays and the control plane
@@ -130,6 +133,36 @@ cp -R build/Build/Products/Release/KillSwitch.app /Applications/
 Then open the app and press "Установить защиту" (or run `Helper/install.sh` in Terminal; server
 addresses found in dropweb and Happ configs are passed to it). After updating the app, press
 "Обновить защиту" to upgrade the installed helper.
+
+## Выпуск
+
+Сборка для других Mac — вне App Store, как у Mullvad и IVPN: приложению нужны root-служба и pf, в
+песочнице App Store это невозможно. Подпись Developer ID, hardened runtime, нотаризация Apple, `.dmg`.
+
+Один раз:
+
+1. Сертификат: Xcode → Settings → Accounts → команда YR58655PJ7 → Manage Certificates → «+» →
+   **Developer ID Application**. Ключ остаётся в связке ключей входа.
+2. Профили: на developer.apple.com есть два профиля Developer ID — «KillSwitch Developer ID»
+   (`com.lesha19.KillSwitch`: System Extension, Network Extensions) и «KillSwitch Filter Developer ID»
+   (`com.lesha19.KillSwitch.Filter`: Network Extensions); в обоих `content-filter-provider-systemextension`.
+   Скачать: Xcode → Settings → Accounts → YR58655PJ7 → **Download Manual Profiles** (лягут в
+   `~/Library/Developer/Xcode/UserData/Provisioning Profiles`, скрипт найдёт их сам; другой путь можно
+   указать в `KS_PROFILE_APP` / `KS_PROFILE_FILTER`). Виджету профиль не нужен: ограниченных прав у него
+   нет, группа приложений начинается с ID команды.
+3. Профиль нотаризации: создать пароль приложения на appleid.apple.com → «Вход и безопасность» →
+   «Пароли приложений», затем в Терминале
+   `xcrun notarytool store-credentials killswitch-notary --apple-id <Apple ID> --team-id YR58655PJ7`
+   и ввести пароль, когда спросит (в командную строку его не писать). Он хранится в связке ключей.
+4. Ядро: `Helper/fetch-mihomo.sh`.
+
+Выпуск: `scripts/release.sh`. Сначала проверяет всё перечисленное и без этого ничего не собирает
+(`scripts/release.sh --check` — только проверка), затем собирает Release, подписывает изнутри наружу
+(ядро как `com.lesha19.KillSwitch.core`, виджет, фильтр, приложение — с правами Developer ID и
+вложенными профилями), отправляет в нотаризацию, прикрепляет квитанцию (`stapler`) и делает
+подписанный и нотаризованный `build/release/KillSwitch-<версия>.dmg`. `scripts/release.sh --sign-only`
+только собирает и подписывает приложение, без нотаризации. Системное расширение включается, только
+когда приложение лежит в /Applications.
 
 ## Emergency off
 

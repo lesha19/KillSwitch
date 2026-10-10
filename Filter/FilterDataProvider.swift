@@ -1,6 +1,5 @@
 import Foundation
 import NetworkExtension
-import Security
 
 /// Second layer under the pf rules: a socket-flow content filter.
 ///
@@ -8,8 +7,8 @@ import Security
 /// It only covers the case pf exists for in the first place, from a different part of the
 /// system: while no VPN tunnel is up, a new flow is let through only to the local network,
 /// to listed addresses (VPN servers, Tailscale relays, exceptions) or from trusted programs
-/// (our own core, the system tailscaled, dropweb's core with "direct"). Everything else is
-/// dropped. With a tunnel up, flows are allowed and pf does the fine-grained filtering.
+/// (our own core, Tailscale), identified by code signature. Everything else is dropped.
+/// With a tunnel up, flows are allowed and pf does the fine-grained filtering.
 ///
 /// The app passes the lists in `vendorConfiguration` (see FilterConfig in the app).
 final class FilterDataProvider: NEFilterDataProvider {
@@ -48,25 +47,15 @@ final class FilterDataProvider: NEFilterDataProvider {
         }
     }
 
-    /// Paths of programs whose flows are always allowed. Paths come from the code signature
-    /// of the running process, so a copy elsewhere does not count.
+    /// Programs whose flows are always allowed, recognised by code signature (TrustedCode), not
+    /// by path. dropweb's core is ad-hoc signed, so the filter cannot tell it from a copy and
+    /// does not trust it, "direct" or not; pf's direct rule still applies to it.
     private static func isTrusted(_ token: Data, config: [String: Any]) -> Bool {
-        guard let path = processPath(token) else { return false }
-        if path.hasPrefix("/Library/KillSwitch/core/") { return true }
-        if path.hasPrefix("/opt/homebrew/Cellar/tailscale/") && (config["tailscale"] as? Bool ?? true) { return true }
-        if path.hasSuffix("/app.dropweb/cores/DropwebCore") && (config["direct"] as? Bool ?? false) { return true }
-        return false
-    }
-
-    private static func processPath(_ token: Data) -> String? {
-        var code: SecCode?
-        let attributes = [kSecGuestAttributeAudit: token] as CFDictionary
-        guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess, let code else { return nil }
-        var staticCode: SecStaticCode?
-        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return nil }
-        var url: CFURL?
-        guard SecCodeCopyPath(staticCode, [], &url) == errSecSuccess, let url else { return nil }
-        return (url as URL).path
+        switch TrustedCode.program(auditToken: token) {
+        case .core: return true
+        case .tailscale: return config["tailscale"] as? Bool ?? true
+        case nil: return false
+        }
     }
 
     private static func isLocal(_ host: String, lan: Bool) -> Bool {
