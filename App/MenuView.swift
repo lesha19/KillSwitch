@@ -2,29 +2,67 @@ import SwiftUI
 
 struct MenuView: View {
     @Environment(KillSwitchControl.self) private var control
+    @Environment(VPNClient.self) private var client
     @AppStorage("pauseShort") private var pauseShort = 5
     @AppStorage("pauseLong") private var pauseLong = 30
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Text(control.state.title)
-        Text(control.vpnUp ? "VPN подключён" : "VPN не подключён")
+        let connection = control.connection
+        Text(connection.title)
+        if connection == .connected || connection == .connecting, let server = control.currentServer {
+            let name = ServerName(server)
+            let delay = control.proxies?.delay(server).map { " · \($0) мс" } ?? ""
+            Text("\(name.flag ?? "🌐") \(name.title.isEmpty ? server : name.title)\(delay)")
+        }
+        if control.foreignVPN != nil {
+            Text("⚠︎ Работает VPN другой программы")
+        }
 
-        if control.coreInstalled && control.coreConfigured {
-            Button(control.coreRunning ? "Выключить своё ядро" : "Включить своё ядро") {
-                control.coreRunning ? control.coreOff() : control.coreOn()
+        switch connection {
+        case .connected, .connecting:
+            Button("Отключить") { control.coreOff() }.disabled(control.busy)
+        case .disconnected:
+            Button("Подключить") { control.coreOn() }.disabled(control.busy || !control.coreConfigured)
+        case .otherApp, .unavailable:
+            EmptyView()
+        }
+
+        if let proxies = control.proxies {
+            let groups = proxies.groups.filter(\.selectable)
+            if !groups.isEmpty {
+                Menu("Сервер") {
+                    ForEach(groups) { group in
+                        Section(group.name) {
+                            ForEach(group.all, id: \.self) { name in
+                                Toggle(isOn: Binding(get: { group.now == name },
+                                                     set: { if $0 { control.coreSelect(group: group.name, proxy: name) } })) {
+                                    let label = ServerName(name)
+                                    Text("\(label.flag ?? "🌐") \(label.title.isEmpty ? name : label.title)")
+                                }
+                            }
+                        }
+                    }
+                }
             }
+        }
+        if client.hasURL {
+            Button(client.updating ? "Обновляю подписку…" : "Обновить подписку") {
+                Task { await client.update(interactive: true) }
+            }
+            .disabled(client.updating)
         }
 
         Divider()
 
+        Text(control.state.title)
         switch control.state {
         case .on:
-            Button("Выключить") { control.turnOff() }
+            Button("Выключить защиту") { control.turnOff() }
             Button("Пауза \(pauseShort) мин") { control.pause(minutes: pauseShort) }
             Button("Пауза \(pauseLong) мин") { control.pause(minutes: pauseLong) }
         case .off, .paused:
-            Button("Включить") { control.turnOn() }
+            Button("Включить защиту") { control.turnOn() }
         case .notInstalled, .unknown:
             EmptyView()
         }

@@ -2,70 +2,46 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(KillSwitchControl.self) private var control
+    @Environment(VPNClient.self) private var client
     @AppStorage("pauseShort") private var pauseShort = 5
     @AppStorage("pauseLong") private var pauseLong = 30
     @State private var confirmUninstall = false
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 18) {
-                ZStack {
-                    Circle().fill(color.opacity(0.15)).frame(width: 120, height: 120)
-                    Image(systemName: control.state.symbol)
-                        .font(.system(size: 56, weight: .semibold))
-                        .foregroundStyle(color)
-                        .contentTransition(.symbolEffect(.replace))
+            ScrollView {
+                VStack(spacing: 16) {
+                    header
+                    banners
+                    if control.state == .notInstalled {
+                        installCard
+                    } else {
+                        if !client.hasURL && client.manual.isEmpty && !control.coreConfigured {
+                            card { SubscriptionOnboarding() }
+                        }
+                        if control.coreInstalled && (control.coreConfigured || control.coreRunning) {
+                            card { ServerList() }
+                        }
+                        if client.hasURL {
+                            card { SubscriptionSummary() }
+                        }
+                        card { protection }
+                    }
+                    if let error = control.error {
+                        Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                            .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-
-                VStack(spacing: 6) {
-                    Text(control.state.title).font(.title2.bold())
-                    Text(subtitle).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                }
-
-                Label(control.vpnUp ? (control.coreRunning ? "VPN подключён (своё ядро)" : "VPN подключён") : "VPN не подключён",
-                      systemImage: control.vpnUp ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                    .foregroundStyle(control.vpnUp ? .green : .orange)
-                    .font(.callout)
-
-                actions
-                    .disabled(control.busy || control.state == .unknown)
-
-                if control.coreInstalled && control.state != .notInstalled {
-                    core.disabled(control.busy)
-                }
-
-                if let error = control.error {
-                    Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
-                        .multilineTextAlignment(.center)
-                }
-            }
-            .padding(28)
-
-            if control.daemonProblem {
-                Label("Фоновая служба защиты выключена в Системных настройках → Основные → Объекты входа. Правила пока действуют, но следить за ними некому.",
-                      systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout).foregroundStyle(.orange)
-                    .padding(.horizontal, 20).padding(.bottom, 16)
+                .padding(20)
             }
 
             Divider()
-
-            HStack {
-                SettingsLink { Label("Настройки", systemImage: "gearshape") }
-                    .buttonStyle(.link)
-                Spacer()
-                if control.state != .notInstalled && control.state != .unknown {
-                    Button("Обновить защиту") { control.install() }
-                        .buttonStyle(.link).disabled(control.busy)
-                    Button("Удалить защиту…", role: .destructive) { confirmUninstall = true }
-                        .buttonStyle(.link).foregroundStyle(.secondary)
-                }
-            }
-            .font(.callout)
-            .padding(.horizontal, 20).padding(.vertical, 12)
+            footer
         }
-        .frame(width: 430)
-        .animation(.default, value: control.state)
+        .frame(width: 460)
+        .frame(minHeight: 520, idealHeight: 680)
+        .animation(.default, value: control.connection)
+        .onAppear { control.loadProxies(force: true) }
         .confirmationDialog("Удалить защиту?", isPresented: $confirmUninstall) {
             Button("Удалить", role: .destructive) { control.uninstall() }
         } message: {
@@ -73,74 +49,140 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder private var actions: some View {
-        switch control.state {
-        case .notInstalled:
-            Button { control.install() } label: {
-                Text("Установить защиту").frame(maxWidth: .infinity)
-            }
-            .controlSize(.large).buttonStyle(.borderedProminent)
-            Text("Попросит пароль.").font(.caption).foregroundStyle(.secondary)
-        case .on:
-            Button { control.turnOff() } label: {
-                Text("Выключить").frame(maxWidth: .infinity)
-            }
-            .controlSize(.large).buttonStyle(.borderedProminent).tint(.red)
-            Text("Выключение и пауза просят пароль.").font(.caption).foregroundStyle(.secondary)
-            HStack {
-                Button("Пауза \(pauseShort) мин") { control.pause(minutes: pauseShort) }
-                Button("Пауза \(pauseLong) мин") { control.pause(minutes: pauseLong) }
-            }
-        case .off, .paused, .unknown:
-            Button { control.turnOn() } label: {
-                Text("Включить").frame(maxWidth: .infinity)
-            }
-            .controlSize(.large).buttonStyle(.borderedProminent).tint(.green)
-        }
-    }
+    // MARK: connection
 
-    /// Our own VPN core: direct sites of the profile work without trusting dropweb's core.
-    @ViewBuilder private var core: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(control.coreRunning
-                     ? "Своё ядро работает: VPN и сайты напрямую по правилам профиля."
-                     : "VPN своим ядром вместо dropweb. Перед включением отключи VPN в dropweb и Happ.")
-                    .font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    if control.coreRunning {
-                        Button("Выключить своё ядро") { control.coreOff() }
-                    } else {
-                        Button("Включить своё ядро") { control.coreOn() }
-                            .disabled(!control.coreConfigured)
-                    }
-                    Spacer()
-                    Button(control.coreConfigured ? "Обновить профиль" : "Взять профиль из dropweb") { control.coreImport() }
+    private var header: some View {
+        let connection = control.connection
+        return VStack(spacing: 14) {
+            ZStack {
+                Circle().fill(connection.color.opacity(0.15)).frame(width: 110, height: 110)
+                Image(systemName: connection.symbol)
+                    .font(.system(size: 50, weight: .semibold))
+                    .foregroundStyle(connection.color)
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            Text(connection.title).font(.title.bold())
+            if connection == .connected || connection == .connecting, let server = control.currentServer {
+                HStack(spacing: 8) {
+                    ServerLabel(name: server, font: .title3)
+                    DelayBadge(delay: control.proxies?.delay(server))
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        } label: {
-            Label("Своё ядро VPN", systemImage: "cpu")
+            Text(protectionLine).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+
+            switch connection {
+            case .connected, .connecting:
+                Button { control.coreOff() } label: { Text("Отключить").frame(maxWidth: .infinity) }
+                    .controlSize(.large).buttonStyle(.borderedProminent).tint(.red)
+                    .disabled(control.busy)
+            case .disconnected:
+                Button { control.coreOn() } label: { Text("Подключить").frame(maxWidth: .infinity) }
+                    .controlSize(.large).buttonStyle(.borderedProminent).tint(.green)
+                    .disabled(control.busy || !control.coreConfigured)
+                if !control.coreConfigured {
+                    Text("Сначала добавь подписку или сервер.").font(.caption).foregroundStyle(.secondary)
+                }
+            case .otherApp:
+                Text("Сейчас подключён VPN другой программы. Отключи его, чтобы подключиться здесь.")
+                    .font(.callout).foregroundStyle(.orange).multilineTextAlignment(.center)
+            case .unavailable:
+                if control.state != .notInstalled {
+                    Text("Ядро VPN не установлено. Нажми «Обновить защиту» внизу.")
+                        .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
+            }
         }
+        .frame(maxWidth: .infinity)
     }
 
-    private var color: Color {
+    private var protectionLine: String {
         switch control.state {
-        case .on: .green
-        case .off: .red
-        case .paused: .orange
-        case .notInstalled, .unknown: .gray
-        }
-    }
-
-    private var subtitle: String {
-        switch control.state {
-        case .on: "Интернет только через VPN.\nДомашняя сеть доступна."
-        case .off: "Программы выходят в интернет и без VPN."
-        case .paused(let until): "Включится сама в \(until.formatted(date: .omitted, time: .shortened))."
-        case .notInstalled: "Программы выходят в интернет и без VPN."
+        case .on: control.coreDirect ? "Защита от утечек включена. Российские сайты — напрямую." : "Защита от утечек включена: без VPN интернета нет."
+        case .off: "Защита от утечек выключена."
+        case .paused(let until): "Защита на паузе до \(until.formatted(date: .omitted, time: .shortened))."
+        case .notInstalled: "Защита от утечек не установлена."
         case .unknown: " "
         }
+    }
+
+    @ViewBuilder private var banners: some View {
+        if let foreign = control.foreignVPN {
+            banner("Рядом с нашим VPN работает VPN другой программы (\(foreign)). Два VPN мешают друг другу и могут пускать трафик мимо — отключи второй.")
+        }
+        if control.daemonProblem {
+            banner("Фоновая служба защиты выключена в Системных настройках → Основные → Объекты входа. Правила пока действуют, но следить за ними некому.")
+        }
+    }
+
+    private func banner(_ text: String) -> some View {
+        Label(text, systemImage: "exclamationmark.triangle.fill")
+            .font(.callout).foregroundStyle(.orange)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // MARK: kill switch
+
+    private var installCard: some View {
+        card {
+            VStack(spacing: 8) {
+                Text("Защита от утечек и ядро VPN ставятся один раз и работают от системы, ещё до входа в учётную запись.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Button { control.install() } label: { Text("Установить").frame(maxWidth: .infinity) }
+                    .controlSize(.large).buttonStyle(.borderedProminent)
+                    .disabled(control.busy)
+                Text("Попросит пароль.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var protection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label(control.state.title, systemImage: control.state.symbol).font(.headline)
+                Spacer()
+                switch control.state {
+                case .on:
+                    Menu("Пауза") {
+                        Button("\(pauseShort) мин") { control.pause(minutes: pauseShort) }
+                        Button("\(pauseLong) мин") { control.pause(minutes: pauseLong) }
+                    }
+                    .fixedSize()
+                    Button("Выключить", role: .destructive) { control.turnOff() }
+                case .off, .paused, .unknown:
+                    Button("Включить") { control.turnOn() }.buttonStyle(.borderedProminent).tint(.green)
+                case .notInstalled:
+                    EmptyView()
+                }
+            }
+            .disabled(control.busy || control.state == .unknown)
+            Text("Пока защита включена, программы выходят в интернет только через VPN. Выключение и пауза просят пароль.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            SettingsLink { Label("Настройки", systemImage: "gearshape") }
+                .buttonStyle(.link)
+            Spacer()
+            if control.state != .notInstalled && control.state != .unknown {
+                Button("Обновить защиту") { control.install() }
+                    .buttonStyle(.link).disabled(control.busy)
+                Button("Удалить защиту…", role: .destructive) { confirmUninstall = true }
+                    .buttonStyle(.link).foregroundStyle(.secondary)
+            }
+        }
+        .font(.callout)
+        .padding(.horizontal, 20).padding(.vertical, 12)
+    }
+
+    private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
     }
 }

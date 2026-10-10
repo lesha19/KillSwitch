@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     var body: some View {
         TabView {
+            VPNSettings().tabItem { Label("VPN", systemImage: "network.badge.shield.half.filled") }
             AccessSettings().tabItem { Label("Что пропускать", systemImage: "checklist") }
             ServerSettings().tabItem { Label("Серверы VPN", systemImage: "network") }
             ExceptionSettings().tabItem { Label("Исключения", systemImage: "list.bullet") }
@@ -22,7 +23,7 @@ private struct AccessSettings: View {
                 toggle("Домашняя сеть", "Роутер, NAS, принтер, AirPlay.", key: "lan", value: control.allowLAN)
                 toggle("Адреса сайтов через роутер", "Пока VPN выключен, Mac может узнавать адреса сайтов у роутера. Само содержимое не уходит, но видно, куда ходит Mac.", key: "dns", value: control.allowRouterDNS)
                     .disabled(!control.allowLAN)
-                toggle("Сайты мимо VPN через dropweb", "Ядро dropweb сможет выходить на любые адреса, а не только к серверам VPN. Это слабее защиты: любая программа может запустить ядро со своим конфигом и выйти мимо VPN. Безопасная замена — «Своё ядро VPN» в главном окне.", key: "direct", value: control.allowDirect)
+                toggle("Сторонний клиент dropweb мимо VPN", "Только для старой схемы с dropweb вместо встроенного VPN: его ядро сможет выходить на любые адреса. Это слабее защиты: любая программа может запустить то ядро со своим конфигом. Встроенному VPN это не нужно.", key: "direct", value: control.allowDirect)
                 toggle("Отключать сеть при выключении Mac", "Wi-Fi, кабель и iPhone по USB отключаются при выключении Mac и включаются сами после загрузки, когда защита уже стоит. Так при загрузке ничего не утекает. Не спасает при внезапном выключении (сел аккумулятор, сбой).", key: "wifiguard", value: control.wifiGuard)
                 toggle("Tailscale", "Связь между своими устройствами без VPN: напрямую (только системная служба Tailscale) и через ретрансляторы Tailscale вне дома.", key: "tailscale", value: control.allowTailscale)
             } footer: {
@@ -50,7 +51,7 @@ private struct ServerSettings: View {
         Form {
             Section {
                 if rows.isEmpty {
-                    Text("Серверы не найдены. Подключись в dropweb или Happ хотя бы раз.").foregroundStyle(.secondary)
+                    Text("Пусто. Серверы из подписки добавляются сами при каждом обновлении.").foregroundStyle(.secondary)
                 }
                 ForEach(rows, id: \.self) { server in
                     HStack {
@@ -70,7 +71,7 @@ private struct ServerSettings: View {
             } header: {
                 Text("Серверы VPN")
             } footer: {
-                Text("Без VPN доступны только эти адреса, и к ним сможет подключиться любая программа. Сайты, которые Happ отправляет мимо VPN (российские, Apple, Steam), при включённой защите открываться не будут. Изменения спросят пароль.")
+                Text("Без VPN доступны только эти адреса. Серверы встроенного VPN пропускаются сами при обновлении подписки. Здесь же видны серверы сторонних клиентов (Happ, dropweb), если они есть: к ним сможет подключиться любая программа. Изменения спросят пароль.")
                     .foregroundStyle(.secondary)
             }
         }
@@ -233,5 +234,107 @@ private struct FilterSection: View {
         case .failed, .waitingForApproval: .orange
         default: .secondary
         }
+    }
+}
+
+/// Subscription, servers added by hand and routing of the built-in VPN.
+private struct VPNSettings: View {
+    @Environment(KillSwitchControl.self) private var control
+    @Environment(VPNClient.self) private var client
+    @State private var revealed: String?
+    @State private var editing = false
+    @State private var newURL = ""
+    @State private var newLink = ""
+    @State private var confirmRemove = false
+
+    var body: some View {
+        @Bindable var client = client
+        Form {
+            Section {
+                if client.hasURL && !editing {
+                    LabeledContent("Ссылка") {
+                        Text(revealed ?? client.maskedURL ?? "").monospaced().textSelection(.enabled)
+                            .lineLimit(revealed == nil ? 1 : nil)
+                    }
+                    HStack {
+                        Button(revealed == nil ? "Показать" : "Скрыть") {
+                            revealed = revealed == nil ? client.revealURL() : nil
+                        }
+                        Button("Изменить…") { editing = true; revealed = nil }
+                        Spacer()
+                        Button("Удалить", role: .destructive) { confirmRemove = true }
+                    }
+                } else {
+                    HStack {
+                        SecureField("https://…", text: $newURL).onSubmit(saveURL)
+                        Button("Сохранить", action: saveURL).disabled(newURL.isEmpty)
+                        if editing { Button("Отмена") { editing = false; newURL = "" } }
+                    }
+                }
+                Picker("Обновлять", selection: $client.intervalHours) {
+                    Text("как просит подписка (\(Int(client.status.serverInterval / 3600)) ч)").tag(0)
+                    ForEach([1, 3, 6, 12, 24, 48], id: \.self) { Text("каждые \($0) ч").tag($0) }
+                }
+                if client.hasURL {
+                    SubscriptionSummary()
+                }
+            } header: {
+                Text("Подписка")
+            } footer: {
+                Text("Ссылка хранится в связке ключей этого Mac. При обновлении сервер видит обезличенный номер этого Mac (для лимита устройств), версию macOS и модель. Если обновление не удалось, VPN продолжает работать со старым профилем.")
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                if client.manual.isEmpty {
+                    Text("Пусто").foregroundStyle(.secondary)
+                }
+                ForEach(client.manual) { server in
+                    HStack {
+                        ServerLabel(name: server.name)
+                        Spacer()
+                        Button("Убрать", role: .destructive) { Task { await client.removeManual(server) } }
+                    }
+                }
+                HStack {
+                    SecureField("vless://, trojan://, ss://, hysteria2://, tuic://", text: $newLink).onSubmit(addLink)
+                    Button("Добавить", action: addLink).disabled(newLink.isEmpty)
+                }
+            } header: {
+                Text("Свои серверы")
+            } footer: {
+                Text("Серверы по ссылкам появятся в списке отдельной группой «\(ProfileMerger.manualGroup)». Ссылки тоже хранятся в связке ключей. Каждое изменение спросит пароль.")
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle(isOn: Binding(get: { control.coreDirect }, set: { control.set("coredirect", $0) })) {
+                    Text("Прямой выход для российских сайтов")
+                    Text("Российские сайты и адреса открываются напрямую, без VPN: быстрее и без капч, но провайдер видит, что ты на них заходишь. Остальное — через VPN. Спросит пароль.")
+                }
+                .disabled(control.busy || control.state == .notInstalled)
+            } header: {
+                Text("Маршрутизация")
+            }
+        }
+        .formStyle(.grouped)
+        .confirmationDialog("Удалить подписку?", isPresented: $confirmRemove) {
+            Button("Удалить", role: .destructive) { revealed = nil; Task { await client.removeURL() } }
+        } message: {
+            Text("Ссылка удалится из связки ключей. Ядро продолжит работать с последним профилем, пока его не заменят.")
+        }
+    }
+
+    private func saveURL() {
+        let value = newURL
+        newURL = ""
+        editing = false
+        Task { await client.setURL(value) }
+    }
+
+    private func addLink() {
+        let value = newLink
+        newLink = ""
+        Task { await client.addLink(value) }
     }
 }
