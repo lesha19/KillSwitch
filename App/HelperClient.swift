@@ -49,7 +49,13 @@ final class HelperClient {
         guard command.needsAuthorization else {
             return await call(command, authorization: nil).map(Outcome.reply) ?? .unreachable
         }
-        guard interactive else {
+        // macOS's dialog for the right only for a user action (AdminGate)
+        let what: String = switch command {
+        case .install: "install.sh"
+        case .uninstall: "uninstall.sh"
+        default: AdminGate.reason([["ks"] + command.arguments])
+        }
+        guard AdminGate.permit(.init(reason: "right for " + what, userInitiated: interactive)) else {
             return .reply(HelperReply(status: HelperReply.notAuthorized, stdout: "", stderr: ""))
         }
         for _ in 0..<2 {

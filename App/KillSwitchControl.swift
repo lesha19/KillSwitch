@@ -213,7 +213,7 @@ final class KillSwitchControl {
         }
     }
 
-    func turnOn() { run(["on"]) }
+    func turnOn() { run(["on"], userInitiated: true) }
     func turnOff() { runAsAdmin([helper, "off"]) }
     func pause(minutes: Int) { runAsAdmin([helper, "pause", String(minutes)]) }
 
@@ -237,7 +237,7 @@ final class KillSwitchControl {
         if connection == .connected {
             guard mode == "armed" else { return }
             defaults.removeObject(forKey: Self.resumeKey)
-            turnOn()
+            run(["on"], userInitiated: false)   // not a click: passwordless `ks on` or nothing
         } else if mode == "afterDrop" {
             defaults.set("armed", forKey: Self.resumeKey)
         }
@@ -497,7 +497,7 @@ final class KillSwitchControl {
     }
     func coreOff() {
         disconnecting = true
-        run(["core", "off"])
+        run(["core", "off"], userInitiated: true)
     }
 
     /// «Отключить» was pressed: the tunnel going down is no drop.
@@ -707,7 +707,7 @@ final class KillSwitchControl {
         if result.status == 0 { return .ok(result.output) }
         guard Self.sudoWantsPassword(result.output) else { return .failed(result.output) }
         guard interactive else { return .needsPassword }
-        switch await adminRun([[helper] + args]) {
+        switch await adminRun([[helper] + args], .init(reason: AdminGate.reason([[helper] + args]), userInitiated: interactive)) {
         case .ok(let output): return .ok(output)
         case .cancelled: return .cancelled
         case .failed(let message): return .failed(message)
@@ -745,7 +745,7 @@ final class KillSwitchControl {
         }
         let commands = Onboarding.commands(installScript: script, user: NSUserName(), servers: [], helper: helper,
                                            profile: profile)
-        switch await adminRun(commands) {
+        switch await adminRun(commands, .init(reason: AdminGate.reason(commands), userInitiated: true)) {   // the wizard's button
         case .ok:
             error = nil
             measured = [:]
@@ -916,11 +916,12 @@ final class KillSwitchControl {
         WidgetCenter.shared.reloadAllTimelines()
     }
 
-    /// A click (or the widget): may fall back to the password prompt.
-    private func run(_ args: [String]) {
+    /// `userInitiated`: a click (or the widget) may fall back to the password prompt; anything else
+    /// only tries the passwordless way.
+    private func run(_ args: [String], userInitiated: Bool) {
         busy = true
         Task {
-            switch await callHelper(args, interactive: true) {
+            switch await callHelper(args, interactive: userInitiated) {
             case .ok: error = nil
             case .failed(let message): error = UserError.from(raw: message.isEmpty ? "ks \(args.joined(separator: " ")): failed" : message, context: .helper)
             case .needsPassword, .cancelled: break
@@ -956,13 +957,14 @@ final class KillSwitchControl {
         runAsAdmin(batch: [command], context: context)
     }
 
-    /// Several commands behind one password; the first failure stops the rest.
+    /// Several commands behind one password; the first failure stops the rest. Only the user's
+    /// actions call it (AdminGateTests keeps launch and refresh code away from it).
     private func runAsAdmin(batch commands: [[String]], context: UserError.Context = .helper,
                             then done: (@MainActor () async -> Void)? = nil) {
         guard !commands.isEmpty else { return }
         busy = true
         Task {
-            switch await adminRun(commands) {
+            switch await adminRun(commands, .init(reason: AdminGate.reason(commands), userInitiated: true)) {
             case .ok:
                 error = nil
                 await done?()
@@ -977,8 +979,10 @@ final class KillSwitchControl {
     /// Through the daemon when it is allowed: one authorization for the whole batch, none within
     /// five minutes of the last. Otherwise the admin prompt and the command run in their own
     /// process (AdminScript.run), so the app keeps drawing while the password is typed and
-    /// install.sh works.
-    private func adminRun(_ commands: [[String]]) async -> AdminScript.Outcome {
+    /// install.sh works. Nothing runs and nothing is asked unless AdminGate lets the request through
+    /// (a user action); a refused one counts as cancelled.
+    private func adminRun(_ commands: [[String]], _ request: AdminGate.Request) async -> AdminScript.Outcome {
+        guard AdminGate.permit(request) else { return .cancelled }
         if helperAvailability == .ready {
             let typed = commands.compactMap { HelperCommand(command: $0, helper: helper) }
             if typed.count == commands.count, let outcome = await daemonRun(typed) { return outcome }
@@ -1105,7 +1109,7 @@ final class KillSwitchControl {
 
     /// «Включить сеть»: `ks netrestore` turns back on the network services the stopped service
     /// had turned off. Passwordless since 0.9.1; an older sudoers falls back to the prompt.
-    func restoreNetwork() { run(["netrestore"]) }
+    func restoreNetwork() { run(["netrestore"], userInitiated: true) }
 
     /// «Перезапустить VPN»: the core is running but its API does not answer.
     func restartCore() {
