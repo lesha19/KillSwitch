@@ -62,6 +62,9 @@ func proxies(selected: String = "⚡ Авто", auto: String = "🇱🇹 Лит�
     }
 }
 
+/// The wizard's step and install state for the next snapshot (prepare.py wires OnboardingView to it).
+@MainActor var renderOnboarding: (step: Onboarding.Step, installed: Bool) = (.welcome, false)
+
 // MARK: rendering
 
 @MainActor
@@ -305,6 +308,44 @@ func main() {
         w.connect()
         w.client.lastError = UserError.from(raw: "HTTP 404", context: .subscription)
         window("16-window-subscription-expired", height: 1000, w)
+    }
+
+    // MARK: first-run wizard
+
+    func wizard(_ name: String, _ step: Onboarding.Step, installed: Bool = false, _ w: World) {
+        renderOnboarding = (step, installed)
+        snapshot(name, width: 520, height: 440, title: "Начало работы") {
+            OnboardingView().environment(w.control).environment(w.client).environment(w.tester).environment(w.auto)
+        }
+    }
+
+    do {
+        let w = World()
+        w.control.state = .notInstalled
+        w.control.coreInstalled = false
+        w.control.coreConfigured = false
+        wizard("60-wizard-welcome", .welcome, w)
+        wizard("61-wizard-subscription", .subscription, w)
+        w.client.lastError = UserError.from(raw: "HTTP 404", context: .subscription)
+        wizard("61b-wizard-subscription-error", .subscription, w)
+        w.client.lastError = nil
+        w.subscribe()
+        w.client.profileProxies = proxies()
+        wizard("61c-wizard-subscription-checked", .subscription, w)
+        wizard("62-wizard-install", .install, w)
+        w.control.error = UserError.from(raw: "install.sh: launchctl bootstrap failed: 5: Input/output error", context: .install)
+        wizard("62b-wizard-install-error", .install, w)
+        w.control.error = nil
+        w.control.filter.status = .notInstalled
+        wizard("63-wizard-filter", .filter, w)
+        w.control.filter.status = .waitingForApproval
+        wizard("63b-wizard-filter-waiting", .filter, w)
+        w.control.state = .on
+        w.control.coreInstalled = true
+        w.control.coreConfigured = true
+        w.connect()
+        w.control.filter.status = .on
+        wizard("64-wizard-done", .done, w)
     }
 
     // MARK: menu bar menu

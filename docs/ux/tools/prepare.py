@@ -8,7 +8,8 @@ Patches (copies only):
   and reach the settings tabs;
 - init bodies of KillSwitchControl / VPNClient / AutoConnector / FilterControl / LeakTester do
   nothing (no timers, no sudo, no keychain, no network monitor);
-- the helper runner, proxy loading and the event log reader are no-ops; the keychain is a stub.
+- the helper runner, proxy loading and the event log reader are no-ops; the keychain is a stub;
+- the wizard opens on the step and install state set by Render.swift and does not run the leak test.
 
 Usage: prepare.py <repo> <out-dir>
 """
@@ -56,6 +57,7 @@ patches = {
     "AutoConnector.swift": [("    init(control: KillSwitchControl) {", "        self.control = control\n        super.init()")],
     "FilterControl.swift": [("    override init() {", "        super.init()")],
     "LeakTester.swift": [("    init() {", "    ")],
+    "OnboardingView.swift": [("    private func rememberHome() {", "        return")],
 }
 
 for path in files:
@@ -65,6 +67,9 @@ for path in files:
     text = re.sub(r"(?m)^private struct", "struct", text)
     # no asset catalog in the renderer: the status icons are NSImages registered by name (Render.swift)
     text = text.replace("Image(status.icon)", "Image(nsImage: NSImage(named: status.icon) ?? NSImage())")
+    if path.name == "OnboardingView.swift":
+        text = text.replace("control.serviceInstalled", "renderOnboarding.installed")
+        text = text.replace("        index = 0\n", "        index = steps.firstIndex(of: renderOnboarding.step) ?? 0\n")
     for signature, body in patches.get(path.name, []):
         text = replace_body(text, signature, body)
     if path.name == "Keychain.swift":

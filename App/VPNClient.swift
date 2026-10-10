@@ -84,20 +84,25 @@ final class VPNClient {
     func revealURL() -> String? { Self.storedURL() }
 
     func setURL(_ text: String) async {
-        let url = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard store(text.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
+        await update(interactive: true)
+    }
+
+    /// Keeps a subscription link in the keychain; the status starts over.
+    private func store(_ url: String) -> Bool {
         guard let components = URLComponents(string: url), components.scheme?.lowercased() == "https", components.host?.isEmpty == false else {
             lastError = UserError(title: "Это не ссылка на подписку", message: "Нужна ссылка вида https://…")
-            return
+            return false
         }
         guard Keychain.write(Self.urlAccount, Data(url.utf8)) else {
             lastError = UserError(title: "Ссылка не сохранилась", message: "Не получилось сохранить ссылку в связке ключей.")
-            return
+            return false
         }
         hasURL = true
         maskedURL = SubscriptionHeaders.masked(url)
         status = Status()
         saveStatus()
-        await update(interactive: true)
+        return true
     }
 
     func removeURL() async {
@@ -120,7 +125,13 @@ final class VPNClient {
         let links = ProxyLink.isWireGuardConf(trimmed)
             ? [trimmed]
             : trimmed.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        guard !links.isEmpty else { return }
+        guard !links.isEmpty, let added = parse(links, name: name) else { return }
+        manual += added
+        saveManual()
+        await apply(subscription: Self.cachedSubscription(), interactive: true)
+    }
+
+    private func parse(_ links: [String], name: String?) -> [ManualServer]? {
         var added: [ManualServer] = []
         for link in links {
             do {
@@ -129,12 +140,10 @@ final class VPNClient {
             } catch {
                 lastError = UserError(title: "Не получилось добавить сервер", message: error.localizedDescription,
                                       details: error.localizedDescription)
-                return
+                return nil
             }
         }
-        manual += added
-        saveManual()
-        await apply(subscription: Self.cachedSubscription(), interactive: true)
+        return added
     }
 
     /// A wg-quick `.conf` picked in the file dialog; the file name becomes the server name.
@@ -178,6 +187,12 @@ final class VPNClient {
         guard !updating else { return }
         updating = true
         defer { updating = false }
+        guard let profile = await fetchProfile(url) else { return }
+        await apply(subscription: profile, interactive: interactive)
+    }
+
+    /// Downloads and caches the subscription, without handing it to the helper.
+    private func fetchProfile(_ url: URL) async -> Profile? {
         do {
             let (body, headers) = try await Self.fetch(url)
             let profile = try ProfileConverter.profile(fromSubscription: body)
@@ -191,13 +206,86 @@ final class VPNClient {
             retryAt = nil
             Self.cache(profile)
             reloadProfileProxies()
-            await apply(subscription: profile, interactive: interactive)
+            return profile
         } catch {
             let raw = Self.describe(error)
             // no network: try again with the next timer tick (10 min), anything else in an hour
             retryAt = Date().addingTimeInterval(raw.hasPrefix("offline") ? 540 : 3600)
             lastError = UserError.from(raw: raw, context: .subscription)
+            return nil
         }
+    }
+
+    // MARK: first run (Onboarding)
+
+    /// Step «Ссылка на подписку»: keeps and checks a subscription link, or takes share links or the
+    /// text of a WireGuard file as own servers. Nothing reaches the helper yet, so no password.
+    func check(_ text: String) async -> Onboarding.Found? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !updating else { return nil }
+        lastError = nil
+        if trimmed.lowercased().hasPrefix("http") {
+            guard store(trimmed), let url = URL(string: trimmed) else { return nil }
+            updating = true
+            defer { updating = false }
+            guard let profile = await fetchProfile(url) else { return nil }
+            let found = Onboarding.Found(title: status.title, servers: (profile["proxies"] as? [Any])?.count ?? 0,
+                                         expire: status.usage?.expire)
+            if !found.ready { lastError = UserError.from(raw: "empty", context: .subscription) }
+            return found
+        }
+        let links = ProxyLink.isWireGuardConf(trimmed)
+            ? [trimmed]
+            : trimmed.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard let added = parse(links, name: nil) else { return nil }
+        manual += added
+        saveManual()
+        reloadProfileProxies()
+        return Onboarding.Found(title: nil, servers: manual.count, expire: nil, ownServers: true)
+    }
+
+    /// What is already there when the wizard is reopened.
+    var found: Onboarding.Found? {
+        guard let servers = profileProxies?.servers.count, servers > 0 else { return nil }
+        return Onboarding.Found(title: status.title, servers: servers, expire: status.usage?.expire, ownServers: !hasURL)
+    }
+
+    /// The merged profile in a private temporary file, for `ks core import` inside the wizard's one
+    /// admin command; `didImport` or `discard` removes the file.
+    struct Prepared {
+        let file: URL
+        let hash: String
+        fileprivate let profile: Profile
+    }
+
+    func prepareImport() -> Prepared? {
+        guard let profile = ProfileMerger.merge(subscription: Self.cachedSubscription(), manual: manual.compactMap(Self.proxy)),
+              let written = write(profile) else { return nil }
+        return Prepared(file: written.file, hash: written.hash, profile: profile)
+    }
+
+    func didImport(_ prepared: Prepared) {
+        imported(prepared.profile, hash: prepared.hash)
+        discard(prepared)
+    }
+
+    func discard(_ prepared: Prepared) { try? FileManager.default.removeItem(at: prepared.file) }
+
+    private func write(_ profile: Profile) -> (file: URL, hash: String)? {
+        let data: Data
+        do { data = try ProfileConverter.json(profile) } catch {
+            lastError = UserError.from(raw: "profile: \(error.localizedDescription)", context: .subscription)
+            return nil
+        }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-profile-\(UUID().uuidString).json")
+        do {
+            try data.write(to: file, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        } catch {
+            lastError = UserError.from(raw: "profile file: \(error.localizedDescription)", context: .subscription)
+            return nil
+        }
+        return (file, Self.hash(data))
     }
 
     /// Imports the last fetched subscription with the admin password. Only from a click.
@@ -216,25 +304,12 @@ final class VPNClient {
             lastError = nil
             return
         }
-        let data: Data
-        do { data = try ProfileConverter.json(profile) } catch {
-            lastError = UserError.from(raw: "profile: \(error.localizedDescription)", context: .subscription)
-            return
-        }
-        let hash = Self.hash(data)
+        guard let (file, hash) = write(profile) else { return }
+        defer { try? FileManager.default.removeItem(at: file) }
         if control.coreConfigured, UserDefaults.standard.string(forKey: Self.importedKey) == hash {
             lastError = nil
             needsPassword = false
             needsConfirmation = false
-            return
-        }
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-profile-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: file) }
-        do {
-            try data.write(to: file, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
-        } catch {
-            lastError = UserError.from(raw: "profile file: \(error.localizedDescription)", context: .subscription)
             return
         }
         guard interactive else {

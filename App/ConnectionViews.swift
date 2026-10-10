@@ -313,32 +313,3 @@ struct SubscriptionSummary: View {
         ByteCountFormatter.string(fromByteCount: count, countStyle: .binary)
     }
 }
-
-/// First run: paste the subscription URL.
-struct SubscriptionOnboarding: View {
-    @Environment(VPNClient.self) private var client
-    @State private var url = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Добавь подписку").font(.headline)
-            Text("Вставь ссылку подписки от VPN-сервиса. Она хранится в связке ключей этого Mac.")
-                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            HStack {
-                SecureField("https://…", text: $url).onSubmit(save)
-                    .accessibilityLabel("Ссылка подписки")
-                Button("Добавить", action: save).disabled(url.isEmpty || client.updating)
-            }
-            if client.updating { ProgressView().controlSize(.small) }
-            if let error = client.lastError {
-                InlineError(error: error)
-            }
-        }
-    }
-
-    private func save() {
-        let value = url
-        url = ""
-        Task { await client.setURL(value) }
-    }
-}

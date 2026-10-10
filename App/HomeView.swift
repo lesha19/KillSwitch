@@ -29,7 +29,7 @@ private struct HomeContent: View {
 
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
-    @State private var addingSubscription = false
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         let status = control.status(client)
@@ -59,7 +59,6 @@ private struct HomeContent: View {
             }
         }
         .padding(16)
-        .sheet(isPresented: $addingSubscription) { AddSubscriptionSheet() }
     }
 
     private func hero(_ status: Status) -> some View {
@@ -108,9 +107,11 @@ private struct HomeContent: View {
 
     private func perform(_ action: Status.Action) {
         switch action {
-        case .install, .repair: control.install()
+        case .install, .addSubscription:
+            openWindow(id: OnboardingView.windowID)
+            NSApp.activate()
+        case .repair: control.install()
         case .openLoginItems: NSWorkspace.shared.open(SystemSettings.loginItems)
-        case .addSubscription: addingSubscription = true
         case .connect: control.coreOn()
         case .cancel, .disconnect: control.coreOff()
         case .chooseServer: chooseServer()
@@ -396,24 +397,5 @@ struct ActionsMenu: View {
         case .notInstalled, .unknown:
             EmptyView()
         }
-    }
-}
-
-/// «Добавить подписку…» before the wizard exists for it: paste the link, nothing else.
-private struct AddSubscriptionSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(VPNClient.self) private var client
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            SubscriptionOnboarding()
-            HStack {
-                Spacer()
-                Button("Готово") { dismiss() }.keyboardShortcut(.cancelAction)
-            }
-        }
-        .padding(20)
-        .frame(width: 420)
-        .onChange(of: client.hasURL) { _, has in if has { dismiss() } }
     }
 }

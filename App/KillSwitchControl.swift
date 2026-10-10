@@ -404,7 +404,7 @@ final class KillSwitchControl {
         if result.status == 0 { return .ok(result.output) }
         guard Self.sudoWantsPassword(result.output) else { return .failed(result.output) }
         guard interactive else { return .needsPassword }
-        switch await adminRun([helper] + args) {
+        switch await adminRun([[helper] + args]) {
         case .ok(let output): return .ok(output)
         case .cancelled: return .cancelled
         case .failed(let message): return .failed(message)
@@ -413,6 +413,40 @@ final class KillSwitchControl {
 
     /// Also used to upgrade the installed helper: install.sh keeps settings and lists.
     func install() { runBundled("install.sh", [NSUserName()] + foundServers) }
+
+    /// The service is on this Mac (the helper may still be broken or switched off).
+    var serviceInstalled: Bool { FileManager.default.fileExists(atPath: helper) }
+
+    /// «Начало работы», step «Установка»: install.sh (unless the service is there), the import of
+    /// `profile` and connecting, as one admin command — one password, and the protection that
+    /// install.sh turns on never finds the Mac without a VPN.
+    func setUp(profile: String) async -> Bool {
+        let installed = serviceInstalled
+        var script: String?
+        if !installed {
+            guard let path = Bundle.main.path(forResource: "install.sh", ofType: nil, inDirectory: "Helper") else {
+                error = UserError.problem(.vpnMissing)
+                return false
+            }
+            script = path
+        }
+        busy = true
+        defer { busy = false; refresh() }
+        let commands = Onboarding.commands(installScript: script, user: NSUserName(), servers: foundServers, helper: helper,
+                                           profile: profile)
+        switch await adminRun(commands) {
+        case .ok:
+            error = nil
+            measured = [:]
+            await applyPendingChoice()
+            return true
+        case .cancelled:
+            return false
+        case .failed(let message):
+            error = UserError.from(raw: message, context: installed ? .helper : .install)
+            return false
+        }
+    }
     func uninstall() { runBundled("uninstall.sh", []) }
 
     func refresh() {
@@ -500,7 +534,7 @@ final class KillSwitchControl {
     private func runAsAdmin(_ command: [String], context: UserError.Context = .helper) {
         busy = true
         Task {
-            switch await adminRun(command) {
+            switch await adminRun([command]) {
             case .ok: error = nil
             case .cancelled: break
             case .failed(let message): error = UserError.from(raw: message, context: context)
@@ -512,8 +546,8 @@ final class KillSwitchControl {
 
     private enum AdminResult { case ok(String), cancelled, failed(String) }
 
-    private func adminRun(_ command: [String]) async -> AdminResult {
-        let source = AdminScript.source([command])
+    private func adminRun(_ commands: [[String]]) async -> AdminResult {
+        let source = AdminScript.source(commands)
         var info: NSDictionary?
         let output = NSAppleScript(source: source)?.executeAndReturnError(&info)
         if let info {
