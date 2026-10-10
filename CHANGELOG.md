@@ -4,6 +4,32 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [0.14] - 2026-10-10
+
+Updating no longer interrupts the VPN and needs no manual steps (ADR 0012).
+
+### Added
+- «Обновлять автоматически» in «О программе», on by default (`SUAutomaticallyUpdate`): Sparkle
+  downloads the update in the background and it is installed, with a relaunch of the app, as soon
+  as KillSwitch is not the active app. The tunnel, pf and DNS live in the root daemons and are not
+  touched by quitting or replacing the app.
+- Daemon command `upgrade`: after an app update the privileged daemon puts the bundled helper in
+  place without a password (`install.sh --upgrade` from its verified copy of the signed bundle),
+  never an older helper over a newer one. Then a notice «Обновление установлено — VPN не
+  прерывался» instead of «Восстановить службу…».
+- `install.sh --upgrade`: in-place upgrade for the user the sudoers entry already names; leaves
+  protection on, off or paused as it was; exit 2 when not installed, exit 4 on a downgrade.
+- `ks _regen` (internal, root only): a new config generator's output is hot-reloaded through the
+  core's API, without restarting the core.
+
+### Changed
+- `install.sh` (also «Восстановить службу…») no longer drops the connection: files are replaced
+  by rename, the watchdog takes a new `ks` by SIGHUP (`ks watch` re-execs itself; before, a
+  `bootout` made its shutdown guard switch Wi-Fi and Ethernet off), pf is never flushed, and the
+  core restarts only if its binary, geodata or plist changed (before: on every run).
+- The daemon exits as soon as its app was replaced and nothing runs, so a new daemon takes over
+  within 30 s; the app routes its reads around a daemon of an older build until then.
+
 ## [0.13] - 2026-10-10
 
 The helper changed (new passwordless `ks core traffic`, `ks set adblock`), so «Восстановить

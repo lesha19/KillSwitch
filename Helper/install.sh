@@ -100,7 +100,7 @@ watchdog_update() {
     echo "watchdog: started"
   elif [ "$2" = 1 ]; then
     # A new plist needs bootout and bootstrap. Marked disabled meanwhile, the watchdog's shutdown
-    # guard leaves the network on (watch_disabled in ks, since 0.10); the rules stay loaded.
+    # guard leaves the network on (watch_disabled in ks, already in 0.13); the rules stay loaded.
     local was_disabled=0
     job_disabled "$WATCH_JOB" && was_disabled=1
     launchctl disable "$WATCH_JOB"
