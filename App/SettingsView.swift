@@ -716,6 +716,10 @@ struct AboutView: View {
                     Spacer()
                     CheckForUpdatesButton(updater: updater)
                 }
+                Toggle(isOn: Binding(get: { updater.automaticallyUpdates }, set: { updater.automaticallyUpdates = $0 })) {
+                    Text("Обновлять автоматически")
+                    Text("KillSwitch ставит обновления сам, пока вы им не пользуетесь. VPN и защита при этом не прерываются.")
+                }
             }
             NetworkHintsSection()
             Section("Советы") {
