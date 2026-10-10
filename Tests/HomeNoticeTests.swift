@@ -46,6 +46,20 @@ final class HomeNoticeTests: XCTestCase {
         XCTAssertNil(HomeNotice.pick(next))
     }
 
+    /// The two approvals in System Settings come last: the old filter keeps working meanwhile, and
+    /// without the daemon every change only asks for the password.
+    func testApprovalsComeLast() {
+        let both = input {
+            $0.filterUpdateWaiting = true
+            $0.helperApproval = true
+        }
+        XCTAssertEqual(HomeNotice.pick(both), .filterUpdateWaiting)
+        XCTAssertEqual(HomeNotice.pick(input { $0.helperApproval = true }), .helperApproval)
+        XCTAssertEqual(HomeNotice.pick(input { $0.helperApproval = true; $0.newServers = true }), .newServers)
+        XCTAssertEqual(HomeNotice.pick(input { $0.filterUpdateWaiting = true; $0.filterIncomplete = true }), .filterOff)
+        XCTAssertEqual(HomeNotice.helperApproval.title, "Разреши KillSwitch в Объектах входа, чтобы не вводить пароль каждый раз.")
+    }
+
     func testEndingCountsWholeDaysFromThreeDaysOut() {
         XCTAssertEqual(HomeNotice.pick(input { $0.usage = usage(expiresIn: 3) }), .ending(days: 3))
         XCTAssertEqual(HomeNotice.pick(input { $0.usage = usage(expiresIn: 0.4) }), .ending(days: 1))

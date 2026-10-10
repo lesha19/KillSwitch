@@ -13,6 +13,10 @@ enum HomeNotice: Equatable {
     case newServers
     /// «Защита неполная»: the macOS filter is not working (skipped in the wizard, removed, failed).
     case filterOff
+    /// The bundled filter waits for the switch in System Settings; the old one keeps working.
+    case filterUpdateWaiting
+    /// The daemon (ADR 0010) waits for the switch in Login Items: until then a password every time.
+    case helperApproval
 
     struct Input: Equatable {
         var otherVPN: Bool
@@ -26,6 +30,9 @@ enum HomeNotice: Equatable {
         /// The country whose servers all stopped answering.
         var serversDown: String?
         var networkCause: NetworkCause? = nil
+        var filterUpdateWaiting = false
+        /// HelperService.showApprovalBanner, not dismissed.
+        var helperApproval = false
     }
 
     static let endingDays = 3
@@ -45,6 +52,8 @@ enum HomeNotice: Equatable {
         }
         if input.newServers { return .newServers }
         if input.filterIncomplete && !input.filterDismissed { return .filterOff }
+        if input.filterUpdateWaiting { return .filterUpdateWaiting }
+        if input.helperApproval { return .helperApproval }
         return nil
     }
 
@@ -58,6 +67,8 @@ enum HomeNotice: Equatable {
         case .trafficLow(let used, let total): String(localized: "Трафик почти закончился: \(Russian.traffic(used: used, total: total)).")
         case .newServers: String(localized: "В подписке новые серверы.")
         case .filterOff: String(localized: "Защита неполная.")
+        case .filterUpdateWaiting: String(localized: "Разреши обновление фильтра KillSwitch.")
+        case .helperApproval: String(localized: "Разреши KillSwitch в Объектах входа, чтобы не вводить пароль каждый раз.")
         }
     }
 
@@ -70,6 +81,8 @@ enum HomeNotice: Equatable {
         case .ending, .trafficLow: ""
         case .newServers: String(localized: "Разреши им работать при включённой защите.")
         case .filterOff: String(localized: "Защита macOS выключена. Рекомендуем включить второй уровень.")
+        case .filterUpdateWaiting: String(localized: "Системные настройки › Основные › Объекты входа и расширения › Сетевые расширения. Пока работает прежняя версия.")
+        case .helperApproval: ""
         }
     }
 }

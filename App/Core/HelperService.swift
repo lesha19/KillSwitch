@@ -22,4 +22,22 @@ enum HelperService {
         @unknown default: .unavailable
         }
     }
+
+    enum LaunchStep: Equatable, Sendable { case nothing, register }
+
+    /// At launch: a helper installed before the daemon existed (or whose registration was lost)
+    /// gets it registered, once. `register()` needs no password; macOS may then want the switch in
+    /// Login Items. Without the helper the wizard registers it with the first install.
+    static func launchStep(helperInstalled: Bool, availability: Availability) -> LaunchStep {
+        helperInstalled && availability == .needsRegistration ? .register : .nothing
+    }
+
+    static let approvalBannerInterval: TimeInterval = 86400
+
+    /// The banner asking for the switch in Login Items: not more often than once a day.
+    static func showApprovalBanner(helperInstalled: Bool, availability: Availability, lastShown: Date?, now: Date) -> Bool {
+        guard helperInstalled, availability == .needsApproval else { return false }
+        guard let lastShown else { return true }
+        return now.timeIntervalSince(lastShown) >= approvalBannerInterval
+    }
 }
