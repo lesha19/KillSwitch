@@ -1,6 +1,9 @@
 #!/bin/bash
 # Removes everything install.sh put in place and lifts the rules.
 set -u
+PATH=/usr/bin:/bin:/usr/sbin:/sbin; export PATH
+export HOME=/var/root LC_ALL=C
+unset CURL_HOME BASH_ENV ENV CDPATH
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
 # A stopped watchdog disables the physical network services unless protection is off (the
 # shutdown guard), so it is switched off first; then wait until the old watchdog is gone.
