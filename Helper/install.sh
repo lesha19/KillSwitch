@@ -26,6 +26,14 @@ else
   USER_NAME="${1:?usage: install.sh <user> [server-ip ...]}"
   shift
 fi
+# The user goes into sudoers: an existing ordinary account with a plain name, never a sudoers
+# keyword (ALL), a group (%…), a uid (#…), several words or root.
+valid_user() {
+  local uid
+  [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_.-]{0,31}$ ]] && [ "$1" != ALL ] || return 1
+  uid=$(id -u "$1" 2>/dev/null) && [[ "$uid" =~ ^[0-9]+$ ]] && [ "$uid" -ge 500 ]
+}
+valid_user "$USER_NAME" || { echo "bad user: $USER_NAME" >&2; exit 1; }
 
 for ip in "$@"; do
   [[ "$ip" =~ ^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$ ]] || { echo "bad server address: $ip" >&2; exit 1; }

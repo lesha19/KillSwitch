@@ -40,5 +40,15 @@ refuses core refresh /a /b
 takes set lan 0
 takes core import /x.json
 
+# --- install.sh: the user it writes into sudoers
+eval "$(sed -n '/^valid_user() {/,/^}/p' "$here/../install.sh")"
+me=$(id -un)
+if [ "$(id -u)" -ge 500 ]; then
+  valid_user "$me" && ok "install.sh: takes the user running it ($me)" || bad "install.sh: refused $me"
+fi
+for u in ALL root daemon %admin '#0' 'a b' $'me\nx' "$me ALL" "$me,root" nosuchuser_ks_test -x ''; do
+  valid_user "$u" && bad "install.sh: took user $(printf '%q' "$u")" || ok "install.sh: refuses user $(printf '%q' "$u")"
+done
+
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
