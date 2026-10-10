@@ -111,7 +111,7 @@ upgrade() {  # upgrade [args]: runs main of install.sh in the bundle directory o
     cd "$root/bundle" || exit 1
     # shellcheck source=../install.sh
     . "$here/../install.sh"
-    set +e
+    [ "${KEEP_E:-0}" = 1 ] || set +e   # KEEP_E=1: main under install.sh's own set -e, as for real
     DIR="$root/lib"; SUDOERS="$root/sudoers"
     WATCH_PLIST="$root/ld/local.killswitch.plist"; CORE_PLIST="$root/ld/local.killswitch.core.plist"
     eval "$(sed -n '/^sudoers_text() {/,/^}/p' "$here/../install.sh")"
@@ -165,6 +165,17 @@ check "upgrade: pf and the network never touched" "$(grep -cE '^(pfctl|networkse
 check "upgrade: says the core kept running" "$(grep -c '^core: kept$' <<<"$out")" 1
 check "upgrade: sudoers kept for the same user" "$(grep -c '^someone ALL=(root) NOPASSWD:' "$root/sudoers")" 1
 check "upgrade: settings kept, coredirect dropped (ADR 0013)" "$(paste -sd, - < "$root/lib/settings")" "lan=0,adblock=1"
+
+setup onlycoredirect
+printf 'coredirect=1\n' > "$root/lib/settings"
+out=$(KEEP_E=1 upgrade --upgrade 2>&1); rc=$?
+check "settings with only coredirect: upgrade succeeds under set -e" "$rc" 0
+check "settings with only coredirect: emptied" "$(wc -c < "$root/lib/settings" | tr -d ' ')" 0
+check "settings with only coredirect: the rest of the install ran" "$(grep -c '^launchctl kill HUP system/local.killswitch$' "$root/calls")" 1
+
+setup strict
+out=$(KEEP_E=1 upgrade --upgrade 2>&1); rc=$?
+check "upgrade under set -e: succeeds" "$rc" 0
 
 setup again
 upgrade --upgrade >/dev/null 2>&1

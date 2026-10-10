@@ -184,8 +184,9 @@ main() {
   if put_file ks "$DIR/ks" 755; then ks_new=1; fi
   # «Российские сайты напрямую» (coredirect, 0.7–0.14) is gone (ADR 0013): what goes outside the
   # VPN comes from the subscription's rules only. Its line is dropped; every other setting stays.
+  # (grep -v exits 1 when no line is left, a settings file with only coredirect: not an error)
   if grep -q '^coredirect=' "$DIR/settings" 2>/dev/null; then
-    grep -v '^coredirect=' "$DIR/settings" > "$DIR/settings.tmp"; chmod 644 "$DIR/settings.tmp"; mv "$DIR/settings.tmp" "$DIR/settings"
+    { grep -v '^coredirect=' "$DIR/settings" || true; } > "$DIR/settings.tmp"; chmod 644 "$DIR/settings.tmp"; mv "$DIR/settings.tmp" "$DIR/settings"
   fi
   if put_file local.killswitch.plist "$WATCH_PLIST" 644; then plist_new=1; fi
   put_file tsrelays "$DIR/tsrelays" 644 || true
