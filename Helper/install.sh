@@ -82,6 +82,8 @@ SUDOERS=/etc/sudoers.d/killswitch
 # "core import" may add servers the core can reach, so it keeps asking for the password.
 # "netrestore" only turns back on the network services ks itself turned off, and refuses while the
 # watchdog runs without its rules.
+# "core traffic" (the menu bar speed) prints two byte totals of the core and changes nothing.
+# "set" (ad blocking included) changes what the core and pf do, so it keeps the password.
 # The environment: secure_path and env_reset for ks whatever the system's sudoers says, and none
 # of the variables macOS keeps by default (HOME would hand curl the user's ~/.curlrc).
 sudoers_text() {  # sudoers_text <user> <ks>
@@ -90,7 +92,7 @@ sudoers_text() {  # sudoers_text <user> <ks>
   echo "Defaults!$ks env_keep-=\"HOME MAIL CHARSET LANG LANGUAGE LC_ALL LC_COLLATE LC_CTYPE LC_MESSAGES LC_MONETARY LC_NUMERIC LC_TIME SSH_AUTH_SOCK TZ EDITOR VISUAL\""
   echo "Defaults!$ks env_delete+=\"HOME CURL_HOME BASH_ENV ENV LC_ALL\""
   echo "$1 ALL=(root) NOPASSWD: $ks state, $ks probe, $ks on, $ks netrestore, $ks core state, $ks core on, $ks core off," \
-    "$ks core proxies, $ks core select *, $ks core delay *, $ks core refresh *"
+    "$ks core proxies, $ks core traffic, $ks core select *, $ks core delay *, $ks core refresh *"
 }
 sudoers_text "$USER_NAME" "$DIR/ks" > "$SUDOERS.tmp"
 chmod 440 "$SUDOERS.tmp"

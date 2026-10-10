@@ -11,12 +11,13 @@ final class HelperCommandTests: XCTestCase {
         let cases: [(HelperCommand, [String])] = [
             (.state, ["state"]), (.probe, ["probe"]), (.protectionOn, ["on"]), (.netRestore, ["netrestore"]),
             (.coreState, ["core", "state"]), (.coreOn, ["core", "on"]), (.coreOff, ["core", "off"]),
-            (.coreProxies, ["core", "proxies"]),
+            (.coreProxies, ["core", "proxies"]), (.coreTraffic, ["core", "traffic"]),
             (.coreSelect(group: "🇩🇪 Germany", proxy: "de-1"), ["core", "select", "🇩🇪 Germany", "de-1"]),
             (.coreDelay("Auto"), ["core", "delay", "Auto"]),
             (.coreRefresh(profile: "/private/tmp/p.json"), ["core", "refresh", "/private/tmp/p.json"]),
             (.protectionOff, ["off"]), (.pause(minutes: 5), ["pause", "5"]),
             (.setSwitch("lan", true), ["set", "lan", "1"]), (.setSwitch("wifiguard", false), ["set", "wifiguard", "0"]),
+            (.setSwitch("adblock", true), ["set", "adblock", "1"]),
             (.setSplitApps(["/Applications/Telegram.app", "zoom.us"]),
              ["set", "splitapps", "/Applications/Telegram.app,zoom.us"]),
             (.setSplitApps([]), ["set", "splitapps", ""]),
@@ -81,7 +82,7 @@ final class HelperCommandTests: XCTestCase {
             [ks, "version"], [ks, "off", "now"], [ks, "pause"], [ks, "pause", "-1"], [ks, "pause", "10000"],
             [ks, "set", "lan", "yes"], [ks, "set", "evil", "1"], [ks, "set", "lan"], [ks, "allow", "example.com"],
             [ks, "allow", "1.2.3.4; rm -rf /"], [ks, "server-add", "-f"], [ks, "core"], [ks, "core", "import"],
-            [ks, "core", "import", "relative.json"], [ks, "core", "select", "only-group"], [ks, "core", "delay", ""],
+            [ks, "core", "import", "relative.json"], [ks, "core", "select", "only-group"], [ks, "core", "traffic", "x"], [ks, "core", "delay", ""],
             [ks, "core", "select", "g", "a\nb"], [ks, "set", "multihop", ""], [ks, "set", "splitapps", "a,,b"],
             [ks, "set", "splitapps", "/tmp/../evil.app"],
         ]
@@ -102,9 +103,10 @@ final class HelperCommandTests: XCTestCase {
         let sudoers = Set(text.matches(of: /\$ks ([a-z -]+?)( \*)?[,"]/).map { String($0.1) })
         XCTAssertFalse(sudoers.isEmpty)
         let all: [HelperCommand] = [
-            .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies,
+            .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic,
             .coreSelect(group: "g", proxy: "p"), .coreDelay("g"), .coreRefresh(profile: "/tmp/p.json"),
-            .protectionOff, .pause(minutes: 5), .setSwitch("lan", true), .setSplitApps([]), .setMultihop(nil),
+            .protectionOff, .pause(minutes: 5), .setSwitch("lan", true), .setSwitch("adblock", true), .setSplitApps([]),
+            .setMultihop(nil),
             .allow("192.0.2.1"), .unallow("192.0.2.1"), .serverAdd("192.0.2.1"), .serverRemove("192.0.2.1"),
             .coreImport(profile: "/tmp/p.json"), .install(user: "alex", servers: []), .uninstall,
         ]
@@ -113,6 +115,9 @@ final class HelperCommandTests: XCTestCase {
                 .joined(separator: " ") : "-"
             XCTAssertEqual(command.needsAuthorization, !sudoers.contains(words), "\(command)")
         }
+        let passwordless = Set(all.filter { !$0.needsAuthorization }
+            .map { $0.arguments.prefix($0.arguments.first == "core" ? 2 : 1).joined(separator: " ") })
+        XCTAssertEqual(passwordless, sudoers)
     }
 
     // MARK: validation (Helper/ks is the authority; the daemon checks before it runs anything)
@@ -147,7 +152,7 @@ final class HelperCommandTests: XCTestCase {
     }
 
     func testSwitchKeys() {
-        for key in ["lan", "tailscale", "dns", "direct", "coredirect", "wifiguard"] {
+        for key in ["lan", "tailscale", "dns", "direct", "coredirect", "wifiguard", "adblock"] {
             XCTAssertTrue(HelperCommand.setSwitch(key, true).isValid, key)
         }
         for key in ["", "splitapps", "multihop", "LAN", "lan ", "x"] {

@@ -1341,7 +1341,7 @@ passwordless_args_ok() {
     state|probe|on|netrestore) [ $# -eq 1 ] ;;
     core)
       case "${2:-}" in
-        state|on|off|proxies) [ $# -eq 2 ] ;;
+        state|on|off|proxies|traffic) [ $# -eq 2 ] ;;
         select) [ $# -eq 4 ] && valid_name "$3" && valid_name "$4" ;;
         delay) [ $# -eq 3 ] && valid_name "$3" ;;
         # the app's own temporary file, read with the caller's rights (core_import)
@@ -1356,7 +1356,7 @@ passwordless_args_ok() {
 # reads nothing but this file: no root needed
 [ "${1:-}" = version ] && { ks_version "$0"; exit 0; }
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
-passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,24p' "$0" >&2; exit 1; }
+passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,25p' "$0" >&2; exit 1; }
 
 # Everything that writes the core's config runs under one lock (the watchdog's rotation skips
 # its turn while it is held).

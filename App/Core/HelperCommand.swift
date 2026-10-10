@@ -9,6 +9,8 @@ enum HelperCommand: Equatable, Sendable {
     // Never widen the rules: what the sudoers line of Helper/install.sh allows without a password.
     case state, probe, protectionOn, netRestore
     case coreState, coreOn, coreOff, coreProxies
+    /// Two byte totals of the core for the menu bar speed (`ks core traffic`).
+    case coreTraffic
     case coreSelect(group: String, proxy: String)
     case coreDelay(String)
     /// Refused by ks (exit 3) if the profile brings new servers: the subscription auto-update.
@@ -40,8 +42,8 @@ enum HelperCommand: Equatable, Sendable {
 
     var needsAuthorization: Bool {
         switch self {
-        case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreSelect,
-             .coreDelay, .coreRefresh:
+        case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic,
+             .coreSelect, .coreDelay, .coreRefresh:
             false
         default:
             true
@@ -59,6 +61,7 @@ enum HelperCommand: Equatable, Sendable {
         case .coreOn: ["core", "on"]
         case .coreOff: ["core", "off"]
         case .coreProxies: ["core", "proxies"]
+        case .coreTraffic: ["core", "traffic"]
         case .coreSelect(let group, let proxy): ["core", "select", group, proxy]
         case .coreDelay(let name): ["core", "delay", name]
         case .coreRefresh(let profile): ["core", "refresh", profile]
@@ -79,8 +82,8 @@ enum HelperCommand: Equatable, Sendable {
 
     var isValid: Bool {
         switch self {
-        case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .protectionOff,
-             .uninstall:
+        case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic,
+             .protectionOff, .uninstall:
             true
         case .coreSelect(let group, let proxy): Self.isName(group) && Self.isName(proxy)
         case .coreDelay(let name): Self.isName(name)
@@ -134,6 +137,7 @@ enum HelperCommand: Equatable, Sendable {
         case ["core", "on"]: command = .coreOn
         case ["core", "off"]: command = .coreOff
         case ["core", "proxies"]: command = .coreProxies
+        case ["core", "traffic"]: command = .coreTraffic
         default:
             switch (arguments.first, arguments.count) {
             case ("pause", 2):
@@ -179,7 +183,9 @@ enum HelperCommand: Equatable, Sendable {
     // MARK: checks
 
     static let multihopOff = "off"
-    static let switchKeys: Set<String> = ["lan", "tailscale", "dns", "direct", "coredirect", "wifiguard"]
+    /// `ks set <key> 0|1`; all behind the right, «Блокировать рекламу» (adblock) too: it changes
+    /// what the core refuses, and only an admin turns that on or off, as with the password before.
+    static let switchKeys: Set<String> = ["lan", "tailscale", "dns", "direct", "coredirect", "wifiguard", "adblock"]
     static let maxSplitApps = 50
     static let maxInstallServers = 512
 
