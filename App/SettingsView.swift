@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -87,6 +88,12 @@ private struct CheckSettings: View {
 
     var body: some View {
         Form {
+            Section {
+                LeakTestView.OpenButton(title: "Открыть «Проверка утечек»…")
+            } footer: {
+                Text("Какой адрес видят сайты по IPv4 и IPv6 и кто узнаёт для тебя адреса сайтов (DNS).")
+                    .foregroundStyle(.secondary)
+            }
             Section {
                 Button(control.leakRunning ? "Проверяю…" : "Проверить утечку") { control.checkLeak() }
                     .disabled(control.leakRunning)
@@ -190,12 +197,193 @@ private struct GeneralSettings: View {
                 Toggle("VPN отключился, интернет перекрыт", isOn: $notifyVPNDropped)
                 Toggle("Пауза закончилась", isOn: $notifyPauseEnded)
             }
-            Section {
-                Toggle("Запускать при входе", isOn: $control.launchAtLogin)
-            }
+            AutoConnectSection(control: control)
             FilterSection(filter: control.filter)
         }
         .formStyle(.grouped)
+    }
+}
+
+/// «Двойной VPN»: traffic enters through the chosen server and leaves through the selected one
+/// (`ks set multihop <entry>|off`, admin prompt).
+private struct MultihopSection: View {
+    @Environment(KillSwitchControl.self) private var control
+    @State private var pending: String?
+
+    var body: some View {
+        let exit = control.currentServer
+        let candidates = Multihop.candidates(control.proxies?.servers ?? [], exit: exit)
+        let entry = control.multihopEntry
+        Section {
+            Toggle(isOn: Binding(get: { entry != nil },
+                                 set: { on in control.setMultihop(entry: on ? (pending ?? candidates.first) : nil) })) {
+                Text("Двойной VPN")
+                Text("Трафик идёт через два сервера: сервер входа видит твой адрес, но не сайты; сервер выхода — сайты, но не твой адрес. Медленнее. Спросит пароль.")
+            }
+            .disabled(entry == nil && candidates.isEmpty)
+            if candidates.isEmpty && entry == nil {
+                Text(control.coreRunning ? "Нужно хотя бы два сервера." : "Подключись, чтобы выбрать сервер входа.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Picker("Сервер входа", selection: Binding(
+                    get: { entry ?? pending ?? candidates.first ?? "" },
+                    set: { new in
+                        pending = new
+                        if entry != nil, new != entry { control.setMultihop(entry: new) }
+                    })) {
+                    if let entry, !candidates.contains(entry) { Text(entry).tag(entry) }
+                    ForEach(candidates, id: \.self) { ServerLabel(name: $0).tag($0) }
+                }
+            }
+            if let entry {
+                Text(Multihop.chain(entry: entry, exit: exit)).font(.callout)
+                if entry == exit {
+                    Text("Вход и выход — один и тот же сервер: выбери другой сервер входа.").font(.caption).foregroundStyle(.orange)
+                }
+            }
+        } header: {
+            Text("Двойной VPN")
+        } footer: {
+            Text("Сервер выхода — тот, что выбран в списке серверов.").foregroundStyle(.secondary)
+        }
+        .disabled(control.busy || control.state == .notInstalled)
+    }
+}
+
+/// «Раздельный туннель»: chosen programs go around the VPN (`ks set splitapps`). Works only with
+/// «Российские сайты — напрямую», which lets the core reach addresses outside the tunnel.
+private struct SplitTunnelSection: View {
+    @Environment(KillSwitchControl.self) private var control
+    /// Process name → app bundle path, to show the app's name and icon; local, not a setting.
+    @AppStorage("splitAppPaths") private var pathsData = Data()
+
+    var body: some View {
+        let paths = (try? JSONDecoder().decode([String: String].self, from: pathsData)) ?? [:]
+        Section {
+            if !control.coreDirect {
+                Label("Включи «Российские сайты — напрямую» выше: без него ядру VPN закрыт выход мимо туннеля.", systemImage: "info.circle")
+                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if control.splitApps.isEmpty {
+                Text("Пусто").foregroundStyle(.secondary)
+            }
+            ForEach(control.splitApps, id: \.self) { name in
+                HStack {
+                    if let path = paths[name] {
+                        Image(nsImage: NSWorkspace.shared.icon(forFile: path)).resizable().frame(width: 18, height: 18)
+                        Text(FileManager.default.displayName(atPath: path))
+                        Text(name).font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Image(systemName: "app").frame(width: 18)
+                        Text(name)
+                    }
+                    Spacer()
+                    Button("Убрать", role: .destructive) {
+                        control.setSplitApps(control.splitApps.filter { $0 != name })
+                    }
+                }
+            }
+            Button("Добавить программы…", action: pick)
+        } header: {
+            Text("Раздельный туннель")
+        } footer: {
+            Text("Эти программы ходят в интернет напрямую, мимо VPN; остальные — через VPN. Программа узнаётся по имени процесса, поэтому её вспомогательные процессы (например, «Google Chrome Helper») могут идти через VPN. Каждое изменение спросит пароль.")
+                .foregroundStyle(.secondary)
+        }
+        .disabled(control.busy || control.state == .notInstalled || !control.coreDirect)
+    }
+
+    private func pick() {
+        let panel = NSOpenPanel()
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.allowedContentTypes = [.application]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.prompt = "Добавить"
+        panel.message = "Программы, которые будут ходить в интернет мимо VPN"
+        guard panel.runModal() == .OK else { return }
+        var paths = (try? JSONDecoder().decode([String: String].self, from: pathsData)) ?? [:]
+        var names: [String] = []
+        for url in panel.urls {
+            guard let info = Bundle(url: url)?.infoDictionary, let name = SplitApps.processName(infoPlist: info) else { continue }
+            names.append(name)
+            paths[name] = url.path
+        }
+        pathsData = (try? JSONEncoder().encode(paths)) ?? pathsData
+        let list = SplitApps.adding(names, to: control.splitApps)
+        if list != control.splitApps { control.setSplitApps(list) }
+    }
+}
+
+/// «Запускать при входе», «Подключаться автоматически» and trusted Wi-Fi networks.
+private struct AutoConnectSection: View {
+    @Bindable var control: KillSwitchControl
+    @Environment(AutoConnector.self) private var auto
+    @State private var newNetwork = ""
+
+    var body: some View {
+        @Bindable var auto = auto
+        Section {
+            Toggle(isOn: $control.launchAtLogin) {
+                Text("Запускать при входе")
+                if SMAppService.mainApp.status == .requiresApproval {
+                    Text("Разреши KillSwitch в Системных настройках → Основные → Объекты входа.")
+                }
+            }
+            Toggle(isOn: $auto.enabled) {
+                Text("Подключаться автоматически")
+                Text("При запуске программы и при смене сети. Пароль не спрашивается: если он нужен, придёт уведомление. Ручное «Отключить» действует до следующей смены сети.")
+            }
+            .disabled(!control.coreConfigured)
+            Toggle(isOn: $auto.skipTrusted) {
+                Text("Не подключаться в доверенных сетях Wi-Fi")
+                Text("Например, дома. В остальных сетях VPN подключается всегда.")
+            }
+            .disabled(!auto.enabled)
+            if auto.enabled && auto.skipTrusted {
+                if !auto.locationAllowed {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("macOS называет сеть Wi-Fi только программам с доступом к геопозиции. Пока доступа нет, все сети считаются недоверенными и VPN подключается всегда. Само местоположение KillSwitch не использует.", systemImage: "location.slash")
+                            .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                        if auto.location == .notDetermined {
+                            Button("Разрешить…") { auto.requestLocation() }
+                        } else {
+                            Button("Открыть настройки геопозиции") {
+                                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices")!)
+                            }
+                        }
+                    }
+                }
+                ForEach(auto.trusted, id: \.self) { name in
+                    HStack {
+                        Label(name, systemImage: "wifi")
+                        Spacer()
+                        Button("Убрать", role: .destructive) { auto.removeTrusted(name) }
+                    }
+                }
+                if let ssid = auto.ssid, !auto.trusted.contains(ssid) {
+                    Button("Добавить текущую сеть «\(ssid)»") { auto.addTrusted(ssid) }
+                }
+                HStack {
+                    TextField("Имя сети Wi-Fi", text: $newNetwork).onSubmit(add)
+                    Button("Добавить", action: add).disabled(newNetwork.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+            if let last = auto.lastAction {
+                Text(last).font(.caption).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Автоподключение")
+        } footer: {
+            if !control.coreConfigured {
+                Text("Сначала добавь подписку или сервер.").foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func add() {
+        auto.addTrusted(newNetwork)
+        newNetwork = ""
     }
 }
 
@@ -329,13 +517,16 @@ private struct VPNSettings: View {
 
             Section {
                 Toggle(isOn: Binding(get: { control.coreDirect }, set: { control.set("coredirect", $0) })) {
-                    Text("Прямой выход для российских сайтов")
-                    Text("Российские сайты и адреса открываются напрямую, без VPN: быстрее и без капч, но провайдер видит, что ты на них заходишь. Остальное — через VPN. Спросит пароль.")
+                    Text("Российские сайты — напрямую (мимо VPN)")
+                    Text("Банки и Госуслуги открываются как без VPN; остальное — через VPN. Провайдер видит, что ты на них заходишь. Спросит пароль.")
                 }
                 .disabled(control.busy || control.state == .notInstalled)
             } header: {
                 Text("Маршрутизация")
             }
+
+            MultihopSection()
+            SplitTunnelSection()
         }
         .formStyle(.grouped)
         .fileImporter(isPresented: $importingWireGuard,

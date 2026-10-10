@@ -44,11 +44,32 @@ final class SubscriptionHeadersTests: XCTestCase {
     }
 
     func testRequestHeaders() {
-        let headers = SubscriptionHeaders.request(hwid: "abc", osVersion: "15.6", model: "Mac14,6")
-        XCTAssertEqual(headers["x-hwid"], "abc")
+        let headers = SubscriptionHeaders.request(appVersion: "0.7", hwid: "0123456789abcdef0123456789abcdef", osVersion: "15.6", model: "MacBookPro18,2")
+        XCTAssertEqual(headers["x-hwid"], "0123456789abcdef0123456789abcdef")
         XCTAssertEqual(headers["x-device-os"], "macOS")
         XCTAssertEqual(headers["x-ver-os"], "15.6")
-        XCTAssertEqual(headers["x-device-model"], "Mac14,6")
-        XCTAssertTrue(headers["User-Agent"]?.hasPrefix("clash-verge/") == true)
+        // recognisable in the panel's device list
+        XCTAssertEqual(headers["x-device-model"], "MacBookPro18,2 KillSwitch")
+        // Remnawave's Mihomo rule is anchored: the UA must START with mihomo to get YAML;
+        // StorkVPN's Caddy passes anything containing it
+        XCTAssertEqual(headers["User-Agent"], "mihomo/1.19.32 (KillSwitch/0.7; macOS 15.6)")
+        // text/html would match Remnawave's browser rule and return a web page
+        XCTAssertFalse(headers["Accept"]?.contains("html") ?? false)
+    }
+
+    func testHWIDFormat() {
+        // Remnawave ignores an x-hwid outside ^[A-Za-z0-9=-]{10,64}$
+        XCTAssertTrue(SubscriptionHeaders.isValidHWID("0123456789abcdef0123456789abcdef"))
+        XCTAssertFalse(SubscriptionHeaders.isValidHWID("short"))
+        XCTAssertFalse(SubscriptionHeaders.isValidHWID("has_underscore_123"))
+        XCTAssertFalse(SubscriptionHeaders.isValidHWID("aa:bb:cc:dd:ee:ff"))
+    }
+
+    func testHWIDProblems() {
+        XCTAssertEqual(SubscriptionHeaders.hwidProblem(headers: ["x-hwid-max-devices-reached": "true", "x-hwid-active": "true"]),
+                       "Превышен лимит устройств в подписке — удалите старое устройство в личном кабинете.")
+        XCTAssertNotNil(SubscriptionHeaders.hwidProblem(headers: ["x-hwid-not-supported": "true"]))
+        XCTAssertNil(SubscriptionHeaders.hwidProblem(headers: ["x-hwid-active": "true"]))
+        XCTAssertNil(SubscriptionHeaders.hwidProblem(headers: [:]))
     }
 }

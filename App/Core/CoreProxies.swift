@@ -59,6 +59,17 @@ struct CoreProxies: Equatable {
         return current == name ? nil : current
     }
 
+    /// Servers (not groups, not mihomo's built-ins) in group order, for «Двойной VPN».
+    var servers: [String] {
+        let groupNames = Set(groups.map(\.name)).union(["GLOBAL"])
+        let builtIn: Set<String> = ["DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE"]
+        var result: [String] = []
+        for name in groups.flatMap(\.all) where !groupNames.contains(name) && !builtIn.contains(name) && !result.contains(name) {
+            result.append(name)
+        }
+        return result
+    }
+
     /// The group the traffic goes through: the first selector (profile order).
     var mainGroup: Group? { groups.first(where: \.selectable) ?? groups.first }
 }

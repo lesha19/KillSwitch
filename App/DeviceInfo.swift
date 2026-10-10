@@ -14,6 +14,11 @@ enum DeviceInfo {
         return digest.prefix(16).map { String(format: "%02x", $0) }.joined()
     }()
 
+    /// e.g. "0.7", for the User-Agent.
+    static var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+    }
+
     static var osVersion: String {
         let v = ProcessInfo.processInfo.operatingSystemVersion
         return "\(v.majorVersion).\(v.minorVersion)" + (v.patchVersion > 0 ? ".\(v.patchVersion)" : "")

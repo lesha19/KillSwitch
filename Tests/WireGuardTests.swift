@@ -67,11 +67,107 @@ final class WireGuardTests: XCTestCase {
         XCTAssertThrowsError(try WireGuard.parse(conf: "[Interface]\nAddress = 10.0.0.2\n[Peer]\nPublicKey = \(pub)\nEndpoint = h:1", name: nil))
         XCTAssertThrowsError(try WireGuard.parse(conf: "[Interface]\nPrivateKey = \(priv)\nAddress = 10.0.0.2\n[Peer]\nPublicKey = \(pub)", name: nil))
         XCTAssertThrowsError(try WireGuard.parse(conf: "[Interface]\nPrivateKey = short\nAddress = 10.0.0.2\n[Peer]\nPublicKey = \(pub)\nEndpoint = h:1", name: nil))
-        XCTAssertThrowsError(try WireGuard.parse(conf: "[Interface]\nPrivateKey = \(priv)\nAddress = 10.0.0.2\n[Peer]\nPublicKey = \(pub)\nEndpoint = h:1\n[Peer]\nPublicKey = \(pub)\nEndpoint = h:2", name: nil))
+        // several peers: each needs its own Endpoint and AllowedIPs (mihomo routes by them)
+        XCTAssertThrowsError(try WireGuard.parse(conf: "[Interface]\nPrivateKey = \(priv)\nAddress = 10.0.0.2\n[Peer]\nPublicKey = \(pub)\nEndpoint = h:1\nAllowedIPs = 10.1.0.0/16\n[Peer]\nPublicKey = \(pub)\nEndpoint = h:2", name: nil))
+        XCTAssertThrowsError(try WireGuard.parse(conf: "[Interface]\nPrivateKey = \(priv)\nAddress = 10.0.0.2\n[Peer]\nPublicKey = \(pub)\nEndpoint = h:1\nAllowedIPs = 10.1.0.0/16\n[Peer]\nPublicKey = \(pub)\nAllowedIPs = 0.0.0.0/0", name: nil))
+        XCTAssertThrowsError(try WireGuard.parse(conf: "[Interface]\nPrivateKey = \(priv)\nAddress = 10.0.0.2\n[Peer]\nPublicKey = \(pub)\nEndpoint = h:1\nAllowedIPs = 10.1.0.0/16\n[Peer]\nPublicKey = bad\nEndpoint = h:2\nAllowedIPs = 0.0.0.0/0", name: nil))
     }
 
-    func testAmneziaRejected() {
-        XCTAssertThrowsError(try WireGuard.parse(conf: "[Interface]\nPrivateKey = \(priv)\nAddress = 10.0.0.2\nJc = 4\n[Peer]\nPublicKey = \(pub)\nEndpoint = h:1", name: nil))
+    func testAmneziaWG() throws {
+        let p = try WireGuard.parse(conf: """
+        [Interface]
+        PrivateKey = \(priv)
+        Address = 10.8.1.2/32
+        Jc = 4
+        Jmin = 40
+        Jmax = 70
+        S1 = 52
+        S2 = 81
+        S3 = 30
+        S4 = 12
+        H1 = 1376502731
+        H2 = 100-200
+        H3 = 3
+        H4 = 4
+        I1 = <b 0xf6ab3267fa><c><b 0xf6ab><t><r 10><wt 10>
+        Itime = 120
+        [Peer]
+        PublicKey = \(pub)
+        Endpoint = 203.0.113.9:51820
+        AllowedIPs = 0.0.0.0/0
+        """, name: "Amnezia")
+        XCTAssertEqual(p["type"] as? String, "wireguard")
+        let awg = try XCTUnwrap(p["amnezia-wg-option"] as? [String: Any])
+        XCTAssertEqual(awg["jc"] as? Int, 4)
+        XCTAssertEqual(awg["jmin"] as? Int, 40)
+        XCTAssertEqual(awg["jmax"] as? Int, 70)
+        XCTAssertEqual(awg["s1"] as? Int, 52)
+        XCTAssertEqual(awg["s2"] as? Int, 81)
+        XCTAssertEqual(awg["s3"] as? Int, 30)
+        XCTAssertEqual(awg["s4"] as? Int, 12)
+        XCTAssertEqual(awg["h1"] as? String, "1376502731")
+        XCTAssertEqual(awg["h2"] as? String, "100-200")       // AmneziaWG 2: a range
+        XCTAssertEqual(awg["i1"] as? String, "<b 0xf6ab3267fa><c><b 0xf6ab><t><r 10><wt 10>")
+        XCTAssertEqual(awg["itime"] as? Int, 120)
+        XCTAssertNil(awg["i2"])
+        XCTAssertNil(awg["version"])
+    }
+
+    func testPlainWireGuardHasNoAmneziaOption() throws {
+        XCTAssertNil(try WireGuard.parse(conf: conf, name: nil)["amnezia-wg-option"])
+    }
+
+    func testAmneziaBadNumber() {
+        XCTAssertThrowsError(try WireGuard.parse(conf: "[Interface]\nPrivateKey = \(priv)\nAddress = 10.0.0.2\nJc = many\n[Peer]\nPublicKey = \(pub)\nEndpoint = h:1", name: nil)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("Jc"))
+        }
+    }
+
+    func testSeveralPeers() throws {
+        let p = try WireGuard.parse(conf: """
+        [Interface]
+        PrivateKey = \(priv)
+        Address = 10.0.0.2/32
+        MTU = 1400
+        [Peer]
+        PublicKey = \(pub)
+        PresharedKey = \(psk)
+        Endpoint = office.example.com:51820
+        AllowedIPs = 10.1.0.0/16, 192.168.50.0/24
+        PersistentKeepalive = 25
+        [Peer]
+        PublicKey = \(psk)
+        Endpoint = [2001:db8::2]:443
+        AllowedIPs = 0.0.0.0/0
+        Reserved = 1,2,3
+        """, name: "Офис")
+        XCTAssertEqual(p["name"] as? String, "Офис")
+        // the first peer stays the top-level server: the helper lets it out and the list shows it
+        XCTAssertEqual(p["server"] as? String, "office.example.com")
+        XCTAssertEqual(p["port"] as? Int, 51820)
+        XCTAssertNil(p["public-key"])
+        XCTAssertNil(p["allowed-ips"])
+        XCTAssertEqual(p["persistent-keepalive"] as? Int, 25)
+        XCTAssertEqual(p["mtu"] as? Int, 1400)
+        let peers = try XCTUnwrap(p["peers"] as? [[String: Any]])
+        XCTAssertEqual(peers.count, 2)
+        XCTAssertEqual(peers[0]["server"] as? String, "office.example.com")
+        XCTAssertEqual(peers[0]["port"] as? Int, 51820)
+        XCTAssertEqual(peers[0]["public-key"] as? String, pub)
+        XCTAssertEqual(peers[0]["pre-shared-key"] as? String, psk)
+        XCTAssertEqual(peers[0]["allowed-ips"] as? [String], ["10.1.0.0/16", "192.168.50.0/24"])
+        XCTAssertNil(peers[0]["reserved"])
+        XCTAssertEqual(peers[1]["server"] as? String, "2001:db8::2")
+        XCTAssertEqual(peers[1]["port"] as? Int, 443)
+        XCTAssertEqual(peers[1]["public-key"] as? String, psk)
+        XCTAssertNil(peers[1]["pre-shared-key"])
+        XCTAssertEqual(peers[1]["reserved"] as? [Int], [1, 2, 3])
+    }
+
+    func testPeerReservedBase64BecomesBytes() throws {
+        let p = try WireGuard.parse(conf: "[Interface]\nPrivateKey = \(priv)\nAddress = 10.0.0.2\n[Peer]\nPublicKey = \(pub)\nEndpoint = h:1\nAllowedIPs = 10.0.0.0/8\n[Peer]\nPublicKey = \(pub)\nEndpoint = h:2\nAllowedIPs = 0.0.0.0/0\nReserved = U4An", name: nil)
+        let peers = try XCTUnwrap(p["peers"] as? [[String: Any]])
+        XCTAssertEqual(peers[1]["reserved"] as? [Int], [83, 128, 39])
     }
 
     func testErrorsDoNotLeakKey() {

@@ -4,11 +4,14 @@ import SwiftUI
 struct KillSwitchApp: App {
     @State private var control: KillSwitchControl
     @State private var client: VPNClient
+    @State private var leakTester = LeakTester()
+    @State private var autoConnector: AutoConnector
 
     init() {
         let control = KillSwitchControl()
         _control = State(initialValue: control)
         _client = State(initialValue: VPNClient(control: control))
+        _autoConnector = State(initialValue: AutoConnector(control: control))
     }
 
     var body: some Scene {
@@ -20,6 +23,7 @@ struct KillSwitchApp: App {
         .windowResizability(.contentSize)
         .commands {
             CommandMenu("VPN") {
+                LeakTestView.OpenButton()
                 Button("Обновить подписку") { Task { await client.update(interactive: true) } }
                     .keyboardShortcut("r")
                     .disabled(!client.hasURL || client.updating)
@@ -31,10 +35,18 @@ struct KillSwitchApp: App {
             }
         }
 
+        Window("Проверка утечек", id: LeakTestView.windowID) {
+            LeakTestView()
+                .environment(control)
+                .environment(leakTester)
+        }
+        .windowResizability(.contentSize)
+
         Settings {
             SettingsView()
                 .environment(control)
                 .environment(client)
+                .environment(autoConnector)
         }
 
         MenuBarExtra {

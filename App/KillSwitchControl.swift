@@ -82,8 +82,12 @@ final class KillSwitchControl {
     private(set) var coreInstalled = false
     private(set) var coreConfigured = false
     private(set) var coreRunning = false
-    /// "Прямой выход для российских сайтов": the core sends Russian sites around the tunnel.
+    /// «Российские сайты — напрямую (мимо VPN)»: the core sends Russian sites around the tunnel.
     private(set) var coreDirect = false
+    /// «Раздельный туннель»: process names that go around the VPN (only with coreDirect).
+    private(set) var splitApps: [String] = []
+    /// «Двойной VPN»: the entry server; the exit is the selected one. Nil = off.
+    private(set) var multihopEntry: String?
     /// Set while another VPN's TUN is up next to our core (see `foreignVPNFile`).
     private(set) var foreignVPN: String?
     /// Groups and servers of the running core, from `ks core proxies`.
@@ -142,6 +146,11 @@ final class KillSwitchControl {
     }
     func removeException(_ address: String) { runAsAdmin([helper, "unallow", address]) }
 
+    /// Always a click: the list decides what goes around the VPN.
+    func setSplitApps(_ names: [String]) { runAsAdmin([helper, "set", "splitapps", SplitApps.argument(names)]) }
+    /// `entry` nil turns «Двойной VPN» off. Always a click.
+    func setMultihop(entry: String?) { runAsAdmin([helper, "set", "multihop", entry ?? Multihop.off]) }
+
     /// VPN servers are reachable by any process (Happ's tunnel runs as the ordinary user and
     /// cannot be told apart from other apps), so only these addresses are let out.
     func allowFoundServers() {
@@ -155,6 +164,26 @@ final class KillSwitchControl {
     /// Starting and stopping never widen the rules, so they go without a password.
     func coreOn() { run(["core", "on"]) }
     func coreOff() { run(["core", "off"]) }
+
+    /// «Подключаться автоматически»: like coreOn, but never shows the password prompt; if the
+    /// helper wants a password, a notification says so instead. True when the core was started.
+    func coreOnAutomatically() async -> Bool {
+        guard !busy else { return false }
+        busy = true
+        defer { busy = false; refresh() }
+        switch await callHelper(["core", "on"], interactive: false) {
+        case .ok:
+            error = nil
+            return true
+        case .needsPassword:
+            notify(.autoConnectNeedsPassword)
+        case .failed(let message):
+            error = message.isEmpty ? "Не получилось подключиться автоматически" : message
+        case .cancelled:
+            break
+        }
+        return false
+    }
 
     enum ImportResult: Equatable { case ok, cancelled, needsPassword, failed(String) }
 
@@ -454,6 +483,8 @@ final class KillSwitchControl {
         allowRouterDNS = (values["dns"] ?? "0") == "1"
         allowDirect = (values["direct"] ?? "0") == "1"
         coreDirect = (values["coredirect"] ?? "0") == "1"
+        splitApps = SplitApps.parse(setting: values["splitapps"])
+        multihopEntry = Multihop.entry(setting: values["multihop"])
         exceptions = Self.readLines("/Library/KillSwitch/allow")
         servers = Self.readLines("/Library/KillSwitch/servers")
         let dropweb = Self.readDropwebServers()
@@ -554,7 +585,7 @@ final class KillSwitchControl {
         return result
     }
 
-    enum Event { case vpnDropped, pauseEnded, daemonOff, macOSUpdated }
+    enum Event { case vpnDropped, pauseEnded, daemonOff, macOSUpdated, autoConnectNeedsPassword }
 
     private func notify(_ event: Event) {
         let defaults = UserDefaults.standard
@@ -574,6 +605,9 @@ final class KillSwitchControl {
         case .macOSUpdated:
             content.title = "macOS обновилась"
             content.body = "Перезагрузи Mac и проверь утечки в KillSwitch"
+        case .autoConnectNeedsPassword:
+            content.title = "VPN не подключился сам"
+            content.body = "Для этого нужен пароль. Подключись в KillSwitch вручную или нажми там «Обновить защиту»."
         }
         let request = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         Task {
