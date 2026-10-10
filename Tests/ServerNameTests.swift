@@ -18,6 +18,13 @@ final class ServerNameSpeechTests: XCTestCase {
         XCTAssertNil(ServerName("Дом").country)
     }
 
+    func testDisplayName() {
+        XCTAssertEqual(ServerName.display("🇱🇹 Литва"), "🇱🇹 Литва")
+        XCTAssertEqual(ServerName.display("LT-Vilnius"), "🇱🇹 LT-Vilnius")
+        XCTAssertEqual(ServerName.display("⚡ Авто"), "⚡ Авто")
+        XCTAssertEqual(ServerName.display("🇩🇪"), "🇩🇪 Германия")
+    }
+
     func testOwnEmojiIsNotDoubledWithAGlobe() {
         // H4-5: «Авто» showed 🌐⚡
         XCTAssertNil(ServerName("⚡ Авто").flag)

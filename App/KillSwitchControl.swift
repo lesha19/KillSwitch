@@ -161,7 +161,62 @@ final class KillSwitchControl {
     func removeServer(_ address: String) { runAsAdmin([helper, "server-remove", address]) }
 
     /// Starting and stopping never widen the rules, so they go without a password.
-    func coreOn() { run(["core", "on"]) }
+    /// Connects, then applies the server chosen while disconnected.
+    func coreOn() {
+        busy = true
+        Task {
+            switch await callHelper(["core", "on"], interactive: true) {
+            case .ok:
+                error = nil
+                await applyPendingChoice()
+            case .failed(let message): error = UserError.from(raw: message.isEmpty ? "ks core on: failed" : message, context: .helper)
+            case .needsPassword, .cancelled: break
+            }
+            busy = false
+            refresh()
+        }
+    }
+
+    /// A server picked while disconnected (ServerPicker path), applied by the next «Подключить».
+    private(set) var pendingChoice: ServerPicker.Entry? = KillSwitchControl.loadPending()
+    /// The server of the last connection, shown while disconnected.
+    private(set) var lastServer = UserDefaults.standard.string(forKey: "lastServer")
+
+    private static let pendingKey = "pendingServer"
+
+    /// «Выбор сервера»: switches the running core at once, or remembers the choice for «Подключить».
+    func choose(_ entry: ServerPicker.Entry) {
+        guard coreRunning else {
+            pendingChoice = entry
+            if let data = try? JSONEncoder().encode(entry) { UserDefaults.standard.set(data, forKey: Self.pendingKey) }
+            return
+        }
+        busy = true
+        Task {
+            for step in entry.path { await select(group: step.group, proxy: step.proxy) }
+            busy = false
+        }
+    }
+
+    /// The core's API comes up a moment after `ks core on`: a few tries, then give up quietly
+    /// (the core keeps its own last choice).
+    private func applyPendingChoice() async {
+        guard let entry = pendingChoice else { return }
+        pendingChoice = nil
+        UserDefaults.standard.removeObject(forKey: Self.pendingKey)
+        for step in entry.path {
+            for attempt in 0..<6 {
+                if case .ok = await callHelper(["core", "select", step.group, step.proxy], interactive: false) { break }
+                if attempt < 5 { try? await Task.sleep(for: .milliseconds(500)) }
+            }
+        }
+        loadProxies(force: true)
+    }
+
+    private static func loadPending() -> ServerPicker.Entry? {
+        guard let data = UserDefaults.standard.data(forKey: pendingKey) else { return nil }
+        return try? JSONDecoder().decode(ServerPicker.Entry.self, from: data)
+    }
     func coreOff() { run(["core", "off"]) }
 
     /// «Подключаться автоматически»: like coreOn, but never shows the password prompt; if the
@@ -316,6 +371,10 @@ final class KillSwitchControl {
                 if let parsed = try? CoreProxies(data: Data(output.utf8), order: order) {
                     proxiesError = nil
                     if parsed != proxies { proxies = parsed }
+                    if let server = currentServer, server != lastServer {
+                        lastServer = server
+                        UserDefaults.standard.set(server, forKey: "lastServer")
+                    }
                 } else {
                     proxiesError = UserError.from(raw: "proxies: not a JSON list", context: .serverList)
                 }

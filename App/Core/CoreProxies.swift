@@ -49,6 +49,18 @@ struct CoreProxies: Equatable {
         self.groups = groups
     }
 
+    /// The groups of a profile before the core runs it (choosing a server before connecting):
+    /// profile order, no current choice, no latency.
+    init(profile: Profile) {
+        let types = ["select": "Selector", "url-test": "URLTest", "fallback": "Fallback", "load-balance": "LoadBalance",
+                     "relay": "Relay"]
+        for group in profile["proxy-groups"] as? [[String: Any]] ?? [] {
+            guard let name = group["name"] as? String, let type = types[(group["type"] as? String ?? "").lowercased()],
+                  name != Self.helperDNSGroup, group["hidden"] as? Bool != true else { continue }
+            groups.append(Group(name: name, type: type, now: nil, all: group["proxies"] as? [String] ?? []))
+        }
+    }
+
     func delay(_ name: String) -> Int? { delays[name] }
 
     /// Follows `now` through nested groups to the actual server.

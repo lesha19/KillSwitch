@@ -150,16 +150,6 @@ extension Status.Action {
     var isConnection: Bool { self == .connect || self == .disconnect || self == .cancel }
 }
 
-extension ServerName {
-    /// «🇱🇹 Литва»; no 🌐 in front of a name that brings its own emoji.
-    static func display(_ name: String) -> String {
-        let parts = ServerName(name)
-        let title = parts.title.isEmpty ? name : parts.title
-        guard let flag = parts.flag else { return title }
-        return "\(flag) \(title)"
-    }
-}
-
 /// «🇱🇹 Литва   37 мс  ›»: opens the server choice.
 private struct ServerRow: View {
     let action: () -> Void
@@ -167,11 +157,15 @@ private struct ServerRow: View {
 
     var body: some View {
         let server = control.currentServer
+        let title = control.coreRunning ? server.map(ServerName.display)
+            : control.pendingChoice?.title ?? control.lastServer.map(ServerName.display)
         Button(action: action) {
             HStack {
-                Text(server.map(ServerName.display) ?? "Выбрать сервер").lineLimit(1)
+                Text(title ?? "Выбрать сервер").lineLimit(1)
                 Spacer()
-                if let server { DelayBadge(delay: control.delay(of: server), timedOut: control.timedOut(server)) }
+                if let server {
+                    PingView(ping: ServerPicker.Ping(delay: control.delay(of: server), timedOut: control.timedOut(server)))
+                }
                 Image(systemName: "chevron.right").foregroundStyle(.secondary).accessibilityHidden(true)
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
@@ -180,9 +174,17 @@ private struct ServerRow: View {
         }
         .buttonStyle(.plain)
         .keyboardShortcut("l")
-        .accessibilityLabel("Сервер: " + (server.map { ServerName.spoken($0) } ?? "не выбран"))
+        .accessibilityLabel("Сервер: " + (title.map { _ in spoken } ?? "не выбран"))
         .accessibilityHint("Открыть выбор сервера")
         .help("Выбрать сервер (⌘L)")
+    }
+
+    private var spoken: String {
+        if control.coreRunning, let server = control.currentServer { return ServerName.spoken(server) }
+        if let pending = control.pendingChoice {
+            return pending.isFastest ? ServerPicker.fastestTitle : ServerName.spoken(pending.name)
+        }
+        return control.lastServer.map(ServerName.spoken) ?? "не выбран"
     }
 }
 

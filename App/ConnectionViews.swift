@@ -83,7 +83,8 @@ struct ServerLabel: View {
     var body: some View {
         let parts = ServerName(name)
         HStack(spacing: 6) {
-            Text(parts.flag ?? "🌐").font(font)
+            // a name with its own emoji (⚡ Auto) gets no 🌐 in front
+            if let flag = parts.flag { Text(flag).font(font) } else if !ServerName.startsWithEmoji(name) { Text("🌐").font(font) }
             Text(parts.title.isEmpty ? name : parts.title).font(font).lineLimit(1).truncationMode(.tail)
         }
     }

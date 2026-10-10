@@ -32,20 +32,14 @@ struct MenuView: View {
             EmptyView()
         }
 
-        if let proxies = control.proxies {
-            let groups = proxies.groups.filter(\.selectable)
-            if !groups.isEmpty {
+        if let proxies = control.proxies ?? client.profileProxies {
+            let entries = ServerPicker.entries(proxies)
+            let current = control.coreRunning && control.proxies != nil ? ServerPicker.selected(proxies) : control.pendingChoice?.name
+            if !entries.isEmpty {
                 Menu("Сервер") {
-                    ForEach(groups) { group in
-                        Section(group.name) {
-                            ForEach(group.all, id: \.self) { name in
-                                Toggle(isOn: Binding(get: { group.now == name },
-                                                     set: { if $0 { control.coreSelect(group: group.name, proxy: name) } })) {
-                                    let label = ServerName(name)
-                                    Text("\(label.flag ?? "🌐") \(label.title.isEmpty ? name : label.title)")
-                                }
-                            }
-                        }
+                    ForEach(entries) { entry in
+                        Toggle(entry.title, isOn: Binding(get: { entry.name == current },
+                                                          set: { if $0 { control.choose(entry) } }))
                     }
                 }
             }

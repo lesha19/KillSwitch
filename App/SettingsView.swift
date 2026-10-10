@@ -270,7 +270,7 @@ private struct MultihopSection: View {
                         if entry != nil, new != entry { control.setMultihop(entry: new) }
                     })) {
                     if let entry, !candidates.contains(entry) { Text(entry).tag(entry) }
-                    ForEach(candidates, id: \.self) { ServerLabel(name: $0).tag($0) }
+                    ForEach(candidates, id: \.self) { Text(ServerName.display($0)).tag($0) }
                 }
             }
             if let entry {

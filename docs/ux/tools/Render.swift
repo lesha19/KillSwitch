@@ -170,6 +170,12 @@ func main() {
         }
     }
 
+    func picker(_ name: String, _ world: World) {
+        snapshot(name, width: 400, title: "KillSwitch") {
+            ServersScreen(back: {}).environment(world.control).environment(world.client).environment(Updater())
+        }
+    }
+
     // MARK: main window
 
     do { // 01 first run: nothing installed
@@ -214,8 +220,18 @@ func main() {
         w.control.measured["🇺🇸 США"] = CoreDelay.timeout
         w.control.coreError = UserError.from(raw: "no server of ⚡ Авто answered", context: .latency)
         UserDefaults.standard.set(true, forKey: "sortByLatency")
-        window("06-window-servers-latency-timeouts", height: 1000, w)
+        UserDefaults.standard.set("🇳🇱 Нидерланды", forKey: "favouriteServers")
+        picker("06-window-servers-latency-timeouts", w)
         UserDefaults.standard.removeObject(forKey: "sortByLatency")
+        UserDefaults.standard.removeObject(forKey: "favouriteServers")
+    }
+    do { // 06b server choice, profile order, entry segment shown with double VPN
+        let w = World()
+        w.subscribe()
+        w.connect(selected: "⚡ Авто")
+        picker("06b-window-servers", w)
+        w.control.multihopEntry = "🇱🇹 Литва"
+        picker("06c-window-servers-double-vpn", w)
     }
     do { // 07 double VPN
         let w = World()

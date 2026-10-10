@@ -29,6 +29,8 @@ final class VPNClient {
     private(set) var manual: [ManualServer] = []
     private(set) var updating = false
     private(set) var lastError: UserError?
+    /// Groups of the cached profile, for choosing a server before connecting.
+    private(set) var profileProxies: CoreProxies?
     /// An automatic update found a new profile, but applying it needs the admin password
     /// (the installed helper does not allow `core refresh` without one).
     private(set) var needsPassword = false
@@ -66,6 +68,7 @@ final class VPNClient {
         if let data = UserDefaults.standard.data(forKey: Self.statusKey), let saved = try? JSONDecoder().decode(Status.self, from: data) {
             status = saved
         }
+        reloadProfileProxies()
         timer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.updateIfDue() }
         }
@@ -100,6 +103,7 @@ final class VPNClient {
     func removeURL() async {
         Keychain.delete(Self.urlAccount)
         try? FileManager.default.removeItem(at: Self.cacheFile)
+        reloadProfileProxies()
         hasURL = false
         maskedURL = nil
         status = Status()
@@ -186,6 +190,7 @@ final class VPNClient {
             saveStatus()
             retryAt = nil
             Self.cache(profile)
+            reloadProfileProxies()
             await apply(subscription: profile, interactive: interactive)
         } catch {
             let raw = Self.describe(error)
@@ -255,7 +260,13 @@ final class VPNClient {
         }
     }
 
+    private func reloadProfileProxies() {
+        profileProxies = ProfileMerger.merge(subscription: Self.cachedSubscription(), manual: manual.compactMap(Self.proxy))
+            .map(CoreProxies.init(profile:))
+    }
+
     private func imported(_ profile: Profile, hash: String) {
+        reloadProfileProxies()
         UserDefaults.standard.set(hash, forKey: Self.importedKey)
         let groups = (profile["proxy-groups"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
         UserDefaults.standard.set(groups, forKey: KillSwitchControl.groupOrderKey)
