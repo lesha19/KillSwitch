@@ -101,7 +101,7 @@ private struct HomeContent: View {
                 .frame(width: 56, height: 56)
                 .foregroundStyle(status.tone.color)
                 .accessibilityHidden(true)
-            Text(status.title).font(.title2.bold())
+            Text(status.homeTitle(detail)).font(.title2.bold()).multilineTextAlignment(.center)
                 .accessibilityAddTraits(.isHeader)
             let line = status.homeLine(detail)
             if !line.isEmpty {
@@ -119,19 +119,23 @@ private struct HomeContent: View {
     private var detail: Status.Detail {
         let server = control.currentServer
         return Status.Detail(server: server.map(ServerName.display), ping: server.flatMap(control.delay(of:)),
-                             switched: control.recentSwitch)
+                             switched: control.recentSwitch, otherVPN: control.otherVPNName,
+                             otherVPNStopFailed: control.otherVPNStopFailed)
     }
 
     @ViewBuilder private func buttons(_ status: Status) -> some View {
         VStack(spacing: 8) {
             let primary = status.primary
+            let remedy = control.otherVPNRemedy
             Button { perform(primary) } label: {
-                Text(primary.title).frame(maxWidth: .infinity)
+                Text(primary == .replaceOtherVPN ? OtherVPN.buttonTitle(remedy, name: control.otherVPNName) : primary.title)
+                    .multilineTextAlignment(.center).frame(maxWidth: .infinity)
             }
             .controlSize(.large)
-            .modifier(Prominent(on: primary == .connect))
+            .modifier(Prominent(on: primary == .connect || primary == .replaceOtherVPN))
             .keyboardShortcut(primary.isConnection ? KeyboardShortcut("k") : nil)
-            .disabled(!status.primaryEnabled || control.busy || (primary == .connect && !control.coreConfigured))
+            .disabled(!status.primaryEnabled || control.busy || (primary == .connect && !control.coreConfigured)
+                      || (primary == .replaceOtherVPN && remedy == .none))
             if let secondary = status.secondary {
                 Button(secondary.title) { perform(secondary) }
                     .disabled(control.busy)
@@ -148,6 +152,12 @@ private struct HomeContent: View {
         case .cancel, .disconnect: control.coreOff()
         case .chooseServer: chooseServer()
         case .enableProtection, .resumeProtection: control.turnOn()
+        case .replaceOtherVPN:
+            switch control.otherVPNRemedy {
+            case .stop: control.replaceOtherVPN()
+            case .openApp: if let app = control.otherVPNApp { NSWorkspace.shared.open(app) }
+            case .none: break
+            }
         }
     }
 }
@@ -180,7 +190,7 @@ extension Status.Tone {
 }
 
 extension Status.Action {
-    var isConnection: Bool { self == .connect || self == .disconnect || self == .cancel }
+    var isConnection: Bool { self == .connect || self == .disconnect || self == .cancel || self == .replaceOtherVPN }
 }
 
 /// «🇱🇹 Литва   37 мс  ›»: opens the server choice.
@@ -311,14 +321,14 @@ private struct NoticeBanner: View {
         default: false
         }
         let notice = HomeNotice.pick(HomeNotice.Input(
-            otherVPN: control.foreignVPN != nil || control.connection == .otherApp,
+            otherVPN: control.otherVPNActive,
             usage: client.status.usage, newServers: client.needsConfirmation,
             filterIncomplete: filterIncomplete, filterDismissed: filterDismissed, now: Date(),
             serversDown: control.serversDown, networkCause: control.networkCause))
         if let notice {
             switch notice {
             case .otherVPN:
-                Banner(icon: "arrow.left.arrow.right", title: notice.title, message: notice.message) { EmptyView() }
+                EmptyView()   // the summary on top says it, with the button (ADR 0009); lower notices wait
             case .network(let cause):
                 Banner(icon: "wifi.exclamationmark", title: notice.title, message: notice.message) {
                     if cause == .serversBlocked {

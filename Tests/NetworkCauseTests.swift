@@ -74,4 +74,12 @@ final class NetworkCauseTests: XCTestCase {
         XCTAssertFalse(NetworkCause.shouldProbe(serversAnswer: false, serversDown: false, last: now.addingTimeInterval(-30), now: now))
         XCTAssertTrue(NetworkCause.shouldProbe(serversAnswer: false, serversDown: false, last: now.addingTimeInterval(-61), now: now))
     }
+
+    /// Our servers go silent because another VPN (Happ) took the routes, not because the network
+    /// or the provider blocks them: no probe, no cause (ADR 0009).
+    func testNoCauseWhileAnotherVPNIsUp() {
+        let now = Date()
+        XCTAssertFalse(NetworkCause.shouldProbe(serversAnswer: false, serversDown: true, last: nil, now: now, otherVPN: true))
+        XCTAssertTrue(NetworkCause.shouldProbe(serversAnswer: false, serversDown: true, last: nil, now: now, otherVPN: false))
+    }
 }

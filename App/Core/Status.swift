@@ -46,7 +46,9 @@ enum Status: Equatable {
     case notInstalled
     case broken(Problem)
     case needsSetup
-    case otherVPN
+    /// Another program's VPN carries the traffic instead of ours (ADR 0009). With protection on,
+    /// whatever that VPN sends around itself (often Russian sites) is blocked.
+    case otherVPN(blocksDirect: Bool)
     case connecting
     case stuck
     case protected
@@ -83,8 +85,8 @@ enum Status: Equatable {
         if !input.coreInstalled { return .broken(.vpnMissing) }
         if input.needsRepair { return .broken(.needsAccess) }
         if !input.hasServers { return .needsSetup }
-        if input.foreignVPN || input.connection == .otherApp { return .otherVPN }
         let protectedNow = input.protection == .on
+        if input.foreignVPN || input.connection == .otherApp { return .otherVPN(blocksDirect: protectedNow) }
         switch input.connection {
         case .connecting:
             if let since = input.connectingSince, input.now.timeIntervalSince(since) > stuckAfter { return .stuck }
@@ -108,11 +110,17 @@ enum Status: Equatable {
         var ping: Int?
         /// The core moved to another server of the country lately (Failover), names displayed.
         var switched: Failover.Switch?
+        /// The other VPN's name (OtherVPN.name), nil = unknown.
+        var otherVPN: String?
+        /// «Отключить … и подключить KillSwitch» could not stop it.
+        var otherVPNStopFailed = false
     }
 
     enum Action: Equatable {
         case install, repair, openLoginItems, addSubscription, connect, cancel, disconnect, chooseServer
         case enableProtection, resumeProtection
+        /// Stop the other VPN, then connect ours; the main screen names it (OtherVPN.buttonTitle).
+        case replaceOtherVPN
 
         var title: String {
             switch self {
@@ -126,6 +134,7 @@ enum Status: Equatable {
             case .chooseServer: "Выбрать другой сервер…"
             case .enableProtection: "Включить защиту"
             case .resumeProtection: "Возобновить защиту"
+            case .replaceOtherVPN: OtherVPN.buttonTitle(.stop, name: nil)
             }
         }
     }
@@ -178,7 +187,9 @@ enum Status: Equatable {
         case .notInstalled: "Установка займёт минуту и попросит пароль один раз."
         case .broken(let problem): UserError.problem(problem).message
         case .needsSetup: "Без неё VPN не к чему подключаться."
-        case .otherVPN: "Отключи другой VPN: два VPN мешают друг другу."
+        case .otherVPN(let blocksDirect):
+            blocksDirect ? "KillSwitch не подключён. Сайты, которые тот VPN пускает напрямую (часто российские), защита блокирует."
+                         : "KillSwitch не подключён: два VPN не работают вместе."
         case .connecting: detail.server ?? ""
         case .stuck: "Сервер не отвечает. Попробуй другой."
         case .protected:
@@ -190,6 +201,12 @@ enum Status: Equatable {
         }
     }
 
+    /// The main screen names the other VPN.
+    func homeTitle(_ detail: Detail) -> String {
+        if case .otherVPN = self { return OtherVPN.title(name: detail.otherVPN) }
+        return title
+    }
+
     /// Under the title of the main screen, which shows the server in its own row.
     func homeLine(_ detail: Detail) -> String {
         switch self {
@@ -198,13 +215,15 @@ enum Status: Equatable {
                 ". В \(Self.time($0.at)) «\($0.from)» перестал отвечать — переключились на «\($0.to)»."
             } ?? "")
         case .connecting: "Сервер скоро ответит"
+        case .otherVPN where detail.otherVPNStopFailed: OtherVPN.stopFailed(name: detail.otherVPN)
         default: line(detail)
         }
     }
 
     var primary: Action {
         switch self {
-        case .checking, .blocked, .unprotected, .otherVPN: .connect
+        case .checking, .blocked, .unprotected: .connect
+        case .otherVPN: .replaceOtherVPN
         case .notInstalled: .install
         case .broken(.serviceOff): .openLoginItems
         case .broken: .repair
@@ -217,7 +236,7 @@ enum Status: Equatable {
 
     var primaryEnabled: Bool {
         switch self {
-        case .checking, .otherVPN: false
+        case .checking: false
         default: true
         }
     }
@@ -233,7 +252,7 @@ enum Status: Equatable {
 
     /// One of each, for previews and the screenshot renderer.
     static func examples(now: Date) -> [Status] {
-        [.checking, .notInstalled, .broken(.serviceOff), .needsSetup, .otherVPN, .connecting, .stuck, .protected,
+        [.checking, .notInstalled, .broken(.serviceOff), .needsSetup, .otherVPN(blocksDirect: true), .connecting, .stuck, .protected,
          .connectedUnprotected, .blocked, .unprotected(pausedUntil: nil), .unprotected(pausedUntil: now + 25 * 60)]
     }
 

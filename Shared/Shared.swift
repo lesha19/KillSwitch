@@ -4,7 +4,7 @@ import Foundation
 enum Shared {
     static let appGroup = "YR58655PJ7.killswitch"
     static let stateKey = "state"          // "on" | "off" | "paused:<epoch>" | "notInstalled"
-    static let vpnKey = "vpnUp"
+    static let vpnKey = "vpnUp"            // our VPN; another program's (Happ) does not count (ADR 0009)
 
     /// Darwin notifications the widget posts; the running app performs the action.
     enum Command: String, CaseIterable {

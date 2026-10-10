@@ -34,11 +34,25 @@ final class StatusTests: XCTestCase {
     }
 
     func testOtherVPNWhileOursIsOff() {
-        XCTAssertEqual(Status.summary(input { $0.connection = .otherApp }), .otherVPN)
+        XCTAssertEqual(Status.summary(input { $0.connection = .otherApp }), .otherVPN(blocksDirect: true))
     }
 
     func testOtherVPNNextToOurs() {
-        XCTAssertEqual(Status.summary(input { $0.connection = .connected; $0.foreignVPN = true }), .otherVPN)
+        XCTAssertEqual(Status.summary(input { $0.connection = .connected; $0.foreignVPN = true }), .otherVPN(blocksDirect: true))
+    }
+
+    /// The field report of 0.11: Happ up, protection on, Russian sites dead. Never «Защищено».
+    func testOtherVPNWithProtectionIsAWarningNotProtected() {
+        let status = Status.summary(input { $0.connection = .otherApp; $0.protection = .on })
+        XCTAssertEqual(status, .otherVPN(blocksDirect: true))
+        XCTAssertEqual(status.tone, .warning)
+        XCTAssertNotEqual(status.title, Status.protected.title)
+    }
+
+    func testOtherVPNWithoutProtectionBlocksNothing() {
+        XCTAssertEqual(Status.summary(input { $0.connection = .otherApp; $0.protection = .off }), .otherVPN(blocksDirect: false))
+        XCTAssertEqual(Status.summary(input { $0.connection = .otherApp; $0.protection = .paused(until: now + 60) }),
+                       .otherVPN(blocksDirect: false))
     }
 
     func testConnecting() {
@@ -92,7 +106,7 @@ final class StatusTests: XCTestCase {
     }
 
     func testOtherVPNBeatsConnectedAndConnecting() {
-        XCTAssertEqual(Status.summary(input { $0.connection = .connecting; $0.foreignVPN = true }), .otherVPN)
+        XCTAssertEqual(Status.summary(input { $0.connection = .connecting; $0.foreignVPN = true }), .otherVPN(blocksDirect: true))
     }
 
     // MARK: what the user sees
@@ -117,7 +131,7 @@ final class StatusTests: XCTestCase {
         XCTAssertEqual(Status.notInstalled.title, "KillSwitch не установлен")
         XCTAssertEqual(Status.broken(.serviceOff).title, "Нужна починка")
         XCTAssertEqual(Status.needsSetup.title, "Добавь подписку")
-        XCTAssertEqual(Status.otherVPN.title, "Работает другой VPN")
+        XCTAssertEqual(Status.otherVPN(blocksDirect: true).title, "Работает другой VPN")
         XCTAssertEqual(Status.connecting.title, "Подключение…")
         XCTAssertEqual(Status.stuck.title, "Подключение затянулось")
         XCTAssertEqual(Status.protected.title, "Защищено")
@@ -143,7 +157,9 @@ final class StatusTests: XCTestCase {
         XCTAssertEqual(Status.protected.line(Status.Detail(server: "🇱🇹 Литва")), "🇱🇹 Литва")
         XCTAssertEqual(Status.connecting.line(server), "🇱🇹 Литва")
         XCTAssertEqual(Status.blocked.line(server), "VPN не подключён, поэтому интернет закрыт. Ничего не утекает.")
-        XCTAssertEqual(Status.otherVPN.line(server), "Отключи другой VPN: два VPN мешают друг другу.")
+        XCTAssertEqual(Status.otherVPN(blocksDirect: true).line(server),
+                       "KillSwitch не подключён. Сайты, которые тот VPN пускает напрямую (часто российские), защита блокирует.")
+        XCTAssertEqual(Status.otherVPN(blocksDirect: false).line(server), "KillSwitch не подключён: два VPN не работают вместе.")
         XCTAssertEqual(Status.unprotected(pausedUntil: nil).line(server), "Программы ходят в интернет напрямую.")
         XCTAssertTrue(Status.unprotected(pausedUntil: now).line(server).hasPrefix("Программы ходят в интернет напрямую. Пауза до "))
         XCTAssertEqual(Status.broken(.serviceOff).line(server),
@@ -157,13 +173,25 @@ final class StatusTests: XCTestCase {
         XCTAssertEqual(Status.blocked.homeLine(server), Status.blocked.line(server))
     }
 
+    func testOtherVPNIsNamedOnTheMainScreen() {
+        let happ = Status.Detail(otherVPN: "Happ")
+        let status = Status.otherVPN(blocksDirect: true)
+        XCTAssertEqual(status.homeTitle(happ), "Работает другой VPN (Happ)")
+        XCTAssertEqual(status.homeTitle(Status.Detail()), "Работает другой VPN")
+        XCTAssertEqual(status.homeLine(happ), status.line(happ))
+        XCTAssertEqual(Status.protected.homeTitle(happ), "Защищено")
+        var failed = happ
+        failed.otherVPNStopFailed = true
+        XCTAssertEqual(status.homeLine(failed), OtherVPN.stopFailed(name: "Happ"))
+    }
+
     func testActions() {
         XCTAssertEqual(Status.notInstalled.primary, .install)
         XCTAssertEqual(Status.broken(.vpnMissing).primary, .repair)
         XCTAssertEqual(Status.broken(.serviceOff).primary, .openLoginItems)
         XCTAssertEqual(Status.needsSetup.primary, .addSubscription)
-        XCTAssertEqual(Status.otherVPN.primary, .connect)
-        XCTAssertFalse(Status.otherVPN.primaryEnabled)
+        XCTAssertEqual(Status.otherVPN(blocksDirect: true).primary, .replaceOtherVPN)
+        XCTAssertTrue(Status.otherVPN(blocksDirect: true).primaryEnabled)
         XCTAssertEqual(Status.connecting.primary, .cancel)
         XCTAssertEqual(Status.stuck.primary, .chooseServer)
         XCTAssertEqual(Status.stuck.secondary, .disconnect)

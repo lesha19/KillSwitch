@@ -333,9 +333,9 @@ final class KillSwitchControl {
     /// while no server answers or the chosen country is down; clears the cause once they answer.
     private func checkNetwork(_ proxies: CoreProxies, force: Bool = false) {
         let answer = NetworkCause.serversAnswer(proxies)
-        guard answer == false || serversDown != nil else { networkCause = nil; return }
+        guard answer == false || serversDown != nil, foreignVPN == nil else { networkCause = nil; return }
         guard !probing, force || NetworkCause.shouldProbe(serversAnswer: answer, serversDown: serversDown != nil,
-                                                          last: lastProbe, now: Date()) else { return }
+                                                          last: lastProbe, now: Date(), otherVPN: foreignVPN != nil) else { return }
         probing = true
         lastProbe = Date()
         Task {
@@ -344,6 +344,77 @@ final class KillSwitchControl {
             // an older helper without `ks probe`: no explanation, as before
             guard case .ok(let output) = result, let probe = NetworkCause.Probe(output) else { return }
             networkCause = NetworkCause.classify(probe, serversAnswer: self.proxies.flatMap(NetworkCause.serversAnswer) ?? answer)
+        }
+    }
+
+    // MARK: another program's VPN (OtherVPN, ADR 0009)
+
+    /// Its name while one is up instead of ours; nil = unknown («другой VPN») or none.
+    private(set) var otherVPNName: String?
+    /// Its VPN configurations that `scutil --nc stop` can turn off.
+    private(set) var otherVPNServices: [OtherVPN.Service] = []
+    /// Its app, opened when it cannot be stopped from here.
+    private(set) var otherVPNApp: URL?
+    /// «Отключить … и подключить KillSwitch» did not bring its tunnel down.
+    private(set) var otherVPNStopFailed = false
+    private var readingOtherVPN = false
+    /// Its tunnel going down after our stop is no drop.
+    private var stoppingOtherVPN = false
+
+    var otherVPNActive: Bool { foreignVPN != nil || connection == .otherApp }
+
+    var otherVPNRemedy: OtherVPN.Remedy {
+        OtherVPN.remedy(stoppable: !otherVPNServices.isEmpty, stopFailed: otherVPNStopFailed, appKnown: otherVPNApp != nil)
+    }
+
+    /// After every refresh while another VPN is up: `scutil --nc list` (read-only, no password)
+    /// and the running apps say who it is.
+    private func readOtherVPN() {
+        guard otherVPNActive else {
+            otherVPNName = nil; otherVPNServices = []; otherVPNApp = nil; otherVPNStopFailed = false
+            return
+        }
+        guard !readingOtherVPN else { return }
+        readingOtherVPN = true
+        Task {
+            let services = OtherVPN.services(await Self.exec("/usr/sbin/scutil", ["--nc", "list"]).output)
+            let running = NSWorkspace.shared.runningApplications
+            otherVPNServices = OtherVPN.stoppable(services)
+            otherVPNName = OtherVPN.name(services: services, runningApps: running.compactMap(\.localizedName))
+            otherVPNApp = Self.appURL(of: otherVPNServices, running: running)
+            readingOtherVPN = false
+        }
+    }
+
+    private static func appURL(of services: [OtherVPN.Service], running: [NSRunningApplication]) -> URL? {
+        for provider in services.compactMap(\.provider) {
+            for id in OtherVPN.appCandidates(provider: provider) {
+                if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) { return url }
+            }
+        }
+        return running.first { OtherVPN.knownApps.contains(($0.localizedName ?? "").lowercased()) }?.bundleURL
+    }
+
+    /// «Отключить Happ и подключить KillSwitch»: `scutil --nc stop` as the user (no password), then
+    /// ours once the other tunnel is gone. If it stays up (on-demand rules, an app that refuses),
+    /// the main screen says to turn it off in its app and offers to open it.
+    func replaceOtherVPN() {
+        let ids = otherVPNServices.map(\.id)
+        guard !ids.isEmpty else { return }
+        busy = true
+        otherVPNStopFailed = false
+        stoppingOtherVPN = true
+        Task {
+            for id in ids { _ = await Self.exec("/usr/sbin/scutil", ["--nc", "stop", id]) }
+            var gone = false
+            for _ in 0..<20 {
+                try? await Task.sleep(for: .milliseconds(500))
+                if !Self.vpnTunnels().contains(.other) { gone = true; break }
+            }
+            busy = false
+            refresh()
+            stoppingOtherVPN = false
+            if gone { coreOn() } else { otherVPNStopFailed = true }
         }
     }
 
@@ -647,9 +718,9 @@ final class KillSwitchControl {
             dropped = false
             disconnecting = false
         }
-        if wasVPNUp && !vpnUp && state == .on && !manual { notify(.vpnDropped(protected: true)) }
+        if wasVPNUp && !vpnUp && state == .on && !manual && !stoppingOtherVPN { notify(.vpnDropped(protected: true)) }
         readSettings()
-        defer { scheduleTimer() }
+        defer { scheduleTimer(); readOtherVPN() }
         guard FileManager.default.fileExists(atPath: helper) else {
             daemonProblem = false; networkLeftOff = false
             daemonStateLive = false
@@ -730,13 +801,13 @@ final class KillSwitchControl {
 
     private func publish(_ new: State) {
         let defaults = Shared.defaults
-        let changed = new != state || defaults?.bool(forKey: Shared.vpnKey) != vpnUp
+        let changed = new != state || defaults?.bool(forKey: Shared.vpnKey) != ownTunnelUp
         if case .paused = state, new == .on { notify(.pauseEnded) }
         state = new
         syncFilter()
         guard changed else { return }
         defaults?.set(new.stored, forKey: Shared.stateKey)
-        defaults?.set(vpnUp, forKey: Shared.vpnKey)
+        defaults?.set(ownTunnelUp, forKey: Shared.vpnKey)
         WidgetCenter.shared.reloadAllTimelines()
     }
 

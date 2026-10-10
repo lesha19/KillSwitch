@@ -53,8 +53,9 @@ enum NetworkCause: Equatable {
     static let probeInterval: TimeInterval = 60
 
     /// Only when nothing answers (every server, or every one of the chosen country), at most once a minute.
-    static func shouldProbe(serversAnswer: Bool?, serversDown: Bool, last: Date?, now: Date) -> Bool {
-        guard serversAnswer == false || serversDown else { return false }
+    /// Never while another VPN is up: it took the routes, and the main screen already says so (ADR 0009).
+    static func shouldProbe(serversAnswer: Bool?, serversDown: Bool, last: Date?, now: Date, otherVPN: Bool = false) -> Bool {
+        guard !otherVPN, serversAnswer == false || serversDown else { return false }
         guard let last else { return true }
         return now.timeIntervalSince(last) > probeInterval
     }
