@@ -11,6 +11,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   (WireGuard, IKEv2, L2TP…) that takes the default route or splits it, IPv4 or IPv6, both by the
   app (`netstat -rn`) and by the watchdog (`core/foreign-vpn`). Ours and Tailscale's (100.64/10,
   fd7a:115c:a1e0::/48, exit node included) are not counted. What pf lets through is unchanged.
+- Release transparency: every release carries `SHA256SUMS` of the .dmg, appcast.xml and
+  geosite.dat (`scripts/release.sh` writes it and `--publish` uploads it); README «Проверка
+  загрузки» tells how to check it and the Developer ID signature.
 
 ### Changed
 - `Helper/fetch-geodata.sh` takes geosite.dat from our own releases first (`scripts/release.sh

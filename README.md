@@ -237,10 +237,30 @@ addresses found in dropweb and Happ configs are passed to it). After updating th
 
 Кроме `.dmg` выпуск делает `build/release/appcast.xml` для Sparkle, подписанный ключом EdDSA.
 `scripts/release.sh --publish` — то же, а затем `gh release create v<версия>` в
-`lesha19/KillSwitch-releases` с `.dmg`, `appcast.xml` и копией `geosite.dat` (с `geosite.dat.sha256`); описание берётся из раздела «## <версия>»
+`lesha19/KillSwitch-releases` с `.dmg`, `appcast.xml`, копией `geosite.dat` (с `geosite.dat.sha256`)
+и `SHA256SUMS` всех трёх; описание берётся из раздела «## <версия>»
 `CHANGELOG.md` (или из файла в `KS_RELEASE_NOTES`). Нужен `gh`, вошедший с доступом к этому
 репозиторию. Приложение читает `releases/latest/download/appcast.xml`, поэтому опубликованный выпуск
 сразу становится обновлением для всех.
+
+### Проверка загрузки
+
+Каждый выпуск в `lesha19/KillSwitch-releases` несёт `SHA256SUMS` — суммы `.dmg`, `appcast.xml` и
+`geosite.dat`. Скачать `.dmg` и `SHA256SUMS` в одну папку и в ней:
+
+```bash
+shasum -a 256 -c SHA256SUMS --ignore-missing      # KillSwitch-<версия>.dmg: OK
+spctl -a -t open --context context:primary-signature -v KillSwitch-<версия>.dmg
+                                                  # accepted, source=Notarized Developer ID
+codesign -dv /Volumes/KillSwitch\ <версия>/KillSwitch.app 2>&1 | grep TeamIdentifier
+                                                  # TeamIdentifier=YR58655PJ7
+```
+
+Суммы лежат там же, где файлы, поэтому защищают от битой или подменённой по дороге загрузки, но не
+от подмены самого выпуска. От неё — подпись: приложение и образ подписаны Developer ID команды
+`YR58655PJ7` и нотаризованы Apple, а обновления через Sparkle ещё и подписью EdDSA, открытый ключ
+которой зашит в приложение (`SUPublicEDKey`). Суммы стоит сверить и с теми, что печатает
+`scripts/release.sh` в конце выпуска.
 
 ## Emergency off
 

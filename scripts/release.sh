@@ -7,7 +7,7 @@
 #   scripts/release.sh --sign-only   build and sign build/release/KillSwitch.app, no notarization
 #   scripts/release.sh --publish     full release, then `gh release create v<version>` in
 #                                    lesha19/KillSwitch-releases with the .dmg, appcast.xml and
-#                                    geosite.dat (+ .sha256)
+#                                    geosite.dat (+ .sha256), and SHA256SUMS of them all
 #
 # What it needs (found automatically, nothing secret is printed):
 #   - certificate + private key "Developer ID Application: … (YR58655PJ7)" in the login keychain
@@ -34,6 +34,15 @@ geosite_pinned() {
   local pin
   pin=$(sed -nE 's/^SHA256="([0-9a-f]{64})".*/\1/p' "$1/fetch-geodata.sh")
   [ -n "$pin" ] && [ -f "$1/geosite.dat" ] && [ "$(shasum -a 256 < "$1/geosite.dat" | cut -d' ' -f1)" = "$pin" ]
+}
+
+# write_sums <dir> <file>...: <dir>/SHA256SUMS for files in <dir>, by bare name, in the format
+# `shasum -a 256 -c SHA256SUMS` checks (README, «Проверка загрузки»). Fails if one is missing.
+write_sums() {
+  local dir=$1
+  shift
+  (cd "$dir" && shasum -a 256 "$@" > SHA256SUMS.tmp) && mv "$dir/SHA256SUMS.tmp" "$dir/SHA256SUMS" ||
+    { rm -f "$dir/SHA256SUMS.tmp"; return 1; }
 }
 
 [ "${BASH_SOURCE[0]}" = "$0" ] || return 0   # sourced by Helper/tests
@@ -250,11 +259,14 @@ grep -q 'sparkle:edSignature=' "$OUT/appcast.xml" || { echo "appcast.xml без 
 cp Helper/geosite.dat "$OUT/geosite.dat"
 (cd "$OUT" && shasum -a 256 geosite.dat > geosite.dat.sha256)
 
-echo "Готово: $DMG, $OUT/appcast.xml"
-shasum -a 256 "$DMG"
+# Checksums of what is published, for people who verify the download (README).
+write_sums "$OUT" "$(basename "$DMG")" appcast.xml geosite.dat
+
+echo "Готово: $DMG, $OUT/appcast.xml, $OUT/SHA256SUMS"
+cat "$OUT/SHA256SUMS"
 
 if [ "$MODE" = --publish ]; then
   gh release create "v$VERSION" --repo "$RELEASES_REPO" --title "KillSwitch $VERSION" \
-    --notes-file "$NOTES" "$DMG" "$OUT/appcast.xml" "$OUT/geosite.dat" "$OUT/geosite.dat.sha256"
+    --notes-file "$NOTES" "$DMG" "$OUT/appcast.xml" "$OUT/geosite.dat" "$OUT/geosite.dat.sha256" "$OUT/SHA256SUMS"
   echo "Опубликовано: https://github.com/$RELEASES_REPO/releases/tag/v$VERSION"
 fi
