@@ -24,6 +24,15 @@ expect "manual server reachable by any process" '^pass out quick to \{ 192\.0\.2
 expect "core server not reachable by any process" '^pass out quick to \{[^}]*203\.0\.113\.10' absent
 expect "core group reaches both servers only" "^pass out quick proto \{ tcp udp \} to \{ 192\.0\.2\.1,203\.0\.113\.10 \} group $CORE_GROUP"
 expect "no broad core rule" "^pass out quick group $CORE_GROUP" absent
+expect "core group reaches the DoH resolvers on tcp 443 only (rotation's last resort)" \
+  "^pass out quick proto tcp to \{ 1\.1\.1\.1, 8\.8\.8\.8 \} port 443 group $CORE_GROUP flags any keep state$"
+expect "no other direct rule for the resolvers" "(udp|port (53|853)).*1\.1\.1\.1|1\.1\.1\.1.*(udp|port (53|853))" absent
+expect "resolvers only for the core group" '^pass out quick( proto tcp)? to \{ 1\.1\.1\.1, 8\.8\.8\.8 \}( port 443)? flags' absent
+: > "$SERVERS_CORE"; : > "$SERVERS_MANUAL"; : > "$SERVERS"
+rules > "$tmp/out"
+expect "no servers yet: the resolvers still reachable by the core" "^pass out quick proto tcp to \{ 1\.1\.1\.1, 8\.8\.8\.8 \} port 443 group $CORE_GROUP"
+echo 192.0.2.1 > "$SERVERS_MANUAL"; echo 203.0.113.10 > "$SERVERS_CORE"
+servers_merge > "$SERVERS"
 
 echo coredirect=1 > "$SETTINGS"
 rules > "$tmp/out"

@@ -41,6 +41,7 @@ CORE_GROUP="_ksvpn"      # the core runs with this gid; nothing else can get it
 CORE_JOB="system/local.killswitch.core"
 CORE_CTL="$CORE_DIR/ctl/mihomo.sock" # the core's API; ctl/ is root-only
 CORE_TUN_ADDR="198.18.128.1"
+DOH_IPS="1.1.1.1, 8.8.8.8"   # DoH resolvers the core group may reach directly (rules, resolve_direct)
 KS_DNS="KS-DNS"          # our group for DNS and rule downloads: the profile's proxies, never DIRECT # our TUN's address (start of the core's fake-ip-range)
 DNS_STATE="$CORE_DIR/dns-state" # system DNS keys pointed at the core, with their originals
 DNS_OURS="127.0.0.1"
@@ -101,8 +102,14 @@ rules() {  # rules [allow-file] [servers-file] [manual-servers-file]
   if dscl . -read "/Groups/$CORE_GROUP" PrimaryGroupID >/dev/null 2>&1; then
     if [ "$(setting coredirect 0)" = 1 ]; then
       echo "pass out quick group $CORE_GROUP flags any keep state"
-    elif [ -s "$servers_file" ]; then
-      echo "pass out quick proto { tcp udp } to { $(paste -sd, "$servers_file") } group $CORE_GROUP flags any keep state"
+    else
+      [ -s "$servers_file" ] &&
+        echo "pass out quick proto { tcp udp } to { $(paste -sd, "$servers_file") } group $CORE_GROUP flags any keep state"
+      # Only for server IP rotation's last resort (resolve_direct): when every server moved, the
+      # tunnel that carried the lookups is gone, and the names are asked by DoH directly. The core
+      # itself never uses this: its resolvers go through KS-DNS; a profile rule sending these
+      # addresses DIRECT would, but such rules need the admin's approval (approved-direct).
+      echo "pass out quick proto tcp to { $DOH_IPS } port 443 group $CORE_GROUP flags any keep state"
     fi
   fi
   echo 'pass out quick inet proto udp from any port 68 to any port 67 keep state'
@@ -225,6 +232,31 @@ resolve_all() {  # resolve_all <name>
   done
   rm -f "$j"
   [ -n "$ips" ] && echo "$ips"
+}
+# Rotation's last resort, only when no approved name resolved the usual way (core_rotate): DoH
+# to 1.1.1.1, then 8.8.8.8, bound to the primary interface (past any TUN) and run with the core's
+# group, the one thing pf lets reach them (rules). Never the LAN's DNS: the provider sees an HTTPS
+# connection to Cloudflare or Google, not the name.
+resolve_direct() {  # resolve_direct <name>
+  local j ips="" u ifc
+  [[ "$1" =~ ^[A-Za-z0-9.-]{1,253}$ ]] || return 1
+  ifc=$(primary_iface); [ -n "$ifc" ] || return 1
+  j=$(mktemp) || return 1
+  for u in "https://1.1.1.1/dns-query" "https://8.8.8.8/resolve"; do
+    [ -n "$ips" ] && break
+    as_core_group curl -sf --max-time 5 --interface "$ifc" -H 'accept: application/dns-json' "$u?name=$1&type=A" -o "$j" &&
+      ips=$(json_a "$j")
+  done
+  rm -f "$j"
+  [ -n "$ips" ] && echo "$ips"
+}
+primary_iface() { printf 'show State:/Network/Global/IPv4\n' | scutil | awk '$1 == "PrimaryInterface" { print $3; exit }'; }
+# as_core_group <cmd...>: runs it with gid and groups = _ksvpn (pf matches the socket's group)
+as_core_group() {
+  local gid
+  gid=$(dscl . -read "/Groups/$CORE_GROUP" PrimaryGroupID 2>/dev/null | awk '{ print $2 }')
+  [[ "$gid" =~ ^[0-9]+$ ]] || return 1
+  /usr/bin/perl -e '$( = $ARGV[0]; $) = "$ARGV[0] $ARGV[0]"; $) == $ARGV[0] or die "setgid\n"; shift; exec { $ARGV[0] } @ARGV or die "exec\n"' "$gid" "$@"
 }
 json_a() {  # usable A records of a DNS JSON answer (mihomo /dns/query and DoH share the format)
   local k=0 t a
@@ -637,19 +669,30 @@ core_reload() {
 # Server IP rotation: the host names approved at the last import are resolved again (never
 # through the LAN's DNS); a name whose pinned address is no longer among its answers is
 # re-pinned and the config, servers and pf follow. A failed lookup keeps the old address.
+# If no name resolves at all, every server may have moved and taken the tunnel with it: the names
+# are then asked once more by DoH directly (resolve_direct), and that is logged.
 core_rotate() {
-  local host ip ips nip changed="" failed="" new="$PINS.next"
+  local host ip ips nip changed failed resolved resolver=resolve_all new="$PINS.next"
   [ -s "$APPROVED_HOSTS" ] && [ -s "$PINS" ] && [ -f "$CORE_PROFILE" ] || return 0
-  : > "$new"; chmod 600 "$new"
-  while IFS=$'\t' read -r host ip; do
-    nip=$ip
-    if grep -qxF -- "$host" "$APPROVED_HOSTS"; then
-      ips=$(resolve_all "$host" </dev/null)
-      if [ -z "$ips" ]; then failed="$failed $host"
-      elif ! grep -qxF -- "$ip" <<<"$ips"; then nip=$(head -1 <<<"$ips"); changed="$changed, $host $ip -> $nip"; fi
-    fi
-    printf '%s\t%s\n' "$host" "$nip" >> "$new"
-  done < "$PINS"
+  while :; do
+    changed=""; failed=""; resolved=0
+    : > "$new"; chmod 600 "$new"
+    while IFS=$'\t' read -r host ip; do
+      nip=$ip
+      if grep -qxF -- "$host" "$APPROVED_HOSTS"; then
+        ips=$("$resolver" "$host" </dev/null)
+        if [ -z "$ips" ]; then failed="$failed $host"
+        else
+          resolved=1
+          if ! grep -qxF -- "$ip" <<<"$ips"; then nip=$(head -1 <<<"$ips"); changed="$changed, $host $ip -> $nip"; fi
+        fi
+      fi
+      printf '%s\t%s\n' "$host" "$nip" >> "$new"
+    done < "$PINS"
+    [ "$resolved" = 0 ] && [ -n "$failed" ] && [ "$resolver" = resolve_all ] || break
+    log_event "server names not resolved through the tunnel:$failed; asking direct DoH (1.1.1.1, 8.8.8.8)"
+    resolver=resolve_direct
+  done
   [ -z "$failed" ] || log_event "server names not resolved:$failed"
   if [ -n "$changed" ]; then
     if core_rebuild "$new" 2>/dev/null; then

@@ -12,12 +12,13 @@ CORE_CTL="$tmp/mihomo.sock"
 ans() { printf '{"Status":0,"Answer":[{"type":5,"data":"cdn.example."}%s]}' "$(for a in "$@"; do printf ',{"type":1,"data":"%s"}' "$a"; done)"; }
 CORE_ANS=""; DOH_ANS=""   # empty: that resolver fails
 curl() {
-  local out="" url="" sock=0
+  local out="" url="" sock=0 ifc=""
   while [ $# -gt 0 ]; do
-    case "$1" in -o) out=$2; shift ;; --unix-socket) sock=1; shift ;; http*) url=$1 ;; esac
+    case "$1" in -o) out=$2; shift ;; --unix-socket) sock=1; shift ;; --interface) ifc=$2; shift ;; http*) url=$1 ;; esac
     shift
   done
   echo "$url" >> "$tmp/urls"
+  [ -z "$ifc" ] || echo "$ifc $url" >> "$tmp/bound"
   if [ "$sock" = 1 ]; then [ -n "$CORE_ANS" ] || return 7; ans $CORE_ANS > "$out"
   else [ -n "$DOH_ANS" ] || return 7; ans $DOH_ANS > "$out"; fi
 }
@@ -45,5 +46,19 @@ VPN=""
 check "first import, no tunnel at all: system resolver" "$(resolve_host de.example.com)" 192.0.2.66
 grep -q 'de.example.com.*system resolver' "$EVENTS" && echo "ok    system resolver use logged" || { echo "FAIL  not logged"; fails=$((fails + 1)); }
 check "odd names are not looked up" "$(resolve_all 'a&type=AAAA'; echo rc=$?)" rc=1
+
+# rotation's last resort: DoH to 1.1.1.1/8.8.8.8 from the primary interface as group _ksvpn
+as_core_group() { echo "as _ksvpn: $1" >> "$tmp/asgid"; "$@"; }
+primary_iface() { echo en0; }
+CORE_ANS="203.0.113.5"; DOH_ANS="198.51.100.1"; : > "$tmp/urls"; rm -f "$tmp/lan"
+check "direct: DoH answer" "$(resolve_direct de.example.com)" 198.51.100.1
+check "direct: bound to the primary interface, 1.1.1.1 first" "$(head -1 "$tmp/bound")" "en0 https://1.1.1.1/dns-query?name=de.example.com&type=A"
+check "direct: run as the core group" "$(sort -u "$tmp/asgid")" "as _ksvpn: curl"
+check "direct: never the core's socket or the LAN's DNS" "$(grep -vc '^https://' "$tmp/urls"; [ -e "$tmp/lan" ] && echo asked)" 0
+DOH_ANS=""
+check "direct: nothing answers, nothing" "$(resolve_direct de.example.com; echo rc=$?)" rc=1
+primary_iface() { :; }
+check "direct: no primary interface, no lookup" "$(: > "$tmp/bound"; resolve_direct de.example.com; echo rc=$?; cat "$tmp/bound")" rc=1
+check "direct: odd names are not looked up" "$(resolve_direct 'a&type=AAAA'; echo rc=$?)" rc=1
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

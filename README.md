@@ -73,8 +73,8 @@ profile, rewritten on every import, reachable only by our core), `servers` (both
   rules (Russian sites and so on) do not.
 - Own VPN core (`ks core on|off|state|import <json>|refresh <json>|proxies|select|delay`): launchd runs `/Library/KillSwitch/core/mihomo` with
   a root-owned config as uid 0, gid `_ksvpn` (created by install.sh, no members, no setgid binary), and the
-  rules let that gid reach only the addresses in `servers`, so a DIRECT rule or proxy in a profile
-  cannot leak past the tunnel. `coredirect=1` is the explicit split-tunnel switch: the gid may then reach
+  rules let that gid reach only the addresses in `servers` (plus 1.1.1.1 and 8.8.8.8 on tcp 443, see
+  rotation below), so a DIRECT rule or proxy in a profile cannot leak past the tunnel. `coredirect=1` is the explicit split-tunnel switch: the gid may then reach
   any address and the profile's direct rules (Russian sites and so on) work. `import <json>` takes a
   mihomo profile as a JSON object (the app converts dropweb's newest from YAML) and generates the config:
   only `proxies`, `proxy-groups`, `rules` and `rule-providers` are taken, everything else (TUN, DNS on
@@ -101,8 +101,11 @@ profile, rewritten on every import, reachable only by our core), `servers` (both
   the config lock. A name whose pinned address is no longer among its answers is re-pinned; the config
   is rebuilt from the kept profile, `servers-core`, `servers` and pf follow and the core rereads its
   config through the API (selections survive; restart if that fails). Logged in `events.log`. If every
-  server of the profile moved at once, the tunnel that carries the lookups is gone too: the next admin
-  import fixes it.
+  server of the profile moved at once, the tunnel that carries the lookups is gone too: when no approved
+  name resolves the usual way, the names are asked once more by DoH straight to 1.1.1.1, then 8.8.8.8,
+  bound to the primary interface and run with gid `_ksvpn` (logged). pf lets that gid reach exactly
+  these two addresses on tcp 443 for this; the core's own DNS still goes through `KS-DNS`, and a profile
+  rule sending them DIRECT needs the admin's approval like any DIRECT rule. Never the LAN's DNS.
   Split tunnel (`coredirect=1` only, new installs default to it, upgrades keep their setting): before the
   profile's rules the generator puts the apps of `ks set splitapps <a,b>` (stored as `splitapps=` in
   `settings`; ≤50 names, ≤64 bytes, no commas or control characters; also their `<name> Helper…`

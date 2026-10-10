@@ -32,6 +32,9 @@ dns() { { grep -v "^$1 " "$DNSF" 2>/dev/null; echo "$1 $2"; } > "$DNSF.new"; mv 
 dns de.example.com 203.0.113.20; dns fi.example.com 203.0.113.30; dns nl.example.com 203.0.113.60
 resolve_all() { awk -v h="$1" '$1 == h { for (i = 2; i <= NF; i++) print $i }' "$DNSF"; }
 resolve_host() { resolve_all "$1" | head -1; }
+# DoH straight from the primary interface as _ksvpn: separate answers, every call recorded
+DIRECTF="$tmp/dns-direct"; : > "$DIRECTF"
+resolve_direct() { echo "$1" >> "$tmp/direct-asked"; awk -v h="$1" '$1 == h { for (i = 2; i <= NF; i++) print $i }' "$DIRECTF"; }
 
 fails=0
 ok()  { echo "ok    $*"; }
@@ -125,6 +128,19 @@ dns de.example.com ""
 core_rotate
 cmp -s "$cfg" "$tmp/cfg.before" && grep -q 'not resolved.*de.example.com' "$EVENTS" && ok "rotate: unresolved name keeps its address, logged" ||
   bad "rotate unresolved: $(tail -1 "$EVENTS")"
+[ ! -e "$tmp/direct-asked" ] && ok "rotate: no direct DoH while the tunnel still resolves a name" || bad "direct DoH asked: $(cat "$tmp/direct-asked")"
+# every server moved: the tunnel resolves nothing, direct DoH (pf: _ksvpn to 1.1.1.1/8.8.8.8:443) recovers
+dns de.example.com ""; dns fi.example.com ""
+printf 'de.example.com 198.51.100.40\nfi.example.com 198.51.100.41\n' > "$DIRECTF"
+: > "$tmp/reloads"; : > "$EVENTS"
+core_rotate
+[ "$(val proxies.1.server "$cfg")" = 198.51.100.40 ] && grep -qx 198.51.100.41 "$SERVERS_CORE" && [ -s "$tmp/reloads" ] &&
+  ok "rotate: nothing resolves through the tunnel, direct DoH re-pins" || bad "rotate direct: $(paste -sd' ' "$SERVERS_CORE")"
+grep -q 'direct DoH' "$EVENTS" && ok "rotate: direct DoH use logged" || bad "direct DoH not logged: $(cat "$EVENTS")"
+rm -f "$tmp/direct-asked"; : > "$DIRECTF"; cp "$cfg" "$tmp/cfg.before"
+core_rotate
+cmp -s "$cfg" "$tmp/cfg.before" && ok "rotate: direct DoH fails too, addresses kept" || bad "rotate: changed without answers"
+dns de.example.com "198.51.100.40"; dns fi.example.com "198.51.100.41"; rm -f "$tmp/direct-asked"
 mv "$APPROVED_HOSTS" "$tmp/ah"
 dns de.example.com "198.51.100.50"
 core_rotate
