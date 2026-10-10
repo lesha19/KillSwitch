@@ -18,9 +18,10 @@ enum Runner {
         case .upgrade:
             return upgrade()
         case .install, .uninstall:
-            guard let copy = verifiedCopy() else {
-                return HelperReply(status: HelperReply.failedToRun, stdout: "",
-                                   stderr: "Программа KillSwitch повреждена или подписана не нами: скачайте её заново")
+            let copy: URL
+            switch verifiedCopy() {
+            case .success(let url): copy = url
+            case .failure(let failure): return failure.reply
             }
             defer { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
             let script = command.program == .install ? "install.sh" : "uninstall.sh"
@@ -33,9 +34,10 @@ enum Runner {
     /// signature this daemon runs under), and is put in place only if it is not older than the
     /// installed helper. install.sh --upgrade keeps the sudoers user and the protection state.
     private static func upgrade() -> HelperReply {
-        guard let copy = verifiedCopy() else {
-            return HelperReply(status: HelperReply.failedToRun, stdout: "",
-                               stderr: "Программа KillSwitch повреждена или подписана не нами: скачайте её заново")
+        let copy: URL
+        switch verifiedCopy() {
+        case .success(let url): copy = url
+        case .failure(let failure): return failure.reply
         }
         defer { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
         let helperDir = copy.appendingPathComponent("Contents/Resources/Helper")
@@ -57,33 +59,49 @@ enum Runner {
         }
     }
 
-    /// The app bundle this daemon belongs to: …/KillSwitch.app/Contents/MacOS/KillSwitchHelper.
-    static func ownBundle() -> URL? {
-        guard let executable = Bundle.main.executableURL?.resolvingSymlinksInPath() else { return nil }
-        let bundle = executable.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        guard executable.lastPathComponent == HelperIdentity.executable,
-              executable.deletingLastPathComponent().path.hasSuffix(".app/Contents/MacOS"),
-              bundle.pathExtension == "app" else { return nil }
-        return bundle
+    /// Why there is no verified copy. Only `.signature` is about the app; the rest is the daemon's
+    /// own trouble, and the app falls back to the password (nothing ran).
+    enum CopyFailure: Error {
+        case ownPath, directory, copy(String), signature
+
+        var reply: HelperReply {
+            let text = switch self {
+            case .signature: "Программа KillSwitch повреждена или подписана не нами: скачайте её заново"
+            case .ownPath: "Служба KillSwitch не нашла свою программу"
+            case .directory: "Служба KillSwitch не смогла создать временную папку"
+            case .copy(let reason): "Служба KillSwitch не смогла скопировать программу: \(reason)"
+            }
+            return HelperReply(status: HelperReply.failedToRun, stdout: "", stderr: text)
+        }
     }
 
     /// The bundle can be written by its user. Its copy in a root-only directory is checked and
     /// then used, so nothing can be swapped between the check and the run: every nested part and
     /// sealed resource (Helper/ included) intact and signed for our app by our team.
-    private static func verifiedCopy() -> URL? {
-        guard let bundle = ownBundle(), let dir = privateDirectory() else { return nil }
+    private static func verifiedCopy() -> Result<URL, CopyFailure> {
+        let result = makeVerifiedCopy()
+        if case .failure(let failure) = result {
+            Log.daemon.error("verified copy: \(String(describing: failure), privacy: .public), executable \(DaemonExecutable.current() ?? "?", privacy: .public)")
+        }
+        return result
+    }
+
+    private static func makeVerifiedCopy() -> Result<URL, CopyFailure> {
+        // the kernel's path of this process, not Bundle.main (see DaemonExecutable.current)
+        guard let bundle = DaemonExecutable.current().flatMap(DaemonExecutable.appBundle) else { return .failure(.ownPath) }
+        guard let dir = privateDirectory() else { return .failure(.directory) }
         let copy = dir.appendingPathComponent(bundle.lastPathComponent)
         do {
             try FileManager.default.copyItem(at: bundle, to: copy)   // a clone on APFS
         } catch {
             try? FileManager.default.removeItem(at: dir)
-            return nil
+            return .failure(.copy(error.localizedDescription))
         }
         guard BundleSignature.isValid(copy, requirement: HelperIdentity.clientRequirement) else {
             try? FileManager.default.removeItem(at: dir)
-            return nil
+            return .failure(.signature)
         }
-        return copy
+        return .success(copy)
     }
 
     /// A fresh 0700 directory of root's (mkdtemp in root's own temporary directory).

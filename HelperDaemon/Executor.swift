@@ -102,7 +102,7 @@ final class Activity: @unchecked Sendable {
     /// bundle into place, ADR 0012): the app may keep it busy for longer than two minutes, and
     /// only the new daemon knows `upgrade`.
     func exitWhenIdle(after idle: TimeInterval = 120) {
-        let path = Bundle.main.executablePath
+        let path = DaemonExecutable.current()   // not Bundle.main: see there
         let started = path.flatMap(Self.fileIdentity)
         let timer = DispatchSource.makeTimerSource(queue: .global())
         timer.schedule(deadline: .now() + 30, repeating: 30)

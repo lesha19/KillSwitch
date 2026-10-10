@@ -151,6 +151,7 @@ targets:
       - App/Core/BundleSignature.swift
       - App/Core/HelperVersion.swift
       - App/Core/HelperUpgrade.swift
+      - App/Core/DaemonExecutable.swift
     settings:
       base:
         PRODUCT_NAME: KillSwitchHelper
