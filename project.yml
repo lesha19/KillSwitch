@@ -121,6 +121,7 @@ targets:
     sources:
       - Tests
       - App/Core
+      - Shared
     dependencies:
       - package: Yams
     settings:

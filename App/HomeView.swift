@@ -24,9 +24,30 @@ struct HomeView: View {
         // the helper is asked often only while something shows its answers
         .onAppear { control.viewAppeared() }
         .onDisappear { control.viewDisappeared() }
+        .modifier(WidgetRequestAlert(enabled: style == .window))
         // Esc: back from the server list, then closes the popover
         .onExitCommand {
             if showingServers { showingServers = false } else if style == .popover { dismiss() }
+        }
+    }
+}
+
+/// The widget's «Выключить» (or a pause) arrives as a Darwin notification, which any program can
+/// post: the main window asks before anything that could bring up the password prompt.
+private struct WidgetRequestAlert: ViewModifier {
+    let enabled: Bool
+    @Environment(KillSwitchControl.self) private var control
+
+    func body(content: Content) -> some View {
+        let request = enabled ? control.widgetRequest : nil
+        content.alert(request == .pause5 ? "Поставить защиту на паузу?" : "Выключить защиту?",
+                      isPresented: Binding(get: { request != nil }, set: { if !$0 { control.answerWidgetRequest(nil) } })) {
+            Button(request == .pause5 ? "Пауза на 5 минут" : "Выключить", role: .destructive) {
+                control.answerWidgetRequest(request)
+            }
+            Button("Отмена", role: .cancel) { control.answerWidgetRequest(nil) }
+        } message: {
+            Text("Об этом попросил виджет. Если вы его не нажимали, нажмите «Отмена».")
         }
     }
 }

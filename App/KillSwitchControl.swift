@@ -904,11 +904,24 @@ final class KillSwitchControl {
     }
 
     private func handle(notification: String) {
-        switch Shared.Command.allCases.first(where: { $0.notificationName == notification }) {
-        case .on: turnOn()
+        guard let command = Shared.Command(notificationName: notification) else { return }
+        guard command.needsConfirmation else { turnOn(); return }
+        // the main window asks first (HomeView); a click there may then bring the password prompt
+        widgetRequest = command
+        Notifier.shared.openWindow?("main")
+        NSApp.activate()
+    }
+
+    /// Off or pause asked by the widget, waiting for «Выключить» / «Пауза» in the app.
+    private(set) var widgetRequest: Shared.Command?
+
+    /// `confirmed`: the request the person agreed to, as the alert showed it; nil cancels.
+    func answerWidgetRequest(_ confirmed: Shared.Command?) {
+        widgetRequest = nil
+        switch confirmed {
         case .off: turnOff()
         case .pause5: pause(minutes: 5)
-        case nil: break
+        case .on, nil: break
         }
     }
 

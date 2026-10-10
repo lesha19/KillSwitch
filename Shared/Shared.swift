@@ -10,6 +10,15 @@ enum Shared {
     enum Command: String, CaseIterable {
         case on, off, pause5
         var notificationName: String { "local.lesha.killswitch.\(rawValue)" }
+
+        init?(notificationName: String) {
+            guard let command = Self.allCases.first(where: { $0.notificationName == notificationName }) else { return nil }
+            self = command
+        }
+
+        /// Any process can post these notifications. What loosens protection (and asks for the
+        /// admin password) only opens the app with a question, never the password prompt itself.
+        var needsConfirmation: Bool { self != .on }
     }
 
     static var defaults: UserDefaults? { UserDefaults(suiteName: appGroup) }
