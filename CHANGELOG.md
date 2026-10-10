@@ -4,6 +4,14 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [0.15.1] - 2026-10-10
+
+### Fixed
+- 0.15 crashed at launch when the privileged daemon refused or dropped the connection: the XPC
+  error, reply and invalidation blocks of `HelperClient` were taken for main-actor code and
+  trapped on XPC's queue (`daemonBuild`). They are `@Sendable` now; a test keeps every XPC block
+  in that file `@Sendable`. The VPN and protection were not affected.
+
 ## [0.15] - 2026-10-10
 
 Routing comes only from the subscription, and the app shows where traffic goes (ADR 0013, #8).

@@ -78,7 +78,7 @@ final class HelperClient {
         connection.remoteObjectInterface = HelperIdentity.interface()
         // only our daemon: anything else holding the name is refused by the system
         connection.setCodeSigningRequirement(HelperIdentity.daemonRequirement)
-        connection.invalidationHandler = { [weak self] in
+        connection.invalidationHandler = { @Sendable [weak self] in
             Task { @MainActor in self?.connection = nil }
         }
         connection.resume()
@@ -91,9 +91,9 @@ final class HelperClient {
         let connection = connect()
         return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
             let once = OnceValue(continuation)
-            let proxy = connection.remoteObjectProxyWithErrorHandler { _ in once.resume(nil) }
+            let proxy = connection.remoteObjectProxyWithErrorHandler { @Sendable _ in once.resume(nil) }
             guard let helper = proxy as? HelperProtocol else { once.resume(nil); return }
-            helper.version { once.resume($0) }
+            helper.version { @Sendable build in once.resume(build) }
         }
     }
 
@@ -114,7 +114,7 @@ final class HelperClient {
         defer { try? profile?.close() }
         return await withCheckedContinuation { (continuation: CheckedContinuation<HelperReply?, Never>) in
             let once = Once(continuation)
-            let proxy = connection.remoteObjectProxyWithErrorHandler { _ in once.resume(nil) }
+            let proxy = connection.remoteObjectProxyWithErrorHandler { @Sendable _ in once.resume(nil) }
             guard let helper = proxy as? HelperProtocol else { once.resume(nil); return }
             let reply: @Sendable (Int32, String, String) -> Void = { once.resume(HelperReply(status: $0, stdout: $1, stderr: $2)) }
             let form = auth ?? Data()
