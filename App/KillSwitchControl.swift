@@ -835,7 +835,7 @@ final class KillSwitchControl {
             let intact = await Self.bundleIntact()
             busy = false
             guard intact else { error = .damagedApp; return }
-            runAsAdmin(["/bin/bash", path] + args, context: script == "install.sh" ? .install : .helper)
+            runAsAdmin(AdminScript.bundled(path, args), context: script == "install.sh" ? .install : .helper)
         }
     }
 

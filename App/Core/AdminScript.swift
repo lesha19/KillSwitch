@@ -38,6 +38,15 @@ enum AdminScript {
         return .failed(trimmed.isEmpty ? "Не получилось" : trimmed)
     }
 
+    /// osascript's whole environment, so the root shell inherits nothing of the app's: any process
+    /// of the user can set variables for the apps it starts (`launchctl setenv`), and BASH_ENV
+    /// alone would run a file of its choice as root before the command.
+    static let environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
+
+    /// A script of the app bundle as an admin command: `bash -p` ignores BASH_ENV, ENV,
+    /// SHELLOPTS and exported functions as well.
+    static func bundled(_ path: String, _ args: [String]) -> [String] { ["/bin/bash", "-p", path] + args }
+
     /// Runs `commands` as root behind one password prompt.
     static func run(_ commands: [[String]]) async -> Outcome { await execute(source(commands)) }
 
@@ -50,6 +59,7 @@ enum AdminScript {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
             process.arguments = ["-"]
+            process.environment = environment
             let input = Pipe(), output = Pipe(), errors = Pipe()
             process.standardInput = input
             process.standardOutput = output

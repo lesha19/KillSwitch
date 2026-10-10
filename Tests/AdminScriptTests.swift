@@ -48,4 +48,30 @@ final class AdminScriptTests: XCTestCase {
         let unicode = await AdminScript.execute("do shell script quoted form of \"/bin/echo\" & \" \" & quoted form of \"🇱🇹 Литва\"")
         XCTAssertEqual(unicode, .ok("🇱🇹 Литва"))
     }
+
+    /// The root shell must not inherit the app's environment: any process of the user can set it
+    /// for apps it starts (launchctl setenv), and BASH_ENV would run before install.sh as root.
+    @MainActor
+    func testRootShellGetsNoneOfTheAppsEnvironment() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let marker = dir.appendingPathComponent("ran").path
+        let hook = dir.appendingPathComponent("hook.sh")
+        try "touch '\(marker)'\n".write(to: hook, atomically: true, encoding: .utf8)
+        setenv("BASH_ENV", hook.path, 1)
+        setenv("KS_TEST_LEAK", "leaked", 1)
+        defer { unsetenv("BASH_ENV"); unsetenv("KS_TEST_LEAK") }
+        let script = "do shell script quoted form of \"/bin/bash\" & \" -c \" & quoted form of \"echo ${KS_TEST_LEAK:-none} $PATH\""
+        let result = await AdminScript.execute(script)
+        XCTAssertEqual(result, .ok("none \(AdminScript.environment["PATH"] ?? "")"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker), "BASH_ENV ran")
+        XCTAssertEqual(AdminScript.environment, ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"])
+    }
+
+    /// Bundled scripts run as root through "bash -p": no BASH_ENV, ENV or exported functions.
+    func testBundledScriptsRunPrivileged() {
+        XCTAssertEqual(AdminScript.bundled("/App/Helper/uninstall.sh", []), ["/bin/bash", "-p", "/App/Helper/uninstall.sh"])
+        XCTAssertEqual(AdminScript.bundled("/App/Helper/install.sh", ["alex"]), ["/bin/bash", "-p", "/App/Helper/install.sh", "alex"])
+    }
 }

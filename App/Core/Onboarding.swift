@@ -21,7 +21,7 @@ enum Onboarding {
     /// `ks core import`, `ks core on`.
     static func commands(installScript: String?, user: String, servers: [String], helper: String, profile: String) -> [[String]] {
         var commands: [[String]] = []
-        if let installScript { commands.append(["/bin/bash", installScript, user] + servers) }
+        if let installScript { commands.append(AdminScript.bundled(installScript, [user] + servers)) }
         commands.append([helper, "core", "import", profile])
         commands.append([helper, "core", "on"])
         return commands

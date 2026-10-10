@@ -27,7 +27,7 @@ final class OnboardingTests: XCTestCase {
         let commands = Onboarding.commands(installScript: "/App/Helper/install.sh", user: "alex", servers: ["1.2.3.4"],
                                            helper: "/Library/KillSwitch/ks", profile: "/tmp/p.json")
         XCTAssertEqual(commands, [
-            ["/bin/bash", "/App/Helper/install.sh", "alex", "1.2.3.4"],
+            ["/bin/bash", "-p", "/App/Helper/install.sh", "alex", "1.2.3.4"],
             ["/Library/KillSwitch/ks", "core", "import", "/tmp/p.json"],
             ["/Library/KillSwitch/ks", "core", "on"],
         ])
