@@ -11,7 +11,7 @@ final class HelperCommandTests: XCTestCase {
         let cases: [(HelperCommand, [String])] = [
             (.state, ["state"]), (.probe, ["probe"]), (.protectionOn, ["on"]), (.netRestore, ["netrestore"]),
             (.coreState, ["core", "state"]), (.coreOn, ["core", "on"]), (.coreOff, ["core", "off"]),
-            (.coreProxies, ["core", "proxies"]), (.coreTraffic, ["core", "traffic"]),
+            (.coreProxies, ["core", "proxies"]), (.coreTraffic, ["core", "traffic"]), (.coreConnections, ["core", "connections"]),
             (.coreSelect(group: "🇩🇪 Germany", proxy: "de-1"), ["core", "select", "🇩🇪 Germany", "de-1"]),
             (.coreDelay("Auto"), ["core", "delay", "Auto"]),
             (.coreRefresh(profile: "/private/tmp/p.json"), ["core", "refresh", "/private/tmp/p.json"]),
@@ -103,7 +103,7 @@ final class HelperCommandTests: XCTestCase {
         let sudoers = Set(text.matches(of: /\$ks ([a-z -]+?)( \*)?[,"]/).map { String($0.1) })
         XCTAssertFalse(sudoers.isEmpty)
         let all: [HelperCommand] = [
-            .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic,
+            .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic, .coreConnections,
             .coreSelect(group: "g", proxy: "p"), .coreDelay("g"), .coreRefresh(profile: "/tmp/p.json"),
             .protectionOff, .pause(minutes: 5), .setSwitch("lan", true), .setSwitch("adblock", true), .setSplitApps([]),
             .setMultihop(nil),
@@ -157,10 +157,11 @@ final class HelperCommandTests: XCTestCase {
     }
 
     func testSwitchKeys() {
-        for key in ["lan", "tailscale", "dns", "direct", "coredirect", "wifiguard", "adblock"] {
+        for key in ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock"] {
             XCTAssertTrue(HelperCommand.setSwitch(key, true).isValid, key)
         }
-        for key in ["", "splitapps", "multihop", "LAN", "lan ", "x"] {
+        // «Российские сайты напрямую» is gone (ADR 0013): ks refuses it, so the daemon does too
+        for key in ["", "coredirect", "splitapps", "multihop", "LAN", "lan ", "x"] {
             XCTAssertFalse(HelperCommand.setSwitch(key, true).isValid, key)
         }
     }

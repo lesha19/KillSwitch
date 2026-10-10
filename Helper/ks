@@ -1650,7 +1650,7 @@ core_connections() {
       for my $x (ref $c->{connections} eq "ARRAY" ? @{ $c->{connections} } : ()) {
         next unless ref $x eq "HASH";
         my $m = ref $x->{metadata} eq "HASH" ? $x->{metadata} : {};
-        push @out, { host => $txt->($m->{host}), ip => $txt->($m->{destinationIP}), port => $txt->($m->{destinationPort}),
+        push @out, { id => $txt->($x->{id}), host => $txt->($m->{host}), ip => $txt->($m->{destinationIP}), port => $txt->($m->{destinationPort}),
                      network => $txt->($m->{network}), process => $txt->($m->{process}), processPath => $txt->($m->{processPath}),
                      rule => $txt->($x->{rule}), rulePayload => $txt->($x->{rulePayload}),
                      chains => [ map { $txt->($_) } ref $x->{chains} eq "ARRAY" ? @{ $x->{chains} } : () ],
