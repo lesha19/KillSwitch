@@ -154,11 +154,19 @@ struct MenuTextStyle: ViewModifier {
 func main() {
     _ = NSApplication.shared
     NSApp.setActivationPolicy(.prohibited)
+    // the app's template images (Assets.xcassets) under their names, for Image("MenuBar…")
+    for file in (try? FileManager.default.contentsOfDirectory(at: iconDir ?? outDir, includingPropertiesForKeys: nil)) ?? []
+    where file.pathExtension == "svg" {
+        guard let image = NSImage(contentsOf: file) else { continue }
+        image.isTemplate = true
+        image.setName(file.deletingPathExtension().lastPathComponent)
+    }
     try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
-    func window(_ name: String, height: CGFloat = 680, _ world: World) {
-        snapshot(name, width: 460, height: height, title: "KillSwitch") {
-            ContentView().environment(world.control).environment(world.client)
+    /// The main window sizes itself to its content (no scrolling), as in the app.
+    func window(_ name: String, height: CGFloat = 0, _ world: World) {
+        snapshot(name, width: 400, title: "KillSwitch") {
+            HomeView(style: .window).environment(world.control).environment(world.client).environment(Updater())
         }
     }
 

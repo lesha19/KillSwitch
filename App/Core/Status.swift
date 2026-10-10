@@ -188,6 +188,15 @@ enum Status: Equatable {
         }
     }
 
+    /// Under the title of the main screen, which shows the server in its own row.
+    func homeLine(_ detail: Detail) -> String {
+        switch self {
+        case .protected: "Интернет только через VPN"
+        case .connecting: "Сервер скоро ответит"
+        default: line(detail)
+        }
+    }
+
     var primary: Action {
         switch self {
         case .checking, .blocked, .unprotected, .otherVPN: .connect

@@ -63,6 +63,8 @@ for path in files:
     text = text.replace("private(set) var", "var")
     text = text.replace("if skipTrusted { requestLocation() }", "")   # no location prompt
     text = re.sub(r"(?m)^private struct", "struct", text)
+    # no asset catalog in the renderer: the status icons are NSImages registered by name (Render.swift)
+    text = text.replace("Image(status.icon)", "Image(nsImage: NSImage(named: status.icon) ?? NSImage())")
     for signature, body in patches.get(path.name, []):
         text = replace_body(text, signature, body)
     if path.name == "Keychain.swift":

@@ -111,6 +111,32 @@ final class KillSwitchControl {
     func turnOff() { runAsAdmin([helper, "off"]) }
     func pause(minutes: Int) { runAsAdmin([helper, "pause", String(minutes)]) }
 
+    /// «Пауза до переподключения»: a day-long pause that the app ends as soon as the VPN connects
+    /// again (after a drop, when it was connected at the time); without the app the helper ends it
+    /// after a day anyway.
+    func pauseUntilReconnect() {
+        UserDefaults.standard.set(connection == .connected ? "afterDrop" : "armed", forKey: Self.resumeKey)
+        pause(minutes: 24 * 60)
+    }
+
+    private static let resumeKey = "resumeProtectionOnConnect"
+
+    private func resumeIfReconnected() {
+        let defaults = UserDefaults.standard
+        guard let mode = defaults.string(forKey: Self.resumeKey) else { return }
+        guard state.isPaused else {
+            if state == .on || state == .off { defaults.removeObject(forKey: Self.resumeKey) }
+            return
+        }
+        if connection == .connected {
+            guard mode == "armed" else { return }
+            defaults.removeObject(forKey: Self.resumeKey)
+            turnOn()
+        } else if mode == "afterDrop" {
+            defaults.set("armed", forKey: Self.resumeKey)
+        }
+    }
+
     func set(_ key: String, _ on: Bool) { runAsAdmin([helper, "set", key, on ? "1" : "0"]) }
     func addException(_ address: String) {
         let trimmed = address.trimmingCharacters(in: .whitespaces)
@@ -371,6 +397,7 @@ final class KillSwitchControl {
     }
 
     private func trackConnecting() {
+        resumeIfReconnected()
         guard connection == .connecting else { connectingSince = nil; return }
         if connectingSince == nil { connectingSince = Date() }
         clock = Date()

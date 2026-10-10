@@ -10,7 +10,7 @@ struct MenuView: View {
 
     var body: some View {
         let connection = control.connection
-        Text(connection.title)
+        Text(control.status(client).title)
         if connection == .connected || connection == .connecting, let server = control.currentServer {
             let name = ServerName(server)
             let delay = control.delay(of: server).map { " · \($0) мс" } ?? ""

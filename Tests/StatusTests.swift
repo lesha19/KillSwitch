@@ -150,6 +150,13 @@ final class StatusTests: XCTestCase {
                        "Её выключили в Системных настройках. Правила пока действуют, но следить за ними некому.")
     }
 
+    func testHomeLineLeavesTheServerToItsRow() {
+        let server = Status.Detail(server: "🇱🇹 Литва", ping: 37)
+        XCTAssertEqual(Status.protected.homeLine(server), "Интернет только через VPN")
+        XCTAssertFalse(Status.connecting.homeLine(server).contains("Литва"))
+        XCTAssertEqual(Status.blocked.homeLine(server), Status.blocked.line(server))
+    }
+
     func testActions() {
         XCTAssertEqual(Status.notInstalled.primary, .install)
         XCTAssertEqual(Status.broken(.vpnMissing).primary, .repair)

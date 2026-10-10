@@ -19,6 +19,30 @@ struct ServerName {
 
     private static func isRegional(_ scalar: Unicode.Scalar) -> Bool { (0x1F1E6...0x1F1FF).contains(scalar.value) }
 
+    /// The country in Russian, from the flag: «Литва».
+    var country: String? {
+        guard let flag else { return nil }
+        let code = String(String.UnicodeScalarView(flag.unicodeScalars.map { Unicode.Scalar($0.value - 0x1F1E6 + 65)! }))
+        return Locale(identifier: "ru_RU").localizedString(forRegionCode: code)
+    }
+
+    /// For VoiceOver: the name without emoji (🚀, ⚡, flags); a bare flag becomes its country.
+    static func spoken(_ name: String) -> String {
+        let text = String(String.UnicodeScalarView(name.unicodeScalars.filter { !isEmojiScalar($0) }))
+            .trimmingCharacters(in: .whitespaces)
+        return text.isEmpty ? ServerName(name).country ?? name : text
+    }
+
+    /// The name brings its own symbol (⚡ Авто): no 🌐 in front of it.
+    static func startsWithEmoji(_ name: String) -> Bool {
+        name.unicodeScalars.first.map(isEmojiScalar) ?? false
+    }
+
+    private static func isEmojiScalar(_ scalar: Unicode.Scalar) -> Bool {
+        isRegional(scalar) || scalar.properties.isEmojiPresentation || scalar.value == 0xFE0F || scalar.value == 0x200D
+            || (scalar.properties.isEmoji && scalar.value > 0x2000)
+    }
+
     static func flag(code: String) -> String? {
         let upper = code.uppercased()
         guard upper.count == 2, upper.allSatisfy({ $0.isASCII && $0.isLetter }) else { return nil }

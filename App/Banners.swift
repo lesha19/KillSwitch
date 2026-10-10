@@ -29,14 +29,16 @@ struct ErrorBanner: View {
 }
 
 /// The most important current error of the app with its action wired up; hidden by ✕ until a
-/// different error comes or this one goes away and comes back.
-struct TopErrorBanner: View {
+/// different error comes or this one goes away and comes back. Without an error it shows
+/// `fallback` (the next notice), so the screen never has more than one.
+struct TopErrorBanner<Fallback: View>: View {
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
     @Environment(\.openSettings) private var openSettings
     @State private var dismissed: String?
     /// «Выбрать другой сервер…» opens the server picker of the view that shows the banner.
     var chooseServer: () -> Void = {}
+    @ViewBuilder var fallback: () -> Fallback
 
     private enum Source { case helper, serverList, latency, subscription }
 
@@ -47,6 +49,8 @@ struct TopErrorBanner: View {
                 ErrorBanner(error: current.error, action: available(current.error.action),
                             perform: { perform($0, source: current.source) },
                             dismiss: { dismissed = key(current.error) })
+            } else {
+                fallback()
             }
         }
         .onChange(of: current.map { key($0.error) }) { _, new in
@@ -94,6 +98,8 @@ struct TopErrorBanner: View {
 /// Deep links into System Settings.
 enum SystemSettings {
     static let loginItems = URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!
+    /// Login Items & Extensions, where «Сетевые расширения» are allowed.
+    static let networkExtensions = loginItems
 }
 
 /// A notice on a tinted background. The colour is only in the icon and the background; the text
@@ -116,8 +122,12 @@ struct Banner<Buttons: View, Footer: View>: View {
                 if !message.isEmpty {
                     Text(message).font(.callout).fixedSize(horizontal: false, vertical: true)
                 }
-                HStack(spacing: 12) { buttons() }.controlSize(.small)
-                footer()
+                if Buttons.self != EmptyView.self {
+                    HStack(spacing: 12) { buttons() }.controlSize(.small)
+                }
+                if Footer.self != EmptyView.self {
+                    footer()
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if let dismiss {

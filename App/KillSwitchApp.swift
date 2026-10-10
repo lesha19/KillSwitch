@@ -17,22 +17,15 @@ struct KillSwitchApp: App {
 
     var body: some Scene {
         Window("KillSwitch", id: "main") {
-            ContentView()
+            HomeView(style: .window)
                 .environment(control)
                 .environment(client)
+                .environment(updater)
         }
         .windowResizability(.contentSize)
         .commands {
             CommandGroup(after: .appInfo) { CheckForUpdatesButton(updater: updater) }
             CommandMenu("VPN") {
-                LeakTestView.OpenButton()
-                Button("Обновить подписку") { Task { await client.update(interactive: true) } }
-                    .keyboardShortcut("r")
-                    .disabled(!client.hasURL || client.updating)
-                Button("Проверить пинг") { Task { await control.testAllDelays() } }
-                    .keyboardShortcut("p", modifiers: [.command, .shift])
-                    .disabled(!control.coreRunning || control.proxies == nil || !control.testing.isEmpty)
-                Divider()
                 Button("Скопировать диагностику") { DiagnosticsCopy.copy(control: control, client: client) }
             }
         }
@@ -57,10 +50,24 @@ struct KillSwitchApp: App {
                 .environment(client)
                 .environment(updater)
         } label: {
-            let status = control.status(client)
-            Image(status.icon)
-                .accessibilityLabel(status.accessibilityLabel)
-                .help(status.accessibilityLabel)
+            MenuBarLabel(status: control.status(client))
         }
+    }
+}
+
+/// The menu bar icon of the summary status. A change of the status is announced to VoiceOver,
+/// at most every 5 s (spec §9.2).
+private struct MenuBarLabel: View {
+    let status: Status
+    @State private var throttle = Throttle(interval: 5)
+
+    var body: some View {
+        Image(status.icon)
+            .accessibilityLabel(status.accessibilityLabel)
+            .help(status.accessibilityLabel)
+            .onChange(of: status.title) { _, title in
+                guard throttle.allow("status", now: Date()) else { return }
+                AccessibilityNotification.Announcement("KillSwitch: " + title).post()
+            }
     }
 }

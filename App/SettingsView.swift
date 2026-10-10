@@ -2,6 +2,19 @@ import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Which tab Settings opens on; other screens set it before opening Settings.
+enum SettingsTab: String {
+    case general, vpn, protection, advanced, help
+
+    static let key = "settingsTab"
+
+    @MainActor static func open(_ tab: SettingsTab, _ openSettings: OpenSettingsAction) {
+        UserDefaults.standard.set(tab.rawValue, forKey: key)
+        openSettings()
+        NSApp.activate()
+    }
+}
+
 struct SettingsView: View {
     var body: some View {
         TabView {
@@ -199,8 +212,33 @@ private struct GeneralSettings: View {
             }
             AutoConnectSection(control: control)
             FilterSection(filter: control.filter)
+            ServiceSection()
         }
         .formStyle(.grouped)
+    }
+}
+
+/// «Служба KillSwitch»: repair and removal, away from the main screen (H2-3, H5-3).
+private struct ServiceSection: View {
+    @Environment(KillSwitchControl.self) private var control
+    @State private var confirmUninstall = false
+
+    var body: some View {
+        Section("Служба KillSwitch") {
+            HStack {
+                Text(control.daemonProblem ? "Выключена" : "Работает")
+                Spacer()
+                Button("Восстановить службу…") { control.install() }
+            }
+            Button("Удалить KillSwitch из системы…", role: .destructive) { confirmUninstall = true }
+                .foregroundStyle(.red)
+        }
+        .disabled(control.busy || control.state == .notInstalled)
+        .confirmationDialog("Удалить KillSwitch из системы?", isPresented: $confirmUninstall) {
+            Button("Удалить", role: .destructive) { control.uninstall() }
+        } message: {
+            Text("VPN и защита будут удалены. Программы снова пойдут в интернет напрямую. Подписка останется в связке ключей.")
+        }
     }
 }
 
