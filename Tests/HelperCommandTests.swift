@@ -22,6 +22,7 @@ final class HelperCommandTests: XCTestCase {
              ["set", "splitapps", "/Applications/Telegram.app,zoom.us"]),
             (.setSplitApps([]), ["set", "splitapps", ""]),
             (.setMultihop("🇩🇪 de-1"), ["set", "multihop", "🇩🇪 de-1"]), (.setMultihop(nil), ["set", "multihop", "off"]),
+            (.setCore(.xray), ["set", "core", "xray"]), (.setCore(.mihomo), ["set", "core", "mihomo"]),
             (.allow("10.0.0.0/8"), ["allow", "10.0.0.0/8"]), (.unallow("10.0.0.0/8"), ["unallow", "10.0.0.0/8"]),
             (.serverAdd("2001:db8::1"), ["server-add", "2001:db8::1"]),
             (.serverRemove("192.0.2.1"), ["server-remove", "192.0.2.1"]),
@@ -107,7 +108,7 @@ final class HelperCommandTests: XCTestCase {
             .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic, .coreConnections,
             .coreSelect(group: "g", proxy: "p"), .coreDelay("g"), .coreRefresh(profile: "/tmp/p.json"),
             .protectionOff, .pause(minutes: 5), .setSwitch("lan", true), .setSwitch("adblock", true), .setSplitApps([]),
-            .setMultihop(nil),
+            .setMultihop(nil), .setCore(.xray),
             .allow("192.0.2.1"), .unallow("192.0.2.1"), .serverAdd("192.0.2.1"), .serverRemove("192.0.2.1"),
             .coreImport(profile: "/tmp/p.json"), .install(user: "alex", servers: []), .uninstall, .repair,
         ]
@@ -172,6 +173,7 @@ final class HelperCommandTests: XCTestCase {
         XCTAssertFalse(HelperCommand.coreSelect(group: "g", proxy: String(repeating: "a", count: 257)).isValid)
         XCTAssertFalse(HelperCommand.coreSelect(group: "", proxy: "p").isValid)
         XCTAssertFalse(HelperCommand.coreDelay("a\u{7}b").isValid)
+        XCTAssertNil(HelperCommand(ks: ["set", "core", "sing-box"]))
         XCTAssertFalse(HelperCommand.setMultihop("").isValid)
         XCTAssertFalse(HelperCommand.setMultihop("off").isValid)   // would mean «выключен»
         XCTAssertFalse(HelperCommand.setMultihop("a\tb").isValid)

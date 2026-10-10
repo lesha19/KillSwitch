@@ -295,7 +295,7 @@ enum GeoDataInstall {
             let name: String
             switch parts[0] {
             case "geosite.dat": name = String(localized: "База категорий сайтов")
-            case "geoip.metadb": name = String(localized: "База стран")
+            case "geoip.metadb", "geoip.dat": name = String(localized: "База стран")
             default: return nil
             }
             return String(localized: "\(name) не обновилась: файл в программе не прошёл проверку, работает прежняя. Скачай KillSwitch заново.")

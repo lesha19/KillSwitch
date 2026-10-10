@@ -146,6 +146,7 @@ targets:
       - path: HelperDaemon
         excludes: [LaunchDaemons]
       - App/Core/HelperCommand.swift
+      - App/Core/CoreChoice.swift
       - App/Core/HelperProtocol.swift
       - App/Core/HelperRight.swift
       - App/Core/BundleSignature.swift

@@ -257,6 +257,8 @@ private struct VPNSettings: View {
             }
             .disabled(control.busy || control.state == .notInstalled)
 
+            CoreChoiceSection()
+
             Section("Вид") {
                 Toggle("Показывать группы подписки в списке серверов", isOn: $showProfileGroups)
             }
@@ -275,6 +277,28 @@ private struct VPNSettings: View {
         newURL = ""
         editing = false
         Task { await client.setURL(value) }
+    }
+}
+
+/// «Способ подключения» (ADR 0020): the main way (Xray, the same as in Happ) or the fallback one
+/// (mihomo, with the connections list). Switching asks the password once and takes the
+/// subscription again in that way's format.
+private struct CoreChoiceSection: View {
+    @Environment(KillSwitchControl.self) private var control
+    @Environment(VPNClient.self) private var client
+
+    var body: some View {
+        Section("Способ подключения") {
+            Picker("Способ подключения", selection: Binding(get: { control.coreChoice }, set: { client.switchCore(to: $0) })) {
+                Text("Основной — как в Happ").tag(CoreChoice.xray)
+                Text("Запасной").tag(CoreChoice.mihomo)
+            }
+            .pickerStyle(.radioGroup).labelsHidden()
+            .disabled(control.busy || client.updating || control.state == .notInstalled
+                      || !FileManager.default.fileExists(atPath: CoreChoice.xray.binary))
+            Footnote(text: String(localized: "Если сайты открываются через раз, попробуй другой способ. Смена спросит пароль и заново возьмёт подписку."),
+                     more: String(localized: "Основной способ работает так же, как Happ. Запасной умеет показывать соединения в окне «Трафик» и двойной VPN, но у некоторых сайты в нём открываются хуже."))
+        }
     }
 }
 

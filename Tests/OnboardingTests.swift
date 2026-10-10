@@ -34,6 +34,13 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(AdminScript.source(commands).components(separatedBy: "\" && \"").count, 3)
     }
 
+    /// ADR 0020: the way of connecting the subscription was fetched for is set before its import.
+    func testCoreChoiceGoesBeforeTheImport() {
+        let commands = Onboarding.commands(installScript: nil, user: "alex", servers: [], helper: "/ks", profile: "/tmp/p.json",
+                                           core: .xray)
+        XCTAssertEqual(commands, [["/ks", "set", "core", "xray"], ["/ks", "core", "import", "/tmp/p.json"], ["/ks", "core", "on"]])
+    }
+
     func testAlreadyInstalledOnlyImportsAndConnects() {
         let commands = Onboarding.commands(installScript: nil, user: "alex", servers: [], helper: "/ks", profile: "/tmp/p.json")
         XCTAssertEqual(commands, [["/ks", "core", "import", "/tmp/p.json"], ["/ks", "core", "on"]])

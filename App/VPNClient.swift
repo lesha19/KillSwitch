@@ -48,6 +48,10 @@ final class VPNClient {
     /// Server name → identity (ServerIdentity) in the cached profile: what per-server settings
     /// are kept under, so they survive a rename.
     private(set) var serverKeys: [String: String] = [:]
+    /// «Начало работы»: the way of connecting the checked subscription was fetched for (ADR 0020).
+    private var setupCore: CoreChoice?
+    /// The raw reason the last Xray fetch failed, for the setup's fallback.
+    private var lastXrayFailure: String?
 
     /// «Избранные» of the server list, by identity (names for servers not seen yet).
     static let favouritesKey = "favouriteServers"
@@ -168,6 +172,7 @@ final class VPNClient {
     func removeURL() async {
         Keychain.delete(Self.urlAccount)
         try? FileManager.default.removeItem(at: Self.cacheFile)
+        try? FileManager.default.removeItem(at: Self.xrayCacheFile)
         reloadProfileProxies()
         hasURL = false
         maskedURL = nil
@@ -188,7 +193,7 @@ final class VPNClient {
         guard !links.isEmpty, let added = parse(links, name: name) else { return }
         manual += added
         saveManual()
-        await apply(subscription: Self.cachedSubscription(), interactive: true)
+        await applyCurrent(interactive: true)
     }
 
     private func parse(_ links: [String], name: String?) -> [ManualServer]? {
@@ -226,7 +231,7 @@ final class VPNClient {
     func removeManual(_ server: ManualServer) async {
         manual.removeAll { $0.id == server.id }
         saveManual()
-        await apply(subscription: Self.cachedSubscription(), interactive: true)
+        await applyCurrent(interactive: true)
     }
 
     /// Saves the choice and hands the profile to the core by a passwordless refresh: the servers
@@ -239,7 +244,7 @@ final class VPNClient {
         guard control.coreConfigured, !updating else { return }
         updating = true
         defer { updating = false }
-        await apply(subscription: Self.cachedSubscription(), interactive: false)
+        await applyCurrent(interactive: false)
     }
 
     // MARK: updating
@@ -259,6 +264,12 @@ final class VPNClient {
         guard !updating else { return }
         updating = true
         defer { updating = false }
+        if usesXray {
+            guard let xray = await fetchXray(url) else { return }
+            let applied = await applyXray(xray.data, interactive: interactive)
+            schedule.record(applied ? .applied : .notApplied, now: Date())
+            return
+        }
         guard let profile = await fetchProfile(url) else { return }
         let applied = await apply(subscription: profile, interactive: interactive)
         schedule.record(applied ? .applied : .notApplied, now: Date())
@@ -289,6 +300,93 @@ final class VPNClient {
         let (body, headers) = try await Self.fetch(url, viaVPN: source.viaVPN)
         let (profile, leftOut) = try ProfileConverter.read(subscription: body)
         UserDefaults.standard.set(leftOut, forKey: RoutingReport.leftOutKey)
+        Self.cache(profile)
+        took(headers, source: source, title: title)
+        return profile
+    }
+
+    // MARK: the main way of connecting (ADR 0020)
+
+    /// The helper runs Xray: the subscription is the panel's Xray config (XrayProfile).
+    private var usesXray: Bool { control.coreChoice == .xray }
+
+    /// The same sources and order as fetchProfile; the link plus XrayProfile.pathComponent.
+    private func fetchXray(_ url: URL) async -> XrayProfile? {
+        let backup = Self.storedBackupURL().flatMap(URL.init(string:))
+        var firstError: String?
+        for source in SubscriptionSource.order(hasBackup: backup != nil, vpnRunning: control.coreRunning) {
+            guard let link = source.usesBackup ? backup : url else { continue }
+            do {
+                return try await fetchXray(link, source: source, title: url.host)
+            } catch {
+                firstError = firstError ?? Self.describe(error)
+            }
+        }
+        let raw = firstError ?? "empty"
+        lastXrayFailure = raw
+        schedule.record(.fetchFailed(offline: raw.hasPrefix("offline")), now: Date())
+        lastError = UserError.from(raw: raw, context: .subscription)
+        return nil
+    }
+
+    private func fetchXray(_ url: URL, source: SubscriptionSource, title: String?) async throws -> XrayProfile {
+        let (body, headers) = try await Self.fetch(XrayProfile.url(for: url), viaVPN: source.viaVPN)
+        let profile = try XrayProfile(body: body)
+        UserDefaults.standard.set([String](), forKey: RoutingReport.leftOutKey)
+        Self.cacheXray(profile.data)
+        took(headers, source: source, title: title)
+        return profile
+    }
+
+    /// The panel's config to the helper (refresh, or import with the password on a click). Own
+    /// servers added by link are not part of it: they are profiles of the other way.
+    @discardableResult
+    private func applyXray(_ data: Data?, interactive: Bool) async -> Bool {
+        guard let data else {
+            lastError = nil
+            return true
+        }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-xray-\(UUID().uuidString).json")
+        do {
+            try data.write(to: file, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        } catch {
+            lastError = UserError.from(raw: "profile file: \(error.localizedDescription)", context: .subscription)
+            return false
+        }
+        defer { try? FileManager.default.removeItem(at: file) }
+        return await handOver(file: file, hash: Self.hash(data), interactive: interactive) { [self] hash in importedXray(hash: hash) }
+    }
+
+    private func importedXray(hash: String) {
+        reloadProfileProxies()
+        UserDefaults.standard.set(hash, forKey: Self.importedKey)
+        UserDefaults.standard.set([CoreProxies.xrayGroup], forKey: KillSwitchControl.groupOrderKey)
+        lastError = nil
+        needsPassword = false
+        needsConfirmation = false
+    }
+
+    /// The cached subscription of the way the helper runs, to the helper again.
+    @discardableResult
+    private func applyCurrent(interactive: Bool) async -> Bool {
+        if usesXray { return await applyXray(Self.cachedXray(), interactive: interactive) }
+        return await apply(subscription: Self.cachedSubscription(), interactive: interactive)
+    }
+
+    /// Settings › «Способ подключения»: the helper switches (one password) and the subscription is
+    /// fetched again in that way's format and imported; a VPN that was on comes back.
+    func switchCore(to choice: CoreChoice) {
+        guard choice != control.coreChoice, !updating else { return }
+        let wasOn = control.coreRunning
+        control.setCore(choice) { [self] in
+            reloadProfileProxies()
+            await update(interactive: true)
+            if wasOn, control.coreConfigured { control.coreOn() }
+        }
+    }
+
+    private func took(_ headers: [String: String], source: SubscriptionSource, title: String?) {
         status.title = SubscriptionHeaders.title(headers["profile-title"]) ?? status.title ?? title
         status.source = source
         status.usage = SubscriptionUsage(header: headers["subscription-userinfo"])
@@ -296,10 +394,8 @@ final class VPNClient {
         status.accountURL = [headers["profile-web-page-url"], headers["support-url"]].lazy
             .compactMap { $0.flatMap(URL.init(string:)) }.first { $0.scheme == "https" }
         saveStatus()
-        Self.cache(profile)
         reloadProfileProxies()
         noticeLimits()
-        return profile
     }
 
     /// «Подписка кончается» at 3 days and at 1 day, «Трафик почти закончился» past 90 %: once per
@@ -335,7 +431,20 @@ final class VPNClient {
             guard store(trimmed), let url = URL(string: trimmed) else { return nil }
             updating = true
             defer { updating = false }
+            setupCore = nil
+            if usesXray {
+                if let xray = await fetchXray(url) {
+                    setupCore = .xray
+                    return Onboarding.Found(title: status.title, servers: xray.servers.count, expire: status.usage?.expire)
+                }
+                // ADR 0020: a service without the main way's format still works the other way;
+                // only while setting up, before anything was imported
+                guard !control.coreConfigured, let failure = lastXrayFailure,
+                      failure == XrayProfile.Failure.notXray.errorDescription || failure.hasPrefix("HTTP 404") else { return nil }
+                lastError = nil
+            }
             guard let profile = await fetchProfile(url) else { return nil }
+            setupCore = usesXray ? .mihomo : nil
             let found = Onboarding.Found(title: status.title, servers: (profile["proxies"] as? [Any])?.count ?? 0,
                                          expire: status.usage?.expire)
             if !found.ready { lastError = UserError.from(raw: "empty", context: .subscription) }
@@ -362,17 +471,32 @@ final class VPNClient {
     struct Prepared {
         let file: URL
         let hash: String
-        fileprivate let profile: Profile
+        /// The way of connecting it is for, set before the import (nil: the one the helper runs).
+        let core: CoreChoice?
+        fileprivate let profile: Profile?
     }
 
     func prepareImport() -> Prepared? {
+        if (setupCore ?? control.coreChoice) == .xray {
+            guard let data = Self.cachedXray() else { return nil }
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-xray-\(UUID().uuidString).json")
+            do {
+                try data.write(to: file, options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            } catch {
+                lastError = UserError.from(raw: "profile file: \(error.localizedDescription)", context: .subscription)
+                return nil
+            }
+            return Prepared(file: file, hash: Self.hash(data), core: .xray, profile: nil)
+        }
         guard let profile = forCore(Self.cachedSubscription()),
               let written = write(profile) else { return nil }
-        return Prepared(file: written.file, hash: written.hash, profile: profile)
+        return Prepared(file: written.file, hash: written.hash, core: setupCore, profile: profile)
     }
 
     func didImport(_ prepared: Prepared) {
-        imported(prepared.profile, hash: prepared.hash)
+        if let profile = prepared.profile { imported(profile, hash: prepared.hash) } else { importedXray(hash: prepared.hash) }
+        setupCore = nil
         // the wizard fetched the subscription a moment ago (check)
         if hasURL { schedule.record(.applied, now: Date()) }
         discard(prepared)
@@ -402,7 +526,7 @@ final class VPNClient {
         guard !updating else { return }
         updating = true
         defer { updating = false }
-        if await apply(subscription: Self.cachedSubscription(), interactive: true) { schedule.record(.applied, now: Date()) }
+        if await applyCurrent(interactive: true) { schedule.record(.applied, now: Date()) }
     }
 
     /// Merges with the manual servers and hands the result to the helper, unless the core already
@@ -417,6 +541,12 @@ final class VPNClient {
         }
         guard let (file, hash) = write(profile) else { return false }
         defer { try? FileManager.default.removeItem(at: file) }
+        return await handOver(file: file, hash: hash, interactive: interactive) { [self] hash in imported(profile, hash: hash) }
+    }
+
+    /// The written profile to the helper, unless the core already has exactly this: a click
+    /// imports (admin prompt if needed), a timer only refreshes. `done` records what was imported.
+    private func handOver(file: URL, hash: String, interactive: Bool, done: (String) -> Void) async -> Bool {
         if control.coreConfigured, UserDefaults.standard.string(forKey: Self.importedKey) == hash {
             lastError = nil
             needsPassword = false
@@ -426,7 +556,7 @@ final class VPNClient {
         guard interactive else {
             switch await control.coreRefresh(file: file.path) {
             case .applied:
-                imported(profile, hash: hash)
+                done(hash)
                 return true
             case .newServers:
                 lastError = nil
@@ -439,7 +569,7 @@ final class VPNClient {
         }
         switch await control.coreImport(file: file.path, allowPassword: true) {
         case .ok:
-            imported(profile, hash: hash)
+            done(hash)
             return true
         case .cancelled:
             break
@@ -459,6 +589,14 @@ final class VPNClient {
     }
 
     private func reloadProfileProxies() {
+        if usesXray {
+            profileProxies = Self.cachedXray().flatMap { try? XrayProfile(body: String(decoding: $0, as: UTF8.self)) }
+                .map { CoreProxies(xrayServers: $0.servers) }
+            transportServers = []
+            serverKeys = [:]
+            KillSwitchShortcuts.updateAppShortcutParameters()
+            return
+        }
         let profile = ProfileMerger.merge(subscription: Self.cachedSubscription(), manual: manual.compactMap(Self.proxy))
         profileProxies = profile.map(CoreProxies.init(profile:))
         transportServers = profile.map(Transport.servers) ?? []
@@ -596,6 +734,17 @@ final class VPNClient {
         try? data.write(to: cacheFile, options: [.atomic])
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: cacheFile.path)
     }
+
+    private static var xrayCacheFile: URL { cacheFile.deletingLastPathComponent().appendingPathComponent("subscription-xray.json") }
+
+    private static func cacheXray(_ data: Data) {
+        let dir = xrayCacheFile.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try? data.write(to: xrayCacheFile, options: [.atomic])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: xrayCacheFile.path)
+    }
+
+    private static func cachedXray() -> Data? { try? Data(contentsOf: xrayCacheFile) }
 
     private static func cachedSubscription() -> Profile? {
         guard let data = try? Data(contentsOf: cacheFile) else { return nil }

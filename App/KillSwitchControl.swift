@@ -71,6 +71,8 @@ final class KillSwitchControl {
     private(set) var coreInstalled = false
     private(set) var coreConfigured = false
     private(set) var coreRunning = false
+    /// Which way of connecting the helper runs (ADR 0020): Xray («Основной») or mihomo («Запасной»).
+    private(set) var coreChoice: CoreChoice = .mihomo
     /// «Блокировать рекламу и трекеры»: the core refuses category-ads-all of the shipped geosite.dat.
     private(set) var adBlock = false
     /// «Раздельный туннель»: process names that go around the VPN (the user's own addition, ADR 0013).
@@ -268,6 +270,13 @@ final class KillSwitchControl {
     func setSplitApps(_ names: [String]) { runAsAdmin([helper, "set", "splitapps", SplitApps.argument(names)]) }
     /// `entry` nil turns «Двойной VPN» off. Always a click.
     func setMultihop(entry: String?) { runAsAdmin([helper, "set", "multihop", entry ?? Multihop.off]) }
+    /// `ks set core` (one password); `then` imports the subscription for it (VPNClient.switchCore).
+    func setCore(_ choice: CoreChoice, then done: @escaping @MainActor () async -> Void) {
+        runAsAdmin(batch: [[helper, "set", "core", choice.rawValue]]) { [self] in
+            coreChoice = choice
+            await done()
+        }
+    }
 
     /// «Адреса серверов для других VPN-программ»: VPN servers are reachable by any process (Happ's
     /// tunnel runs as the ordinary user and cannot be told apart from other apps), so only these
@@ -610,7 +619,8 @@ final class KillSwitchControl {
     private enum DelayOutcome { case done, failed, refused }
 
     private func runDelay(group: CoreProxies.Group) async -> DelayOutcome {
-        guard coreRunning, !testing.contains(group.name) else { return .failed }
+        // no latency test with Xray yet (ADR 0020)
+        guard coreRunning, coreChoice == .mihomo, !testing.contains(group.name) else { return .failed }
         testing.insert(group.name)
         defer { testing.remove(group.name) }
         switch await callHelper(["core", "delay", group.name], interactive: true, separateStderr: true) {
@@ -735,7 +745,7 @@ final class KillSwitchControl {
     /// «Начало работы», step «Установка»: install.sh (unless the service is there), the import of
     /// `profile` and connecting, as one admin command — one password, and the protection that
     /// install.sh turns on never finds the Mac without a VPN.
-    func setUp(profile: String) async -> Bool {
+    func setUp(profile: String, core: CoreChoice? = nil) async -> Bool {
         prepareHelper()
         let installed = serviceInstalled
         var script: String?
@@ -753,7 +763,7 @@ final class KillSwitchControl {
             return false
         }
         let commands = Onboarding.commands(installScript: script, user: NSUserName(), servers: [], helper: helper,
-                                           profile: profile)
+                                           profile: profile, core: core)
         switch await adminRun(commands, .init(reason: AdminGate.reason(commands), userInitiated: true)) {   // the wizard's button
         case .ok:
             error = nil
@@ -801,6 +811,8 @@ final class KillSwitchControl {
         readOtherTunnels()
         defer { scheduleTimer(); readOtherVPN(); syncSpeed() }
         guard FileManager.default.fileExists(atPath: helper) else {
+            // a new install runs the main way when the app carries it (install.sh, ADR 0020)
+            coreChoice = Bundle.main.path(forResource: "xray", ofType: nil, inDirectory: "Helper") != nil ? .xray : .mihomo
             daemonProblem = false; networkLeftOff = false
             daemonStateLive = false
             helperOutdated = false; helperComparedAt = nil
@@ -809,8 +821,9 @@ final class KillSwitchControl {
         }
         watchHelperDirectory()
         compareHelper()
-        coreInstalled = FileManager.default.fileExists(atPath: "/Library/KillSwitch/core/mihomo")
-        coreConfigured = FileManager.default.fileExists(atPath: "/Library/KillSwitch/core/config.yaml")
+        coreChoice = CoreChoice.current()
+        coreInstalled = FileManager.default.fileExists(atPath: coreChoice.binary)
+        coreConfigured = FileManager.default.fileExists(atPath: coreChoice.config)
         if let daemon = DaemonState.read() {
             // the watchdog runs and says what `ks state` / `ks core state` would: no sudo, no launchctl
             daemonStateLive = true
@@ -1246,6 +1259,7 @@ final class KillSwitchControl {
     /// Asks the core once a second, only while the setting is on and our VPN is connected.
     func syncSpeed() {
         let wanted = UserDefaults.standard.bool(forKey: Self.speedKey) && connection == .connected && !speedUnavailable
+            && coreChoice == .mihomo   // no traffic counters with Xray yet (ADR 0020)
         if wanted, speedTimer == nil {
             speedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.readSpeed() }
@@ -1308,7 +1322,7 @@ final class KillSwitchControl {
     }
 
     private func readConnections() {
-        guard !readingConnections, coreRunning else { return }
+        guard !readingConnections, coreRunning, coreChoice.hasConnections else { return }
         readingConnections = true
         Task {
             // never the password prompt: a timer asks

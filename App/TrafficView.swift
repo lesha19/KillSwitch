@@ -20,14 +20,22 @@ struct TrafficView: View {
     @Environment(KillSwitchControl.self) private var control
     @AppStorage("trafficTab") private var tab: Tab = .rules
 
+    /// The main way of connecting (Xray, ADR 0020) lists no live connections, and its rules are
+    /// not the kind «Проверить адрес» can walk: only «Правила» then.
+    static func tabs(_ core: CoreChoice) -> [Tab] { core.hasConnections ? Tab.allCases : [.rules] }
+
     var body: some View {
+        let tabs = Self.tabs(control.coreChoice)
+        let shown = tabs.contains(tab) ? tab : .rules
         VStack(spacing: 0) {
-            Picker("Раздел", selection: $tab) {
-                ForEach(Tab.allCases) { Text($0.title).tag($0) }
+            if tabs.count > 1 {
+                Picker("Раздел", selection: $tab) {
+                    ForEach(tabs) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                .padding(.top, 14).padding(.bottom, 6)
             }
-            .pickerStyle(.segmented).labelsHidden().fixedSize()
-            .padding(.top, 14).padding(.bottom, 6)
-            switch tab {
+            switch shown {
             case .rules: RulesTab()
             case .connections: ConnectionsTab()
             case .check: CheckAddressTab()

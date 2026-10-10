@@ -8,7 +8,7 @@ final class StringCatalogTests: XCTestCase {
     /// Not texts for people: words matched in server names and the helper's output, mihomo group
     /// names, placeholders of the diagnostics, the admin script.
     private let notTexts: Set<String> = ["ServerName.swift", "ProfileMerger.swift", "Diagnostics.swift", "AdminScript.swift"]
-    private let matchedOutput = ["\"Ядро не установлено\""]
+    private let matchedOutput = ["\"Ядро не установлено\"", "xrayGroup = \"Сервер\""]
 
     private func sources(_ folder: String) throws -> [(name: String, text: String)] {
         try FileManager.default.contentsOfDirectory(at: app.appending(path: folder), includingPropertiesForKeys: nil)

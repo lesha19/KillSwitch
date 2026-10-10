@@ -6,6 +6,8 @@ final class GeoDataInstallTests: XCTestCase {
     func testOnlyProblemsAreShown() {
         XCTAssertEqual(GeoDataInstall.problems(nil), [])
         XCTAssertEqual(GeoDataInstall.problems("geosite.dat=ok\ngeoip.metadb=ok\n"), [])
+        XCTAssertTrue(GeoDataInstall.problems("geoip.dat=mismatch\n").first?.hasPrefix("База стран не обновилась") == true,
+                      "Xray's country base (ADR 0020) is the same thing to the person")
         XCTAssertEqual(GeoDataInstall.path, "/Library/KillSwitch/core/geodata")
     }
 

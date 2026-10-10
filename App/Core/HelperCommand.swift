@@ -25,6 +25,8 @@ enum HelperCommand: Equatable, Sendable {
     case setSplitApps([String])
     /// nil turns «Двойной VPN» off.
     case setMultihop(String?)
+    /// The way of connecting (ADR 0020); the subscription is imported again for it.
+    case setCore(CoreChoice)
     case allow(String), unallow(String)
     case serverAdd(String), serverRemove(String)
     case coreImport(profile: String)
@@ -87,6 +89,7 @@ enum HelperCommand: Equatable, Sendable {
         case .setSwitch(let key, let on): ["set", key, on ? "1" : "0"]
         case .setSplitApps(let names): ["set", "splitapps", names.joined(separator: ",")]
         case .setMultihop(let entry): ["set", "multihop", entry ?? Self.multihopOff]
+        case .setCore(let core): ["set", "core", core.rawValue]
         case .allow(let address): ["allow", address]
         case .unallow(let address): ["unallow", address]
         case .serverAdd(let address): ["server-add", address]
@@ -112,6 +115,7 @@ enum HelperCommand: Equatable, Sendable {
         case .setSplitApps(let names):
             names.count <= Self.maxSplitApps && Set(names).count == names.count && names.allSatisfy(Self.isSplitApp)
         case .setMultihop(let entry): entry.map { Self.isName($0) && $0 != Self.multihopOff } ?? true
+        case .setCore: true
         case .allow(let address), .serverAdd(let address): Self.isAddress(address)
         case .unallow(let address), .serverRemove(let address): Self.isListedAddress(address)
         case .install(let user, let servers):
@@ -172,6 +176,9 @@ enum HelperCommand: Equatable, Sendable {
                         .map(String.init))
                 case "multihop":
                     command = .setMultihop(arguments[2] == Self.multihopOff ? nil : arguments[2])
+                case "core":
+                    guard let core = CoreChoice(rawValue: arguments[2]) else { return nil }
+                    command = .setCore(core)
                 default:
                     guard ["0", "1"].contains(arguments[2]) else { return nil }
                     command = .setSwitch(arguments[1], arguments[2] == "1")

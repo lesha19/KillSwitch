@@ -284,7 +284,7 @@ private struct InstallStep: View {
         guard let prepared = client.prepareImport() else { return }
         running = true
         Task {
-            if await control.setUp(profile: prepared.file.path) {
+            if await control.setUp(profile: prepared.file.path, core: prepared.core) {
                 client.didImport(prepared)
                 running = false
                 next()

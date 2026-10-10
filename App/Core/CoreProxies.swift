@@ -24,6 +24,8 @@ struct CoreProxies: Equatable {
     private var aliveByName: [String: Bool] = [:]
 
     static let helperDNSGroup = "KS-DNS"
+    /// The one selector Helper/ks offers with Xray (XRAY_GROUP): the subscription's hosts.
+    static let xrayGroup = "Сервер"
     static let groupTypes: Set<String> = ["Selector", "URLTest", "Fallback", "LoadBalance", "Relay"]
 
     /// `order`: group names in profile order (mihomo's JSON object has none); unknown ones follow,
@@ -74,6 +76,11 @@ struct CoreProxies: Equatable {
             let members = group["proxies"] as? [String] ?? []
             groups.append(Group(name: name, type: type, now: nil, all: members, offers: members))
         }
+    }
+
+    /// With Xray before the core runs: the hosts of the panel's config (XrayProfile).
+    init(xrayServers: [String]) {
+        groups = [Group(name: Self.xrayGroup, type: "Selector", now: nil, all: xrayServers, offers: xrayServers)]
     }
 
     func delay(_ name: String) -> Int? { delays[name] }

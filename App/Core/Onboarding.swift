@@ -18,10 +18,13 @@ enum Onboarding {
     }
 
     /// The admin command of step «Установка»: install.sh (skipped when the service is there),
-    /// `ks core import`, `ks core on`.
-    static func commands(installScript: String?, user: String, servers: [String], helper: String, profile: String) -> [[String]] {
+    /// `ks set core` for the way the subscription was fetched for (ADR 0020), `ks core import`,
+    /// `ks core on`.
+    static func commands(installScript: String?, user: String, servers: [String], helper: String, profile: String,
+                         core: CoreChoice? = nil) -> [[String]] {
         var commands: [[String]] = []
         if let installScript { commands.append(AdminScript.bundled(installScript, [user] + servers)) }
+        if let core { commands.append([helper, "set", "core", core.rawValue]) }
         commands.append([helper, "core", "import", profile])
         commands.append([helper, "core", "on"])
         return commands

@@ -67,6 +67,13 @@ final class Endpoint: NSObject, HelperProtocol, Sendable {
     func setMultihop(entry: String?, authorization: Data, reply: @escaping Reply) {
         Executor.perform(.setMultihop(entry), authorization: authorization, reply: reply)
     }
+    func setCore(name: String, authorization: Data, reply: @escaping Reply) {
+        guard let core = CoreChoice(rawValue: name) else {
+            reply(HelperReply.refused, "", "usage: ks set core xray|mihomo")
+            return
+        }
+        Executor.perform(.setCore(core), authorization: authorization, reply: reply)
+    }
     func allow(address: String, authorization: Data, reply: @escaping Reply) {
         Executor.perform(.allow(address), authorization: authorization, reply: reply)
     }

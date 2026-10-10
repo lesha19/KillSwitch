@@ -26,6 +26,7 @@ enum DiagnosticsCopy {
             ("Защита", control.state.title),
             ("Служба защиты", control.daemonProblem ? "выключена или не запущена" : "работает"),
             ("Фильтр macOS", filter),
+            ("Ядро", control.coreChoice.rawValue),
             ("Ядро установлено", yes(control.coreInstalled)),
             ("Ядро настроено", yes(control.coreConfigured)),
             ("Ядро запущено", yes(control.coreRunning)),
