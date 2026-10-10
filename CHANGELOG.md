@@ -7,6 +7,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 ## [Unreleased]
 
 ### Added
+- Right click (or ⌃-click) on the menu bar icon: a compact menu with Подключить/Отключить, Самый
+  быстрый, Открыть KillSwitch, Проверка утечек and Выход. A left click still opens the popover.
+  The icon is now an AppKit status item with an NSPopover hosting the same main screen
+  (ADR 0010).
 - Another program's VPN is recognised beyond the 198.18 address: any utun, ipsec or ppp tunnel
   (WireGuard, IKEv2, L2TP…) that takes the default route or splits it, IPv4 or IPv6, both by the
   app (`netstat -rn`) and by the watchdog (`core/foreign-vpn`). Ours and Tailscale's (100.64/10,

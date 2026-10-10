@@ -7,15 +7,21 @@ struct KillSwitchApp: App {
     @State private var client: VPNClient
     @State private var leakTester = LeakTester()
     @State private var autoConnector: AutoConnector
-    @State private var updater = Updater()
+    @State private var updater: Updater
 
     init() {
         let control = KillSwitchControl()
+        let client = VPNClient(control: control)
+        let updater = Updater()
         _control = State(initialValue: control)
-        _client = State(initialValue: VPNClient(control: control))
+        _client = State(initialValue: client)
+        _updater = State(initialValue: updater)
         _autoConnector = State(initialValue: AutoConnector(control: control))
         Notifier.shared.control = control
-        Notifier.shared.client = _client.wrappedValue
+        Notifier.shared.client = client
+        // spec §5.1, Р3: the menu bar icon; a click opens the main screen as a popover, a right
+        // click a compact menu (ADR 0010)
+        DispatchQueue.main.async { StatusItem.install(control: control, client: client, updater: updater) }
     }
 
     var body: some Scene {
@@ -48,17 +54,6 @@ struct KillSwitchApp: App {
                 Button("Как это работает") { Router.shared.go(.help) }
             }
         }
-
-        // spec §5.1, Р3: a click on the icon opens the main screen as a popover
-        MenuBarExtra {
-            HomeView(style: .popover)
-                .environment(control)
-                .environment(client)
-                .environment(updater)
-        } label: {
-            MenuBarLabel(status: control.status(client))
-        }
-        .menuBarExtraStyle(.window)
     }
 }
 
@@ -70,31 +65,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let route = Navigation.route(url: url) { Router.shared.go(route) }
             }
         }
-    }
-}
-
-/// The menu bar icon of the summary status. A change of the status is announced to VoiceOver,
-/// at most every 5 s (spec §9.2). On a Mac without the service it opens «Начало работы» once.
-private struct MenuBarLabel: View {
-    let status: Status
-    @State private var throttle = Throttle(interval: 5)
-    @State private var offeredSetup = false
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Image(status.icon)
-            .onAppear { Router.shared.openWindow = { openWindow(id: MainWindow.id) } }
-            .accessibilityLabel(status.accessibilityLabel)
-            .help(status.accessibilityLabel)
-            .onChange(of: status.title) { _, title in
-                guard throttle.allow("status", now: Date()) else { return }
-                AccessibilityNotification.Announcement("KillSwitch: " + title).post()
-            }
-            .onChange(of: status == .notInstalled, initial: true) { _, notInstalled in
-                guard notInstalled, !offeredSetup else { return }
-                offeredSetup = true
-                Router.shared.openWindow = { openWindow(id: MainWindow.id) }   // may run before onAppear
-                Router.shared.go(.onboarding)
-            }
     }
 }

@@ -1175,7 +1175,7 @@ final class KillSwitchControl {
             var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             guard getnameinfo(addr, socklen_t(addr.pointee.sa_len), &buf, socklen_t(buf.count), nil, 0, NI_NUMERICHOST) == 0
             else { continue }
-            let address = String(cString: buf).split(separator: "%").first.map(String.init) ?? ""
+            let address = String(decoding: buf.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self).split(separator: "%").first.map(String.init) ?? ""
             result.append(OtherVPN.Address(interface: String(cString: ptr.pointee.ifa_name), address: address))
         }
         return result

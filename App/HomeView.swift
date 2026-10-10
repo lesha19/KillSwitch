@@ -5,6 +5,8 @@ import SwiftUI
 struct HomeView: View {
     enum Style { case popover, window }
     var style: Style = .window
+    /// Closes the popover (StatusItem); `dismiss` cannot reach an AppKit popover.
+    var close: (() -> Void)?
 
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
@@ -28,7 +30,7 @@ struct HomeView: View {
         .onDisappear { control.viewDisappeared() }
         // Esc: back from the server list, then closes the popover
         .onExitCommand {
-            if showingServers { showingServers = false } else if style == .popover { dismiss() }
+            if showingServers { showingServers = false } else if style == .popover { if let close { close() } else { dismiss() } }
         }
     }
 
