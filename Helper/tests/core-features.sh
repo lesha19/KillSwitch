@@ -56,6 +56,39 @@ done
 grep -qE 'u\.com|MATCH' "$tmp/c.direct" && bad "nested: proxy-only rules listed" || ok "nested/GLOBAL/logical/filter groups caught"
 mt "nested groups" "$tmp/c"
 
+# --- rule providers behind DIRECT rules: their contents decide what goes outside the tunnel
+sigof() { gen "$1" || bad "$2: refused: $(cat "$tmp/err")"; cp "$tmp/c.direct" "$tmp/$2.direct"; }
+edit() { /usr/bin/perl -MJSON::PP -e 'local $/; my $j = JSON::PP->new->decode(<STDIN>); eval $ARGV[0]; die $@ if $@; print JSON::PP->new->encode($j)' "$1"; }
+grep -q '^provider	.*"local-inline".*example\.net' "$tmp/full.direct" && ok "providers: inline provider of a DIRECT rule in the signature" ||
+  bad "providers: inline: $(cat "$tmp/full.direct")"
+grep -q '^provider	.*"ru-blocked".*example\.com/ru\.txt' "$tmp/full.direct" && ok "providers: provider of a rule to a DIRECT-holding group in the signature" ||
+  bad "providers: http: $(cat "$tmp/full.direct")"
+edit '$j->{"rule-providers"}{"local-inline"}{payload} = ["+.example.net", "+.com"]' < "$fx/ok-full.json" > "$tmp/p.json"
+sigof "$tmp/p.json" payload
+cmp -s "$tmp/full.direct" "$tmp/payload.direct" && bad "providers: wider inline payload left the signature unchanged" || ok "providers: inline payload change changes the signature"
+edit '$j->{"rule-providers"}{"ru-blocked"}{url} = "https://example.com/everything.txt"' < "$fx/ok-full.json" > "$tmp/p.json"
+sigof "$tmp/p.json" url
+cmp -s "$tmp/full.direct" "$tmp/url.direct" && bad "providers: new url left the signature unchanged" || ok "providers: url change changes the signature"
+edit '$j->{"rule-providers"}{"other"} = {type=>"http", behavior=>"domain", url=>"https://example.com/o.txt"}; unshift @{$j->{rules}}, "RULE-SET,other,auto"' \
+  < "$fx/ok-full.json" > "$tmp/p.json"
+sigof "$tmp/p.json" proxied
+cmp -s "$tmp/full.direct" "$tmp/proxied.direct" && ok "providers: a provider of proxy-only rules stays out" || bad "providers: proxied: $(diff "$tmp/full.direct" "$tmp/proxied.direct")"
+edit '$j->{"rule-providers"}{"other"} = {type=>"http", behavior=>"domain", url=>"https://example.com/o.txt", proxy=>"DIRECT"}; unshift @{$j->{rules}}, "RULE-SET,other,auto"' \
+  < "$fx/ok-full.json" > "$tmp/p.json"
+sigof "$tmp/p.json" pdirect
+grep -q '^provider-proxy	other	DIRECT$' "$tmp/pdirect.direct" && ok "providers: a provider downloaded with proxy DIRECT in the signature" ||
+  bad "providers: proxy DIRECT: $(cat "$tmp/pdirect.direct")"
+edit '$j->{"rule-providers"}{"other"} = {type=>"http", behavior=>"domain", url=>"https://example.com/o.txt", proxy=>"auto"}; unshift @{$j->{rules}}, "RULE-SET,other,auto"' \
+  < "$fx/ok-full.json" > "$tmp/p.json"
+sigof "$tmp/p.json" pauto
+grep -q '^provider-proxy	other	auto$' "$tmp/pauto.direct" && ok "providers: any proxy set by the profile is in the signature" ||
+  bad "providers: proxy auto: $(cat "$tmp/pauto.direct")"
+grep -q 'provider-proxy	ru-blocked' "$tmp/full.direct" && bad "providers: our own KS-DNS proxy in the signature" || ok "providers: our KS-DNS default stays out"
+edit '$j->{rules}[1] = "AND,((RULE-SET,local-inline),(NETWORK,TCP)),DIRECT"' < "$fx/ok-full.json" > "$tmp/p.json"
+sigof "$tmp/p.json" logical
+grep -q '^provider	.*"local-inline"' "$tmp/logical.direct" && ok "providers: provider inside a logical DIRECT rule in the signature" ||
+  bad "providers: logical: $(cat "$tmp/logical.direct")"
+
 # --- splitapps
 put splitapps "Telegram,Google Chrome"
 gen "$fx/ok-full.json"

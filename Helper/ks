@@ -435,7 +435,7 @@ core_generate() (
   fi
 
   # What would go outside the tunnel, for "ks core refresh" to compare with the last import.
-  direct_sig "$G" "$R" > "$w/direct" || fail "Не удалось разобрать правила"
+  direct_sig "$G" "$R" "$RP" > "$w/direct" || fail "Не удалось разобрать правила"
 
   # Double VPN: every other proxy is dialed through the entry, so the core only has to reach
   # the entry's server; the exits are reached through it and stay out of pf.
@@ -528,15 +528,19 @@ json_edit() {
     open $f, ">", $ARGV[0] or die; print $f JSON::PP->new->encode($j); close $f or die' "$1" "$2"
 }
 
-# direct_sig <groups.json> <rules.json>: what can send traffic outside the tunnel, one per line.
-# DIRECT, GLOBAL (mihomo's built-in group, it holds DIRECT) and COMPATIBLE (what an empty group
-# becomes, a direct dialer) are direct; so is every group that holds one of them, transitively,
-# and every group whose members depend on a filter. Printed: those groups (name, members,
-# filters) sorted, then every rule naming one of them, in order.
+# direct_sig <groups.json> <rules.json> [providers.json]: what can send traffic outside the
+# tunnel, one per line. DIRECT, GLOBAL (mihomo's built-in group, it holds DIRECT) and COMPATIBLE
+# (what an empty group becomes, a direct dialer) are direct; so is every group that holds one of
+# them, transitively, and every group whose members depend on a filter. Printed: those groups
+# (name, members, filters) sorted, then every rule naming one of them, in order, then the full
+# definition of every rule provider such a rule uses (its url or payload is the real list of
+# what goes direct), then every provider whose download proxy the profile set (KS-DNS, our
+# default, is not printed).
 direct_sig() {
-  /usr/bin/perl -MJSON::PP -e '
+  KS_DNS=$KS_DNS /usr/bin/perl -MJSON::PP -e '
     sub rd { local $/; open my $f, "<", $_[0] or die; JSON::PP->new->decode(<$f>) }
     my ($g, $r) = (rd($ARGV[0]), rd($ARGV[1]));
+    my $p = defined $ARGV[2] && length $ARGV[2] ? rd($ARGV[2]) : {};
     my %d = map { $_ => 1 } qw(DIRECT GLOBAL COMPATIBLE);
     my $more = 1;
     while ($more) {
@@ -553,10 +557,22 @@ direct_sig() {
       print "group\t", $c->encode({ map { exists $x->{$_} ? ($_ => $x->{$_}) : () }
         qw(name type proxies filter exclude-filter exclude-type include-all include-all-proxies include-all-providers) }), "\n";
     }
+    my %used;
     for my $rule (@$r) {
       my $t = ref $rule ? $c->encode($rule) : $rule;
-      print "rule\t$t\n" if grep { $d{$_} || $d{uc $_} } map { s/^[\s(]+|[\s)]+$//gr } split /,/, $t;
-    }' "$1" "$2"
+      next unless grep { $d{$_} || $d{uc $_} } map { s/^[\s(]+|[\s)]+$//gr } split /,/, $t;
+      print "rule\t$t\n";
+      $used{$1} = 1 while $t =~ /RULE-SET\s*,\s*([^,()\s]+)/gi;
+    }
+    for my $n (sort keys %used) {
+      my %x = ref $p->{$n} eq "HASH" ? %{ $p->{$n} } : (missing => JSON::PP::true);
+      delete $x{proxy} if defined $x{proxy} && $x{proxy} eq $ENV{KS_DNS};   # ours, see provider-proxy
+      print "provider\t", $c->encode({ %x, name => $n }), "\n";
+    }
+    for my $n (sort keys %$p) {
+      my $x = ref $p->{$n} eq "HASH" ? $p->{$n}{proxy} : undef;
+      print "provider-proxy\t$n\t$x\n" if defined $x && $x ne $ENV{KS_DNS};
+    }' "$1" "$2" "${3:-}"
 }
 
 # Servers: those added by hand (server-add, install.sh) plus those of the core profile.

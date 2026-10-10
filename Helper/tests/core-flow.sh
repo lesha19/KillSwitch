@@ -88,6 +88,12 @@ run "$tmp/p.json" refresh
 edit 'push @{$j->{"proxy-groups"}[2]{proxies}}, "DIRECT"' < "$fx/ok-full.json" > "$tmp/p.json"
 run "$tmp/p.json" refresh
 [ "$rc" = 3 ] && ok "refresh: DIRECT added to a group refused" || bad "group DIRECT: $rc"
+edit '$j->{"rule-providers"}{"local-inline"}{payload} = ["+.example.net", "+.com"]' < "$fx/ok-full.json" > "$tmp/p.json"
+run "$tmp/p.json" refresh
+[ "$rc" = 3 ] && ok "refresh: wider payload of a DIRECT rule's provider refused" || bad "provider payload: $rc"
+edit '$j->{"rule-providers"}{"ru-blocked"}{proxy} = "DIRECT"' < "$fx/ok-full.json" > "$tmp/p.json"
+run "$tmp/p.json" refresh
+[ "$rc" = 3 ] && ok "refresh: provider downloaded with proxy DIRECT refused" || bad "provider proxy: $rc"
 edit '$j->{rules}[-1] = "MATCH,GLOBAL"' < "$fx/ok-full.json" > "$tmp/p.json"
 run "$tmp/p.json" refresh
 [ "$rc" = 3 ] && ok "refresh: MATCH,GLOBAL refused" || bad "GLOBAL: $rc"
