@@ -1,14 +1,23 @@
 import Foundation
 
-/// «Раздельный туннель»: programs that go around the VPN, by process name.
+/// «Раздельный туннель»: programs that go around the VPN, by the app bundle's path (every process
+/// inside it) or, in lists from before 0.9.1, by process name.
 /// Helper contract: `ks set splitapps <comma list>` (requires coredirect=1); the current list is
 /// `splitapps=` in /Library/KillSwitch/settings.
 enum SplitApps {
     /// The main executable of an app bundle: what the core matches by process name.
     static func processName(infoPlist: [String: Any]) -> String? {
         guard let name = infoPlist["CFBundleExecutable"] as? String else { return nil }
-        return isValid(name) ? name : nil
+        return isValid(name) && !isPath(name) ? name : nil
     }
+
+    /// What goes into the list for a picked app: its path, or its process name if the helper
+    /// would not take the path.
+    static func entry(bundle: URL, infoPlist: [String: Any]) -> String? {
+        isValid(bundle.path) && isPath(bundle.path) ? bundle.path : processName(infoPlist: infoPlist)
+    }
+
+    static func isPath(_ entry: String) -> Bool { entry.hasPrefix("/") }
 
     static func parse(setting: String?) -> [String] {
         adding((setting ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }, to: [])
@@ -19,6 +28,7 @@ enum SplitApps {
     /// Limits of `ks set splitapps` (Helper/ks splitapps_parse).
     static let maxCount = 50
     static let maxBytes = 64
+    static let maxPathBytes = 255
 
     /// Valid names appended, repeats dropped, order kept, at most `maxCount`.
     static func adding(_ names: [String], to list: [String]) -> [String] {
@@ -27,10 +37,15 @@ enum SplitApps {
         return result
     }
 
-    /// No list separator, path or control characters; what the helper accepts as a process name.
-    static func isValid(_ name: String) -> Bool {
-        !name.isEmpty && name.utf8.count <= maxBytes && !name.contains(",") && !name.contains("/")
-            && !name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+    /// What the helper accepts: no list separator or control characters, and either an absolute
+    /// `.app` path without `.`/`..` parts or a process name without a slash.
+    static func isValid(_ entry: String) -> Bool {
+        guard !entry.isEmpty, !entry.contains(","),
+              !entry.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return false }
+        guard isPath(entry) else { return entry.utf8.count <= maxBytes && !entry.contains("/") }
+        let parts = entry.split(separator: "/", omittingEmptySubsequences: false).dropFirst()
+        return entry.utf8.count <= maxPathBytes && entry.hasSuffix(".app")
+            && !parts.contains { $0.isEmpty || $0 == "." || $0 == ".." }
     }
 }
 

@@ -752,7 +752,7 @@ private struct SplitAppsSheet: View {
                 if draft.isEmpty { Text("Пусто").foregroundStyle(.secondary) }
                 ForEach(draft, id: \.self) { name in
                     HStack {
-                        if let path = paths[name] {
+                        if let path = paths[name] ?? (SplitApps.isPath(name) ? name : nil) {
                             Image(nsImage: NSWorkspace.shared.icon(forFile: path)).resizable().frame(width: 18, height: 18)
                             Text(FileManager.default.displayName(atPath: path))
                         } else {
@@ -772,7 +772,7 @@ private struct SplitAppsSheet: View {
             }
             .disabled(!control.coreDirect)
             Footnote(text: "Эти программы ходят в интернет мимо VPN, остальные — через VPN.",
-                     more: "Программа узнаётся по имени процесса, поэтому её вспомогательные процессы (например, «Google Chrome Helper») могут идти через VPN.")
+                     more: "Программа узнаётся по месту, где она лежит: мимо VPN идут все её процессы, включая вспомогательные. Если программу перенести в другую папку, добавь её заново.")
         }
         .onAppear { draft = control.splitApps }
     }
@@ -789,7 +789,7 @@ private struct SplitAppsSheet: View {
         var paths = (try? JSONDecoder().decode([String: String].self, from: pathsData)) ?? [:]
         var names: [String] = []
         for url in panel.urls {
-            guard let info = Bundle(url: url)?.infoDictionary, let name = SplitApps.processName(infoPlist: info) else { continue }
+            guard let info = Bundle(url: url)?.infoDictionary, let name = SplitApps.entry(bundle: url, infoPlist: info) else { continue }
             names.append(name)
             paths[name] = url.path
         }

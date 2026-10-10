@@ -14,6 +14,29 @@ final class SplitAppsTests: XCTestCase {
         XCTAssertNil(SplitApps.processName(infoPlist: ["CFBundleExecutable": String(repeating: "x", count: 300)]))
     }
 
+    /// A picked app goes by its bundle's path: every process inside it, and no other program can
+    /// take it by naming itself the same.
+    func testEntryIsTheBundlePath() {
+        let info: [String: Any] = ["CFBundleExecutable": "Telegram"]
+        XCTAssertEqual(SplitApps.entry(bundle: URL(fileURLWithPath: "/Applications/Telegram.app"), infoPlist: info),
+                       "/Applications/Telegram.app")
+        // a path the helper would refuse falls back to the process name
+        let long = "/Applications/" + String(repeating: "x", count: 250) + ".app"
+        XCTAssertEqual(SplitApps.entry(bundle: URL(fileURLWithPath: long), infoPlist: info), "Telegram")
+        XCTAssertEqual(SplitApps.entry(bundle: URL(fileURLWithPath: "/Applications/A,B.app"), infoPlist: info), "Telegram")
+        XCTAssertNil(SplitApps.entry(bundle: URL(fileURLWithPath: "/Applications/A,B.app"), infoPlist: [:]))
+    }
+
+    func testPathsAndNamesAreBothValid() {
+        XCTAssertTrue(SplitApps.isValid("/Applications/Google Chrome.app"))
+        XCTAssertTrue(SplitApps.isValid("Telegram"), "lists from before 0.9.1")
+        XCTAssertFalse(SplitApps.isValid("/Applications/Telegram"))
+        XCTAssertFalse(SplitApps.isValid("/Applications/../tmp/x.app"))
+        XCTAssertFalse(SplitApps.isValid("Applications/Telegram.app"))
+        XCTAssertFalse(SplitApps.isValid("/" + String(repeating: "x", count: 252) + ".app"))
+        XCTAssertEqual(SplitApps.parse(setting: "/Applications/Telegram.app,Steam"), ["/Applications/Telegram.app", "Steam"])
+    }
+
     func testSettingRoundTrip() {
         XCTAssertEqual(SplitApps.parse(setting: "Telegram,Google Chrome"), ["Telegram", "Google Chrome"])
         XCTAssertEqual(SplitApps.parse(setting: nil), [])

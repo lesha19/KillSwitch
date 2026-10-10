@@ -108,9 +108,27 @@ gen "$fx/ok-minimal.json"
 [ "$(val rules.1 "$tmp/c")" = 'PROCESS-NAME-REGEX,^a\.b \(x\)\+\[y\] Helper.*$,DIRECT' ] && ok "splitapps: helper regex quotes the name" ||
   bad "splitapps regex: $(val rules.1 "$tmp/c")"
 mt "splitapps regex" "$tmp/c"
+# apps by bundle path: every process inside the bundle, wherever its name came from
+put splitapps "/Applications/Telegram.app,Steam"
+gen "$fx/ok-minimal.json"
+[ "$(val rules.0 "$tmp/c")" = 'PROCESS-PATH-REGEX,^/Applications/Telegram\.app/,DIRECT' ] &&
+  [ "$(val rules.1 "$tmp/c")" = "PROCESS-NAME,Steam,DIRECT" ] && [ "$(val rules.2 "$tmp/c")" = 'PROCESS-NAME-REGEX,^Steam Helper.*$,DIRECT' ] &&
+  ok "splitapps: a bundle path matches its processes by path; old names keep working" ||
+  bad "splitapps paths: $(val rules.0 "$tmp/c") | $(val rules.1 "$tmp/c") | $(val rules.2 "$tmp/c")"
+mt "splitapps by path" "$tmp/c"
+put splitapps "/Applications/Google Chrome (beta)+.app"
+gen "$fx/ok-minimal.json"
+[ "$(val rules.0 "$tmp/c")" = 'PROCESS-PATH-REGEX,^/Applications/Google Chrome \(beta\)\+\.app/,DIRECT' ] &&
+  ok "splitapps: path quoted for the regex" || bad "splitapps path regex: $(val rules.0 "$tmp/c")"
 rm -f "$SETTINGS"
 
 valid_apps() { splitapps_parse "$1" >/dev/null 2>&1; }
+valid_apps "/Applications/Telegram.app" && ok "bundle path accepted" || bad "bundle path refused"
+valid_apps "/Users/me/Applications/Long Name $(printf 'x%.0s' $(seq 100)).app" && ok "path up to 255 bytes" || bad "long path refused"
+valid_apps "/$(printf 'x%.0s' $(seq 256)).app" && bad "path over 255 bytes accepted" || ok "path over 255 bytes refused"
+valid_apps "/Applications/Telegram" && bad "path that is not an .app accepted" || ok "path not ending in .app refused"
+valid_apps "/Applications/../tmp/x.app" && bad "path with .. accepted" || ok "path with .. refused"
+valid_apps "Applications/Telegram.app" && bad "relative path accepted" || ok "name with a slash refused"
 [ "$(splitapps_parse ' Telegram , Google Chrome,Telegram')" = "$(printf 'Telegram\nGoogle Chrome')" ] &&
   ok "splitapps_parse trims and dedupes" || bad "splitapps_parse: $(splitapps_parse ' Telegram , Google Chrome,Telegram')"
 [ -z "$(splitapps_parse '')" ] && valid_apps '' && ok "empty list clears" || bad "empty list"

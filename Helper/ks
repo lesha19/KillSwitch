@@ -580,9 +580,15 @@ core_generate() (
     {
       apps=$(setting splitapps "" | tr ',' '\n')
       if [ -n "$apps" ]; then
-        # the app itself, then its helper processes ("Google Chrome Helper (Renderer)")
-        while IFS= read -r a; do echo "PROCESS-NAME,$a,DIRECT"; done <<<"$apps"
+        # An app bundle's path: every process started from inside it (its helpers too), by the
+        # executable's path. A bare process name (lists from before 0.9.1): the app itself, then
+        # its helper processes ("Google Chrome Helper (Renderer)"); any program can take a name.
         while IFS= read -r a; do
+          if [[ "$a" == /* ]]; then echo "PROCESS-PATH-REGEX,^$(sed 's/[][\\.*^$+?(){}|]/\\&/g' <<<"$a")/,DIRECT"
+          else echo "PROCESS-NAME,$a,DIRECT"; fi
+        done <<<"$apps"
+        while IFS= read -r a; do
+          [[ "$a" == /* ]] && continue
           echo "PROCESS-NAME-REGEX,^$(sed 's/[][\\.*^$+?(){}|]/\\&/g' <<<"$a") Helper.*\$,DIRECT"
         done <<<"$apps"
         fpm='"find-process-mode":"always",'
@@ -1097,8 +1103,10 @@ core_delay() {  # core_delay <group|proxy>: latency test through it, JSON
 }
 valid_name() { [ -n "$1" ] && [ "${#1}" -le 256 ] && [[ "$1" != *[[:cntrl:]]* ]]; }
 
-# splitapps_parse <comma list>: process names one per line (trimmed, deduplicated); fails on an
-# empty entry, a control character, a name over 64 bytes or more than 50 names. "" clears.
+# splitapps_parse <comma list>: apps one per line (trimmed, deduplicated), each an app bundle's
+# absolute path (/…/Name.app, at most 255 bytes, no . or .. parts) or a bare process name (at
+# most 64 bytes, no slash); fails on an empty entry, a control character or more than 50. ""
+# clears.
 splitapps_parse() {
   local list=$1 a n=0 out="" LC_ALL=C
   [[ "$list" != *[[:cntrl:]]* ]] || { echo "Управляющие символы в списке приложений" >&2; return 1; }
@@ -1106,7 +1114,13 @@ splitapps_parse() {
   while IFS= read -r -d, a; do
     a="${a#"${a%%[![:space:]]*}"}"; a="${a%"${a##*[![:space:]]}"}"
     [ -n "$a" ] || { echo "Пустое имя в списке приложений" >&2; return 1; }
-    [ "${#a}" -le 64 ] || { echo "Слишком длинное имя процесса: $a" >&2; return 1; }
+    if [[ "$a" == /* ]]; then
+      [ "${#a}" -le 255 ] && [[ "$a" == *.app && "/$a/" != */./* && "/$a/" != */../* && "$a" != *//* ]] ||
+        { echo "Не путь к программе: $a" >&2; return 1; }
+    else
+      [[ "$a" != */* ]] || { echo "Не путь к программе: $a" >&2; return 1; }
+      [ "${#a}" -le 64 ] || { echo "Слишком длинное имя процесса: $a" >&2; return 1; }
+    fi
     grep -qxF -- "$a" <<<"$out" && continue
     n=$((n + 1)); [ "$n" -le 50 ] || { echo "Больше 50 приложений" >&2; return 1; }
     out+="$a"$'\n'
