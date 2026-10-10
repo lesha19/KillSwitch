@@ -69,6 +69,14 @@ final class KillSwitchControl {
     private(set) var coreInstalled = false
     private(set) var coreConfigured = false
     private(set) var coreRunning = false
+    /// "Прямой выход для российских сайтов": the core sends Russian sites around the tunnel.
+    private(set) var coreDirect = false
+    /// Set while another VPN's TUN is up next to our core (see `foreignVPNFile`).
+    private(set) var foreignVPN: String?
+    /// Groups and servers of the running core, from `ks core proxies`.
+    private(set) var proxies: CoreProxies?
+    private var proxiesLoading = false
+    private var proxiesLoadedAt = Date.distantPast
 
     struct LeakResult: Identifiable {
         let interface: String
@@ -126,13 +134,65 @@ final class KillSwitchControl {
     /// Starting and stopping never widen the rules, so they go without a password.
     func coreOn() { run(["core", "on"]) }
     func coreOff() { run(["core", "off"]) }
-    /// The core's config decides what goes around the VPN, so taking a new one asks for the password.
-    func coreImport() {
-        guard let profile = Self.dropwebProfile() else {
-            error = "Не найден профиль dropweb. Обнови подписку в dropweb."
-            return
+
+    enum ImportResult: Equatable { case ok, cancelled, needsPassword, failed(String) }
+
+    /// Hands a profile (JSON: proxies, proxy-groups, rules, rule-providers) to the helper, which
+    /// writes the full core config and lets the servers out. The config decides what goes around
+    /// the VPN, so unless sudoers allows it, this asks for the password; `allowPassword: false`
+    /// (automatic updates) never shows the prompt.
+    func coreImport(file: String, allowPassword: Bool) async -> ImportResult {
+        busy = true
+        defer { busy = false; refresh() }
+        let result = await Self.exec("/usr/bin/sudo", ["-n", helper, "core", "import", file])
+        if result.status == 0 { return .ok }
+        guard Self.sudoWantsPassword(result.output) else { return .failed(result.output.isEmpty ? "Не получилось" : result.output) }
+        guard allowPassword else { return .needsPassword }
+        switch await adminRun([helper, "core", "import", file]) {
+        case .ok: return .ok
+        case .cancelled: return .cancelled
+        case .failed(let message): return .failed(message)
         }
-        runAsAdmin([helper, "core", "import", profile])
+    }
+
+    /// Picks a server in a selector group of the running core.
+    func coreSelect(group: String, proxy: String) {
+        busy = true
+        Task {
+            let args = [helper, "core", "select", group, proxy]
+            let result = await Self.exec("/usr/bin/sudo", ["-n"] + args)
+            if result.status == 0 {
+                error = nil
+            } else if Self.sudoWantsPassword(result.output) {
+                if case .failed(let message) = await adminRun(args) { error = message }
+            } else {
+                error = result.output
+            }
+            busy = false
+            loadProxies(force: true)
+        }
+    }
+
+    /// `ks core proxies`, at most every 5 s unless forced; only while the core runs.
+    func loadProxies(force: Bool = false) {
+        guard coreRunning else { proxies = nil; return }
+        guard !proxiesLoading, force || Date().timeIntervalSince(proxiesLoadedAt) > 5 else { return }
+        proxiesLoading = true
+        Task {
+            let result = await Self.exec("/usr/bin/sudo", ["-n", helper, "core", "proxies"], separateStderr: true)
+            proxiesLoading = false
+            proxiesLoadedAt = Date()
+            guard result.status == 0, let data = result.output.data(using: .utf8) else { return }
+            let order = UserDefaults.standard.stringArray(forKey: Self.groupOrderKey) ?? []
+            if let parsed = try? CoreProxies(data: data, order: order), parsed != proxies { proxies = parsed }
+        }
+    }
+
+    /// Group names in profile order, written by VPNClient on import (mihomo's JSON has no order).
+    static let groupOrderKey = "coreGroupOrder"
+
+    private static func sudoWantsPassword(_ output: String) -> Bool {
+        output.hasPrefix("sudo:") || output.contains("a password is required")
     }
 
     /// Also used to upgrade the installed helper: install.sh keeps settings and lists.
@@ -141,7 +201,7 @@ final class KillSwitchControl {
 
     func refresh() {
         let wasVPNUp = vpnUp
-        vpnUp = Self.dropwebTunnelUp()
+        vpnUp = Self.vpnTunnelUp()
         if wasVPNUp && !vpnUp && state == .on { notify(.vpnDropped) }
         readSettings()
         checkDaemon()
@@ -152,10 +212,16 @@ final class KillSwitchControl {
         coreInstalled = FileManager.default.fileExists(atPath: "/Library/KillSwitch/core/mihomo")
         coreConfigured = FileManager.default.fileExists(atPath: "/Library/KillSwitch/core/config.yaml")
         if coreInstalled {
-            Task { coreRunning = await Self.exec("/usr/bin/sudo", ["-n", helper, "core", "state"]).output == "on" }
+            Task {
+                // "on", possibly followed by more words in later helpers
+                coreRunning = await Self.exec("/usr/bin/sudo", ["-n", helper, "core", "state"]).output.hasPrefix("on")
+                loadProxies()
+            }
         } else {
             coreRunning = false
+            proxies = nil
         }
+        foreignVPN = coreRunning ? Self.readForeignVPN() : nil
         Task {
             let result = await Self.exec("/usr/bin/sudo", ["-n", helper, "state"])
             guard result.status == 0 else {
@@ -199,20 +265,30 @@ final class KillSwitchControl {
 
     /// Runs a command as root; macOS asks for the admin password every time.
     private func runAsAdmin(_ command: [String]) {
-        let quoted = command.map { "quoted form of \"\($0)\"" }.joined(separator: " & \" \" & ")
-        let source = "do shell script \(quoted) with administrator privileges"
         busy = true
         Task {
-            var info: NSDictionary?
-            let output = NSAppleScript(source: source)?.executeAndReturnError(&info)
-            if let info, (info[NSAppleScript.errorNumber] as? Int) != -128 {   // -128 = user cancelled
-                error = info[NSAppleScript.errorMessage] as? String ?? "Не получилось"
-            } else if output != nil {
-                error = nil
+            switch await adminRun(command) {
+            case .ok: error = nil
+            case .cancelled: break
+            case .failed(let message): error = message
             }
             busy = false
             refresh()
         }
+    }
+
+    private enum AdminResult { case ok, cancelled, failed(String) }
+
+    private func adminRun(_ command: [String]) async -> AdminResult {
+        let quoted = command.map { "quoted form of \"\($0)\"" }.joined(separator: " & \" \" & ")
+        let source = "do shell script \(quoted) with administrator privileges"
+        var info: NSDictionary?
+        let output = NSAppleScript(source: source)?.executeAndReturnError(&info)
+        if let info {
+            if (info[NSAppleScript.errorNumber] as? Int) == -128 { return .cancelled }   // user cancelled
+            return .failed(info[NSAppleScript.errorMessage] as? String ?? "Не получилось")
+        }
+        return output == nil ? .failed("Не получилось") : .ok
     }
 
     /// What the content filter lets out while no VPN tunnel is up, mirroring the pf settings.
@@ -240,6 +316,7 @@ final class KillSwitchControl {
         wifiGuard = (values["wifiguard"] ?? "1") == "1"
         allowRouterDNS = (values["dns"] ?? "0") == "1"
         allowDirect = (values["direct"] ?? "0") == "1"
+        coreDirect = (values["coredirect"] ?? "0") == "1"
         exceptions = Self.readLines("/Library/KillSwitch/allow")
         servers = Self.readLines("/Library/KillSwitch/servers")
         let dropweb = Self.readDropwebServers()
@@ -256,16 +333,15 @@ final class KillSwitchControl {
             && (text.contains(":") || text.wholeMatch(of: /[0-9]{1,3}(\.[0-9]{1,3}){3}/) != nil)
     }
 
-    /// dropweb's most recently updated profile.
-    private static func dropwebProfile() -> String? {
-        let dir = NSHomeDirectory() + "/Library/Application Support/org.dropweb.vpn/profiles"
-        let files = ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).filter { $0.hasSuffix(".yaml") }
-        let dated = files.map { name -> (String, Date) in
-            let path = dir + "/" + name
-            let date = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date) ?? .distantPast
-            return (path, date)
-        }
-        return dated.max { $0.1 < $1.1 }?.0
+    /// ASSUMPTION (helper contract, written in parallel): while our core runs and another VPN's
+    /// TUN is up, the helper keeps a world-readable file naming it (e.g. "utun5"), and removes it
+    /// otherwise. Same pattern as the other state files in /Library/KillSwitch.
+    static let foreignVPNFile = "/Library/KillSwitch/core/foreign-vpn"
+
+    private static func readForeignVPN() -> String? {
+        guard let text = try? String(contentsOfFile: foreignVPNFile, encoding: .utf8) else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : String(trimmed.prefix(80))
     }
 
     /// `server: <ip>` lines from dropweb's profiles.
@@ -455,8 +531,8 @@ final class KillSwitchControl {
         return .off
     }
 
-    /// VPN TUN interfaces (dropweb, Happ) use an address in 198.18.0.0/16; the exact one varies.
-    private static func dropwebTunnelUp() -> Bool {
+    /// VPN TUN interfaces (our core, dropweb, Happ) use an address in 198.18.0.0/16; the exact one varies.
+    private static func vpnTunnelUp() -> Bool {
         var list: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&list) == 0, let first = list else { return false }
         defer { freeifaddrs(list) }
@@ -473,20 +549,30 @@ final class KillSwitchControl {
         return false
     }
 
-    private static func exec(_ tool: String, _ args: [String]) async -> (status: Int32, output: String) {
+    /// `separateStderr`: stdout only on success (JSON), stderr on failure.
+    private static func exec(_ tool: String, _ args: [String], separateStderr: Bool = false) async -> (status: Int32, output: String) {
         await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: tool)
             process.arguments = args
             let pipe = Pipe()
+            let errPipe = separateStderr ? Pipe() : pipe
             process.standardOutput = pipe
-            process.standardError = pipe
+            process.standardError = errPipe
+            // read while running: /proxies JSON is larger than the pipe buffer
+            let reader = Task.detached { pipe.fileHandleForReading.readDataToEndOfFile() }
+            let errReader = Task.detached { separateStderr ? errPipe.fileHandleForReading.readDataToEndOfFile() : Data() }
             process.terminationHandler = { p in
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-                continuation.resume(returning: (p.terminationStatus, text))
+                Task {
+                    let out = await reader.value, err = await errReader.value
+                    let data = p.terminationStatus == 0 || !separateStderr ? out : err
+                    let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                    continuation.resume(returning: (p.terminationStatus, text))
+                }
             }
             do { try process.run() } catch {
+                try? pipe.fileHandleForWriting.close()      // ends the readers
+                try? errPipe.fileHandleForWriting.close()
                 continuation.resume(returning: (-1, error.localizedDescription))
             }
         }

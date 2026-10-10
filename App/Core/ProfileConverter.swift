@@ -54,7 +54,7 @@ enum ProfileConverter {
     /// mihomo reads YAML 1.2 (go-yaml v3): only true/false are booleans, no sexagesimal or
     /// timestamps. Yams' default is YAML 1.1, which would turn `password: on` into a Bool and
     /// `short-id: 12:34` into a number.
-    nonisolated(unsafe) private static let resolver: Resolver = {
+    private static let resolver: Resolver = {
         var resolver = Resolver.default
         for tag in [Tag.Name.bool, .int, .float, .timestamp] { resolver = resolver.removing(tag) }
         // swiftlint:disable:next force_try
