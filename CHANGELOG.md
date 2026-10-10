@@ -4,6 +4,25 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [0.16.0] - 2026-10-10
+
+### Added
+- Fail closed on damaged settings (#17, ADR 0015): if a root state file the protection rules are
+  built from (`settings`, `allow`, `servers`, `servers-manual`, `tsrelays`, `core/egress`) is not a
+  root-owned regular file, is writable by others, or holds a line `ks` never writes, everything
+  but loopback is blocked, the reason goes to `/Library/KillSwitch/invalid`, and the app shows
+  «Настройки защиты повреждены» with «Сбросить настройки» (`ks repair`). A missing `settings`
+  still means the defaults.
+- Backup subscription link and fetch through the VPN (#11, ADR 0016): the subscription is tried
+  directly, then through the running VPN (a local-only HTTP inbound that always goes to a server),
+  then the backup link the same two ways. The source used is shown under the subscription. A
+  failed subscription refresh or update check is retried when the VPN connects.
+
+### Changed
+- Geodata (#27): `install.sh` installs `geosite.dat` / `geoip.metadb` only when their SHA-256
+  matches the pin, keeps the old file otherwise and reports each file in Settings; downloads in
+  `fetch-geodata.sh` time out after 3 minutes.
+
 ## [0.15.2] - 2026-10-10
 
 ### Fixed
