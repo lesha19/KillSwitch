@@ -230,9 +230,11 @@ private struct VPNSettings: View {
             }
 
             Section("Маршруты") {
-                Toggle(isOn: Binding(get: { control.coreDirect }, set: { control.set("coredirect", $0) })) {
-                    Text("Российские сайты напрямую")
-                    Text("Банки и Госуслуги — без VPN, остальное через VPN. Провайдер видит эти сайты.")
+                LabeledContent {
+                    Button("Открыть «Трафик»") { Router.shared.section = .traffic }
+                } label: {
+                    Text("Какие сайты идут напрямую")
+                    Text("Решает подписка: KillSwitch берёт её правила как есть и ничего не добавляет от себя.")
                 }
                 MultihopRows()
                 LabeledContent {
@@ -825,8 +827,8 @@ private struct ListSheet: View {
     }
 }
 
-/// «Программы без VPN → Изменить…». Works only with «Российские сайты напрямую», which lets the
-/// VPN reach addresses outside itself.
+/// «Программы без VPN → Изменить…»: the user's own addition to the subscription's routing; the
+/// helper lets the core out for them (ADR 0013).
 private struct SplitAppsSheet: View {
     @Environment(KillSwitchControl.self) private var control
     /// Process name → app bundle path, to show the app's name and icon; local, not a setting.
@@ -837,11 +839,6 @@ private struct SplitAppsSheet: View {
         let paths = (try? JSONDecoder().decode([String: String].self, from: pathsData)) ?? [:]
         BatchSheet(title: String(localized: "Программы без VPN"), changed: draft != control.splitApps,
                    apply: { control.setSplitApps(draft) }) {
-            if !control.coreDirect {
-                Label("Сначала включи «Российские сайты напрямую»: без него VPN не может выпустить программы мимо себя.",
-                      systemImage: "info.circle")
-                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
             List {
                 if draft.isEmpty { Text("Пусто").foregroundStyle(.secondary) }
                 ForEach(draft, id: \.self) { name in
@@ -859,12 +856,10 @@ private struct SplitAppsSheet: View {
                 }
             }
             .frame(height: 180)
-            .disabled(!control.coreDirect)
             HStack {
                 Button("Добавить программы…", action: pick)
                 Spacer()
             }
-            .disabled(!control.coreDirect)
             Footnote(text: String(localized: "Эти программы ходят в интернет мимо VPN, остальные — через VPN."),
                      more: String(localized: "Программа узнаётся по месту, где она лежит: мимо VPN идут все её процессы, включая вспомогательные. Если программу перенести в другую папку, добавь её заново."))
         }

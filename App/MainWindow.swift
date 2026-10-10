@@ -84,6 +84,8 @@ struct SectionView: View {
                 .frame(maxWidth: 560)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .padding(.horizontal, 8)
+        case .traffic:
+            TrafficView()
         case .leakTest:
             LeakTestView()
         case .log:

@@ -4,10 +4,12 @@ import XCTest
 /// One window (ADR 0008): every button, shortcut, notification and link lands in a section of it.
 final class NavigationTests: XCTestCase {
     func testSidebarOrder() {
-        XCTAssertEqual(AppSection.sidebar, [.home, .servers, .leakTest, .log])
+        XCTAssertEqual(AppSection.sidebar, [.home, .servers, .traffic, .leakTest, .log])
         XCTAssertEqual(AppSection.settingsPanes, [.settings(.general), .settings(.vpn), .settings(.protection), .settings(.advanced)])
         XCTAssertEqual(AppSection.home.title, "Главная")
         XCTAssertEqual(AppSection.servers.title, "Серверы")
+        XCTAssertEqual(AppSection.traffic.title, "Трафик")
+        XCTAssertEqual(AppSection.traffic.id, "traffic")
         XCTAssertEqual(AppSection.leakTest.title, "Проверка утечек")
         XCTAssertEqual(AppSection.log.title, "Журнал защиты")
         XCTAssertEqual(AppSection.about.title, "О программе")

@@ -67,11 +67,9 @@ final class KillSwitchControl {
     private(set) var coreInstalled = false
     private(set) var coreConfigured = false
     private(set) var coreRunning = false
-    /// «Российские сайты — напрямую (мимо VPN)»: the core sends Russian sites around the tunnel.
-    private(set) var coreDirect = false
     /// «Блокировать рекламу и трекеры»: the core refuses category-ads-all of the shipped geosite.dat.
     private(set) var adBlock = false
-    /// «Раздельный туннель»: process names that go around the VPN (only with coreDirect).
+    /// «Раздельный туннель»: process names that go around the VPN (the user's own addition, ADR 0013).
     private(set) var splitApps: [String] = []
     /// «Двойной VPN»: the entry server; the exit is the selected one. Nil = off.
     private(set) var multihopEntry: String?
@@ -1040,7 +1038,6 @@ final class KillSwitchControl {
         wifiGuard = (values["wifiguard"] ?? "1") == "1"
         allowRouterDNS = (values["dns"] ?? "0") == "1"
         allowDirect = (values["direct"] ?? "0") == "1"
-        coreDirect = (values["coredirect"] ?? "0") == "1"
         adBlock = (values["adblock"] ?? "0") == "1"
         splitApps = SplitApps.parse(setting: values["splitapps"])
         multihopEntry = Multihop.entry(setting: values["multihop"])
@@ -1330,6 +1327,55 @@ final class KillSwitchControl {
                 break
             }
             readingSpeed = false
+        }
+    }
+
+    // MARK: «Трафик» (ADR 0013)
+
+    /// What the core took from the subscription, left out and added: the helper's report.
+    private(set) var routing: RoutingReport?
+
+    func readRouting() {
+        routing = RoutingReport.read()
+    }
+
+    /// The core's open connections, while «Соединения» is on screen and not paused.
+    private(set) var connections: CoreConnections?
+    /// The installed helper does not have `ks core connections` (older than this app) or does not
+    /// let it run without a password.
+    private(set) var connectionsUnavailable = false
+    private var connectionsTimer: Timer?
+    private var readingConnections = false
+
+    /// Once a second while `on`; the view turns it on when it appears and off when it goes or is paused.
+    func watchConnections(_ on: Bool) {
+        if on, connectionsTimer == nil {
+            connectionsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.readConnections() }
+            }
+            readConnections()
+        } else if !on, let timer = connectionsTimer {
+            timer.invalidate()
+            connectionsTimer = nil
+        }
+    }
+
+    private func readConnections() {
+        guard !readingConnections, coreRunning else { return }
+        readingConnections = true
+        Task {
+            // never the password prompt: a timer asks
+            switch await callHelper(["core", "connections"], interactive: false, separateStderr: true) {
+            case .ok(let output):
+                connections = try? CoreConnections(data: Data(output.utf8))
+                connectionsUnavailable = false
+            case .needsPassword:
+                connectionsUnavailable = true
+                watchConnections(false)
+            case .failed, .cancelled:
+                break
+            }
+            readingConnections = false
         }
     }
 
