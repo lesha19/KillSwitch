@@ -3,6 +3,8 @@ import Foundation
 /// The one notice of the main screen besides an error (spec §5.1, priorities 2–7).
 enum HomeNotice: Equatable {
     case otherVPN
+    /// Nothing answers and `ks probe` says why (NetworkCause).
+    case network(NetworkCause)
     /// No server of the chosen country answers (Failover.State.countryDown).
     case serversDown(country: String)
     case expired
@@ -23,6 +25,7 @@ enum HomeNotice: Equatable {
         var now: Date
         /// The country whose servers all stopped answering.
         var serversDown: String?
+        var networkCause: NetworkCause? = nil
     }
 
     static let endingDays = 3
@@ -30,6 +33,7 @@ enum HomeNotice: Equatable {
 
     static func pick(_ input: Input) -> HomeNotice? {
         if input.otherVPN { return .otherVPN }
+        if let cause = input.networkCause { return .network(cause) }
         if let country = input.serversDown { return .serversDown(country: country) }
         if let expire = input.usage?.expire {
             let left = expire.timeIntervalSince(input.now)
@@ -47,6 +51,7 @@ enum HomeNotice: Equatable {
     var title: String {
         switch self {
         case .otherVPN: "Работает другой VPN."
+        case .network(let cause): cause.title + "."
         case .serversDown(let country): "Серверы «\(country)» не отвечают."
         case .expired: "Подписка закончилась."
         case .ending(let days): "Подписка кончается через \(Russian.plural(days, "день", "дня", "дней"))."
@@ -59,6 +64,7 @@ enum HomeNotice: Equatable {
     var message: String {
         switch self {
         case .otherVPN: "Отключи его: два VPN мешают друг другу."
+        case .network(let cause): cause.message
         case .serversDown: "Другие страны KillSwitch сам не включает: выбери страну или «Самый быстрый»."
         case .expired: "VPN работает со старыми серверами, пока они пускают."
         case .ending, .trafficLow: ""

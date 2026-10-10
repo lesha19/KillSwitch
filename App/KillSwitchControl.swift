@@ -322,6 +322,37 @@ final class KillSwitchControl {
         }
     }
 
+    // MARK: why nothing works (NetworkCause, ADR 0006)
+
+    /// Set while nothing answers and `ks probe` found why; the home screen's banner.
+    private(set) var networkCause: NetworkCause?
+    private(set) var probing = false
+    private var lastProbe: Date?
+
+    /// After every server list: probes the network (passwordless, at most once a minute) only
+    /// while no server answers or the chosen country is down; clears the cause once they answer.
+    private func checkNetwork(_ proxies: CoreProxies, force: Bool = false) {
+        let answer = NetworkCause.serversAnswer(proxies)
+        guard answer == false || serversDown != nil else { networkCause = nil; return }
+        guard !probing, force || NetworkCause.shouldProbe(serversAnswer: answer, serversDown: serversDown != nil,
+                                                          last: lastProbe, now: Date()) else { return }
+        probing = true
+        lastProbe = Date()
+        Task {
+            let result = await callHelper(["probe"], interactive: false)
+            probing = false
+            // an older helper without `ks probe`: no explanation, as before
+            guard case .ok(let output) = result, let probe = NetworkCause.Probe(output) else { return }
+            networkCause = NetworkCause.classify(probe, serversAnswer: self.proxies.flatMap(NetworkCause.serversAnswer) ?? answer)
+        }
+    }
+
+    /// «Проверить снова».
+    func recheckNetwork() {
+        guard let proxies else { return }
+        checkNetwork(proxies, force: true)
+    }
+
     /// The core's API comes up a moment after `ks core on`: a few tries, then give up quietly
     /// (the core keeps its own last choice).
     private func applyPendingChoice() async {
@@ -492,7 +523,10 @@ final class KillSwitchControl {
     /// `ks core proxies`, at most every 5 s while the app is open (every minute otherwise) unless
     /// forced; only while the core runs. Runs from the timer too, so it never asks for the password.
     func loadProxies(force: Bool = false) {
-        guard coreRunning else { proxies = nil; proxiesError = nil; measured = [:]; serversDown = nil; return }
+        guard coreRunning else {
+            proxies = nil; proxiesError = nil; measured = [:]; serversDown = nil; networkCause = nil
+            return
+        }
         let interval: TimeInterval = openViews > 0 ? 5 : 60
         guard !proxiesLoading, force || Date().timeIntervalSince(proxiesLoadedAt) > interval else { return }
         proxiesLoading = true
@@ -507,6 +541,7 @@ final class KillSwitchControl {
                     proxiesError = nil
                     if parsed != proxies { proxies = parsed }
                     checkFailover(parsed)
+                    checkNetwork(parsed)
                     if let server = currentServer, server != lastServer {
                         lastServer = server
                         UserDefaults.standard.set(server, forKey: "lastServer")

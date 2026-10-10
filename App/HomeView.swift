@@ -313,11 +313,21 @@ private struct NoticeBanner: View {
             otherVPN: control.foreignVPN != nil || control.connection == .otherApp,
             usage: client.status.usage, newServers: client.needsConfirmation,
             filterIncomplete: filterIncomplete, filterDismissed: filterDismissed, now: Date(),
-            serversDown: control.serversDown))
+            serversDown: control.serversDown, networkCause: control.networkCause))
         if let notice {
             switch notice {
             case .otherVPN:
                 Banner(icon: "arrow.left.arrow.right", title: notice.title, message: notice.message) { EmptyView() }
+            case .network(let cause):
+                Banner(icon: "wifi.exclamationmark", title: notice.title, message: notice.message) {
+                    if cause == .serversBlocked {
+                        if let fastest = control.proxies.flatMap({ ServerPicker.entries($0).first(where: \.isFastest) }) {
+                            Button(ServerPicker.fastestTitle) { control.choose(fastest) }.disabled(control.busy)
+                        }
+                        Button("Выбрать сервер…", action: chooseServer)
+                    }
+                    Button("Проверить снова") { control.recheckNetwork() }.disabled(control.probing)
+                }
             case .serversDown:
                 Banner(icon: "antenna.radiowaves.left.and.right.slash", title: notice.title, message: notice.message) {
                     if let fastest = control.proxies.flatMap({ ServerPicker.entries($0).first(where: \.isFastest) }) {

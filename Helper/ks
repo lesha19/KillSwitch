@@ -20,6 +20,7 @@
 #                           addresses or changes what goes DIRECT
 #   ks core proxies         groups and proxies of the running core (JSON)
 #   ks core select <group> <proxy> | delay <group|proxy>
+#   ks probe                "link=0|1 ru=0|1 foreign=0|1": why nothing works (ADR 0006)
 #   ks apply                (re)load rules once unless disabled
 #   ks watch                used by the LaunchDaemon: tunnels every second, pf every 2 s, the core every 2 s
 set -u
@@ -48,6 +49,7 @@ CORE_CTL="$CORE_DIR/ctl/mihomo.sock" # the core's API; ctl/ is root-only
 CORE_LOG_MAX=2000000 # bytes of core/core.log (launchd's StandardOutPath), see core_log_tidy
 CORE_TUN_ADDR="198.18.128.1" # our TUN's address (start of the core's fake-ip-range)
 DOH_IPS="1.1.1.1, 8.8.8.8"   # DoH resolvers the core group may reach directly (rules, resolve_direct)
+PROBE_RU="77.88.8.8, 77.88.8.1" # Yandex DNS: open in the mobile «white lists» (ks probe, rules)
 KS_DNS="KS-DNS"          # our group for DNS and rule downloads: the profile's proxies, never DIRECT
 DNS_STATE="$CORE_DIR/dns-state" # system DNS keys pointed at the core, with their originals
 DNS_OURS="127.0.0.1"
@@ -122,6 +124,8 @@ rules() {  # rules [allow-file] [servers-file] [manual-servers-file]
       # itself never uses this: its resolvers go through KS-DNS; a profile rule sending these
       # addresses DIRECT would, but such rules need the admin's approval (approved-direct).
       echo "pass out quick proto tcp to { $DOH_IPS } port 443 group $CORE_GROUP flags any keep state"
+      # ks probe only: a TCP handshake to a Russian address that the «white lists» keep open
+      echo "pass out quick proto tcp to { $PROBE_RU } port 443 group $CORE_GROUP flags any keep state"
     fi
   fi
   echo 'pass out quick inet proto udp from any port 68 to any port 67 keep state'
@@ -369,6 +373,27 @@ as_core_group() {
   gid=$(dscl . -read "/Groups/$CORE_GROUP" PrimaryGroupID 2>/dev/null | awk '{ print $2 }')
   [[ "$gid" =~ ^[0-9]+$ ]] || return 1
   /usr/bin/perl -e '$( = $ARGV[0]; $) = "$ARGV[0] $ARGV[0]"; $) == $ARGV[0] or die "setgid\n"; shift; exec { $ARGV[0] } @ARGV or die "exec\n"' "$gid" "$@"
+}
+# net_probe: "link=0|1 ru=0|1 foreign=0|1". A TCP handshake (no data sent) from the physical
+# interface, past the TUN, as the core's group: pf lets only it reach these fixed addresses on
+# 443 (rules). ru: a Russian address open in the mobile «white lists»; foreign: the DoH resolvers.
+net_probe() {
+  local ifc link=0 ru=0 foreign=0
+  ifc=$(primary_iface)
+  if [ -n "$ifc" ]; then
+    link=1
+    probe_reaches "$ifc" "$PROBE_RU" && ru=1
+    probe_reaches "$ifc" "$DOH_IPS" && foreign=1
+  fi
+  echo "link=$link ru=$ru foreign=$foreign"
+}
+probe_reaches() {  # <iface> <"a, b">: does any address take a TCP handshake on 443
+  local a t
+  for a in ${2//,/ }; do
+    t=$(as_core_group curl -s -o /dev/null -k --connect-timeout 3 -m 4 --interface "$1" -w '%{time_connect}' "https://$a/" 2>/dev/null)
+    [[ "$t" =~ ^[0-9.]+$ && "$t" =~ [1-9] ]] && return 0
+  done
+  return 1
 }
 json_a() {  # usable A records of a DNS JSON answer (mihomo /dns/query and DoH share the format)
   local k=0 t a
@@ -1306,6 +1331,7 @@ case "${1:-status}" in
       *) echo "usage: ks core on|off|state|import <json>|refresh <json>|proxies|select <group> <proxy>|delay <name>" >&2; exit 1 ;;
     esac
     ;;
+  probe) net_probe ;;
   state)
     if loaded; then echo on
     elif [ -f "$FLAG" ] && [ "$(cat "$FLAG")" != 0 ]; then echo "paused:$(cat "$FLAG")"
