@@ -98,14 +98,27 @@ final class Activity: @unchecked Sendable {
     func begin() { lock.withLock { running += 1; last = Date() } }
     func end() { lock.withLock { running -= 1; last = Date() } }
 
+    /// Also as soon as nothing runs once the app was replaced (a Sparkle update renames a new
+    /// bundle into place, ADR 0012): the app may keep it busy for longer than two minutes, and
+    /// only the new daemon knows `upgrade`.
     func exitWhenIdle(after idle: TimeInterval = 120) {
+        let path = Bundle.main.executablePath
+        let started = path.flatMap(Self.fileIdentity)
         let timer = DispatchSource.makeTimerSource(queue: .global())
         timer.schedule(deadline: .now() + 30, repeating: 30)
         timer.setEventHandler { [self] in
-            let quiet = lock.withLock { running == 0 && Date().timeIntervalSince(last) > idle }
+            let replaced = started != nil && path.flatMap(Self.fileIdentity) != started
+            let quiet = lock.withLock { running == 0 && (replaced || Date().timeIntervalSince(last) > idle) }
             if quiet { exit(0) }
         }
         timer.resume()
         self.timer = timer
+    }
+
+    /// Device and inode of a file: a rename of another file over the path changes them.
+    private static func fileIdentity(_ path: String) -> [UInt64]? {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        return [UInt64(bitPattern: Int64(info.st_dev)), UInt64(info.st_ino)]
     }
 }

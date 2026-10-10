@@ -15,6 +15,8 @@ enum Runner {
                                    stderr: "Служба KillSwitch не установлена или повреждена: «Восстановить службу…»")
             }
             return execute(ks, command.arguments)
+        case .upgrade:
+            return upgrade()
         case .install, .uninstall:
             guard let copy = verifiedCopy() else {
                 return HelperReply(status: HelperReply.failedToRun, stdout: "",
@@ -24,6 +26,34 @@ enum Runner {
             let script = command.program == .install ? "install.sh" : "uninstall.sh"
             let path = copy.appendingPathComponent("Contents/Resources/Helper/\(script)").path
             return execute("/bin/bash", HelperCommand.scriptArguments(path, command.arguments))
+        }
+    }
+
+    /// ADR 0012, no password: the code comes from the verified copy of our own bundle (the same
+    /// signature this daemon runs under), and is put in place only if it is not older than the
+    /// installed helper. install.sh --upgrade keeps the sudoers user and the protection state.
+    private static func upgrade() -> HelperReply {
+        guard let copy = verifiedCopy() else {
+            return HelperReply(status: HelperReply.failedToRun, stdout: "",
+                               stderr: "Программа KillSwitch повреждена или подписана не нами: скачайте её заново")
+        }
+        defer { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
+        let helperDir = copy.appendingPathComponent("Contents/Resources/Helper")
+        let installed = isRootOnly(directory, directory: true) && isRootOnly(ks, directory: false)
+            ? FileManager.default.contents(atPath: ks) : nil
+        let bundled = FileManager.default.contents(atPath: helperDir.appendingPathComponent("ks").path)
+        switch HelperUpgrade.decide(installed: installed, bundled: bundled) {
+        case .notInstalled:
+            return HelperReply(status: HelperReply.failedToRun, stdout: "",
+                               stderr: "Служба KillSwitch не установлена или повреждена: «Восстановить службу…»")
+        case .downgrade:
+            return HelperReply(status: HelperReply.refused, stdout: "",
+                               stderr: "Эта версия KillSwitch старше установленной службы: обновите программу")
+        case .current:
+            return HelperReply(status: 0, stdout: "helper: current", stderr: "")
+        case .upgrade:
+            return execute("/bin/bash", HelperCommand.scriptArguments(helperDir.appendingPathComponent("install.sh").path,
+                                                                      HelperCommand.upgrade.arguments))
         }
     }
 

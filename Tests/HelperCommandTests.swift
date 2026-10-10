@@ -118,6 +118,11 @@ final class HelperCommandTests: XCTestCase {
         let passwordless = Set(all.filter { !$0.needsAuthorization }
             .map { $0.arguments.prefix($0.arguments.first == "core" ? 2 : 1).joined(separator: " ") })
         XCTAssertEqual(passwordless, sudoers)
+        // ADR 0012: the one daemon command without the right that is not a sudoers one. It runs only
+        // the verified bundle's install.sh --upgrade, never older than what is installed; sudo and
+        // the AppleScript prompt cannot run it at all (HelperUpgradeTests).
+        XCTAssertFalse(HelperCommand.upgrade.needsAuthorization)
+        XCTAssertNotEqual(HelperCommand.upgrade.program, .ks)
     }
 
     // MARK: validation (Helper/ks is the authority; the daemon checks before it runs anything)

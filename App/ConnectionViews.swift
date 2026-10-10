@@ -71,7 +71,7 @@ extension KillSwitchControl {
     func status(_ client: VPNClient) -> Status {
         Status.summary(Status.Input(
             protection: state, connection: connection, foreignVPN: foreignVPN != nil, daemonProblem: daemonProblem,
-            coreInstalled: coreInstalled, needsRepair: needsRepair || helperOutdated,
+            coreInstalled: coreInstalled, needsRepair: needsRepair || helperOutdated && !upgradingHelper,
             hasServers: coreConfigured || client.hasURL || !client.manual.isEmpty,
             connectingSince: connectingSince, now: clock))
     }

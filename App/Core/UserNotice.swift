@@ -18,6 +18,8 @@ enum UserNotice: Equatable {
     case pauseEnded
     case serviceOff
     case macOSUpdated
+    /// The app updated itself and the daemon put the new helper in place (ADR 0012).
+    case updateInstalled(coreRestarted: Bool)
 
     static let interval: TimeInterval = 600
 
@@ -59,6 +61,7 @@ enum UserNotice: Equatable {
         case .pauseEnded: "pauseEnded"
         case .serviceOff: "serviceOff"
         case .macOSUpdated: "macOS"
+        case .updateInstalled: "updated"
         }
     }
 
@@ -68,7 +71,7 @@ enum UserNotice: Equatable {
         case .subscriptionEnding, .trafficLow, .newServers: .subscription
         case .pauseEnded: .pause
         case .serviceOff: .service
-        case .macOSUpdated: nil
+        case .macOSUpdated, .updateInstalled: nil
         }
     }
 
@@ -80,7 +83,7 @@ enum UserNotice: Equatable {
         case .newServers: .approve
         case .serviceOff: .openLoginItems
         case .macOSUpdated: .check
-        case .reconnected, .serverSwitched, .trafficLow, .pauseEnded: nil
+        case .reconnected, .serverSwitched, .trafficLow, .pauseEnded, .updateInstalled: nil
         }
     }
 
@@ -98,6 +101,7 @@ enum UserNotice: Equatable {
         case .pauseEnded: String(localized: "Защита снова включена")
         case .serviceOff: String(localized: "Служба KillSwitch выключена")
         case .macOSUpdated: String(localized: "macOS обновилась")
+        case .updateInstalled: String(localized: "Обновление установлено")
         }
     }
 
@@ -120,6 +124,9 @@ enum UserNotice: Equatable {
         case .pauseEnded: String(localized: "Пауза закончилась.")
         case .serviceOff: String(localized: "Включи её в Объектах входа.")
         case .macOSUpdated: String(localized: "Перезагрузи Mac и запусти проверку утечек.")
+        case .updateInstalled(let restarted):
+            restarted ? String(localized: "VPN переподключился за секунду, защита не отключалась.")
+                      : String(localized: "VPN не прерывался.")
         }
     }
 

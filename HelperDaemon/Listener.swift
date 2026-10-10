@@ -87,4 +87,5 @@ final class Endpoint: NSObject, HelperProtocol, Sendable {
     func uninstall(authorization: Data, reply: @escaping Reply) {
         Executor.perform(.uninstall, authorization: authorization, reply: reply)
     }
+    func upgrade(reply: @escaping Reply) { Executor.perform(.upgrade, reply: reply) }
 }

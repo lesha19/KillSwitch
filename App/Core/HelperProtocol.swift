@@ -55,6 +55,8 @@ enum HelperIdentity {
     func coreImport(profile: FileHandle, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func install(servers: [String], authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func uninstall(authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
+    /// ADR 0012: the bundle's helper over the installed one, without the right (HelperCommand.upgrade).
+    func upgrade(reply: @escaping @Sendable (Int32, String, String) -> Void)
 }
 
 extension HelperIdentity {

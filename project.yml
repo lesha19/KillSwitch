@@ -18,8 +18,8 @@ settings:
     DEVELOPMENT_TEAM: YR58655PJ7
     CODE_SIGN_STYLE: Automatic
     CODE_SIGN_IDENTITY: "Apple Development"
-    MARKETING_VERSION: "0.13"
-    CURRENT_PROJECT_VERSION: "15"
+    MARKETING_VERSION: "0.14"
+    CURRENT_PROJECT_VERSION: "16"
     # on for every target (ADR 0010): the root daemon trusts the app by its signature, so no other
     # process may inject code into it; release.sh signs with --options runtime as well
     ENABLE_HARDENED_RUNTIME: YES
@@ -63,6 +63,9 @@ targets:
         SUPublicEDKey: c9ZEz2ibLJRVCYpynZHOd4UQ5t3u9uWKh7bVULDOD0E=  # gitleaks:allow (public key)
         SUEnableAutomaticChecks: true
         SUScheduledCheckInterval: 86400
+        # «Обновлять автоматически», on by default (ADR 0012): downloaded in the background and
+        # installed while the app is not in use; the VPN lives in the root daemons, not in the app
+        SUAutomaticallyUpdate: true
         # killswitch://home, killswitch://settings/vpn …: only open a section of the window (ADR 0008)
         CFBundleURLTypes:
           - CFBundleURLName: com.lesha19.KillSwitch
@@ -146,6 +149,8 @@ targets:
       - App/Core/HelperProtocol.swift
       - App/Core/HelperRight.swift
       - App/Core/BundleSignature.swift
+      - App/Core/HelperVersion.swift
+      - App/Core/HelperUpgrade.swift
     settings:
       base:
         PRODUCT_NAME: KillSwitchHelper

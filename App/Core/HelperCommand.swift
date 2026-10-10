@@ -29,13 +29,18 @@ enum HelperCommand: Equatable, Sendable {
     /// The daemon puts the connecting user here (audit token), whatever the app said.
     case install(user: String, servers: [String])
     case uninstall
+    /// After an app update (ADR 0012): the verified bundle's `install.sh --upgrade`, without the
+    /// right. The daemon runs it only with a helper not older than the installed one
+    /// (HelperUpgrade); it keeps the sudoers user and the protection state and never drops the VPN.
+    case upgrade
 
-    enum Program: Equatable, Sendable { case ks, install, uninstall }
+    enum Program: Equatable, Sendable { case ks, install, uninstall, upgrade }
 
     var program: Program {
         switch self {
         case .install: .install
         case .uninstall: .uninstall
+        case .upgrade: .upgrade
         default: .ks
         }
     }
@@ -43,7 +48,7 @@ enum HelperCommand: Equatable, Sendable {
     var needsAuthorization: Bool {
         switch self {
         case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic,
-             .coreSelect, .coreDelay, .coreRefresh:
+             .coreSelect, .coreDelay, .coreRefresh, .upgrade:
             false
         default:
             true
@@ -77,13 +82,14 @@ enum HelperCommand: Equatable, Sendable {
         case .coreImport(let profile): ["core", "import", profile]
         case .install(let user, let servers): [user] + servers
         case .uninstall: []
+        case .upgrade: ["--upgrade"]
         }
     }
 
     var isValid: Bool {
         switch self {
         case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic,
-             .protectionOff, .uninstall:
+             .protectionOff, .uninstall, .upgrade:
             true
         case .coreSelect(let group, let proxy): Self.isName(group) && Self.isName(proxy)
         case .coreDelay(let name): Self.isName(name)

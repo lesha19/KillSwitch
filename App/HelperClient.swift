@@ -66,6 +66,17 @@ final class HelperClient {
         return connection
     }
 
+    /// The running daemon's build (CFBundleVersion of the app it came with); nil if it does not answer.
+    func daemonBuild() async -> String? {
+        let connection = connect()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            let once = OnceValue(continuation)
+            let proxy = connection.remoteObjectProxyWithErrorHandler { _ in once.resume(nil) }
+            guard let helper = proxy as? HelperProtocol else { once.resume(nil); return }
+            helper.version { once.resume($0) }
+        }
+    }
+
     /// nil: no answer (connection refused, invalidated or interrupted).
     private func call(_ command: HelperCommand, authorization auth: Data?) async -> HelperReply? {
         let connection = connect()
@@ -113,6 +124,7 @@ final class HelperClient {
             // the user is the one the daemon sees connecting
             case .install(_, let servers): helper.install(servers: servers, authorization: form, reply: reply)
             case .uninstall: helper.uninstall(authorization: form, reply: reply)
+            case .upgrade: helper.upgrade(reply: reply)
             }
         }
     }
@@ -127,6 +139,22 @@ private final class Once: @unchecked Sendable {
 
     func resume(_ value: HelperReply?) {
         let pending = lock.withLock { () -> CheckedContinuation<HelperReply?, Never>? in
+            defer { continuation = nil }
+            return continuation
+        }
+        pending?.resume(returning: value)
+    }
+}
+
+/// The same for the daemon's version.
+private final class OnceValue: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<String?, Never>?
+
+    init(_ continuation: CheckedContinuation<String?, Never>) { self.continuation = continuation }
+
+    func resume(_ value: String?) {
+        let pending = lock.withLock { () -> CheckedContinuation<String?, Never>? in
             defer { continuation = nil }
             return continuation
         }

@@ -50,6 +50,12 @@ final class KillSwitchControl {
     private(set) var needsRepair = false
     /// The installed helper is not the one this app carries (HelperVersion): «Восстановить службу…».
     private(set) var helperOutdated = false
+    /// The daemon is putting the bundled helper in place after an app update (ADR 0012): no
+    /// «Восстановить службу…» meanwhile; it shows only if that fails.
+    private(set) var upgradingHelper = false
+    /// The running daemon is older than this app (it still runs until idle): the app's commands go
+    /// around it through sudo, so it leaves and launchd starts the new one.
+    private var daemonOutdated = false
     /// Modification date of the installed helper when it was last compared.
     private var helperComparedAt: Date?
     /// When the current connection attempt started; nil unless connecting.
@@ -664,7 +670,7 @@ final class KillSwitchControl {
     /// `ks <args>` through passwordless sudo; if sudoers does not allow it (older helper), the
     /// admin prompt follows only when `interactive` — a user's click, never a timer.
     private func callHelper(_ args: [String], interactive: Bool, separateStderr: Bool = false) async -> HelperResult {
-        if helperAvailability == .ready, let command = HelperCommand(ks: args) {
+        if helperAvailability == .ready, !daemonOutdated, let command = HelperCommand(ks: args) {
             switch await helperClient.send(command, interactive: interactive) {
             case .reply(let reply):
                 if reply.status == 0 { return .ok(reply.text(separateStderr: separateStderr)) }
@@ -828,6 +834,41 @@ final class KillSwitchControl {
         speedUnavailable = false   // another helper may allow `core traffic`
         let bundled = Bundle.main.path(forResource: "ks", ofType: nil, inDirectory: "Helper").flatMap(FileManager.default.contents(atPath:))
         helperOutdated = HelperVersion.matches(installed: FileManager.default.contents(atPath: helper), bundled: bundled) == false
+        if helperOutdated { upgradeHelper() }
+    }
+
+    /// ADR 0012: after an app update the daemon puts the new helper in place, without a password
+    /// and without dropping the VPN. A daemon of the old build (it has no `upgrade`) is waited out:
+    /// it leaves when nothing runs, after two idle minutes (from 0.14 on also as soon as its app was
+    /// replaced). Without the daemon, or if it fails, «Восстановить службу…» stays, as before.
+    private func upgradeHelper() {
+        guard !upgradingHelper, helperClient.availability == .ready else { return }
+        upgradingHelper = true
+        Task {
+            defer { upgradingHelper = false; daemonOutdated = false }
+            let app = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+            for _ in 0..<12 {   // 4 minutes: the old daemon's 2 idle minutes and its 30 s timer
+                guard helperOutdated else { return }
+                if let build = await helperClient.daemonBuild(), HelperUpgrade.daemonIsCurrent(daemonBuild: build, appBuild: app) {
+                    daemonOutdated = false
+                    switch await helperClient.send(.upgrade, interactive: false) {
+                    case .reply(let reply) where reply.status == 0:
+                        notify(.updateInstalled(coreRestarted: HelperUpgrade.outcome(reply.stdout) == .coreRestarted))
+                        helperComparedAt = nil
+                        refresh()
+                        return
+                    case .reply(let reply):
+                        recentErrors.append("helper upgrade: " + reply.text(separateStderr: false))
+                        return
+                    case .cancelled, .unreachable:
+                        break
+                    }
+                } else {
+                    daemonOutdated = true
+                }
+                try? await Task.sleep(for: .seconds(20))
+            }
+        }
     }
 
     private func clearStatePollError() {
@@ -945,7 +986,7 @@ final class KillSwitchControl {
 
     /// A passwordless read (`ks state`, `core state`, `core refresh`): the daemon, else sudo -n.
     private func readHelper(_ args: [String]) async -> (status: Int32, output: String) {
-        if helperAvailability == .ready, let command = HelperCommand(ks: args), !command.needsAuthorization,
+        if helperAvailability == .ready, !daemonOutdated, let command = HelperCommand(ks: args), !command.needsAuthorization,
            case .reply(let reply) = await helperClient.send(command, interactive: false) {
             return (reply.status, reply.text(separateStderr: false))
         }
