@@ -281,14 +281,16 @@ final class VPNClient {
             if let key = key as? String, let value = value as? String { headers[key.lowercased()] = value }
         }
         let body = String(decoding: data, as: UTF8.self)
+        if let problem = SubscriptionHeaders.hwidProblem(headers: headers) { throw FetchError.device(problem) }
         guard (200..<300).contains(http.statusCode) else {
             let hint = body.hasPrefix("<") ? nil : String(body.trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))
             throw FetchError.status(http.statusCode, hint)
         }
+        guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw FetchError.empty }
         return (body, headers)
     }
 
-    private enum FetchError: Error { case status(Int, String?) }
+    private enum FetchError: Error { case status(Int, String?), device(String), empty }
 
     /// Error text without the URL (URLError descriptions may carry it).
     private static func describe(_ error: Error) -> String {
@@ -296,6 +298,10 @@ final class VPNClient {
         case FetchError.status(let code, let hint):
             let reason = code == 404 ? "подписка не найдена" : code == 403 ? "доступ запрещён" : "ошибка \(code)"
             return "Сервер подписки ответил: \(reason)." + (hint.map { $0.isEmpty ? "" : " \($0)" } ?? "")
+        case FetchError.device(let message):
+            return message
+        case FetchError.empty:
+            return "Сервер подписки прислал пустой ответ: серверов нет. Проверь подписку в личном кабинете."
         case let error as URLError:
             switch error.code {
             case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost, .dnsLookupFailed, .cannotConnectToHost, .timedOut:

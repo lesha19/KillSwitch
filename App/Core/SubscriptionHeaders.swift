@@ -31,23 +31,44 @@ enum SubscriptionHeaders {
     static let coreVersion = "1.19.32"
     static let defaultInterval: TimeInterval = 12 * 3600
 
-    /// Remnawave picks the response format by User-Agent; "mihomo" in it gets mihomo YAML. The
-    /// panel's reverse proxy may also filter by User-Agent: StorkVPN's Caddy passes anything with
-    /// "mihomo" or "clash.meta" and blocks "KillSwitch/1.0", "Clash" and "sing-box".
-    static func userAgent(appVersion: String) -> String {
-        "KillSwitch/\(appVersion) (macOS; mihomo/\(coreVersion))"
+    /// Remnawave picks the response format by User-Agent with anchored rules: only a UA that
+    /// starts with "mihomo" gets mihomo YAML (one that merely contains it gets base64). The panel's
+    /// reverse proxy may also filter by User-Agent: StorkVPN's Caddy passes anything containing
+    /// "mihomo" and blocks "KillSwitch/1.0", "Clash" and "sing-box".
+    static func userAgent(appVersion: String, osVersion: String) -> String {
+        "mihomo/\(coreVersion) (KillSwitch/\(appVersion); macOS \(osVersion))"
     }
 
-    /// Headers Remnawave reads for its per-device (HWID) limit, same names as Happ and the mihomo clients send.
+    /// Headers Remnawave reads for its per-device (HWID) limit, same names as Happ and the mihomo
+    /// clients send. No text/html in Accept: Remnawave's browser rule would answer with a web page.
     static func request(appVersion: String, hwid: String, osVersion: String, model: String) -> [String: String] {
         [
-            "User-Agent": userAgent(appVersion: appVersion),
+            "User-Agent": userAgent(appVersion: appVersion, osVersion: osVersion),
             "Accept": "application/yaml, text/plain, */*",
             "x-hwid": hwid,
             "x-device-os": "macOS",
             "x-ver-os": osVersion,
-            "x-device-model": model,
+            "x-device-model": "\(model) KillSwitch",
         ]
+    }
+
+    /// Remnawave ignores an x-hwid outside ^[A-Za-z0-9=-]{10,64}$ (and then refuses the request).
+    static func isValidHWID(_ hwid: String) -> Bool {
+        hwid.wholeMatch(of: /[A-Za-z0-9=-]{10,64}/) != nil
+    }
+
+    /// Remnawave's device limit answers by header (status and body vary): `x-hwid-max-devices-reached`
+    /// when the subscription has no free device slot, `x-hwid-not-supported` when x-hwid was missing
+    /// or invalid (an empty body).
+    static func hwidProblem(headers: [String: String]) -> String? {
+        func flag(_ name: String) -> Bool { headers[name]?.trimmingCharacters(in: .whitespaces).lowercased() == "true" }
+        if flag("x-hwid-max-devices-reached") {
+            return "Превышен лимит устройств в подписке — удалите старое устройство в личном кабинете."
+        }
+        if flag("x-hwid-not-supported") {
+            return "Сервер подписки не принял номер этого Mac (HWID) и не отдал серверы. Напиши в поддержку подписки."
+        }
+        return nil
     }
 
     /// `profile-update-interval` is in hours.
