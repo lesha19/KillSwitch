@@ -45,6 +45,10 @@ final class KillSwitchControl {
     private(set) var networkLeftOff = false
     /// `sudo -n ks state` wants a password: the helper was installed by an older app.
     private(set) var needsRepair = false
+    /// The installed helper is not the one this app carries (HelperVersion): «Восстановить службу…».
+    private(set) var helperOutdated = false
+    /// Modification date of the installed helper when it was last compared.
+    private var helperComparedAt: Date?
     /// When the current connection attempt started; nil unless connecting.
     private(set) var connectingSince: Date?
     /// Moves on with every refresh while connecting, so «Подключение затянулось» shows up in time.
@@ -539,10 +543,12 @@ final class KillSwitchControl {
         guard FileManager.default.fileExists(atPath: helper) else {
             daemonProblem = false; networkLeftOff = false
             daemonStateLive = false
+            helperOutdated = false; helperComparedAt = nil
             publish(.notInstalled)
             return
         }
         watchHelperDirectory()
+        compareHelper()
         coreInstalled = FileManager.default.fileExists(atPath: "/Library/KillSwitch/core/mihomo")
         coreConfigured = FileManager.default.fileExists(atPath: "/Library/KillSwitch/core/config.yaml")
         if let daemon = DaemonState.read() {
@@ -589,6 +595,15 @@ final class KillSwitchControl {
             clearStatePollError()
             publish(DaemonState.protection(result.output))
         }
+    }
+
+    /// Again only when the installed helper's file changed (install.sh replaces it).
+    private func compareHelper() {
+        let modified = (try? FileManager.default.attributesOfItem(atPath: helper))?[.modificationDate] as? Date
+        guard modified != helperComparedAt else { return }
+        helperComparedAt = modified
+        let bundled = Bundle.main.path(forResource: "ks", ofType: nil, inDirectory: "Helper").flatMap(FileManager.default.contents(atPath:))
+        helperOutdated = HelperVersion.matches(installed: FileManager.default.contents(atPath: helper), bundled: bundled) == false
     }
 
     private func clearStatePollError() {

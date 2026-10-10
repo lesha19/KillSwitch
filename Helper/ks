@@ -2,6 +2,7 @@
 # Kill switch control.
 #   ks status               show state and loaded rules
 #   ks state                one word for the app: on | off | paused:<epoch>
+#   ks version              "<version> <sha256 of this file>", without root
 #   ks on                   enable (also after reboot)
 #   ks off                  disable until "ks on"
 #   ks pause [min]          disable for N minutes (default 5), e.g. for a captive Wi-Fi portal
@@ -24,6 +25,7 @@
 set -u
 umask 022
 
+KS_VERSION="0.9" # the app's version (project.yml); the app compares the whole file anyway
 DIR="/Library/KillSwitch"
 ANCHOR="com.apple/killswitch"
 FLAG="$DIR/disabled"     # contains epoch when to re-enable, 0 = never
@@ -1096,7 +1098,11 @@ valid_addr() {  # a bare name must not reach pfctl, it would be resolved through
   [[ "$1" =~ $ADDR_RE ]] && { [[ "$1" == *:* ]] || [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?$ ]]; }
 }
 
+ks_version() { echo "$KS_VERSION $(shasum -a 256 < "$1" | cut -d' ' -f1)"; }
+
 [ "${BASH_SOURCE[0]}" = "$0" ] || return 0   # sourced by Helper/tests
+# reads nothing but this file: no root needed
+[ "${1:-}" = version ] && { ks_version "$0"; exit 0; }
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
 
 # Everything that writes the core's config runs under one lock (the watchdog's rotation skips
@@ -1240,5 +1246,5 @@ case "${1:-status}" in
     [ -f "$FLAG" ] && { u=$(cat "$FLAG"); [ "$u" = 0 ] && echo "disabled by hand" || echo "back on at $(date -r "$u" +%H:%M)"; }
     pfctl -a "$ANCHOR" -s rules 2>/dev/null
     ;;
-  *) sed -n '2,23p' "$0"; exit 1 ;;
+  *) sed -n '2,24p' "$0"; exit 1 ;;
 esac

@@ -142,6 +142,11 @@ net_restore >/dev/null && [ ! -e "$WIFI_MARK" ] && ok "netrestore: watchdog runs
 : > "$tmp/net"
 net_restore >/dev/null && [ ! -s "$tmp/net" ] && ok "netrestore without the mark: nothing to do" || bad "netrestore without mark"
 
+# --- ks version: what the app compares with its own copy
+[[ "$(ks_version "$here/../ks")" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?\ [0-9a-f]{64}$ ]] && ok "ks version: version and the file's sha256" ||
+  bad "ks version: $(ks_version "$here/../ks")"
+[ "$(ks_version "$here/../ks" | cut -d' ' -f2)" = "$(shasum -a 256 "$here/../ks" | cut -d' ' -f1)" ] && ok "  hash of the file itself" || bad "  hash"
+
 # --- the core's log: root-only, capped
 CORE_DIR="$tmp/core"; mkdir -m 755 "$CORE_DIR"; CORE_LOG_MAX=1000; CORE_LOG="$CORE_DIR/core.log"
 core_log_tidy
