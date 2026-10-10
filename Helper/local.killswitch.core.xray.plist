@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>local.killswitch.core</string>
+  <!-- Xray (ADR 0020): the same job as mihomo's, so ks, the watchdog and the filter see one core -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Library/KillSwitch/core/xray</string>
+    <string>run</string>
+    <string>-format</string>
+    <string>json</string>
+    <string>-c</string>
+    <string>/Library/KillSwitch/core/xray.json</string>
+  </array>
+  <!-- geosite.dat and geoip.dat of the app (fetch-geodata.sh) -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>XRAY_LOCATION_ASSET</key>
+    <string>/Library/KillSwitch/core</string>
+  </dict>
+  <key>UserName</key>
+  <string>root</string>
+  <key>GroupName</key>
+  <string>_ksvpn</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <!-- 077: what the core creates (and its log, if launchd has to create it) is root-only -->
+  <key>Umask</key>
+  <integer>63</integer>
+  <key>StandardOutPath</key>
+  <string>/Library/KillSwitch/core/core.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Library/KillSwitch/core/core.log</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>com.lesha19.KillSwitch</string>
+  </array>
+</dict>
+</plist>

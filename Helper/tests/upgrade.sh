@@ -90,11 +90,12 @@ check "_regen: config in place" "$(grep '^config=' <<<"$out")" "config=new"
 
 # ===== install.sh --upgrade on fakes =====
 # A fake system: /Library/KillSwitch is $root/lib, the bundle's Helper/ is $root/bundle.
-pin_bundle() {  # pin_bundle <geosite text> <geoip text>: the bundle's fetch-geodata.sh pins these contents
-  local s i
+pin_bundle() {  # pin_bundle <geosite text> <geoip text> [geoip.dat text]: the bundle's fetch-geodata.sh pins these contents
+  local s i d
   s=$(printf '%s\n' "$1" | shasum -a 256 | cut -d' ' -f1); i=$(printf '%s\n' "$2" | shasum -a 256 | cut -d' ' -f1)
+  d=$(printf '%s\n' "${3:-ipdat}" | shasum -a 256 | cut -d' ' -f1)
   sed -e "s/^SHA256_GEOSITE=\"[0-9a-f]*\"/SHA256_GEOSITE=\"$s\"/" -e "s/^SHA256_GEOIP=\"[0-9a-f]*\"/SHA256_GEOIP=\"$i\"/" \
-    "$here/../fetch-geodata.sh" > "$root/bundle/fetch-geodata.sh"
+    -e "s/^SHA256_GEOIP_DAT=\"[0-9a-f]*\"/SHA256_GEOIP_DAT=\"$d\"/" "$here/../fetch-geodata.sh" > "$root/bundle/fetch-geodata.sh"
 }
 setup() {  # setup <name>: a fresh installed system and bundle
   root="$tmp/i-$1"
@@ -161,7 +162,7 @@ check "upgrade: the new ks is in place" "$(tail -1 "$root/lib/ks")" "echo new"
 [ "$(stat -f %i "$root/lib/ks")" != "$ino" ] && check "upgrade: ks replaced by rename (new inode)" yes yes || check "upgrade: ks replaced by rename (new inode)" no yes
 check "upgrade: the old file's readers still see the old one" "$(tail -1 <&3)" "echo old"
 exec 3<&-
-check "upgrade: written to disk before the rename" "$(grep -c '^sync$' "$root/calls")" 1
+check "upgrade: written to disk before the rename (ks, and the mihomo job kept in core/ the first time)" "$(grep -c '^sync$' "$root/calls")" 2
 check "upgrade: no temporary file left" "$(find "$root/lib" "$root/ld" -name '.*.new' | wc -l | tr -d ' ')" 0
 check "upgrade: watchdog gets SIGHUP" "$(grep -c '^launchctl kill HUP system/local.killswitch$' "$root/calls")" 1
 check "upgrade: watchdog never booted out" "$(grep -c 'bootout system/local.killswitch$' "$root/calls")" 0
@@ -241,6 +242,35 @@ rm "$root/bundle/fetch-geodata.sh"; echo ip-2 > "$root/bundle/geoip.metadb"
 out=$(KEEP_E=1 upgrade --upgrade 2>&1); rc=$?
 check "no pin in the bundle: nothing replaced, install succeeds" "$rc $(cat "$root/lib/core/geoip.metadb")" "0 ip"
 check "  geodata state" "$(geo geosite.dat) $(geo geoip.metadb)" "unpinned unpinned"
+
+# --- Xray (ADR 0020): shipped next to mihomo; an install that runs mihomo keeps it, a new one gets Xray
+xray_bundle() {
+  echo xray-1 > "$root/bundle/xray"; echo ipdat > "$root/bundle/geoip.dat"
+  cp "$here/../local.killswitch.core.xray.plist" "$root/bundle/"
+}
+setup xrayup
+xray_bundle
+out=$(KEEP_E=1 upgrade --upgrade 2>&1); rc=$?
+check "xray in the bundle: upgrade succeeds" "$rc" 0
+check "  binary and geoip.dat in place" "$(cat "$root/lib/core/xray" 2>&1) $(cat "$root/lib/core/geoip.dat" 2>&1)" "xray-1 ipdat"
+check "  geodata state has geoip.dat" "$(geo geoip.dat)" ok
+check "  both jobs kept in core/ for ks set core" \
+  "$(cmp -s "$root/lib/core/plist.mihomo" "$here/../local.killswitch.core.plist" && cmp -s "$root/lib/core/plist.xray" "$here/../local.killswitch.core.xray.plist" && echo yes)" yes
+check "  an install with a mihomo config keeps mihomo" "$(grep -c '^core=' "$root/lib/settings") $(cmp -s "$root/ld/local.killswitch.core.plist" "$here/../local.killswitch.core.plist" && echo mihomo-job)" "0 mihomo-job"
+setup xraynew
+xray_bundle
+rm -f "$root/lib/core/config.yaml" "$root/lib/core/mihomo"
+KEEP_E=1 upgrade --upgrade >/dev/null 2>&1
+check "no core config yet: Xray chosen, its job installed" \
+  "$(grep '^core=' "$root/lib/settings") $(cmp -s "$root/ld/local.killswitch.core.plist" "$here/../local.killswitch.core.xray.plist" && echo xray-job)" "core=xray xray-job"
+KEEP_E=1 upgrade --upgrade >/dev/null 2>&1
+check "  a second run keeps it (one line)" "$(grep -c '^core=' "$root/lib/settings")" 1
+setup xraychosen
+xray_bundle
+printf 'core=xray\n' >> "$root/lib/settings"; echo '{}' > "$root/lib/core/xray.json"
+KEEP_E=1 upgrade --upgrade >/dev/null 2>&1
+check "core=xray: its job, its config rebuilt" \
+  "$(cmp -s "$root/ld/local.killswitch.core.plist" "$here/../local.killswitch.core.xray.plist" && echo xray-job) $(grep -c '^ks _regen' "$root/calls")" "xray-job 1"
 
 setup coreoff
 echo core-2 > "$root/bundle/mihomo"

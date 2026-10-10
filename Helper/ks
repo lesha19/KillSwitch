@@ -10,12 +10,14 @@
 #   ks set <key> <0|1>      lan, tailscale, dns, direct (see rules() below), wifiguard, adblock
 #   ks set splitapps <a,b>  apps outside the VPN; "" clears
 #   ks set multihop <proxy>|off  double VPN: every other proxy is reached through this one
+#   ks set core xray|mihomo the core that runs (ADR 0020); the subscription is imported again for it
 #   ks allow <addr[/n]>     always let this address or network out without VPN
 #   ks unallow <addr[/n]>
 #   ks server-add <addr>    VPN server: reachable by any process (needed by Happ)
 #   ks server-remove <addr>
-#   ks core on|off|state    our own VPN core (mihomo run by launchd as group _ksvpn)
-#   ks core import <json>   build the core's config from a mihomo profile converted to JSON
+#   ks core on|off|state    our own VPN core (Xray or mihomo, run by launchd as group _ksvpn)
+#   ks core import <json>   build the core's config: a mihomo profile converted to JSON, or with
+#                           core=xray the panel's Xray JSON (a list of Xray configs)
 #   ks core refresh <json>  the same, refused (exit 3) if it brings new server names or
 #                           addresses or changes what goes DIRECT
 #   ks core proxies         groups and proxies of the running core (JSON)
@@ -111,6 +113,8 @@ settings_lines_ok() {
       coredirect=[01]) ;;   # until 0.14 (ADR 0013): ignored, install.sh drops it
       splitapps=*) splitapps_parse "${line#*=}" >/dev/null 2>&1 || return 1 ;;
       multihop=*) [ "${line#*=}" = off ] || valid_name "${line#*=}" || return 1 ;;
+      core=xray|core=mihomo) ;;   # ADR 0020
+      xrayserver=*) valid_name "${line#*=}" || return 1 ;;
       *) return 1 ;;
     esac
   done < "$1" 2>/dev/null
@@ -612,10 +616,23 @@ resolve_host() {  # resolve_host <name>
   good_server_ip "$ip" && echo "$ip"
 }
 
-# core_generate <profile.json> <config-out> <servers-out> [manual-servers]
+# Which core runs (ADR 0020): "core=xray|mihomo" in the settings; without the line mihomo, as
+# every install before 0.17 had (install.sh writes core=xray on a new install). Each core has its
+# own config and kept subscription; switching means importing the subscription in its format.
+core_kind() { if [ "$(setting core mihomo)" = xray ]; then echo xray; else echo mihomo; fi; }
+core_conf() { if [ "$(core_kind)" = xray ]; then echo "$CORE_DIR/xray.json"; else echo "$CORE_DIR/config.yaml"; fi; }
+core_profile() { if [ "$(core_kind)" = xray ]; then echo "$CORE_DIR/profile-xray.json"; else echo "$CORE_PROFILE"; fi; }
+core_generate() { if [ "$(core_kind)" = xray ]; then core_generate_xray "$@"; else core_generate_mihomo "$@"; fi; }
+# core_test <config>: the core's own check of a generated config
+core_test() {
+  if [ "$(core_kind)" = xray ]; then XRAY_LOCATION_ASSET=$CORE_DIR "$CORE_DIR/xray" run -test -format json -c "$1"
+  else "$CORE_DIR/mihomo" -t -d "$CORE_DIR" -f "$1"; fi
+}
+
+# core_generate_mihomo <profile.json> <config-out> <servers-out> [manual-servers]
 # Writes the config and the IPv4 addresses of its proxies. Prints a reason and fails on a
 # profile it will not take. Runs in a subshell: "exit" leaves only the generator.
-core_generate() (
+core_generate_mihomo() (
   in=$1 out=$2 srv_out=$3 manual=${4:-}
   umask 077   # the config and the copies hold the servers' passwords
   w=$(mktemp -d) || exit 1
@@ -1621,7 +1638,8 @@ put_setting() {  # put_setting <key> <value> [settings-file]
 }
 
 core_import() {  # core_import <profile.json> [import|refresh]
-  local src=${1:-} in="$CORE_PROFILE.new" tmp="$CORE_DIR/config.yaml.tmp" srv="$SERVERS_CORE.tmp" rc
+  local src=${1:-} prof conf in tmp srv="$SERVERS_CORE.tmp" rc
+  prof=$(core_profile); conf=$(core_conf); in="$prof.new"; tmp="$conf.tmp"
   servers_migrate
   install -d -o root -g wheel -m 700 "$CORE_DIR/ctl"
   # Read once, with the caller's rights (root must not open files for the user), into our
@@ -1647,7 +1665,7 @@ core_import() {  # core_import <profile.json> [import|refresh]
     chmod 600 "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new"
   fi
   core_commit "$tmp" "$srv" || { rm -f "$in" "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new"; return 1; }
-  mv "$in" "$CORE_PROFILE"
+  mv "$in" "$prof"
   if [ "${2:-}" != refresh ]; then mv "$APPROVED_HOSTS.new" "$APPROVED_HOSTS"; mv "$APPROVED_DIRECT.new" "$APPROVED_DIRECT"; fi
 }
 
@@ -1693,29 +1711,30 @@ refresh_check() {
 core_commit() {
   local tmp=$1 srv=$2
   chmod 600 "$tmp" "$tmp.pins"
-  "$CORE_DIR/mihomo" -t -d "$CORE_DIR" -f "$tmp" >/dev/null 2>&1 || {
-    "$CORE_DIR/mihomo" -t -d "$CORE_DIR" -f "$tmp" 2>&1 | tail -3 >&2; core_clean "$tmp" "$srv"; return 1; }
+  core_test "$tmp" >/dev/null 2>&1 || {
+    core_test "$tmp" 2>&1 | tail -3 >&2; core_clean "$tmp" "$srv"; return 1; }
   servers_merge "$srv" > "$SERVERS.tmp"
   rules "$ALLOW" "$SERVERS.tmp" | pfctl -n -a "$ANCHOR" -f - >/dev/null 2>&1 || {
     core_clean "$tmp" "$srv"; echo "pf не принял адреса серверов" >&2; return 1; }
   mv "$srv" "$SERVERS_CORE"; mv "$SERVERS.tmp" "$SERVERS"
   mv "$tmp.pins" "$PINS"; rm -f "$tmp.direct"
   core_publish "$tmp"
-  mv "$tmp" "$CORE_DIR/config.yaml"
+  mv "$tmp" "$(core_conf)"
 }
 
 # core_rebuild <pins>: the config again from the kept profile with these addresses, no DNS
 # (rotation, settings the generator reads).
 core_rebuild() {
-  local tmp="$CORE_DIR/config.yaml.tmp" srv="$SERVERS_CORE.tmp"
-  [ -f "$CORE_PROFILE" ] && [ -f "$1" ] || { echo "Нет сохранённого профиля: возьми профиль заново" >&2; return 2; }
-  KS_PINS=$1 core_generate "$CORE_PROFILE" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; return 1; }
+  local prof tmp srv="$SERVERS_CORE.tmp"
+  prof=$(core_profile); tmp="$(core_conf).tmp"
+  [ -f "$prof" ] && [ -f "$1" ] || { echo "Нет сохранённого профиля: возьми профиль заново" >&2; return 2; }
+  KS_PINS=$1 core_generate "$prof" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; return 1; }
   core_commit "$tmp" "$srv"
 }
 
 # A setting the generator reads changed: rebuild and reload if there is a kept profile.
 core_apply_settings() {
-  [ -f "$CORE_PROFILE" ] && [ -f "$PINS" ] || return 0
+  [ -f "$(core_profile)" ] && [ -f "$PINS" ] || return 0
   core_rebuild "$PINS" || return 1
   reload_if_on; core_reload
 }
@@ -1724,10 +1743,11 @@ core_apply_settings() {
 # profile and pins, so a new generator applies at once. Put in place only if it differs; then pf
 # is reloaded (atomic, never flushed) and the core rereads it through its API, without a restart.
 core_regen() {
-  local tmp="$CORE_DIR/config.yaml.tmp" srv="$SERVERS_CORE.tmp"
-  [ -f "$CORE_PROFILE" ] && [ -f "$PINS" ] && [ -f "$CORE_DIR/config.yaml" ] || { echo "core config: none"; return 0; }
-  KS_PINS=$PINS core_generate "$CORE_PROFILE" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; return 1; }
-  if cmp -s "$tmp" "$CORE_DIR/config.yaml"; then
+  local prof conf tmp srv="$SERVERS_CORE.tmp"
+  prof=$(core_profile); conf=$(core_conf); tmp="$conf.tmp"
+  [ -f "$prof" ] && [ -f "$PINS" ] && [ -f "$conf" ] || { echo "core config: none"; return 0; }
+  KS_PINS=$PINS core_generate "$prof" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; return 1; }
+  if cmp -s "$tmp" "$conf"; then
     # an older helper wrote no report or egress: those still come into place
     if core_publish "$tmp"; then reload_if_on; fi
     core_clean "$tmp" "$srv"; echo "core config: kept"; return 0
@@ -1742,6 +1762,8 @@ core_regen() {
 core_reload() {
   local b rc
   launchctl print "$CORE_JOB" >/dev/null 2>&1 || return 0
+  # Xray has no API here to reread its config: a restart (about a second; pf keeps blocking)
+  if [ "$(core_kind)" = xray ]; then launchctl kickstart -k "$CORE_JOB"; return; fi
   b=$(mktemp) || return 1
   echo '{"path":"","payload":""}' > "$b"
   core_api PUT "/configs?force=true" "$b" >/dev/null 2>&1; rc=$?
@@ -1781,7 +1803,7 @@ repair() {
 # are then asked once more by DoH directly (resolve_direct), and that is logged.
 core_rotate() {
   local host ip ips nip changed failed resolved resolver=resolve_all new="$PINS.next"
-  [ -s "$APPROVED_HOSTS" ] && [ -s "$PINS" ] && [ -f "$CORE_PROFILE" ] || return 0
+  [ -s "$APPROVED_HOSTS" ] && [ -s "$PINS" ] && [ -f "$(core_profile)" ] || return 0
   while :; do
     changed=""; failed=""; resolved=0
     : > "$new"; chmod 600 "$new"
@@ -1833,6 +1855,33 @@ net_sig() {  # primary interface and router
   printf 'show State:/Network/Global/IPv4\n' | scutil | awk '$1 == "PrimaryInterface" || $1 == "Router" { print $3 }' | paste -sd' ' -
 }
 
+# The launchd job runs the chosen core: install.sh keeps both plists in core/ (plist.mihomo,
+# plist.xray), the one in /Library/LaunchDaemons is a copy of the chosen one. Fails (1) when it
+# was already right.
+CORE_PLIST="/Library/LaunchDaemons/local.killswitch.core.plist"
+core_plist_sync() {
+  local src
+  src="$CORE_DIR/plist.$(core_kind)"
+  [ -s "$src" ] || { echo "Нет задания launchd для ядра $(core_kind): переустанови KillSwitch" >&2; return 1; }
+  cmp -s "$src" "$CORE_PLIST" && return 1
+  cp "$src" "$CORE_PLIST.tmp" && chmod 644 "$CORE_PLIST.tmp" && mv "$CORE_PLIST.tmp" "$CORE_PLIST"
+}
+
+# "ks set core xray|mihomo" (admin): the core that runs from now on. Servers, pins and approvals
+# belong to the last import, which was in the other core's format: a running core is stopped (pf
+# keeps blocking) and the app imports the subscription for the new one in the same admin batch
+# ("ks core import", then "ks core on").
+set_core() {
+  [[ "$1" =~ ^(xray|mihomo)$ ]] || { echo "usage: ks set core xray|mihomo" >&2; return 1; }
+  [ -x "$CORE_DIR/$1" ] || { echo "Ядро $1 не установлено" >&2; return 1; }
+  launchctl bootout "$CORE_JOB" 2>/dev/null
+  put_setting core "$1" || return 1
+  core_plist_sync 2>/dev/null
+  rm -f "$(core_conf)"   # built from an older import: "ks core on" waits for a new one
+  log_event "core: $1 (waits for the subscription)"
+  echo "Ядро $1 выбрано: возьми подписку заново, чтобы его запустить" >&2
+}
+
 # "ks set splitapps <list>": apps outside the VPN, "" clears. The rebuilt config lets the core out
 # directly for them (egress), so they need no other switch.
 set_splitapps() {
@@ -1847,6 +1896,7 @@ set_splitapps() {
 set_multihop() {
   local s
   if [ "$1" != off ]; then
+    [ "$(core_kind)" = mihomo ] || { echo "Двойной VPN пока работает только с ядром mihomo" >&2; return 1; }
     valid_name "$1" || { echo "Плохое имя прокси" >&2; return 1; }
     [ -f "$CORE_PROFILE" ] && [ -f "$PINS" ] || { echo "Сначала возьми профиль" >&2; return 1; }
   fi
@@ -2092,8 +2142,35 @@ core_api() {  # core_api <method> <path> [json-body-file]: prints the reply, fai
   if [ "${code:-0}" -ge 200 ] && [ "$code" -lt 300 ]; then cat "$out"; rm -f "$out"; return 0; fi
   { cat "$out"; echo; } >&2; rm -f "$out"; return 1
 }
+# With Xray the servers to choose from are the subscription's hosts (its configs, by remarks):
+# one selector named $XRAY_GROUP, in the shape of mihomo's /proxies, from the report. No API, no
+# latency, traffic or connections (ADR 0020); the app hides what needs them.
+XRAY_GROUP="Сервер"
+xray_only_mihomo() { [ "$(core_kind)" = xray ] && { echo "С ядром Xray это недоступно" >&2; return 0; }; return 1; }
+core_proxies() {
+  [ "$(core_kind)" = xray ] || { core_api GET /proxies; return; }
+  [ -s "$REPORT" ] || { echo "Нет конфига ядра" >&2; return 1; }
+  G=$XRAY_GROUP /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>);
+    my @n = map { $_->{name} } @{ $r->{servers} || [] };
+    print JSON::PP->new->canonical->encode({ proxies => { $ENV{G} => { type => "Selector", now => $r->{selected}, all => \@n },
+      map { ($_ => { type => "Xray" }) } @n } }), "\n"' < "$REPORT"
+}
+# xray_select <host>: run that host of the subscription (approved at import, so no password)
+xray_select() {
+  grep -qxF -- "$1" <(/usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); print "$_->{name}\n" for @{ $r->{servers} || [] }' < "$REPORT" 2>/dev/null) ||
+    { echo "В подписке нет сервера «$1»" >&2; return 1; }
+  local old
+  old=$(setting xrayserver "")
+  put_setting xrayserver "$1" || return 1
+  core_rebuild "$PINS" || { put_setting xrayserver "$old"; return 1; }
+  reload_if_on; core_reload
+}
 core_select() {  # core_select <group> <proxy>: switch a select group, e.g. to another server
   local body rc
+  if [ "$(core_kind)" = xray ]; then
+    [ "$1" = "$XRAY_GROUP" ] || { echo "С ядром Xray выбирается только сервер" >&2; return 1; }
+    xray_select "$2"; return
+  fi
   body=$(mktemp) || return 1
   echo '{"name":""}' > "$body"
   plutil -replace name -string "$2" "$body" && core_api PUT "/proxies/$(urlencode "$1")" "$body"
@@ -2101,6 +2178,7 @@ core_select() {  # core_select <group> <proxy>: switch a select group, e.g. to a
 }
 core_delay() {  # core_delay <group|proxy>: latency test through it, JSON
   local name q info
+  xray_only_mihomo && return 1
   name=$(urlencode "$1"); q="url=$(urlencode http://cp.cloudflare.com/generate_204)&timeout=3000"
   info=$(core_api GET "/proxies/$name") || return 1
   if grep -q '"all":' <<<"$info"; then core_api GET "/group/$name/delay?$q"
@@ -2110,6 +2188,7 @@ core_delay() {  # core_delay <group|proxy>: latency test through it, JSON
 # processes leave ks); the app takes the speed from two readings.
 core_traffic() {
   local j up down
+  xray_only_mihomo && return 1
   j=$(core_api GET /connections) || return 1
   up=$(sed -nE 's/.*"uploadTotal":([0-9]+).*/\1/p' <<<"$j")
   down=$(sed -nE 's/.*"downloadTotal":([0-9]+).*/\1/p' <<<"$j")
@@ -2121,6 +2200,7 @@ core_traffic() {
 # provider its size and last update. Nothing else of the replies (no source addresses or ports, no
 # internal ids) leaves ks. The user it runs for is the one whose traffic it is (sudoers).
 core_connections() {
+  xray_only_mihomo && return 1
   local c p rc
   c=$(mktemp) || return 1; p=$(mktemp) || { rm -f "$c"; return 1; }
   core_api GET /connections > "$c" && { core_api GET /providers/rules > "$p" 2>/dev/null || echo "{}" > "$p"; } &&
@@ -2236,7 +2316,7 @@ passwordless_args_ok() {
 # reads nothing but this file: no root needed
 [ "${1:-}" = version ] && { ks_version "$0"; exit 0; }
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
-passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,28p' "$0" >&2; exit 1; }
+passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,30p' "$0" >&2; exit 1; }
 
 # Everything that writes the core's config runs under one lock (the watchdog's rotation skips
 # its turn while it is held).
@@ -2265,6 +2345,10 @@ case "${1:-status}" in
         [ $# -eq 3 ] || { echo "usage: ks set splitapps <name,name,...>  (\"\" clears)" >&2; exit 1; }
         set_splitapps "$val" || exit 1
         log_event "apps outside the VPN: ${val:-none}"; exit 0 ;;
+      core)
+        [ $# -eq 3 ] || { echo "usage: ks set core xray|mihomo" >&2; exit 1; }
+        set_core "$val" || exit 1
+        exit 0 ;;
       multihop)
         [ $# -eq 3 ] || { echo "usage: ks set multihop <entry proxy>|off" >&2; exit 1; }
         set_multihop "$val" || exit 1
@@ -2314,15 +2398,17 @@ case "${1:-status}" in
   core)
     case "${2:-state}" in
       on)
-        [ -x "$CORE_DIR/mihomo" ] || { echo "Ядро не установлено" >&2; exit 1; }
-        [ -s "$CORE_DIR/config.yaml" ] || { echo "Нет конфига ядра: сначала «Взять профиль из dropweb»" >&2; exit 1; }
+        [ -x "$CORE_DIR/$(core_kind)" ] || { echo "Ядро не установлено" >&2; exit 1; }
+        [ -s "$(core_conf)" ] || { echo "Нет конфига ядра: сначала возьми подписку" >&2; exit 1; }
         # two TUNs fight over routes and DNS: the other VPN has to be off first
         if ! core_running && { pgrep -x DropwebCore >/dev/null || [ -n "$(vpn_ifaces)" ]; }; then
           echo "Сначала отключи VPN в dropweb или Happ" >&2; exit 1
         fi
         core_log_tidy
         launchctl enable "$CORE_JOB"
-        launchctl bootstrap system /Library/LaunchDaemons/local.killswitch.core.plist 2>/dev/null ||
+        # the job of the chosen core (ADR 0020); a loaded job of the other one goes first
+        if core_plist_sync 2>/dev/null; then launchctl bootout "$CORE_JOB" 2>/dev/null; fi
+        launchctl bootstrap system "$CORE_PLIST" 2>/dev/null ||
           launchctl kickstart "$CORE_JOB"
         # DNS goes to the core only once it runs; otherwise the Mac would be left without names
         for _ in 1 2 3 4 5 6 7 8 9 10; do core_running && break; sleep 0.5; done
@@ -2344,7 +2430,7 @@ case "${1:-status}" in
         if core_running; then echo on; else echo off; fi ;;
       proxies)
         [ $# -eq 2 ] || { echo "usage: ks core proxies" >&2; exit 1; }
-        core_api GET /proxies || exit 1 ;;
+        core_proxies || exit 1 ;;
       select)
         [ $# -eq 4 ] && valid_name "$3" && valid_name "$4" || { echo "usage: ks core select <group> <proxy>" >&2; exit 1; }
         core_select "$3" "$4" || exit 1
@@ -2373,5 +2459,5 @@ case "${1:-status}" in
     [ -f "$FLAG" ] && { u=$(cat "$FLAG"); [ "$u" = 0 ] && echo "disabled by hand" || echo "back on at $(date -r "$u" +%H:%M)"; }
     pfctl -a "$ANCHOR" -s rules 2>/dev/null
     ;;
-  *) sed -n '2,28p' "$0"; exit 1 ;;
+  *) sed -n '2,30p' "$0"; exit 1 ;;
 esac

@@ -9,7 +9,7 @@ import Security
 /// certificate issued by Apple), which ad-hoc and unsigned code cannot satisfy.
 enum TrustedCode {
     enum Program: CaseIterable {
-        /// Our own VPN core: mihomo signed by our team with this identifier (scripts/sign-core.sh).
+        /// Our own VPN core: mihomo or Xray (ADR 0020), signed by our team with this identifier (scripts/sign-core.sh).
         case core
         /// Tailscale's app and network extension, Developer ID or Mac App Store build.
         case tailscale

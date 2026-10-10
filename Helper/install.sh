@@ -139,7 +139,7 @@ watchdog_update() {
 GEO_STATE=""
 geodata_put() {
   local var pin sum
-  case "$1" in geosite.dat) var=SHA256_GEOSITE ;; *) var=SHA256_GEOIP ;; esac
+  case "$1" in geosite.dat) var=SHA256_GEOSITE ;; geoip.dat) var=SHA256_GEOIP_DAT ;; *) var=SHA256_GEOIP ;; esac
   pin=$(sed -nE "s/^$var=\"([0-9a-f]{64})\".*/\1/p" fetch-geodata.sh 2>/dev/null || true)
   sum=$(shasum -a 256 "$1" | cut -d' ' -f1)
   if [ -z "$pin" ]; then
@@ -152,11 +152,21 @@ geodata_put() {
   put_file "$1" "$DIR/core/$1" 644
 }
 
-# Own VPN core (optional: only if Helper/mihomo is present, see fetch-mihomo.sh). Prints
-# "core: restarted" or "core: kept".
+# Own VPN core (optional: only if Helper/mihomo or Helper/xray is present, see fetch-mihomo.sh,
+# fetch-xray.sh). Prints "core: restarted" or "core: kept".
+# Which core runs (ADR 0020): the settings' core= line. An install without one that already has a
+# mihomo config or subscription keeps mihomo (ks reads a missing line as mihomo); a new one gets
+# Xray when the bundle has it.
 core_update() {
-  local restart=0 plist=0
-  if put_file mihomo "$DIR/core/mihomo" 755; then restart=1; fi
+  local restart=0 plist=0 kind
+  if [ -f xray ] && ! grep -q '^core=' "$DIR/settings" 2>/dev/null &&
+     [ ! -e "$DIR/core/config.yaml" ] && [ ! -e "$DIR/core/profile.json" ]; then
+    echo core=xray >> "$DIR/settings"; chmod 644 "$DIR/settings"
+  fi
+  kind=$(sed -n 's/^core=//p' "$DIR/settings" 2>/dev/null | tail -1)
+  [ "$kind" = xray ] || kind=mihomo
+  if [ -f mihomo ] && put_file mihomo "$DIR/core/mihomo" 755 && [ "$kind" = mihomo ]; then restart=1; fi
+  if [ -f xray ] && put_file xray "$DIR/core/xray" 755 && [ "$kind" = xray ]; then restart=1; fi
   # the subscription's GEOSITE/GEOIP rules and the ad block (ADR 0013): the pinned files of the app bundle
   # (fetch-geodata.sh), never a copy from a place the user can write. A geoip.metadb that older
   # versions took from dropweb's folder is replaced, or removed if the bundle has none. The core
@@ -167,12 +177,18 @@ core_update() {
   elif [ -e "$DIR/core/geoip.metadb" ]; then
     rm -f "$DIR/core/geoip.metadb"; restart=1
   fi
+  if [ -f geoip.dat ] && geodata_put geoip.dat && [ "$kind" = xray ]; then restart=1; fi
   printf '%s' "$GEO_STATE" > "$DIR/core/.geodata.new"; chmod 644 "$DIR/core/.geodata.new"; mv -f "$DIR/core/.geodata.new" "$DIR/core/geodata"
   # the core starts at boot only after "ks core on"; an upgrade keeps a running core running
   job_running "$CORE_JOB" || launchctl disable "$CORE_JOB"
-  if put_file local.killswitch.core.plist "$CORE_PLIST" 644; then plist=1; fi
-  # a config the new generator writes differently: reloaded through the core's API, no restart
-  if [ -s "$DIR/core/config.yaml" ]; then ks_run _regen || echo "core config: not rebuilt"; fi
+  # both jobs stay in core/ for "ks set core"; the chosen one is the system's
+  put_file local.killswitch.core.plist "$DIR/core/plist.mihomo" 644 || true
+  if [ -f local.killswitch.core.xray.plist ]; then put_file local.killswitch.core.xray.plist "$DIR/core/plist.xray" 644 || true; fi
+  if [ "$kind" = xray ]; then
+    if put_file local.killswitch.core.xray.plist "$CORE_PLIST" 644; then plist=1; fi
+  elif put_file local.killswitch.core.plist "$CORE_PLIST" 644; then plist=1; fi
+  # a config the new generator writes differently: reloaded in place (mihomo) or restarted (Xray)
+  if [ -s "$DIR/core/config.yaml" ] || [ -s "$DIR/core/xray.json" ]; then ks_run _regen || echo "core config: not rebuilt"; fi
   if ! job_loaded "$CORE_JOB" || [ "$((restart + plist))" = 0 ]; then
     echo "core: kept"
     return 0
@@ -237,7 +253,7 @@ main() {
   install -d -o root -g wheel -m 711 "$DIR/core"
   [ -f "$DIR/core/core.log" ] || install -o root -g wheel -m 600 /dev/null "$DIR/core/core.log"
   chmod 600 "$DIR/core/core.log"
-  [ ! -f mihomo ] || core_update
+  if [ -f mihomo ] || [ -f xray ]; then core_update; fi
   [ -e "$DIR/events.log" ] || install -o root -g wheel -m 644 /dev/null "$DIR/events.log"
 
   sudoers_text "$USER_NAME" "$DIR/ks" > "$SUDOERS.tmp"
