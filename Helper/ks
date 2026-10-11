@@ -130,9 +130,15 @@ block_geosites() {  # the lists the settings block, one per line; none without t
     if [ "$(setting "${kv%%:*}" 0)" = 1 ]; then echo "${kv#*:}"; fi
   done
 }
+# a category switched on without the shipped geosite.dat blocks nothing: say so and log it
+block_geodata_note() {  # block_geodata_note <key> <0|1>
+  [ "$2" = 1 ] && [ ! -s "$CORE_DIR/geosite.dat" ] || return 0
+  log_event "blocking ${1}: no geosite.dat, nothing is blocked"
+  echo "Нет файла geosite.dat: блокировка ничего не блокирует, переустанови KillSwitch" >&2
+}
 # The own DNS-over-HTTPS server (ADR 0031): https, a public host name or IPv4 address, an optional
 # port and path; no user, query or fragment, nothing local (it is reached through a VPN server).
-DOH_RE='^https://([A-Za-z0-9.-]+)(:([0-9]{1,5}))?(/[A-Za-z0-9._~%/-]*)?$'
+DOH_RE='^https://([A-Za-z0-9.-]+)(:([0-9]{1,5}))?(/([A-Za-z0-9._/~-]|%[0-9A-Fa-f]{2})*)?$'   # % only as %XX
 DOH_NAME_RE='^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$'
 valid_doh() {  # valid_doh <url>
   local h p a b c d
@@ -154,6 +160,7 @@ valid_doh() {  # valid_doh <url>
     return 0
   fi
   [ "${#h}" -le 253 ] && [[ "$h" =~ $DOH_NAME_RE ]] || return 1
+  h=$(printf '%s' "$h" | tr 'A-Z' 'a-z')
   case "$h" in *.local|*.localhost|*.internal|*.lan|*.home.arpa) return 1 ;; esac
 }
 doh_url() { local u; u=$(setting doh ""); if [ -n "$u" ] && valid_doh "$u"; then echo "$u"; fi; }   # empty: none (or not valid)
@@ -1292,12 +1299,10 @@ core_generate_mihomo() (
     }
     $dns->{$_} = $taken{$_} for keys %taken;
     $dns->{"proxy-server-nameserver"} = [@ns] if $taken{"respect-rules"};
-    # the own DoH server (ADR 0031), reached through KS-DNS like ours; when it gives no answer, ours
-    # (fallback without filters: asked only then). Neither changes what leaves outside the tunnel.
-    if (length($ENV{DOH} // "")) {
-      $dns->{nameserver} = ["$ENV{DOH}#$ENV{KS_DNS}"];
-      $dns->{fallback} = [@ns]; $dns->{"fallback-filter"} = { geoip => JSON::PP::false };
-    }
+    # the own DoH server (ADR 0031), reached through KS-DNS like ours, alone: mihomo asks "fallback"
+    # at the same time as the nameservers, so ours there would overrule it. Ours still resolve its
+    # name (default-nameserver). Nothing here leaves outside the tunnel.
+    if (length($ENV{DOH} // "")) { $dns->{nameserver} = ["$ENV{DOH}#$ENV{KS_DNS}"] }
     # what can resolve outside the tunnel: the signature and pf (egress) follow it
     my %sig = map { exists $taken{$_} ? ($_ => $taken{$_}) : () } qw(nameserver-policy direct-nameserver direct-nameserver-follow-policy respect-rules);
     my $c = JSON::PP->new->canonical;
@@ -1715,15 +1720,19 @@ KS_XRAY_PL='
         my $bad = $s =~ /\A(localhost|fakedns)\z/i || $s =~ m{\A(https|tcp|quic)\+local://}i;
         push @dropped, { section => "dns", item => $s, reason => "bad-value" } if $bad; !$bad } @{ $cfg{dns}{servers} } ];
     }
-    # the own DoH first: Xray asks the next server when it gives no answer (the template'"'"'s, else
-    # Cloudflare'"'"'s DoH, also through a server), so disableFallback goes. After the DIRECT signature:
-    # nothing here leaves outside the tunnel.
+    # the own DoH first; when it gives no answer Xray asks the next one, Cloudflare'"'"'s DoH, also
+    # tagged ks-doh, so through a server. The template'"'"'s servers stay only for their own domains
+    # (skipFallback): a failed query must never go on to one the template routes DIRECT (review of
+    # #14); those without domains go. The template'"'"'s disableFallback stays (then the own DoH alone).
+    # After the DIRECT signature: nothing here leaves outside the tunnel.
     if (length $doh) {
       $cfg{dns} = {} unless ref $cfg{dns} eq "HASH";
-      my @s = ref $cfg{dns}{servers} eq "ARRAY" ? @{ $cfg{dns}{servers} } : ();
-      @s = ({ address => "https://1.1.1.1/dns-query", tag => "ks-doh" }) unless @s;
-      $cfg{dns}{servers} = [ { address => $doh, tag => "ks-doh" }, @s ];
-      if (exists $cfg{dns}{disableFallback}) { delete $cfg{dns}{disableFallback}; push @dropped, { section => "dns", item => "disableFallback", reason => "managed" } }
+      my @s;
+      for (ref $cfg{dns}{servers} eq "ARRAY" ? @{ $cfg{dns}{servers} } : ()) {
+        if (ref $_ eq "HASH" && ref $_->{domains} eq "ARRAY" && @{ $_->{domains} }) { push @s, { %$_, skipFallback => JSON::PP::true } }
+        else { push @dropped, { section => "dns", item => (ref $_ eq "HASH" ? $_->{address} // "?" : $_ // "?"), reason => "own-doh" } }
+      }
+      $cfg{dns}{servers} = [ { address => $doh, tag => "ks-doh" }, { address => "https://1.1.1.1/dns-query", tag => "ks-doh" }, @s ];
     }
     # sniffing: the template inbound'"'"'s, else routing only
     my ($tpl) = grep { ref $_ eq "HASH" && ref $_->{sniffing} eq "HASH" && $_->{sniffing}{enabled} } @{ ref $c->{inbounds} eq "ARRAY" ? $c->{inbounds} : [] };
@@ -2415,15 +2424,21 @@ set_splitapps() {
 # "ks set doh <url>" (ADR 0031): the own DNS-over-HTTPS server, used by the core through the VPN
 # only; "" clears. Checked before it is written: a bad line in settings would block everything.
 set_doh() {
-  if [ -z "$1" ]; then
-    { grep -v '^doh=' "$SETTINGS" 2>/dev/null || true; } > "$SETTINGS.tmp" && chmod 644 "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS" || return 1
-  else
-    valid_doh "$1" || {
-      echo "Адрес DNS-over-HTTPS должен быть вида https://имя-сервера/путь: без логина, без ? и #, не адрес в локальной сети" >&2
-      return 1; }
-    put_setting doh "$1" || return 1
+  local old
+  old=$(setting doh "")
+  if [ -n "$1" ] && ! valid_doh "$1"; then
+    echo "Адрес DNS-over-HTTPS должен быть вида https://имя-сервера/путь: без логина, без ? и #, не адрес в локальной сети" >&2
+    return 1
   fi
-  core_apply_settings
+  doh_put "$1" || return 1
+  # a config the core does not take must not stay in settings: every later rebuild would fail
+  core_apply_settings && return 0
+  doh_put "$old"
+  return 1
+}
+doh_put() {  # doh_put <url>: the settings line, "" removes it
+  if [ -n "$1" ]; then put_setting doh "$1"; return; fi
+  { grep -v '^doh=' "$SETTINGS" 2>/dev/null || true; } > "$SETTINGS.tmp" && chmod 644 "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
 }
 
 # "ks set multihop <entry proxy>|off": double VPN. The entry is checked by building the config
@@ -3438,7 +3453,7 @@ case "${1:-status}" in
     { grep -vE "^$key=" "$SETTINGS" 2>/dev/null; echo "$key=$val"; } > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
     reload_if_on
     # the generator adds the blocked categories (ADR 0031)
-    case "$key" in adblock|blockadult|blocksocial|blockbetting) core_apply_settings || exit 1 ;; esac
+    case "$key" in adblock|blockadult|blocksocial|blockbetting) core_apply_settings || exit 1; block_geodata_note "$key" "$val" ;; esac
     if [ "$key" = failover ]; then log_event "automatic server switch: $([ "$val" = 1 ] && echo on || echo off)"; fi
     ;;
   allow)

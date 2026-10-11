@@ -42,7 +42,7 @@ genx() { core_generate_xray "$1" "$tmp/c" "$tmp/s" 2>"$tmp/err"; }
 
 # --- the settings lines ks writes (fail closed on anything else, ADR 0015)
 lines_ok() { printf '%s\n' "$1" > "$tmp/lines"; settings_lines_ok "$tmp/lines"; }
-for l in blockadult=1 blocksocial=0 blockbetting=1 adblock=1 doh= \
+for l in blockadult=1 blocksocial=0 blockbetting=1 adblock=1 doh= doh=https://dns.example.com/q%2Fx%20y \
          doh=https://dns.example.com/dns-query doh=https://dns.nextdns.io/abc123 doh=https://9.9.9.9/dns-query \
          doh=https://dns.example.com:8443/q/x_y~z doh=https://d.adguard-dns.com/dns-query/a1b2; do
   lines_ok "$l" && ok "settings: takes $l" || bad "settings: refused $l"
@@ -52,7 +52,9 @@ for l in blockadult=2 blockmalware=1 doh=http://dns.example.com/dns-query doh=ht
          doh=https://localhost/dns-query doh=https://127.0.0.1/dns-query doh=https://192.168.1.1/dns-query \
          doh=https://10.0.0.1/dns-query doh=https://198.18.0.1/dns-query doh=https://[::1]/dns-query \
          doh=https://dns.example.com:0/x doh=https://dns.example.com:99999/x doh=https://300.1.1.1/x doh=https://dns/x \
-         "doh=https://dns.example.com/$(printf 'a%.0s' $(seq 300))" doh=dns.example.com 'doh=https://-bad.example.com/x'; do
+         "doh=https://dns.example.com/$(printf 'a%.0s' $(seq 300))" doh=dns.example.com 'doh=https://-bad.example.com/x' \
+         'doh=https://dns.example.com/%zz' 'doh=https://dns.example.com/%' 'doh=https://dns.example.com/a%2' \
+         doh=https://Router.LOCAL/dns-query doh=https://nas.Home.Arpa/x doh=https://box.LAN/x; do
   lines_ok "$l" && bad "settings: took $l" || ok "settings: refuses ${l:0:60}"
 done
 
@@ -79,16 +81,16 @@ rm -f "$SETTINGS"
 genm "$fx/ok-minimal.json"
 [ "$(rules_of)" = "MATCH,only" ] && ok "mihomo: nothing chosen, nothing blocked" || bad "mihomo none: $(rules_of)"
 
-# --- mihomo: own DoH through KS-DNS first, our resolvers (also through KS-DNS) when it fails
+# --- mihomo: own DoH only, through KS-DNS. mihomo asks "fallback" at the same time as the
+# nameservers (review of #14), so a fallback would overrule the own server: none.
 genm "$fx/ok-minimal.json"; cp "$tmp/c.direct" "$tmp/plain.direct"; cp "$tmp/c.egress" "$tmp/plain.egress"
 j '$c->{dns}' > "$tmp/plain.dns"
 put doh https://dns.example.com/dns-query/abc123
 genm "$fx/ok-minimal.json" || bad "mihomo doh refused: $(cat "$tmp/err")"
 [ "$(j 'join ",", @{ $c->{dns}{nameserver} }')" = "https://dns.example.com/dns-query/abc123#KS-DNS" ] &&
   ok "mihomo doh: the own server, reached through KS-DNS (never DIRECT)" || bad "mihomo doh nameserver: $(j '$c->{dns}{nameserver}')"
-[ "$(j 'join ",", @{ $c->{dns}{fallback} }')" = "https://1.1.1.1/dns-query#KS-DNS,https://8.8.8.8/dns-query#KS-DNS" ] &&
-  [ "$(j '$c->{dns}{"fallback-filter"}{geoip} ? "on" : "off"')" = off ] &&
-  ok "mihomo doh: when it fails, our resolvers through KS-DNS (fallback, no geoip filter)" || bad "mihomo doh fallback: $(j '$c->{dns}')"
+[ "$(j 'exists $c->{dns}{fallback} || exists $c->{dns}{"fallback-filter"} ? "yes" : "no"')" = no ] &&
+  ok "mihomo doh: no fallback (it would be asked at the same time and overrule it)" || bad "mihomo doh fallback: $(j '$c->{dns}')"
 [ "$(j 'join ",", @{ $c->{dns}{"default-nameserver"} }')" = "https://1.1.1.1/dns-query#KS-DNS,https://8.8.8.8/dns-query#KS-DNS" ] &&
   ok "mihomo doh: its name resolved by our resolvers through the tunnel" || bad "mihomo default-nameserver: $(j '$c->{dns}{"default-nameserver"}')"
 cmp -s "$tmp/c.direct" "$tmp/plain.direct" && cmp -s "$tmp/c.egress" "$tmp/plain.egress" &&
@@ -138,8 +140,15 @@ genx "$fx/xray-panel.json"; cp "$tmp/c.direct" "$tmp/x.direct"; cp "$tmp/c.egres
 put doh https://dns.example.com/dns-query/abc123
 genx "$fx/xray-panel.json" || bad "xray doh refused: $(cat "$tmp/err")"
 [ "$(j '$c->{dns}{servers}[0]')" = '{"address":"https://dns.example.com/dns-query/abc123","tag":"ks-doh"}' ] &&
-  [ "$(j 'scalar @{ $c->{dns}{servers} }')" = 4 ] && ok "xray doh: the own server first, the subscription's after it (fallback)" ||
-  bad "xray doh servers: $(j '$c->{dns}{servers}')"
+  [ "$(j '$c->{dns}{servers}[1]')" = '{"address":"https://1.1.1.1/dns-query","tag":"ks-doh"}' ] &&
+  ok "xray doh: the own server first, Cloudflare DoH through a server when it fails" || bad "xray doh servers: $(j '$c->{dns}{servers}')"
+# review of #14: a failed own DoH must never cascade to a template server routed DIRECT
+# (direct-dns 77.88.8.8 → freedom): template servers stay only for their own domains
+[ "$(j 'join ",", map { $_->{tag} . ":" . ($_->{skipFallback} ? "skip" : "fallback") . ":" . (ref $_->{domains} ? "domains" : "all") } @{ $c->{dns}{servers} }[2 .. $#{ $c->{dns}{servers} }]')" = \
+  "direct-dns:skip:domains" ] && ok "xray doh: the template's servers only for their own domains, never as a fallback" ||
+  bad "xray doh template servers: $(j '$c->{dns}{servers}')"
+[ "$(q 'join ",", map { "$_->{item}:$_->{reason}" } grep { $_->{section} eq "dns" } @{ $c->{dropped} }')" = "8.8.8.8:own-doh,1.1.1.1:own-doh" ] &&
+  ok "xray doh report: the template's general servers named as replaced" || bad "xray doh dropped: $(q '$c->{dropped}')"
 [ "$(j '$c->{routing}{rules}[2]')" = '{"inboundTag":["ks-doh"],"outboundTag":"LT_1"}' ] &&
   [ "$(j '$c->{routing}{rules}[3]')" = '{"domain":["full:dns.example.com"],"outboundTag":"LT_1"}' ] &&
   ok "xray doh: its queries and its host to a server, before the subscription's rules" || bad "xray doh rules: $(j '[ @{ $c->{routing}{rules} }[2,3] ]')"
@@ -154,7 +163,7 @@ put doh https://9.9.9.9/dns-query
   < "$fx/xray-panel.json" > "$tmp/p.json"
 genx "$tmp/p.json" || bad "xray doh ip refused: $(cat "$tmp/err")"
 [ "$(j '$c->{routing}{rules}[3]')" = '{"ip":["9.9.9.9"],"outboundTag":"LT_1"}' ] && ok "xray doh: an address as the host" || bad "xray doh ip: $(j '$c->{routing}{rules}[3]')"
-[ "$(j 'exists $c->{dns}{disableFallback} ? "kept" : "gone"')" = gone ] && ok "xray doh: disableFallback dropped, so a dead DoH falls back" ||
+[ "$(j '$c->{dns}{disableFallback} ? "kept" : "gone"')" = kept ] && ok "xray doh: the template's disableFallback kept (own DoH alone)" ||
   bad "xray doh: disableFallback $(j '$c->{dns}{disableFallback}')"
 xtest "xray: own DoH by address" "$tmp/c"
 /usr/bin/perl -MJSON::PP -e 'local $/; my $a = JSON::PP->new->decode(<STDIN>); delete $a->[0]{dns}; print JSON::PP->new->encode($a)' \
@@ -168,6 +177,15 @@ genx "$fx/xray-panel.json"
 [ "$(j '$c->{dns}{servers}[0]{tag}')" = direct-dns ] && ok "xray doh: a bad value is ignored" || bad "xray bad doh: $(j '$c->{dns}{servers}[0]')"
 rm -f "$SETTINGS"
 
+# --- a category switched on without geosite.dat blocks nothing: said and logged (review of #14)
+EVENTS="$tmp/events.log"; diag_event() { :; }
+rm -f "$CORE_DIR/geosite.dat"
+block_geodata_note blocksocial 1 2>"$tmp/err"
+grep -q 'blocksocial.*geosite.dat' "$EVENTS" && grep -q geosite.dat "$tmp/err" && ok "block without geosite.dat: logged and said" ||
+  bad "block without geodata: $(cat "$EVENTS" "$tmp/err" 2>/dev/null)"
+: > "$EVENTS"; block_geodata_note blocksocial 0 2>/dev/null; geo_on; block_geodata_note blocksocial 1 2>/dev/null
+[ ! -s "$EVENTS" ] && ok "block: nothing logged when off or with geosite.dat" || bad "block note: $(cat "$EVENTS")"
+
 # --- ks set doh: checked before it is written, "" clears; the config is rebuilt (core_apply_settings)
 applied=0; core_apply_settings() { applied=$((applied + 1)); }
 printf 'lan=1\n' > "$SETTINGS"
@@ -176,6 +194,12 @@ set_doh "https://dns.example.com/dns-query" 2>/dev/null && [ "$(setting doh "")"
 set_doh "http://dns.example.com/x" 2>"$tmp/err" && bad "set doh: took http" ||
   { [ "$(setting doh "")" = https://dns.example.com/dns-query ] && [ "$applied" = 1 ] && grep -q https "$tmp/err" &&
     ok "set doh: a bad address refused, nothing changed, the reason said" || bad "set doh bad: $(cat "$SETTINGS") $(cat "$tmp/err")"; }
+core_apply_settings() { applied=$((applied + 1)); return 1; }
+set_doh "https://other.example.com/q" 2>/dev/null && bad "set doh: a failed rebuild reported as done" ||
+  { [ "$(setting doh "")" = https://dns.example.com/dns-query ] && ok "set doh: a failed rebuild puts the old value back" ||
+    bad "set doh rollback: $(cat "$SETTINGS")"; }
+core_apply_settings() { applied=$((applied + 1)); }
+applied=1
 set_doh "" && ! grep -q '^doh' "$SETTINGS" && grep -qx lan=1 "$SETTINGS" && [ "$applied" = 2 ] && ok "set doh \"\": the line gone, the rest kept" ||
   bad "set doh clear: $(cat "$SETTINGS")"
 rm -f "$SETTINGS"
