@@ -37,6 +37,30 @@ final class ProviderInfoTests: XCTestCase {
         XCTAssertEqual(SubscriptionHeaders.title("Stork \(rainbow)"), "Stork \(rainbow)")
     }
 
+    /// A kept joiner must not make an invisible banner or «Сообщение от «»», nor glue thousands of
+    /// scalars into one Character that slips past the caps.
+    func testJoinerAloneIsNothing() {
+        XCTAssertNil(ProviderInfo.text("\u{200D}"))
+        XCTAssertNil(ProviderInfo.text(" \u{200D}\u{200D} \u{FE0F} "))
+        XCTAssertNil(SubscriptionHeaders.title("\u{200D}"))
+        XCTAssertNil(ProviderInfo(headers: ["announce": base64("\u{200D}\n\u{200D}\u{200D}")]).announcement)
+        XCTAssertEqual(ProviderInfo.text("\u{200D}Hi\u{200D}"), "Hi")
+        XCTAssertEqual(ProviderInfo.text("👨\u{200D}\u{200D}\u{200D}👩"), "👨\u{200D}👩", "no runs of joiners")
+        XCTAssertEqual(ProviderInfo.text("a \u{200D} b"), "a  b", "only between two visible scalars")
+    }
+
+    func testJoinedEmojiCannotBypassTheCaps() throws {
+        let glued = Array(repeating: "😀", count: 4000).joined(separator: "\u{200D}")
+        XCTAssertEqual(glued.count, 1)
+        let announcement = ProviderInfo.text("ok " + glued)
+        XCTAssertLessThanOrEqual(announcement?.unicodeScalars.count ?? 0, ProviderInfo.maxAnnouncementLength)
+        XCTAssertLessThanOrEqual(SubscriptionHeaders.title(glued)?.unicodeScalars.count ?? 0, SubscriptionHeaders.maxTitleLength)
+        let long = try XCTUnwrap(ProviderInfo.text(String(repeating: "👨\u{200D}👩\u{200D}👧 ", count: 200)))
+        XCTAssertLessThanOrEqual(long.unicodeScalars.count, ProviderInfo.maxAnnouncementLength)
+        XCTAssertTrue(long.hasSuffix("…"))
+        XCTAssertTrue(long.hasPrefix("👨\u{200D}👩\u{200D}👧 "), "whole emoji are kept")
+    }
+
     func testAnnouncementIsCapped() throws {
         let long = String(repeating: "а", count: 1000)
         let text = try XCTUnwrap(ProviderInfo(headers: ["announce": base64(long)]).announcement)

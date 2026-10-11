@@ -40,22 +40,55 @@ struct ProviderInfo: Codable, Equatable {
         guard var text = header?.trimmingCharacters(in: .whitespaces), !text.isEmpty else { return nil }
         if text.hasPrefix("base64:"), let decoded = Base64.decode(String(text.dropFirst(7))) { text = decoded }
         let lines = text.replacingOccurrences(of: "\r\n", with: "\n").split(whereSeparator: \.isNewline).map { line in
-            String(String.UnicodeScalarView(line.unicodeScalars.compactMap { scalar -> Unicode.Scalar? in
+            let kept = line.unicodeScalars.compactMap { scalar -> Unicode.Scalar? in
                 if scalar == "\t" { return " " }
                 // the zero-width joiner holds emoji sequences together (👨‍👩‍👧); it cannot reorder text
-                if scalar == "\u{200D}" { return scalar }
+                if scalar == joiner { return scalar }
                 switch scalar.properties.generalCategory {
                 case .control, .format, .lineSeparator, .paragraphSeparator, .surrogate, .privateUse, .unassigned: return nil
                 default: return scalar
                 }
-            })).trimmingCharacters(in: .whitespaces)
+            }
+            // a joiner only between two other scalars that are not spaces: no runs, none at the ends
+            var scalars: [Unicode.Scalar] = []
+            for (index, scalar) in kept.enumerated() {
+                if scalar == joiner {
+                    let next = index + 1 < kept.count ? kept[index + 1] : nil
+                    guard let last = scalars.last, last != joiner, !last.properties.isWhitespace,
+                          let next, next != joiner, !next.properties.isWhitespace else { continue }
+                }
+                scalars.append(scalar)
+            }
+            return String(String.UnicodeScalarView(scalars)).trimmingCharacters(in: .whitespaces)
         }
-        text = lines.filter { !$0.isEmpty }.prefix(maxLines).joined(separator: "\n")
+        text = lines.filter(isVisible).prefix(maxLines).joined(separator: "\n")
         guard !text.isEmpty else { return nil }
-        if text.count > maxLength {
-            text = String(text.prefix(maxLength - 1)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+        // counted in scalars: joined emoji make one Character of any length
+        if text.unicodeScalars.count > maxLength {
+            var cut = "", count = 0
+            for character in text {
+                count += character.unicodeScalars.count
+                if count > maxLength - 1 { break }
+                cut.append(character)
+            }
+            cut = cut.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard isVisible(cut) else { return nil }
+            text = cut + "…"
         }
         return text
+    }
+
+    private static let joiner: Unicode.Scalar = "\u{200D}"
+
+    /// Something to see: not only spaces, joiners and marks that attach to nothing.
+    private static func isVisible(_ text: some StringProtocol) -> Bool {
+        text.unicodeScalars.contains { scalar in
+            guard scalar != joiner, !scalar.properties.isWhitespace else { return false }
+            switch scalar.properties.generalCategory {
+            case .nonspacingMark, .enclosingMark, .spacingMark: return false
+            default: return true
+            }
+        }
     }
 
     private static func link(_ header: String?) -> URL? {
