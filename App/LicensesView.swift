@@ -29,7 +29,7 @@ struct LicensesView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Лицензии").font(.headline)
+            Text("Лицензии").font(.headline).accessibilityAddTraits(.isHeader)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     ForEach(Array(Self.sections.enumerated()), id: \.offset) { _, section in

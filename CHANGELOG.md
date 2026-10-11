@@ -4,6 +4,16 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Fixed
+- Accessibility (#41): no more orange or red text in the light theme, where it read at 1.9–3.6:1.
+  The split-apps and geodata warnings, «Действует до …» in the last 3 days and the report error
+  are a primary text with a coloured icon; «Удалить KillSwitch из системы…» is no longer red text
+  (it still asks first). Sheet and leak test titles are VoiceOver headings.
+- «Проверка утечек» no longer tells you to turn protection off to learn your usual address: it is
+  learnt in the first setup, or by a check during a pause.
+
 ## [0.18.1] - 2026-10-11
 
 ### Added

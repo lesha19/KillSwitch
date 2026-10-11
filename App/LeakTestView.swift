@@ -86,7 +86,7 @@ struct LeakTestView: View {
                     }
                     Button("Забыть", role: .destructive) { tester.forgetHome() }
                 } else {
-                    Text("Неизвестен. Чтобы проверка могла узнать твоего провайдера среди DNS-серверов, один раз запусти её с отключённым VPN и выключенной (или на паузе) защитой.")
+                    Text("Неизвестен, поэтому DNS провайдера не с чем сравнить. Он запоминается сам при первой настройке, а ещё при проверке во время паузы защиты, пока VPN отключён.")
                         .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             } header: {
@@ -105,7 +105,7 @@ struct LeakTestView: View {
             Image(systemName: verdict.clean ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
                 .font(.system(size: 44)).foregroundStyle(color)
                 .accessibilityHidden(true)
-            Text(verdict.title).font(.title2.bold())
+            Text(verdict.title).font(.title2.bold()).accessibilityAddTraits(.isHeader)
             if verdict.needsHomeReference && verdict.clean {
                 Text("Твой обычный адрес неизвестен, поэтому DNS-серверы провайдера не с чем сравнить — посмотри список ниже.")
                     .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -114,7 +114,7 @@ struct LeakTestView: View {
         } else {
             Image(systemName: "shield.lefthalf.filled").font(.system(size: 44)).foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            Text("Проверка утечек").font(.title2.bold())
+            Text("Проверка утечек").font(.title2.bold()).accessibilityAddTraits(.isHeader)
             Text("Проверит, может ли что-то выйти мимо VPN, какой адрес видят сайты и кто узнаёт для тебя адреса сайтов.")
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)

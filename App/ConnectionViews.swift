@@ -265,9 +265,13 @@ struct SubscriptionSummary: View {
                     Text("Трафик: \(Self.bytes(usage.used)), без ограничения").font(.caption).foregroundStyle(.secondary)
                 }
                 if let expire = usage.expire {
-                    Text(expire < Date() ? String(localized: "Подписка закончилась \(expire.formatted(date: .long, time: .omitted))")
-                                         : String(localized: "Действует до \(expire.formatted(date: .long, time: .omitted))"))
-                        .font(.caption).foregroundStyle(expire.timeIntervalSinceNow < 3 * 86400 ? .orange : .secondary)
+                    let text = expire < Date() ? String(localized: "Подписка закончилась \(expire.formatted(date: .long, time: .omitted))")
+                                               : String(localized: "Действует до \(expire.formatted(date: .long, time: .omitted))")
+                    if expire.timeIntervalSinceNow < 3 * 86400 {
+                        StatusLabel(text, systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.caption)
+                    } else {
+                        Text(text).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
             if let last = client.status.lastUpdate {
