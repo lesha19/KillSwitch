@@ -113,4 +113,117 @@ printf 'net=x\n🇱🇹Литва\tfp\tfirefox\n' > "$MEM"; put_setting escalate
   ok "escalate=0: the memory is not used" || bad "memory with escalate=0"
 drop_setting escalate; rm -f "$MEM"
 
+# --- the observatory's answer: the alternatives' probes are read too
+/usr/bin/perl -e 'sub vi { my $v = shift; my $o = ""; while ($v >= 128) { $o .= chr(($v & 127) | 128); $v >>= 7 } $o . chr($v) }
+  sub f { my ($n, $s) = @_; vi($n * 8 + 2) . vi(length $s) . $s }
+  my @st = map { vi(8) . vi(1) . vi(16) . vi(60) . f(4, $_) } qw(ks-ping-0-fp-firefox ks-ping-0-t1 ks-ping-0-x LT_1);
+  my $m = f(1, join "", map { f(1, $_) } @st); print "\0", pack("N", length $m), $m' | observe_decode > "$T/obs"
+[ "$(cut -f1 "$T/obs" | paste -sd' ' -)" = "ks-ping-0-fp-firefox ks-ping-0-t1" ] &&
+  ok "observatory reply: the alternatives' probes read, nothing else" || bad "decoded: $(cat -t "$T/obs")"
+
+# --- the failover pass: fingerprint, then transport, then another server of the country
+core_job() { CORE_RUN=1; CORE_PID=100; }
+PROBE="0 0"; diag_probe() { echo "$PROBE"; }
+primary_iface() { echo en0; }
+NETSIG="en0 192.168.1.1"; net_sig() { echo "$NETSIG"; }
+OBS=""; xray_observe() { [ -n "$OBS" ] && printf '%s\n' "$OBS"; }
+xray_select() {
+  echo "$1" >> "$T/selected"; put_setting xrayserver "$1"
+  /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); $r->{selected} = $ARGV[0]; print JSON::PP->new->encode($r)' "$1" < "$REPORT" > "$REPORT.n" &&
+    mv "$REPORT.n" "$REPORT"
+}
+REBUILD_RC=0
+core_rebuild() { echo "rebuild ${2:-}" >> "$T/rebuilt"; cp "$MEM" "$T/mem.at-rebuild" 2>/dev/null; return "$REBUILD_RC"; }
+reload_if_on() { :; }; core_reload() { :; }
+hosts; gen; cp "$T/c.report" "$T/report.lt"
+reset_esc() { rm -f "$CORE_DIR/failover" "$T/selected" "$T/rebuilt" "$MEM" "$DIAG"/events-*.jsonl; : > "$EVENTS"; cp "$T/report.lt" "$REPORT"
+  put_setting core xray; put_setting xrayserver "🇱🇹Литва"; drop_setting escalate; drop_setting failover; PROBE="0 0"; NOW=1000000; }
+pass() { failover_pass "$NOW"; NOW=$((NOW + 20)); }
+mem() { grep -v '^net=' "$MEM" 2>/dev/null | paste -sd'|' -; }
+# the running host dead, as its firefox probe; safari and its xhttp answer; so do the others
+OBS=$'ks-ping-0\t0\t0\nks-ping-0-fp-firefox\t0\t0\nks-ping-0-fp-safari\t1\t80\nks-ping-0-t1\t1\t50\nks-ping-1\t1\t30\nks-ping-2\t1\t40\nks-ping-3\t1\t20'
+reset_esc
+pass; pass
+[ ! -e "$T/rebuilt" ] && ok "two failed probes: nothing yet" || bad "stepped after 2"
+pass
+[ "$(mem)" = "🇱🇹Литва	fp	safari" ] && [ "$(cat "$T/rebuilt" 2>/dev/null)" = "rebuild switch" ] && [ ! -e "$T/selected" ] &&
+  ok "3 failed: first another fingerprint for the same server (the one whose probe answers), the server picked by hand kept" ||
+  bad "fp step: mem '$(mem)' rebuilt $(cat "$T/rebuilt" 2>&1) selected $(cat "$T/selected" 2>&1)"
+grep -q 'escalate (no answer): 🇱🇹Литва fingerprint chrome -> safari$' "$EVENTS" && ok "  events.log: escalate … fingerprint chrome -> safari" || bad "  events: $(cat "$EVENTS")"
+grep -q '"ev":"escalate","server":"🇱🇹Литва","kind":"fingerprint","from":"chrome","to":"safari"' "$DIAG"/events-*.jsonl &&
+  ok "  the diagnostics journal: an escalate event" || bad "  journal: $(cat "$DIAG"/events-*.jsonl 2>&1)"
+grep -qx "net=$NETSIG" "$MEM" && ok "  the memory is tied to this network" || bad "  net: $(cat "$MEM")"
+for _ in 1 2 3 4 5 6 7 8; do pass; done
+[ "$(wc -l < "$T/rebuilt")" -eq 1 ] && ok "  still failing: no next step within 3 minutes" || bad "  steps too fast: $(cat "$T/rebuilt")"
+pass
+[ "$(mem)" = "🇱🇹Литва	lead	LT_1_FB" ] && [ ! -e "$T/selected" ] &&
+  ok "then another transport the host offers for the same server (the fingerprint found for the old one forgotten)" || bad "transport step: '$(mem)'"
+grep -q 'escalate (no answer): 🇱🇹Литва transport tcp -> xhttp$' "$EVENTS" && ok "  events.log: escalate … transport tcp -> xhttp" || bad "  events: $(cat "$EVENTS")"
+for _ in 1 2 3 4 5 6 7 8 9; do pass; done
+[ "$(cat "$T/selected" 2>/dev/null)" = "🇱🇹Литва XHTTP" ] &&
+  ok "then another server: a host at the same address first, though a farther one answers faster" || bad "server step: $(cat "$T/selected" 2>&1)"
+grep -q 'failover (no answer, same server): 🇱🇹Литва -> 🇱🇹Литва XHTTP$' "$EVENTS" && ok "  events.log: failover (no answer, same server)" || bad "  events: $(cat "$EVENTS")"
+[ "$(wc -l < "$T/rebuilt")" -eq 2 ] && ok "  each step once: no fingerprint or transport again for that host in the same outage" || bad "  rebuilt: $(cat "$T/rebuilt")"
+
+reset_esc; put_setting escalate 0
+pass; pass; pass
+[ ! -e "$T/rebuilt" ] && [ "$(cat "$T/selected" 2>/dev/null)" = "🇱🇹Литва 2" ] &&
+  ok "escalate=0: the server switch of ADR 0023 at once (the fastest of the country)" || bad "escalate off: $(cat "$T/selected" 2>&1) $(cat "$T/rebuilt" 2>&1)"
+
+reset_esc; put_setting failover 0
+for _ in $(seq 1 30); do pass; done
+[ "$(wc -l < "$T/rebuilt")" -eq 2 ] && [ ! -e "$T/selected" ] && ! grep -q 'failover' "$EVENTS" &&
+  ok "failover=0: fingerprint and transport of the same server still tried, the server never left" || bad "failover off: $(cat "$T/rebuilt" 2>&1) $(cat "$T/selected" 2>&1) $(cat "$EVENTS")"
+
+OBS=$'ks-ping-0\t1\t90\nks-ping-0-fp-firefox\t1\t80\nks-ping-0-fp-safari\t1\t80\nks-ping-0-t1\t1\t50\nks-ping-1\t1\t30\nks-ping-2\t1\t40'
+reset_esc; pass; pass; pass
+[ ! -e "$T/rebuilt" ] && [ -e "$T/selected" ] &&
+  ok "its own probe answers while the requests fail: not the fingerprint or transport, another server as before" || bad "lead alive: $(cat "$T/rebuilt" 2>&1)"
+
+OBS=$'ks-ping-0\t0\t0\nks-ping-0-fp-firefox\t0\t0\nks-ping-0-fp-safari\t0\t0\nks-ping-0-t1\t0\t0\nks-ping-1\t1\t30\nks-ping-2\t0\t0'
+reset_esc; pass; pass; pass
+[ ! -e "$T/rebuilt" ] && [ "$(cat "$T/selected" 2>/dev/null)" = "🇱🇹Литва 2" ] &&
+  ok "no alternative answers (the address blocked): straight to another server, as fast as before" || bad "all dead: $(cat "$T/selected" 2>&1) $(cat "$T/rebuilt" 2>&1)"
+
+OBS=$'ks-ping-0\t0\t0\nks-ping-0-fp-safari\t1\t80'
+reset_esc; pass; pass; pass
+PROBE="90 1"; pass
+PROBE="0 0"; for _ in $(seq 1 9); do pass; done
+[ "$(wc -l < "$T/rebuilt")" -eq 2 ] && ok "an answer in between ends the outage: the fingerprint may be tried again later" || bad "episode: $(cat "$T/rebuilt")"
+
+reset_esc; REBUILD_RC=1
+printf 'net=%s\n🇱🇹Литва 2\tfp\tfirefox\n' "$NETSIG" > "$MEM"
+pass; pass; pass
+[ "$(mem)" = "🇱🇹Литва 2	fp	firefox" ] && grep -q 'escalate failed: 🇱🇹Литва fingerprint chrome -> safari, kept$' "$EVENTS" &&
+  ok "a step whose config cannot be built: the memory as it was, logged" || bad "failed step: '$(mem)' $(cat "$EVENTS")"
+REBUILD_RC=0
+
+# --- a new network: what worked is forgotten (another network may block something else)
+reset_esc
+printf 'net=wi-fi 10.0.0.1\n🇱🇹Литва\tfp\tfirefox\n' > "$MEM"
+PROBE="90 1"; pass
+[ "$(cat "$MEM")" = "net=$NETSIG" ] && [ "$(cat "$T/rebuilt" 2>/dev/null)" = "rebuild switch" ] &&
+  grep -q 'escalate reset (network changed)$' "$EVENTS" &&
+  ok "network changed: memory cleared, the config rebuilt as in the subscription, logged" || bad "net change: $(cat "$MEM") $(cat "$T/rebuilt" 2>&1) $(cat "$EVENTS")"
+pass
+[ "$(wc -l < "$T/rebuilt")" -eq 1 ] && ok "  once" || bad "  again: $(cat "$T/rebuilt")"
+reset_esc; PROBE="90 1"; pass
+[ "$(cat "$MEM")" = "net=$NETSIG" ] && [ ! -e "$T/rebuilt" ] && [ ! -s "$EVENTS" ] &&
+  ok "nothing remembered: a new network is noted, nothing rebuilt" || bad "empty memory: $(cat "$MEM") $(cat "$T/rebuilt" 2>&1)"
+
+# --- slow is not a reason to change the fingerprint or the transport
+OBS=$'ks-ping-0\t0\t0\nks-ping-0-fp-safari\t1\t80\nks-ping-1\t1\t30'
+reset_esc; put_setting xrayserver ""; PROBE="100 1"
+for _ in 1 2 3 4 5 6; do pass; done
+PROBE="450 1"
+for _ in 1 2 3 4 5 6 7 8; do pass; done
+[ ! -e "$T/rebuilt" ] && ok "slow (auto host): no fingerprint or transport step" || bad "slow tuned: $(cat "$T/rebuilt")"
+
+# --- the setting
+printf 'escalate=0\nescalate=1\n' > "$T/set"
+settings_lines_ok "$T/set" && ok "settings: escalate=0|1 is ours" || bad "escalate line refused"
+echo escalate=2 > "$T/set"
+settings_lines_ok "$T/set" && bad "escalate=2 accepted" || ok "settings: escalate=2 refused"
+core_lock_wanted set escalate && ok "ks set escalate runs under the core lock (it rebuilds)" || bad "set escalate not locked"
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

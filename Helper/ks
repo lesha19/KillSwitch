@@ -7,7 +7,8 @@
 #   ks off                  disable until "ks on"
 #   ks pause [min]          disable for N minutes (default 5), e.g. for a captive Wi-Fi portal
 #   ks netrestore           network services turned off at shutdown back on (if the watchdog is gone)
-#   ks set <key> <0|1>      lan, tailscale, dns, direct (see rules() below), wifiguard, adblock, failover
+#   ks set <key> <0|1>      lan, tailscale, dns, direct (see rules() below), wifiguard, adblock, failover,
+#                           escalate (Xray: another fingerprint or transport first, ADR 0030)
 #   ks set splitapps <a,b>  apps outside the VPN; "" clears
 #   ks set multihop <proxy>|off  double VPN: every other proxy (Xray: the running host) is reached through this one
 #   ks set core xray|mihomo the core that runs (ADR 0020); the subscription is imported again for it
@@ -130,6 +131,7 @@ settings_lines_ok() {
       xrayserver=*) valid_name "${line#*=}" || return 1 ;;
       diag=[01]) ;;   # «Подробная диагностика», ADR 0021
       failover=[01]) ;;   # automatic server switch with Xray, ADR 0023
+      escalate=[01]) ;;   # another fingerprint or transport of the same server first, ADR 0030
       *) return 1 ;;
     esac
   done < "$1" 2>/dev/null
@@ -2728,7 +2730,7 @@ KS_FAILOVER_PL='
   my $usual = @h >= 5 ? $sorted[$#sorted / 2] : 0;
   my ($ms, $now) = ($ENV{PROBE_MS} + 0, $ENV{NOW} + 0);
   if ($ENV{PROBE_OK}) {
-    $s{fails} = 0;
+    $s{fails} = 0; delete $s{esc};
     if ($usual && $ms > 3 * $usual) { $s{high} ||= $now }
     else { $s{high} = 0; push @h, $ms; shift @h while @h > 30 }
   } else { $s{fails} = ($s{fails} // 0) + 1 }
@@ -2739,12 +2741,35 @@ KS_FAILOVER_PL='
   if (!$why) { $s{told} = 0 }
   elsif ($now - $s{last} >= 180) {
     my %p = map { my @f = split /\t/; ($f[0] => [ $f[1], $f[2] ]) } split /\n/, $ENV{P} // "";
-    my $country = $flag->($cur);
-    my $entry = $ENV{ENTRY} // "";   # «Двойной VPN»: the entry is no exit (ADR 0027)
-    my ($best) = sort { $p{$a}[1] <=> $p{$b}[1] }
-      grep { $_ ne $cur && $_ ne $entry && length $country && $flag->($_) eq $country && $p{$_} && $p{$_}[0] && ($why ne "slow" || $p{$_}[1] * 2 < $ms) } @names;
-    if (defined $best) { $out = join "\t", "switch", $cur, $best, $why, $ms, $usual; %s = (server => $best, last => $now, manual => "") }
-    elsif (!$s{told}) { $out = join "\t", "stay", $cur, "-", $why, $ms, $usual; $s{told} = 1 }
+    my %o = map { my @f = split /\t/; ($f[0] => [ $f[1], $f[2] ]) } split /\n/, $ENV{O} // "";
+    my ($srv) = grep { $_->{name} eq $cur } @{ $r->{servers} || [] };
+    # escalation (ADR 0030): dead, its own probe too, and another way to the same server answers:
+    # another fingerprint, then another transport of the host; each once until it answers again
+    if ($ENV{ESC} && $why eq "no-answer" && $srv && !($srv->{ping} && $o{ $srv->{ping} } && $o{ $srv->{ping} }[0])) {
+      my %done = map { $_ => 1 } grep { length } split /,/, $s{esc} // "";
+      for my $kind (qw(fingerprint transport)) {
+        next if $done{$kind};
+        my ($v) = sort { $o{ $a->{tag} }[1] <=> $o{ $b->{tag} }[1] }
+          grep { ref $_ eq "HASH" && ($_->{kind} // "") eq $kind && $o{ $_->{tag} // "" } && $o{ $_->{tag} }[0] } @{ ref $srv->{variants} eq "ARRAY" ? $srv->{variants} : [] };
+        next unless $v;
+        my $was = $kind eq "fingerprint" ? $srv->{fingerprint} // "default" : $srv->{transport} // "other";
+        $out = join "\t", "tune", $cur, $kind, ($kind eq "fingerprint" ? $v->{value} : $v->{outbound}), $was, $v->{value};
+        $s{esc} = join ",", sort(keys %done), $kind; $s{last} = $now; $s{fails} = 0;
+        last;
+      }
+    }
+    if (!length $out && $ENV{FO}) {
+      my $country = $flag->($cur);
+      my $entry = $ENV{ENTRY} // "";   # «Двойной VPN»: the entry is no exit (ADR 0027)
+      # escalation: a host at the same address (another transport of this server) before the others
+      my %ep = map { ($_->{name} => $_->{endpoint}) } grep { defined $_->{endpoint} } @{ $r->{servers} || [] };
+      my $mine = $ENV{ESC} && $why eq "no-answer" && $srv ? $srv->{endpoint} : undef;
+      my $far = sub { defined $mine && defined $ep{ $_[0] } && $ep{ $_[0] } == $mine ? 0 : 1 };
+      my ($best) = sort { $far->($a) <=> $far->($b) || $p{$a}[1] <=> $p{$b}[1] }
+        grep { $_ ne $cur && $_ ne $entry && length $country && $flag->($_) eq $country && $p{$_} && $p{$_}[0] && ($why ne "slow" || $p{$_}[1] * 2 < $ms) } @names;
+      if (defined $best) { $out = join "\t", "switch", $cur, $best, $why, $ms, $usual, $far->($best) ? "" : "same"; %s = (server => $best, last => $now, manual => "") }
+      elsif (!$s{told}) { $out = join "\t", "stay", $cur, "-", $why, $ms, $usual; $s{told} = 1 }
+    }
   }
   $s{hist} = join ",", @h if ($s{server} eq $cur);
   open my $f, ">", "$ENV{ST}.tmp" or die; print $f map { "$_=" . ($s{$_} // "") . "\n" } sort keys %s; close $f or die;
@@ -2752,22 +2777,29 @@ KS_FAILOVER_PL='
   print "$out\n" if length $out;
 '
 failover_pass() {  # failover_pass [epoch]
-  local now=${1:-$(date +%s)} probe ok out act from to why ms usual text
-  [ "$(core_kind)" = xray ] && [ "$(setting failover 1)" = 1 ] && [ -s "$REPORT" ] || return 0
+  local now=${1:-$(date +%s)} fo esc probe ok out act from to why ms usual same text
+  fo=$(setting failover 1); esc=$(setting escalate 1)
+  [ "$(core_kind)" = xray ] && { [ "$fo" = 1 ] || [ "$esc" = 1 ]; } && [ -s "$REPORT" ] || return 0
   core_job
   [ "$CORE_RUN" = 1 ] || return 0
   # no network at all (no primary interface): a failed probe says nothing of the server
   [ -n "$(primary_iface)" ] || return 0
+  [ "$esc" = 1 ] && escalate_net
   read -r probe ok <<<"$(diag_probe)"
   out=$(PROBE_MS=$probe PROBE_OK=$ok NOW=$now PICK=$(setting xrayserver "") ENTRY=$(setting multihop off) P=$(xray_pings 2>/dev/null) ST="$CORE_DIR/failover" \
+    FO=$([ "$fo" = 1 ] && echo 1) ESC=$([ "$esc" = 1 ] && echo 1) O=$([ "$esc" = 1 ] && xray_observe 2>/dev/null) \
     /usr/bin/perl -MJSON::PP -e "$KS_FAILOVER_PL" < "$REPORT") || return 0
   [ -n "$out" ] || return 0
-  IFS=$'\t' read -r act from to why ms usual <<<"$out"
+  IFS=$'\t' read -r act from to why ms usual same <<<"$out"
+  # tune <host> fingerprint|transport <fingerprint|outbound> <was> <now>
+  if [ "$act" = tune ]; then xray_tune "$from" "$to" "$why" "$ms" "$usual"; return; fi
   if [ "$why" = slow ]; then text=slow; else text="no answer"; fi
+  [ -z "$same" ] || text="$text, same server"
   if [ "$act" = switch ]; then
     if xray_select "$to" 2>/dev/null; then
       log_event "failover ($text): $from -> $to"
       if [ "$why" = slow ]; then diag_event failover from="$from" to="$to" reason="$why" ms="$ms" usual="$usual"
+      elif [ -n "$same" ]; then diag_event failover from="$from" to="$to" reason="$why" via=same-server
       else diag_event failover from="$from" to="$to" reason="$why"; fi
     else
       log_event "failover failed: $from -> $to, $from kept"
@@ -2777,6 +2809,46 @@ failover_pass() {  # failover_pass [epoch]
     log_event "failover ($text): $from, no faster server of its country"
   else
     log_event "failover ($text): $from, no live server of its country"
+  fi
+}
+# Transport escalation (ADR 0030, #20). $CORE_DIR/escalation: "net=<net_sig>", then
+# "<host>\tfp|lead\t<fingerprint|outbound tag>" per host, what worked; the generator builds it in
+# (validated there: a listed fingerprint, an outbound of the host to the same server).
+# xray_tune <host> fingerprint|transport <fingerprint|outbound> <was> <now>: remember it for that
+# host and run the config with it (core_rebuild "switch": refused if DIRECT changed, which it
+# cannot); the memory as it was when the config cannot be built
+xray_tune() {
+  local mem="$CORE_DIR/escalation" key=fp
+  [ "$2" = transport ] && key=lead
+  if [ -f "$mem" ]; then cp -p "$mem" "$mem.old"; else rm -f "$mem.old"; fi
+  # another transport: the fingerprint found for the old one is forgotten too
+  ( umask 077
+    { grep '^net=' "$mem" 2>/dev/null | head -1
+      awk -F'\t' -v h="$1" -v k="$key" 'NF == 3 && !($1 == h && ($2 == k || k == "lead"))' "$mem" 2>/dev/null
+      printf '%s\t%s\t%s\n' "$1" "$key" "$3"; } > "$mem.tmp" ) && mv "$mem.tmp" "$mem" || return 1
+  if core_rebuild "$PINS" switch 2>/dev/null; then
+    rm -f "$mem.old"
+    reload_if_on; core_reload
+    log_event "escalate (no answer): $1 $2 $4 -> $5"
+    diag_event escalate server="$1" kind="$2" from="$4" to="$5" reason=no-answer
+  else
+    if [ -f "$mem.old" ]; then mv "$mem.old" "$mem"; else rm -f "$mem"; fi
+    log_event "escalate failed: $1 $2 $4 -> $5, kept"
+    diag_event escalate-failed server="$1" kind="$2" from="$4" to="$5"
+  fi
+}
+# escalate_net: a new network (interface and router) forgets what worked: another one may block
+# something else. The config is rebuilt only when something was remembered.
+escalate_net() {
+  local mem="$CORE_DIR/escalation" sig
+  sig=$(net_sig)
+  [ -f "$mem" ] && [ "$(sed -n 's/^net=//p' "$mem" | head -1)" = "$sig" ] && return 0
+  if [ -f "$mem" ] && grep -q "$(printf '\t')" "$mem"; then
+    ( umask 077; echo "net=$sig" > "$mem" )
+    if core_rebuild "$PINS" switch 2>/dev/null; then reload_if_on; core_reload; fi
+    log_event "escalate reset (network changed)"
+  else
+    ( umask 077; echo "net=$sig" > "$mem" )
   fi
 }
 failover_bg() { [ -d "$CORE_DIR" ] && core_lock_exec 0 "$0" _failover >/dev/null 2>&1 & }
@@ -2823,7 +2895,7 @@ observe_decode() {
     eval { for my $r (map { $_->[1] } grep { $_->[0] == 1 } fields($m)) {
       for my $st (map { $_->[1] } grep { $_->[0] == 1 } fields($r)) {
         my %h = map { $_->[0] => $_->[1] } grep { $_->[0] =~ /\A[124]\z/ } fields($st);
-        next unless defined $h{4} && $h{4} =~ /\Aks-ping-[0-9]{1,3}\z/;
+        next unless defined $h{4} && $h{4} =~ /\Aks-ping-[0-9]{1,3}(-fp-[a-z0-9]{1,16}|-t[0-9]{1,3})?\z/;
         my $alive = $h{1} ? 1 : 0;
         push @out, "$h{4}\t$alive\t" . ($alive && ($h{2} // 0) < 100000 ? $h{2} // 0 : 0);
       } } 1 } or exit 1;
@@ -3350,7 +3422,7 @@ passwordless_args_ok() {
 # (core_lock_exec 0); the watchdog's rotation skips its turn while it is held.
 core_lock_wanted() {
   case "${1:-}:${2:-}" in
-    core:import|core:refresh|core:select|set:splitapps|set:multihop|set:adblock|set:diag|_regen:|repair:) return 0 ;;
+    core:import|core:refresh|core:select|set:splitapps|set:multihop|set:adblock|set:diag|set:escalate|_regen:|repair:) return 0 ;;
   esac
   return 1
 }
@@ -3403,12 +3475,18 @@ case "${1:-status}" in
     esac
     # coredirect (until 0.14, «Российские сайты напрямую») is gone: what goes direct is the
     # subscription's alone (ADR 0013); install.sh drops the old line
-    [[ "$key" =~ ^(lan|tailscale|dns|direct|wifiguard|adblock|failover)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns|direct|wifiguard|adblock|failover 0|1" >&2; exit 1; }
+    [[ "$key" =~ ^(lan|tailscale|dns|direct|wifiguard|adblock|failover|escalate)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns|direct|wifiguard|adblock|failover|escalate 0|1" >&2; exit 1; }
     { grep -vE "^$key=" "$SETTINGS" 2>/dev/null; echo "$key=$val"; } > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
     reload_if_on
     # the generator adds the ad block with adblock=1
     if [ "$key" = adblock ]; then core_apply_settings || exit 1; fi
     if [ "$key" = failover ]; then log_event "automatic server switch: $([ "$val" = 1 ] && echo on || echo off)"; fi
+    # off: what worked is forgotten and the probes of the alternatives go (ADR 0030)
+    if [ "$key" = escalate ]; then
+      [ "$val" = 1 ] || rm -f "$CORE_DIR/escalation"
+      if [ "$(core_kind)" = xray ]; then core_apply_settings || exit 1; fi
+      log_event "connection escalation: $([ "$val" = 1 ] && echo on || echo off)"
+    fi
     ;;
   allow)
     addr=${2:-}
