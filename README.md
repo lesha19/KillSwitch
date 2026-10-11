@@ -9,7 +9,7 @@ Rules are loaded at boot, before login.
 
 - `Helper/ks` — root helper: generates the pf rules from settings and loads them into anchor
   `com.apple/killswitch` (`/etc/pf.conf` untouched). `status | state | on | off | pause [min] |
-  set lan|tailscale|dns|direct|wifiguard|adblock 0|1 | allow <addr> | unallow <addr> | server-add <ip> |
+  set lan|tailscale|dns|direct|wifiguard|adblock|blockadult|blocksocial|blockbetting 0|1 | set doh <url> | set hosts <name=ip,…> | allow <addr> | unallow <addr> | server-add <ip> |
   server-remove <ip> | core … | apply | repair | watch`. Tests (no root, nothing on the system changes):
   `for t in Helper/tests/*.sh; do bash "$t"; done`.
 - `Helper/local.killswitch.plist` — LaunchDaemon: runs `ks watch` (RunAtLoad + KeepAlive), so rules
@@ -70,7 +70,7 @@ the app target's `.stringsdata` files from DerivedData. Check before a release:
 `rg -n 'ядр|pf |туннел|utun|mihomo|Clash|Remnawave|Обновить защиту' App/*.swift` — only comments
 and code may match. Technical names stay in «Скопировать диагностику» (for support).
 
-Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, wifiguard, adblock, splitapps, multihop, core, xrayserver, diag, failover,
+Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, wifiguard, adblock, blockadult, blocksocial, blockbetting, doh, hosts, splitapps, multihop, core, xrayserver, diag, failover,
 escalate; `ks set <key> 0|1` for the switches),
 `allow` (addresses reachable by any process), `servers-manual` (VPN server IPs added by `server-add`
 and install.sh, reachable by any process), `servers-core` (proxy addresses of the imported core
@@ -139,8 +139,11 @@ what transport escalation remembered per server, ADR 0030).
   rule sending them DIRECT needs the admin's approval like any DIRECT rule. Never the LAN's DNS.
   Programs without VPN: before the profile's rules the generator puts the apps of
   `ks set splitapps <a,b>` (stored as `splitapps=` in `settings`; ≤50 names, ≤64 bytes, no commas or
-  control characters; also their `<name> Helper…` processes; `""` clears), DIRECT; ad blocking
-  (`adblock=1`) puts `GEOSITE,category-ads-all,REJECT` first. Both are the user's own choices and are
+  control characters; also their `<name> Helper…` processes; `""` clears), DIRECT; blocked
+  categories (ADR 0031: `adblock`, `blockadult`, `blocksocial`, `blockbetting` = `category-ads-all`,
+  `category-porn`, `category-social-media-!cn`, `category-betting-ru`) go first as `GEOSITE,…,REJECT`;
+  the own DoH server (`ks set doh <https url>`) is asked through the VPN only (Xray: Cloudflare DoH after it; mihomo: alone);
+  own addresses of sites (`ks set hosts <name=IPv4,…>`, ADR 0033) go into the core's hosts table. Both are the user's own choices and are
   reported as such. `core/geosite.dat` and `core/geoip.metadb` (`Helper/fetch-geodata.sh`,
   sha256-pinned, shipped in the app) serve the profile's `GEOSITE`/`GEOIP` rules; without them such
   rules are left out. The core never downloads geodata (`geo-auto-update: false`).

@@ -75,6 +75,14 @@ final class KillSwitchControl {
     private(set) var coreChoice: CoreChoice = .mihomo
     /// «Блокировать рекламу и трекеры»: the core refuses category-ads-all of the shipped geosite.dat.
     private(set) var adBlock = false
+    /// The other blocked categories of the shipped geosite.dat (ADR 0031): adult sites, social networks, betting.
+    private(set) var blockAdult = false
+    private(set) var blockSocial = false
+    private(set) var blockBetting = false
+    /// The own DNS-over-HTTPS server (`doh=`, ADR 0031), used by the core through the VPN; nil = none.
+    private(set) var ownDoH: String?
+    /// Own addresses of sites (`hosts=`, ADR 0033), "name=IPv4" each, answered by the core's DNS.
+    private(set) var ownHosts: [String] = []
     /// «Подробная диагностика» (diag, ADR 0021): Xray records every connection in the local journal.
     private(set) var diagVerbose = false
     /// Xray: the helper moves to another host of the country when this one stops answering (ADR 0023).
@@ -281,6 +289,10 @@ final class KillSwitchControl {
 
     /// Always a click: the list decides what goes around the VPN.
     func setSplitApps(_ names: [String]) { runAsAdmin([helper, "set", "splitapps", SplitApps.argument(names)]) }
+    /// The own DNS-over-HTTPS server; nil clears it. Always a click.
+    func setDoH(_ url: String?) { runAsAdmin([helper, "set", "doh", url ?? ""]) }
+    /// The edited list of own addresses of sites, one password.
+    func setHosts(_ entries: [String]) { runAsAdmin([helper, "set", "hosts", entries.joined(separator: ",")]) }
     /// `entry` nil turns «Двойной VPN» off. Always a click.
     func setMultihop(entry: String?) {
         multihopAskedAt = Date()
@@ -305,8 +317,9 @@ final class KillSwitchControl {
     /// «Перенос настроек» (SettingsBackup, ADR 0024): the root settings as Settings shows them.
     var rootSettings: SettingsBackup.Root {
         .init(core: coreChoice, switches: switches.merging(["direct": allowDirect, "adblock": adBlock, "diag": diagVerbose, "failover": autoSwitch,
-                                                      "escalate": escalate]) { $1 },
-              exceptions: exceptions, manualServers: manualServers, splitApps: splitApps)
+                                                      "escalate": escalate, "blockadult": blockAdult, "blocksocial": blockSocial,
+                                                      "blockbetting": blockBetting]) { $1 },
+              exceptions: exceptions, manualServers: manualServers, splitApps: splitApps, doh: ownDoH ?? "", hosts: ownHosts)
     }
     /// A loaded or reset set of root settings: the commands of their own screens, one password;
     /// `done` after they went through (nothing to run: at once).
@@ -1145,6 +1158,11 @@ final class KillSwitchControl {
         allowRouterDNS = (values["dns"] ?? "0") == "1"
         allowDirect = (values["direct"] ?? "0") == "1"
         adBlock = (values["adblock"] ?? "0") == "1"
+        blockAdult = (values["blockadult"] ?? "0") == "1"
+        blockSocial = (values["blocksocial"] ?? "0") == "1"
+        blockBetting = (values["blockbetting"] ?? "0") == "1"
+        ownDoH = values["doh"].flatMap { $0.isEmpty ? nil : $0 }
+        ownHosts = (values["hosts"] ?? "").split(separator: ",").map(String.init)
         diagVerbose = (values["diag"] ?? "0") == "1"
         autoSwitch = (values["failover"] ?? "1") == "1"
         escalate = (values["escalate"] ?? "1") == "1"

@@ -84,8 +84,23 @@ final class RoutingReportTests: XCTestCase {
         XCTAssertEqual(report.additions[1].lines, ["de.example.com → 203.0.113.20"])
         XCTAssertEqual(report.additions[0].lines, ["LT", "DE"])
         for added in report.added { XCTAssertFalse(added.why.isEmpty, added.kind) }
-        XCTAssertEqual(report.additions[2].title, "Блокировка рекламы — твой выбор")
+        XCTAssertEqual(report.additions[2].title, "Блокировка — твой выбор")
         XCTAssertEqual(report.additions[3].title, "Защита от петли")
+    }
+
+    /// ADR 0031: the own DoH server, named by its host only (its path can hold an account id).
+    func testOwnDoHAddition() throws {
+        let added = try JSONDecoder().decode(RoutingReport.Added.self, from: Data(#"{"kind":"doh","items":["dns.example.com"]}"#.utf8))
+        XCTAssertEqual(added.title, "Свой DNS-over-HTTPS — твой выбор")
+        XCTAssertEqual(added.lines, ["dns.example.com"])
+        XCTAssertFalse(added.why.isEmpty)
+    }
+
+    /// ADR 0033: own addresses of sites, named as the person's choice.
+    func testOwnHostsAddition() throws {
+        let added = try JSONDecoder().decode(RoutingReport.Added.self, from: Data(#"{"kind":"hosts","items":["nas.lan → 192.168.1.10"]}"#.utf8))
+        XCTAssertEqual(added.title, "Свои адреса сайтов — твой выбор")
+        XCTAssertFalse(added.why.isEmpty)
     }
 
     func testDroppedReasonsInWords() throws {
@@ -98,6 +113,9 @@ final class RoutingReportTests: XCTestCase {
             "Значение не прошло проверку",
         ])
         XCTAssertEqual(RoutingReport.Dropped.reasonText("something-new"), "something-new")
+        // the own DoH and own addresses of sites replace the template's (ADR 0031, 0033): never the raw code
+        XCTAssertEqual(RoutingReport.Dropped.reasonText("own-doh"), "Вместо него — твой DNS-over-HTTPS")
+        XCTAssertEqual(RoutingReport.Dropped.reasonText("own-hosts"), "Подходила под твой адрес сайта — убрана для всех имён")
     }
 
     func testTakenDNSAndEgressAsText() throws {

@@ -29,8 +29,9 @@ the Keychain on purpose.
   (auto-connect, trusted networks, «Сети Wi‑Fi», notifications, menu bar speed, pause lengths,
   subscription interval, start without window, server order, profile groups, favourites, recents,
   beta updates) and the root ones as Settings shows them: the way of connecting, the switches
-  (`lan`, `dns`, `tailscale`, `wifiguard`, `direct`, `adblock`, `diag`), «Адреса без VPN»,
-  «Адреса серверов для других VPN-программ», «Программы без VPN». Wi-Fi names are in it: the
+  (`lan`, `dns`, `tailscale`, `wifiguard`, `direct`, `adblock`, `diag`; since 0.20 `blockadult`, `blocksocial`,
+  `blockbetting`), «Адреса без VPN», «Адреса серверов для других VPN-программ», «Программы без VPN»,
+  «Свой сервер DNS-over-HTTPS» (`doh`, ADR 0031), «Свои адреса сайтов» (`hosts`, ADR 0033). Wi-Fi names are in it: the
   person exports their own file, and the screen says what is and is not inside.
 - **Import checks the whole file first** (format, version — a newer one is refused with «обнови
   программу», types, the same ranges and validators as Settings and the daemon: `Batch.address`,

@@ -30,7 +30,7 @@ reset() { rm -rf "$SETTINGS" "$ALLOW" "$SERVERS" "$SERVERS_MANUAL" "$SERVERS_COR
 # --- what is fine
 reset
 expect_open "no settings file at all (the defaults)"
-printf 'lan=1\ntailscale=0\ndns=1\ndirect=0\nwifiguard=1\nadblock=1\nsplitapps=/Applications/Telegram.app,curl\nmultihop=Germany 1\n' > "$SETTINGS"
+printf 'lan=1\ntailscale=0\ndns=1\ndirect=0\nwifiguard=1\nadblock=1\nblockadult=1\nblocksocial=0\nblockbetting=1\ndoh=https://dns.example.com/dns-query\nhosts=nas.lan=192.168.1.10\nsplitapps=/Applications/Telegram.app,curl\nmultihop=Germany 1\n' > "$SETTINGS"
 expect_open "every key ks writes, valid values"
 printf 'multihop=off\nsplitapps=\n' > "$SETTINGS"
 expect_open "multihop off, splitapps cleared"

@@ -625,6 +625,8 @@ private struct AdvancedSettings: View {
     @Environment(KillSwitchControl.self) private var control
     @State private var editingExceptions = false
     @State private var editingServers = false
+    @State private var editingDoH = false
+    @State private var editingHosts = false
 
     var body: some View {
         SettingsForm {
@@ -653,15 +655,48 @@ private struct AdvancedSettings: View {
             }
             .disabled(control.busy || control.state == .notInstalled)
 
-            Section("Реклама и трекеры") {
+            Section("Блокировка") {
                 Toggle(isOn: Binding(get: { control.adBlock }, set: { control.set("adblock", $0) })) {
                     Text("Блокировать рекламу и трекеры")
                     Text("Только пока подключён VPN KillSwitch.")
                 }
-                .disabled(control.busy || control.state == .notInstalled)
+                Toggle("Блокировать сайты для взрослых", isOn: Binding(get: { control.blockAdult }, set: { control.set("blockadult", $0) }))
+                Toggle("Блокировать соцсети", isOn: Binding(get: { control.blockSocial }, set: { control.set("blocksocial", $0) }))
+                Toggle(isOn: Binding(get: { control.blockBetting }, set: { control.set("blockbetting", $0) })) {
+                    Text("Блокировать букмекеров")
+                    Text("Только российские букмекерские сайты.")
+                }
                 Footnote(text: String(localized: "Если какой-то сайт перестал работать, выключи и проверь снова."),
-                         more: String(localized: "Адреса рекламы и трекеров берутся из списка, который лежит в самой программе (category-ads-all), и обновляются вместе с ней: VPN ничего не скачивает сам. Заблокированное не уходит никуда — ни через VPN, ни мимо него."))
+                         more: String(localized: "Списки сайтов лежат в самой программе и обновляются вместе с ней: VPN ничего не скачивает сам. Заблокированное не уходит никуда — ни через VPN, ни мимо него. Соцсети — это ВКонтакте, Одноклассники, Facebook, Instagram, X и другие, Telegram в список не входит. Списка вредоносных сайтов в базе нет, поэтому такой блокировки тоже нет."))
             }
+            .disabled(control.busy || control.state == .notInstalled)
+
+            Section {
+                Text(control.ownDoH ?? String(localized: "Нет")).monospaced().foregroundStyle(.secondary).lineLimit(2)
+                Footnote(text: String(localized: "Спрашивается только через VPN — никогда напрямую и не у провайдера."),
+                         more: String(localized: "Например, NextDNS или AdGuard DNS со своими настройками. Адрес вида https://сервер/путь. Запросы к нему всегда идут через сервер VPN и никогда — напрямую или к провайдеру. Имя самого сервера узнаёт сервер VPN, «Свои адреса сайтов» на него не действуют. Домены, для которых подписка задала свой DNS, спрашиваются у DNS подписки, а не у твоего сервера. С основным способом подключения остальные сайты узнаёт твой сервер; не отвечает — KillSwitch спрашивает DNS Cloudflare, тоже через VPN. С запасным способом сайты, которые идут через VPN, узнаёт сервер VPN, а твой сервер — только те, что идут напрямую или нужны правилам по адресам; не отвечает — другие серверы не спрашиваются."))
+            } header: {
+                HStack {
+                    Text("Свой сервер DNS-over-HTTPS")
+                    Spacer()
+                    Button("Изменить…") { editingDoH = true }
+                }
+            }
+            .disabled(control.busy || control.state == .notInstalled)
+
+            Section {
+                Text(control.ownHosts.isEmpty ? String(localized: "Нет") : control.ownHosts.map(HostsSheet.shown).joined(separator: ", "))
+                    .monospaced().foregroundStyle(.secondary).lineLimit(3)
+                Footnote(text: String(localized: "Для этих имён DNS через VPN ответит твоим адресом."),
+                         more: String(localized: "Например, nas.home.arpa → 192.168.1.10 для своего сервера дома. Работает только пока подключён VPN KillSwitch: ответ даёт само ядро. Меняется только адрес, а пойдёт ли соединение через VPN или напрямую, решают правила подписки, как для любого адреса; защита ничего нового не пропускает. Кроме домашних адресов (10.x, 172.16–31.x, 192.168.x) и Tailscale (100.64–127.x): с запасным способом подключения они идут мимо VPN, с основным — те, к которым у Mac есть свой маршрут, например твоя домашняя сеть; дойдёт до них, только если включены «Доступ к домашней сети» или «Tailscale, NetBird», и раздел «Блокировка» на них не действует. Нельзя: адреса IPv6, имена с * и адреса, которые нужны самой программе, — серверы VPN, ссылка на подписку, обновления, проверки."))
+            } header: {
+                HStack {
+                    Text("Свои адреса сайтов")
+                    Spacer()
+                    Button("Изменить…") { editingHosts = true }
+                }
+            }
+            .disabled(control.busy || control.state == .notInstalled)
 
             TransportSection()
 
@@ -692,6 +727,8 @@ private struct AdvancedSettings: View {
                       placeholder: String(localized: "Адрес, например 1.2.3.46 или 10.8.0.0/24"), original: control.exceptions,
                       apply: control.setExceptions)
         }
+        .sheet(isPresented: $editingDoH) { DoHSheet() }
+        .sheet(isPresented: $editingHosts) { HostsSheet() }
         .sheet(isPresented: $editingServers) {
             ListSheet(title: String(localized: "Адреса серверов для других VPN-программ"),
                       note: String(localized: "К этим адресам сможет подключиться любая программа. Серверы подписки сюда добавлять не нужно."),
@@ -889,6 +926,91 @@ private struct BatchSheet<Content: View>: View {
 }
 
 /// A list of addresses: add, remove, apply together.
+/// «Свой сервер DNS-over-HTTPS» (ADR 0031): one address, checked as Helper/ks checks it.
+private struct DoHSheet: View {
+    @Environment(KillSwitchControl.self) private var control
+    @State private var draft = ""
+
+    private var url: String { draft.trimmingCharacters(in: .whitespaces) }
+    private var valid: Bool { url.isEmpty || HelperCommand.isDoH(url) }
+
+    var body: some View {
+        BatchSheet(title: String(localized: "Свой сервер DNS-over-HTTPS"), changed: valid && url != (control.ownDoH ?? ""),
+                   apply: { control.setDoH(url.isEmpty ? nil : url) }) {
+            Text("KillSwitch будет спрашивать адреса сайтов у этого сервера — только через VPN. Домены, для которых подписка задала свой DNS, спрашиваются у DNS подписки, а не у этого сервера, а с запасным способом подключения большинство сайтов узнаёт сервер VPN. Пусто — обычные серверы.")
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            TextField(String(localized: "https://dns.example.com/dns-query"), text: $draft).monospaced()
+            if !valid {
+                StatusLabel(String(localized: "Нужен адрес вида https://сервер/путь: без логина, без ? и #, не адрес в домашней сети."),
+                            systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.callout)
+            }
+        }
+        .onAppear { draft = control.ownDoH ?? "" }
+    }
+}
+
+/// «Свои адреса сайтов» (ADR 0033): «имя → адрес» pairs, checked as Helper/ks checks them; the
+/// subscription's own hosts are refused here too (ks does not know them).
+private struct HostsSheet: View {
+    @Environment(KillSwitchControl.self) private var control
+    @Environment(VPNClient.self) private var client
+    @State private var draft: [String] = []
+    @State private var name = ""
+    @State private var address = ""
+    @State private var problem: String?
+
+    static func shown(_ entry: String) -> String { entry.replacingOccurrences(of: "=", with: " → ") }
+
+    var body: some View {
+        BatchSheet(title: String(localized: "Свои адреса сайтов"), changed: draft != control.ownHosts,
+                   apply: { control.setHosts(draft) }) {
+            Text("DNS через VPN ответит на эти имена твоим адресом. Только точные имена и адреса IPv4.")
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            List {
+                if draft.isEmpty { Text("Пусто").foregroundStyle(.secondary) }
+                ForEach(draft, id: \.self) { entry in
+                    HStack {
+                        Text(Self.shown(entry)).monospaced()
+                        Spacer()
+                        Button("Убрать") { draft.removeAll { $0 == entry } }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Убрать \(Self.shown(entry))")
+                    }
+                }
+            }
+            .frame(height: 180)
+            HStack {
+                TextField(String(localized: "Имя, например nas.home.arpa"), text: $name)
+                TextField(String(localized: "Адрес, например 192.168.1.10"), text: $address).onSubmit(add)
+                Button("Добавить", action: add).disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            if let problem {
+                StatusLabel(problem, systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.caption)
+            }
+        }
+        .onAppear { draft = control.ownHosts }
+    }
+
+    private func add() {
+        let host = name.trimmingCharacters(in: .whitespaces).lowercased()
+        let entry = host + "=" + address.trimmingCharacters(in: .whitespaces)
+        if client.subscriptionHosts().contains(host) {
+            problem = String(localized: "Это адрес подписки: его менять нельзя.")
+        } else if !HelperCommand.isHostsEntry(entry) {
+            problem = String(localized: "Нужно точное имя сайта и адрес IPv4, не адрес самой программы или локальный 127.x.")
+        } else if draft.contains(where: { $0.hasPrefix(host + "=") }) {
+            problem = String(localized: "Это имя уже есть в списке.")
+        } else if draft.count >= HelperCommand.maxHosts {
+            problem = String(localized: "Не больше 50 адресов.")
+        } else {
+            problem = nil
+            draft.append(entry)
+            name = ""
+            address = ""
+        }
+    }
+}
+
 private struct ListSheet: View {
     let title: String
     let note: String

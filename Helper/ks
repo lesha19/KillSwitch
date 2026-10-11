@@ -7,8 +7,11 @@
 #   ks off                  disable until "ks on"
 #   ks pause [min]          disable for N minutes (default 5), e.g. for a captive Wi-Fi portal
 #   ks netrestore           network services turned off at shutdown back on (if the watchdog is gone)
-#   ks set <key> <0|1>      lan, tailscale, dns, direct (see rules() below), wifiguard, adblock, failover,
-#                           escalate (Xray: another fingerprint or transport first, ADR 0030)
+#   ks set <key> <0|1>      lan, tailscale, dns, direct (see rules() below), wifiguard, failover,
+#                           escalate (Xray: another fingerprint or transport first, ADR 0030), and the
+#                           blocked categories adblock, blockadult, blocksocial, blockbetting (ADR 0031)
+#   ks set doh <https url>  the own DNS-over-HTTPS server, used through the VPN only; "" clears (ADR 0031)
+#   ks set hosts <n=a,...>  own addresses of sites (name=IPv4) answered by the core's DNS; "" clears (ADR 0033)
 #   ks set splitapps <a,b>  apps outside the VPN; "" clears
 #   ks set multihop <proxy>|off  double VPN: every other proxy (Xray: the running host) is reached through this one
 #   ks set core xray|mihomo the core that runs (ADR 0020); the subscription is imported again for it
@@ -118,11 +121,114 @@ setting() {  # setting <key> <default>
 OWNER_UID=$EUID
 ADDR_LINE='[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?|[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*(/[0-9]{1,3})?'   # valid_addr
 HOST_LINE='[0-9]{1,3}(\.[0-9]{1,3}){3}|[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*'   # one address, no network (tsrelays, KS-19)
+# Content blocking (#14, ADR 0031): each switch and the list of the shipped geosite.dat it refuses.
+# Only lists that exist in that file (meta-rules-dat has no malware or phishing list); nothing is
+# ever downloaded. Refusing sends nothing anywhere, so pf and the DIRECT signature stay as they are.
+BLOCK_LISTS='adblock:category-ads-all blockadult:category-porn blocksocial:category-social-media-!cn blockbetting:category-betting-ru'
+block_geosites() {  # the lists the settings block, one per line; none without the shipped geosite.dat
+  local kv
+  [ -s "$CORE_DIR/geosite.dat" ] || return 0
+  for kv in $BLOCK_LISTS; do
+    if [ "$(setting "${kv%%:*}" 0)" = 1 ]; then echo "${kv#*:}"; fi
+  done
+}
+# a category switched on without the shipped geosite.dat blocks nothing: say so and log it
+block_geodata_note() {  # block_geodata_note <key> <0|1>
+  [ "$2" = 1 ] && [ ! -s "$CORE_DIR/geosite.dat" ] || return 0
+  log_event "blocking ${1}: no geosite.dat, nothing is blocked"
+  echo "Нет файла geosite.dat: блокировка ничего не блокирует, переустанови KillSwitch" >&2
+}
+# The own DNS-over-HTTPS server (ADR 0031): https, a public host name or IPv4 address, an optional
+# port and path; no user, query or fragment, nothing local (it is reached through a VPN server).
+DOH_RE='^https://([A-Za-z0-9.-]+)(:([0-9]{1,5}))?(/([A-Za-z0-9._/~-]|%[0-9A-Fa-f]{2})*)?$'   # % only as %XX
+DOH_NAME_RE='^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$'
+valid_doh() {  # valid_doh <url>
+  local h p a b
+  [ "${#1}" -le 256 ] && [[ "$1" =~ $DOH_RE ]] || return 1
+  h=${BASH_REMATCH[1]}; p=${BASH_REMATCH[3]}
+  if [ -n "$p" ]; then [ "$((10#$p))" -ge 1 ] && [ "$((10#$p))" -le 65535 ] || return 1; fi
+  if [[ "$h" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    # no leading zeros, as host_addr_ok: Xray refuses such an address in a rule (mihomo takes it)
+    [[ "$h" =~ $HOST_ADDR_RE ]] || return 1
+    IFS=. read -r a b _ <<<"$h"
+    # this network, private, loopback, link-local, CGNAT (Tailscale), 198.18/15 (our TUN), multicast and up
+    case "$a" in 0|10|127) return 1 ;; esac
+    [ "$a" -lt 224 ] || return 1
+    if [ "$a" = 169 ] && [ "$b" = 254 ]; then return 1; fi
+    if [ "$a" = 172 ] && [ "$b" -ge 16 ] && [ "$b" -le 31 ]; then return 1; fi
+    if [ "$a" = 192 ] && [ "$b" = 168 ]; then return 1; fi
+    if [ "$a" = 100 ] && [ "$b" -ge 64 ] && [ "$b" -le 127 ]; then return 1; fi
+    if [ "$a" = 198 ] && { [ "$b" = 18 ] || [ "$b" = 19 ]; }; then return 1; fi
+    return 0
+  fi
+  [ "${#h}" -le 253 ] && [[ "$h" =~ $DOH_NAME_RE ]] || return 1
+  h=$(printf '%s' "$h" | tr 'A-Z' 'a-z')
+  case "$h" in *.local|*.localhost|*.internal|*.lan|*.home.arpa) return 1 ;; esac
+}
+doh_url() { local u; u=$(setting doh ""); if [ -n "$u" ] && valid_doh "$u"; then echo "$u"; fi; }   # empty: none (or not valid)
+doh_host() { local h=${1#https://}; h=${h%%/*}; echo "${h%%:*}"; }
+
+# Own addresses of sites (#28, ADR 0033): "name=IPv4" pairs the core's DNS answers. Exact names
+# only (mihomo and Xray match wildcards differently), IPv4 only (IPv6 is blocked, ADR 0003), never
+# our listeners (loopback), our TUN (198.18/15), nor the names KillSwitch itself needs.
+HOSTS_MAX=50
+HOSTS_RESERVED='github.com githubusercontent.com cp.cloudflare.com ipify.org mullvad.net bash.ws'
+HOST_NAME_RE='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$'
+HOST_OCTET='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+HOST_ADDR_RE="^${HOST_OCTET}[.]${HOST_OCTET}[.]${HOST_OCTET}[.]${HOST_OCTET}\$"
+host_addr_ok() {  # IPv4 without leading zeros; not this network, loopback, link-local, 198.18/15, multicast and up
+  local a b
+  [[ "$1" =~ $HOST_ADDR_RE ]] || return 1
+  a=${1%%.*}; b=${1#*.}; b=${b%%.*}
+  case "$a" in 0|127) return 1 ;; esac
+  [ "$a" -lt 224 ] || return 1
+  if [ "$a" = 169 ] && [ "$b" = 254 ]; then return 1; fi
+  if [ "$a" = 198 ] && { [ "$b" = 18 ] || [ "$b" = 19 ]; }; then return 1; fi
+  return 0
+}
+host_name_ok() {  # a lower-case DNS name of two labels or more, not .local, localhost or one of ours
+  local r
+  [ "${#1}" -le 253 ] && [[ "$1" =~ $HOST_NAME_RE ]] || return 1
+  case "$1" in *.local|localhost|*.localhost) return 1 ;; esac
+  for r in $HOSTS_RESERVED; do
+    if [ "$1" = "$r" ] || [[ "$1" == *".$r" ]]; then return 1; fi
+  done
+}
+hosts_parse() {  # hosts_parse <name=addr,...>: "name=addr" lines, names lower-cased; fails naming the entry
+  local e n a seen=" " count=0
+  [ -n "$1" ] || return 0
+  [ "${#1}" -le 16384 ] || { echo "Слишком длинный список адресов" >&2; return 1; }
+  while IFS= read -r e; do
+    count=$((count + 1))
+    [ "$count" -le "$HOSTS_MAX" ] || { echo "Больше ${HOSTS_MAX} адресов" >&2; return 1; }
+    n=$(printf '%s' "${e%%=*}" | tr 'A-Z' 'a-z'); a=${e#*=}
+    if [[ "$e" != *=* ]] || ! host_name_ok "$n" || ! host_addr_ok "$a"; then
+      echo "Не подходит: «${e}» (нужно имя сайта и адрес IPv4, не адреса самой программы)" >&2; return 1
+    fi
+    case "$seen" in *" $n "*) echo "Имя ${n} указано дважды" >&2; return 1 ;; esac
+    seen="$seen$n "
+    echo "$n=$a"
+  done <<<"$(tr ',' '\n' <<<"$1")"
+}
+# the entries the generator takes: a valid list, without the names of the VPN's servers (pinned)
+hosts_entries() {  # hosts_entries <pins file>
+  local e list
+  list=$(hosts_parse "$(setting hosts "")" 2>/dev/null) || return 0
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    cut -f1 "$1" 2>/dev/null | grep -qxF -- "${e%%=*}" || echo "$e"
+  done <<<"$list"
+}
+
 settings_lines_ok() {
   local line
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       ""|lan=[01]|tailscale=[01]|dns=[01]|direct=[01]|wifiguard=[01]|adblock=[01]) ;;
+      blockadult=[01]|blocksocial=[01]|blockbetting=[01]) ;;   # ADR 0031
+      doh=) ;;
+      doh=*) valid_doh "${line#*=}" || return 1 ;;
+      hosts=*) hosts_parse "${line#*=}" >/dev/null 2>&1 || return 1 ;;   # ADR 0033
       coredirect=[01]) ;;   # until 0.14 (ADR 0013): ignored, install.sh drops it
       splitapps=*) splitapps_parse "${line#*=}" >/dev/null 2>&1 || return 1 ;;
       multihop=*) [ "${line#*=}" = off ] || valid_name "${line#*=}" || return 1 ;;
@@ -1122,7 +1228,7 @@ core_generate_mihomo() (
   # taken goes into the report with the reason. Our own resolvers (DoH through KS-DNS) stay the
   # default for every other name. Without a sniffer of its own the subscription gets a routing-only
   # one: domain rules then also apply to programs that resolve names themselves (DoH in Firefox).
-  NAMES="$w/names" GEO=$geo PROV="$RP" IN="$in" W="$w" KS_DNS=$KS_DNS TUN_ADDR=$CORE_TUN_ADDR \
+  NAMES="$w/names" GEO=$geo PROV="$RP" IN="$in" W="$w" KS_DNS=$KS_DNS TUN_ADDR=$CORE_TUN_ADDR DOH=$(doh_url) HOSTS=$(hosts_entries "$w/pins" | paste -sd, -) \
     /usr/bin/perl -MJSON::PP -e "$KS_RULES_PL"'
     my $in = rd($ENV{IN}); my $W = $ENV{W};
     open my $f, "<", $ENV{NAMES} or die; my %name = map { chomp; ($_ => 1) } <$f>; close $f;
@@ -1249,6 +1355,12 @@ core_generate_mihomo() (
     }
     $dns->{$_} = $taken{$_} for keys %taken;
     $dns->{"proxy-server-nameserver"} = [@ns] if $taken{"respect-rules"};
+    $dns->{"use-hosts"} = JSON::PP::true if length($ENV{HOSTS} // "");   # own addresses (ADR 0033)
+    # the own DoH server (ADR 0031), reached through KS-DNS like ours, alone: mihomo asks "fallback"
+    # at the same time as the nameservers, so ours there would overrule it. Its own name goes to the
+    # VPN server as a domain and is resolved at the VPN exit (measured: default-nameserver and hosts
+    # are not asked). Nothing here leaves outside the tunnel.
+    if (length($ENV{DOH} // "")) { $dns->{nameserver} = ["$ENV{DOH}#$ENV{KS_DNS}"] }
     # what can resolve outside the tunnel: the signature and pf (egress) follow it
     my %sig = map { exists $taken{$_} ? ($_ => $taken{$_}) : () } qw(nameserver-policy direct-nameserver direct-nameserver-follow-policy respect-rules);
     my $c = JSON::PP->new->canonical;
@@ -1338,12 +1450,24 @@ core_generate_mihomo() (
   # Known fake-ips are names again before the rules (no-resolve keeps this rule off them). ADR 0019.
   echo "IP-CIDR,198.18.0.0/16,REJECT,no-resolve" >> "$w/ours"
   note loop-guard "IP-CIDR,198.18.0.0/16,REJECT,no-resolve"
-  # Ads and trackers (adblock=1): refused before anything else, from the shipped geosite.dat only
-  # (never downloaded). REJECT sends nothing anywhere, so the DIRECT signature and pf are as before.
-  if [ "$(setting adblock 0)" = 1 ] && [ -s "$CORE_DIR/geosite.dat" ]; then
-    echo "GEOSITE,category-ads-all,REJECT" >> "$w/ours"
-    note adblock "GEOSITE,category-ads-all,REJECT"
-  fi
+  # Blocked categories (ads and trackers, adult, social, betting; ADR 0031): refused before
+  # anything else, from the shipped geosite.dat only (never downloaded). REJECT sends nothing
+  # anywhere, so the DIRECT signature and pf are as before.
+  while IFS= read -r g; do
+    [ -n "$g" ] || continue
+    echo "GEOSITE,$g,REJECT" >> "$w/ours"
+    note adblock "GEOSITE,$g,REJECT"
+  done <<<"$(block_geosites)"
+  # the own DoH server (ADR 0031): only its host in the world-readable report
+  doh=$(doh_url)
+  if [ -n "$doh" ]; then note doh "$(doh_host "$doh")"; fi
+  # own addresses of sites (ADR 0033): only which address a name gets; the rules still decide
+  # where it goes, so neither the DIRECT signature nor pf changes. Names of the VPN's servers are
+  # left out: they stay pinned to what the import approved.
+  hosts=$(hosts_entries "$w/pins")
+  while IFS= read -r e; do
+    if [ -n "$e" ]; then note hosts "${e%%=*} → ${e#*=}"; fi
+  done <<<"$hosts"
   if [ -n "$apps" ]; then
     {
       while IFS= read -r a; do
@@ -1388,6 +1512,8 @@ core_generate_mihomo() (
     printf '{"mode":"rule","log-level":"warning","ipv6":false,"allow-lan":false,"geo-auto-update":false,'
     printf '"find-process-mode":"strict",'
     printf '"external-controller-unix":"ctl/mihomo.sock",'
+    # own addresses of sites (ADR 0033), answered by the DNS (use-hosts)
+    if [ -n "$hosts" ]; then printf '"hosts":{%s},' "$(sed 's/^\([^=]*\)=\(.*\)$/"\1":"\2"/' <<<"$hosts" | paste -sd, -)"; fi
     # #11: when the subscription's host does not answer directly (blocked, or the profile sends it
     # DIRECT), the app asks again through this proxy: on loopback only, every connection to KS-DNS,
     # so it never leaves outside the tunnel. Any local program could use it; it only gets the VPN,
@@ -1446,8 +1572,8 @@ core_generate_xray() (
     printf '%s\t%s\n' "$h" "$a" >> "$w/pins"
   done < "$w/hosts"
   # pass 2: the config and what goes with it
-  W=$w PROTOS=$XRAY_PROTOCOLS PICK=$(setting xrayserver "") ADBLOCK=$(setting adblock 0) \
-    GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) APPS=$(setting splitapps "") MULTIHOP=$(setting multihop off) \
+  W=$w PROTOS=$XRAY_PROTOCOLS PICK=$(setting xrayserver "") BLOCK="$(block_geosites | paste -sd" " -)" DOH=$(doh_url) \
+    HOSTS="$(hosts_entries /dev/null | paste -sd, -)" APPS=$(setting splitapps "") MULTIHOP=$(setting multihop off) \
     ESC=$(setting escalate 1) ESC_FILE="${KS_ESC_FILE:-$CORE_DIR/escalation}" \
     TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT API_PORT=$([ -f "$CORE_DIR/api-off" ] || echo "$CORE_API_PORT") \
     ACCESS=$([ "$(setting diag 0)" = 1 ] && [ -d "$DIAG" ] && echo "$DIAG/access.log") \
@@ -1472,7 +1598,7 @@ core_generate_xray() (
   : > "$w/approved"
   if [ -n "${KS_APPROVE_ALL:-}" ]; then
     mkdir "$w/e" && ln "$w/in.json" "$w/pins" "$w/e/" || exit 1
-    W=$w/e PROTOS=$XRAY_PROTOCOLS ADBLOCK=$(setting adblock 0) GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) \
+    W=$w/e PROTOS=$XRAY_PROTOCOLS BLOCK="$(block_geosites | paste -sd" " -)" DOH=$(doh_url) \
       APPS=$(setting splitapps "") TUN_GW=10.0.0.1/30 FETCH_PORT=$FETCH_PORT API_PORT="" ACCESS="" \
       /usr/bin/perl -MJSON::PP -MStorable -MDigest::SHA -e "$KS_XRAY_PL"' approve()' > "$w/approved.all" || exit 1
     sort -u "$w/approved.all" > "$w/approved"
@@ -1789,10 +1915,20 @@ KS_XRAY_PL='
     # ours, first: the system DNS to the template DNS outbound, the fetch to a server (never
     # direct, ADR 0016), then the person'"'"'s choices
     my @ours = ({ inboundTag => ["ks-dns"], outboundTag => $dnsout }, { inboundTag => ["ks-fetch"], outboundTag => $proxy });
-    if ($ENV{ADBLOCK} eq "1" && $ENV{GEOSITE}) {
+    # the own DoH server (ADR 0031): its queries (tag ks-doh) and its host always to a server
+    my $doh = $ENV{DOH} // "";
+    my ($dohhost) = $doh =~ m{\Ahttps://([^/:]+)};
+    if (length $doh) {
+      push @ours, { inboundTag => ["ks-doh"], outboundTag => $proxy },
+                  { (ipv4($dohhost) ? (ip => [$dohhost]) : (domain => ["full:$dohhost"])), outboundTag => $proxy };
+      push @added, { kind => "doh", items => [$dohhost] };
+    }
+    # blocked categories of the shipped geosite.dat (ADR 0031): a blackhole sends nothing anywhere
+    my @block = split " ", $ENV{BLOCK} // "";
+    if (@block) {
       unless (defined $block) { $block = "ks-block"; push @$outs, { tag => $block, protocol => "blackhole" } }
-      push @ours, { domain => ["geosite:category-ads-all"], outboundTag => $block };
-      push @added, { kind => "adblock", items => ["geosite:category-ads-all → $block"] };
+      push @ours, { domain => [ map { "geosite:$_" } @block ], outboundTag => $block };
+      push @added, { kind => "adblock", items => [ map { "geosite:$_ → $block" } @block ] };
     }
     my @apps = grep { length } split /,/, $ENV{APPS} // "";
     if (@apps) {
@@ -1808,6 +1944,48 @@ KS_XRAY_PL='
       $cfg{dns}{servers} = [ grep { my $s = ref $_ eq "HASH" ? $_->{address} // "" : $_ // "";
         my $bad = $s =~ /\A(localhost|fakedns)\z/i || $s =~ m{\A(https|tcp|quic)\+local://}i;
         push @dropped, { section => "dns", item => $s, reason => "bad-value" } if $bad; !$bad } @{ $cfg{dns}{servers} } ];
+    }
+    # the own DoH first; when it gives no answer Xray asks the next one, Cloudflare'"'"'s DoH, also
+    # tagged ks-doh, so through a server. The template'"'"'s servers stay only for their own domains
+    # (skipFallback): a failed query must never go on to one the template routes DIRECT (review of
+    # #14); those without domains go. The template'"'"'s disableFallback stays (then the own DoH alone).
+    # After the DIRECT signature: nothing here leaves outside the tunnel.
+    if (length $doh) {
+      $cfg{dns} = {} unless ref $cfg{dns} eq "HASH";
+      my @s;
+      for (ref $cfg{dns}{servers} eq "ARRAY" ? @{ $cfg{dns}{servers} } : ()) {
+        if (ref $_ eq "HASH" && ref $_->{domains} eq "ARRAY" && @{ $_->{domains} }) { push @s, { %$_, skipFallback => JSON::PP::true } }
+        else { push @dropped, { section => "dns", item => (ref $_ eq "HASH" ? $_->{address} // "?" : $_ // "?"), reason => "own-doh" } }
+      }
+      $cfg{dns}{servers} = [ { address => $doh, tag => "ks-doh" }, { address => "https://1.1.1.1/dns-query", tag => "ks-doh" }, @s ];
+    }
+    # own addresses of sites (ADR 0033), exact names over the template'"'"'s entry for the same name;
+    # names of the VPN'"'"'s servers left out (pinned). After the DIRECT signature: routing decides.
+    my @hosts = grep { !exists $pin{ $_->[0] } } map { [ split /=/, $_, 2 ] } grep { length } split /,/, $ENV{HOSTS} // "";
+    if (@hosts) {
+      $cfg{dns} = {} unless ref $cfg{dns} eq "HASH";
+      my $h = ref $cfg{dns}{hosts} eq "HASH" ? $cfg{dns}{hosts} : {};
+      # Xray answers with every matching entry at once (measured, 26.9.30), so a template entry that
+      # also matches one of these names goes: full, plain, domain (a leading dot as Xray ignores it),
+      # keyword (lower-cased like Xray); every regexp key goes, never run here: Perl backtracks where
+      # Xray'"'"'s RE2 does not (a crafted one held the core lock for minutes) and the two dialects
+      # differ. geosite and ext are not looked into, dotless never matches a name with dots.
+      my %own = map { $_->[0] => 1 } @hosts;
+      for my $k (sort keys %$h) {
+        my ($p, $v) = $k =~ /\A(full|domain|keyword|regexp):(.*)\z/s ? ($1, $2) : ($k =~ /\A(?:dotless|geosite|ext):/ ? ("", "") : ("full", $k));
+        next unless length $p;
+        my $lv = lc $v;
+        $lv =~ s/\A\.// if $p eq "domain";
+        my $hit = $p eq "regexp" || grep { my $n = $_;
+          $p eq "full" ? $n eq $lv : $p eq "domain" ? ($n eq $lv || substr($n, -length($lv) - 1) eq ".$lv") :
+          index($n, $lv) >= 0 } keys %own;
+        next unless $hit;
+        delete $h->{$k};
+        push @dropped, { section => "dns", item => $k, reason => "own-hosts" };
+      }
+      for (@hosts) { $h->{"full:$_->[0]"} = $_->[1] }
+      $cfg{dns}{hosts} = $h;
+      push @added, { kind => "hosts", items => [ map { "$_->[0] → $_->[1]" } @hosts ] };
     }
     # sniffing: the template inbound'"'"'s, else routing only
     my ($tpl) = grep { ref $_ eq "HASH" && ref $_->{sniffing} eq "HASH" && $_->{sniffing}{enabled} } @{ ref $c->{inbounds} eq "ARRAY" ? $c->{inbounds} : [] };
@@ -1952,7 +2130,7 @@ KS_RULES_PL='
 #   added     what KillSwitch put in, by kind; sniffer, dns: what is in effect and where it came from
 #   egress    why the core may leave the tunnel (pf)
 core_report() {
-  W=$1 IN=$2 KS_DNS=$KS_DNS /usr/bin/perl -MJSON::PP -e "$KS_RULES_PL"'
+  W=$1 IN=$2 KS_DNS=$KS_DNS DOH=$(doh_url) /usr/bin/perl -MJSON::PP -e "$KS_RULES_PL"'
     my ($W, $in) = ($ENV{W}, rd($ENV{IN}));
     my $lines = sub { open my $f, "<", $_[0] or return (); my @l = map { chomp; $_ } <$f>; close $f; @l };
     my (%notes, @order);
@@ -1991,7 +2169,9 @@ core_report() {
     my ($ksdns) = grep { $_->{name} eq $ENV{KS_DNS} } @groups;
     push @added, { kind => "dns-group", name => $ENV{KS_DNS}, items => $ksdns->{proxies} };
     my $dns = rd("$W/dns.json");
-    push @added, { kind => "dns-servers", items => $dns->{nameserver} };
+    my $hide = sub { my $s = shift; $s =~ s{\A(https://[^/#]+)/[^#]*}{$1/...}; $s };   # a DoH path can hold an account id
+    my @shown = map { $ENV{DOH} && index($_, $ENV{DOH}) == 0 ? $hide->($_) : $_ } @{ $dns->{nameserver} };
+    push @added, { kind => "dns-servers", items => [@shown] };
     push @added, map { { kind => "failover", name => $_->{name}, items => $_->{proxies} } } grep { $_->{name} =~ /\AKS-FO-/ } @groups;
     my @pins = map { my ($h, $a) = split /\t/; { host => $h, address => $a } } $lines->("$W/pins");
     push @added, { kind => "pinning", items => \@pins } if @pins;
@@ -2010,7 +2190,7 @@ core_report() {
     my $report = {
       version => 1, rules => \@rules, dropped => \@dropped, providers => \@providers, groups => \@groups, proxies => \@proxies,
       added => \@added, sniffer => { from => (exists $notes{"sniffer-taken"} ? "subscription" : "killswitch"), value => rd("$W/sniffer.json") },
-      dns => { servers => $dns->{nameserver}, taken => $taken }, egress => [ $lines->("$W/egress") ],
+      dns => { servers => \@shown, taken => $taken }, egress => [ $lines->("$W/egress") ],
     };
     print JSON::PP->new->canonical->encode($report), "\n";'
 }
@@ -2206,11 +2386,32 @@ core_rebuild() {
   core_commit "$tmp" "$srv"
 }
 
-# A setting the generator reads changed: rebuild and reload if there is a kept profile.
+# A setting the generator reads changed: rebuild and reload if there is a kept profile. 4: the new
+# config is in place but the core was not reloaded with it.
 core_apply_settings() {
   [ -f "$(core_profile)" ] && [ -f "$PINS" ] || return 0
   core_rebuild "$PINS" || return 1
-  reload_if_on; core_reload
+  reload_if_on; core_reload || return 4
+}
+# setting_apply <put function> <new> <old>: a setting the generator reads, written and applied. A
+# config the core does not take must not stay in settings (every later rebuild would fail): then the
+# old value goes back, and when that config was already put in place (the reload failed) the config
+# is built again with the old value, so settings and the config never disagree.
+setting_apply() {
+  local rc
+  "$1" "$2" || return 1
+  core_apply_settings && return 0
+  rc=$?
+  "$1" "$3"
+  [ "$rc" = 4 ] || return 1
+  echo "Ядро не перезапустилось с новой настройкой: вернул прежнюю" >&2
+  core_apply_settings >/dev/null 2>&1; rc=$?
+  case "$rc" in
+    0) ;;
+    4) log_event "settings: the previous config in place, not reloaded either" ;;
+    *) log_event "settings: the previous settings refused by the core, the config keeps the new value" ;;
+  esac
+  return 1
 }
 
 # "ks _regen" (install.sh, after an upgrade, under the core lock): the config again from the kept
@@ -2502,6 +2703,41 @@ set_splitapps() {
   list=$(splitapps_parse "$1") || return 1
   put_setting splitapps "$(paste -sd, - <<<"$list")" || return 1
   core_apply_settings
+}
+
+# "ks set doh <url>" (ADR 0031): the own DNS-over-HTTPS server, used by the core through the VPN
+# only; "" clears. Checked before it is written: a bad line in settings would block everything.
+set_doh() {
+  local old
+  old=$(setting doh "")
+  if [ -n "$1" ] && ! valid_doh "$1"; then
+    echo "Адрес DNS-over-HTTPS должен быть вида https://имя-сервера/путь: без логина, без ? и #, не адрес в локальной сети" >&2
+    return 1
+  fi
+  setting_apply doh_put "$1" "$old"
+}
+doh_put() {  # doh_put <url>: the settings line, "" removes it
+  if [ -n "$1" ]; then put_setting doh "$1"; return; fi
+  { grep -v '^doh=' "$SETTINGS" 2>/dev/null || true; } > "$SETTINGS.tmp" && chmod 644 "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+}
+
+# "ks set hosts <name=addr,...>" (ADR 0033): own addresses of sites, answered by the core's DNS;
+# "" clears. A name of the VPN's servers is refused (they stay pinned to what the import approved).
+set_hosts() {
+  local list e old
+  old=$(setting hosts "")
+  list=$(hosts_parse "$1") || return 1
+  while IFS= read -r e; do
+    [ -n "$e" ] || continue
+    if { cat "$APPROVED_HOSTS"; cut -f1 "$PINS"; } 2>/dev/null | grep -qxF -- "${e%%=*}"; then
+      echo "${e%%=*} — адрес сервера VPN: его менять нельзя" >&2; return 1
+    fi
+  done <<<"$list"
+  setting_apply hosts_put "$(paste -sd, - <<<"$list")" "$old"
+}
+hosts_put() {  # hosts_put <list>: the settings line, "" removes it
+  if [ -n "$1" ]; then put_setting hosts "$1"; return; fi
+  { grep -v '^hosts=' "$SETTINGS" 2>/dev/null || true; } > "$SETTINGS.tmp" && chmod 644 "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
 }
 
 # "ks set multihop <entry proxy>|off": double VPN. The entry is checked by building the config
@@ -3645,7 +3881,7 @@ passwordless_args_ok() {
 # (core_lock_exec 0); the watchdog's rotation skips its turn while it is held.
 core_lock_wanted() {
   case "${1:-}:${2:-}" in
-    core:import|core:refresh|core:select|set:splitapps|set:multihop|set:adblock|set:diag|set:escalate|_regen:|repair:) return 0 ;;
+    core:import|core:refresh|core:select|set:splitapps|set:multihop|set:adblock|set:blockadult|set:blocksocial|set:blockbetting|set:doh|set:hosts|set:diag|set:escalate|_regen:|repair:) return 0 ;;
   esac
   return 1
 }
@@ -3655,7 +3891,7 @@ core_lock_exec() { lockf -k -t "$1" "$CORE_DIR/core.lock" "${@:2}"; }   # core_l
 # reads nothing but this file: no root needed
 [ "${1:-}" = version ] && { ks_version "$0"; exit 0; }
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
-passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,32p' "$0" >&2; exit 1; }
+passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,35p' "$0" >&2; exit 1; }
 
 # The core lock (core_lock_wanted, above).
 if core_lock_wanted "$@" && [ -z "${KS_LOCKED:-}" ] && [ -d "$CORE_DIR" ]; then KS_LOCKED=1 exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@"; fi
@@ -3695,14 +3931,23 @@ case "${1:-status}" in
         [ $# -eq 3 ] || { echo "usage: ks set multihop <entry proxy>|off" >&2; exit 1; }
         set_multihop "$val" || exit 1
         log_event "double VPN: $val"; exit 0 ;;
+      hosts)
+        [ $# -eq 3 ] || { echo "usage: ks set hosts <name=addr,...>  (\"\" clears)" >&2; exit 1; }
+        set_hosts "$val" || exit 1
+        log_event "own site addresses: $(if [ -n "$val" ]; then tr ',' '\n' <<<"$val" | grep -c .; else echo 0; fi)"; exit 0 ;;
+      doh)
+        [ $# -eq 3 ] || { echo "usage: ks set doh <https url>  (\"\" clears)" >&2; exit 1; }
+        set_doh "$val" || exit 1
+        log_event "own DoH: $(if [ -n "$val" ]; then doh_host "$val"; else echo none; fi)"; exit 0 ;;
     esac
     # coredirect (until 0.14, «Российские сайты напрямую») is gone: what goes direct is the
     # subscription's alone (ADR 0013); install.sh drops the old line
-    [[ "$key" =~ ^(lan|tailscale|dns|direct|wifiguard|adblock|failover|escalate)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns|direct|wifiguard|adblock|failover|escalate 0|1" >&2; exit 1; }
+    [[ "$key" =~ ^(lan|tailscale|dns|direct|wifiguard|adblock|blockadult|blocksocial|blockbetting|failover|escalate)$ && "$val" =~ ^[01]$ ]] ||
+      { echo "usage: ks set lan|tailscale|dns|direct|wifiguard|adblock|blockadult|blocksocial|blockbetting|failover|escalate 0|1" >&2; exit 1; }
     { grep -vE "^$key=" "$SETTINGS" 2>/dev/null; echo "$key=$val"; } > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
     reload_if_on
-    # the generator adds the ad block with adblock=1
-    if [ "$key" = adblock ]; then core_apply_settings || exit 1; fi
+    # the generator adds the blocked categories (ADR 0031)
+    case "$key" in adblock|blockadult|blocksocial|blockbetting) core_apply_settings || exit 1; block_geodata_note "$key" "$val" ;; esac
     if [ "$key" = failover ]; then log_event "automatic server switch: $([ "$val" = 1 ] && echo on || echo off)"; fi
     # off: what worked is forgotten and the probes of the alternatives go (ADR 0030)
     if [ "$key" = escalate ]; then
@@ -3792,5 +4037,5 @@ case "${1:-status}" in
     [ -f "$FLAG" ] && { u=$(cat "$FLAG"); [ "$u" = 0 ] && echo "disabled by hand" || echo "back on at $(date -r "$u" +%H:%M)"; }
     pfctl -a "$ANCHOR" -s rules 2>/dev/null
     ;;
-  *) sed -n '2,32p' "$0"; exit 1 ;;
+  *) sed -n '2,35p' "$0"; exit 1 ;;
 esac

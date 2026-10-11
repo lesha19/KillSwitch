@@ -50,6 +50,28 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   address with its port. No link turns protection off or pauses it; one link per 2 s; a question
   nobody answered goes away and never blocks an update's restart; unknown links do nothing and are
   logged without the link.
+- Settings › Дополнительно «Блокировка» (#14, ADR 0031): besides ads and trackers, «Блокировать сайты
+  для взрослых», «Блокировать соцсети» and «Блокировать букмекеров» (Russian bookmakers), from the
+  lists shipped in the app (`category-porn`, `category-social-media-!cn`, `category-betting-ru` of
+  the pinned geosite.dat); nothing is downloaded. Blocked sites are refused by both ways of
+  connecting before the subscription's rules; nothing goes anywhere, so the protection rules do not
+  change. Each switch asks for the administrator (`ks set blockadult|blocksocial|blockbetting 0|1`).
+  The ad blocking setting stays as it was. There is no malware list in that data, so no such switch.
+- «Свой сервер DNS-over-HTTPS» (#14, ADR 0031): your DoH server (NextDNS, AdGuard DNS…) is asked
+  always through the VPN, never directly or from the provider. With the main way of connecting
+  (Xray) it answers every name the subscription has no DNS of its own for; when it does not
+  answer, Cloudflare's DoH is asked, also through the VPN. With the fallback way (mihomo, fake-ip)
+  sites that go through the VPN are resolved by the VPN server, and your server answers only names
+  that go directly or that address rules need, with no one else asked when it does not answer. The
+  DoH server's own name is resolved at the VPN exit. Only `https://` addresses of public servers, without a
+  login, `?` or `#` (`ks set doh <url>`, `""` clears). Both new settings travel with «Перенос настроек».
+- «Свои адреса сайтов» (#28, ADR 0033): up to 50 «name → IPv4» pairs that the VPN's DNS answers
+  with your address (a home server, a service your DNS gets wrong). Only the answer changes: where
+  the connection goes is still up to the subscription's rules, and the protection lets nothing new
+  out; home and Tailscale addresses go past the VPN only with «Доступ к домашней сети» /
+  «Tailscale, NetBird». Not for the own DoH server's name (it is resolved at the VPN exit). Exact names only; not IPv6, 127.x, the VPN's servers, the subscription link or the hosts the
+  app needs for updates and checks (`ks set hosts <name=ip,…>`, `""` clears). Travels with
+  «Перенос настроек».
 
 ### Changed
 - Replacing the subscription link (Settings, QR, a `killswitch://` link, «Начало работы») keeps the
@@ -57,6 +79,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   its status or servers (#23, ADR 0029). A successful replace removes the old subscription's backup
   link; a replace whose import was not confirmed with the password says «Новая подписка сохранена,
   но не применена» instead of nothing.
+- Going back to 0.19 or older after turning on a new blocking category, the own DoH server or own
+  site addresses blocks all traffic (the older helper does not know these settings) until Settings ›
+  «Сбросить настройки». Turn them off before downgrading.
 
 ### Fixed
 - The shortcut «Отключить VPN» stopped the VPN while it was stuck on a server that does not answer;

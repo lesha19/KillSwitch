@@ -29,6 +29,11 @@ final class HelperCommandTests: XCTestCase {
             (.serverRemove("192.0.2.1"), ["server-remove", "192.0.2.1"]),
             (.coreImport(profile: "/private/tmp/p.json"), ["core", "import", "/private/tmp/p.json"]),
             (.repair, ["repair"]),
+            (.setSwitch("blockadult", true), ["set", "blockadult", "1"]), (.setSwitch("blocksocial", false), ["set", "blocksocial", "0"]),
+            (.setSwitch("blockbetting", true), ["set", "blockbetting", "1"]),
+            (.setDoH("https://dns.example.com/dns-query"), ["set", "doh", "https://dns.example.com/dns-query"]), (.setDoH(nil), ["set", "doh", ""]),
+            (.setHosts(["nas.lan=192.168.1.10", "dns.example.com=203.0.113.53"]), ["set", "hosts", "nas.lan=192.168.1.10,dns.example.com=203.0.113.53"]),
+            (.setHosts([]), ["set", "hosts", ""]),
         ]
         for (command, arguments) in cases {
             XCTAssertEqual(command.program, .ks, "\(command)")
@@ -112,7 +117,7 @@ final class HelperCommandTests: XCTestCase {
             .setMultihop(nil), .setCore(.xray),
             .allow("192.0.2.1"), .unallow("192.0.2.1"), .serverAdd("192.0.2.1"), .serverRemove("192.0.2.1"),
             .coreImport(profile: "/tmp/p.json"), .install(user: "alex", servers: []), .uninstall, .repair,
-            .setSwitch("diag", true), .diagReport(directory: "/Users/me/Desktop"),
+            .setSwitch("diag", true), .diagReport(directory: "/Users/me/Desktop"), .setDoH(nil), .setSwitch("blockadult", true), .setHosts([]),
         ]
         let twoWords: Set<String> = ["core", "diag"]
         for command in all {
@@ -192,13 +197,60 @@ final class HelperCommandTests: XCTestCase {
     }
 
     func testSwitchKeys() {
-        for key in ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag", "failover", "escalate"] {
+        for key in ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag", "failover", "escalate",
+                    "blockadult", "blocksocial", "blockbetting"] {
             XCTAssertTrue(HelperCommand.setSwitch(key, true).isValid, key)
         }
         // «Российские сайты напрямую» is gone (ADR 0013): ks refuses it, so the daemon does too
         for key in ["", "coredirect", "splitapps", "multihop", "LAN", "lan ", "x"] {
             XCTAssertFalse(HelperCommand.setSwitch(key, true).isValid, key)
         }
+    }
+
+    /// ADR 0031: the own DoH server as Helper/ks valid_doh takes it (Helper/tests/blocking.sh has the same list).
+    func testDoHAddress() {
+        for url in ["https://dns.example.com/dns-query", "https://dns.nextdns.io/abc123", "https://9.9.9.9/dns-query",
+                    "https://dns.example.com:8443/q/x_y~z", "https://d.adguard-dns.com/dns-query/a1b2", "https://dns.example.com", "https://dns.example.com/q%2Fx%20y"] {
+            XCTAssertTrue(HelperCommand.isDoH(url), url)
+            XCTAssertTrue(HelperCommand.setDoH(url).isValid, url)
+        }
+        for url in ["http://dns.example.com/dns-query", "https://user@dns.example.com/dns-query", "https://dns.example.com/dns query",
+                    "https://dns.example.com/dns-query?x=1", "https://dns.example.com/a#b", "https://localhost/dns-query",
+                    "https://127.0.0.1/dns-query", "https://192.168.1.1/dns-query", "https://10.0.0.1/dns-query",
+                    "https://198.18.0.1/dns-query", "https://172.20.0.1/x", "https://100.100.100.100/x", "https://[::1]/dns-query",
+                    "https://dns.example.com:0/x", "https://dns.example.com:99999/x", "https://300.1.1.1/x", "https://dns/x",
+                    "https://dns.example.com/" + String(repeating: "a", count: 300), "dns.example.com", "https://-bad.example.com/x",
+                    "https://router.local/x", "", "https://dns.example.com/\n", "https://dns.example.com/%zz", "https://dns.example.com/%",
+                    "https://dns.example.com/a%2", "https://Router.LOCAL/x", "https://box.LAN/x",
+                    "https://001.001.001.001/x", "https://9.9.9.09/x", "https://09.9.9.9/x"] {
+            XCTAssertFalse(HelperCommand.isDoH(url), url)
+            XCTAssertFalse(HelperCommand.setDoH(url).isValid, url)
+        }
+        XCTAssertNil(HelperCommand(ks: ["set", "doh", "http://dns.example.com/x"]))
+        XCTAssertTrue(HelperCommand.setDoH(nil).needsAuthorization)
+    }
+
+    /// ADR 0033: own addresses of sites as Helper/ks hosts_parse takes them (Helper/tests/hosts.sh has the same list).
+    func testHostsEntries() {
+        for entry in ["nas.home.arpa=192.168.1.10", "NAS.Lan=10.0.0.5", "dns.example.com=203.0.113.53", "tailnet.example=100.101.102.103"] {
+            XCTAssertTrue(HelperCommand.isHostsEntry(entry), entry)
+        }
+        for entry in ["nas=192.168.1.10", "*.example.com=203.0.113.1", "+.example.com=203.0.113.1", "example.com=2001:db8::1",
+                      "example.com=127.0.0.1", "example.com=0.0.0.0", "example.com=198.18.0.5", "example.com=198.19.1.1",
+                      "example.com=224.0.0.1", "example.com=255.255.255.255", "example.com=169.254.1.1", "example.com=256.1.1.1",
+                      "example.com=010.1.1.1", "example.com=", "=203.0.113.1", "example.com", "example.com=203.0.113.1=x",
+                      "exa mple.com=203.0.113.1", "example.local=192.168.1.2", "localhost=127.0.0.1", "x.localhost=192.168.1.2",
+                      "-bad.example.com=203.0.113.1", "example.123=203.0.113.1", "github.com=203.0.113.1", "api.github.com=203.0.113.1",
+                      "objects.githubusercontent.com=203.0.113.1", "cp.cloudflare.com=203.0.113.1", "api.ipify.org=203.0.113.1",
+                      "ipv4.am.i.mullvad.net=203.0.113.1", "x.bash.ws=203.0.113.1", "a,b.example.com=203.0.113.1",
+                      String(repeating: "a", count: 250) + ".com=203.0.113.1"] {
+            XCTAssertFalse(HelperCommand.isHostsEntry(entry), entry)
+        }
+        XCTAssertFalse(HelperCommand.setHosts(["a.example.com=203.0.113.1", "A.example.com=203.0.113.2"]).isValid, "one name twice")
+        XCTAssertFalse(HelperCommand.setHosts((1...51).map { "h\($0).example.com=203.0.113.1" }).isValid, "more than 50")
+        XCTAssertTrue(HelperCommand.setHosts((1...50).map { "h\($0).example.com=203.0.113.1" }).isValid)
+        XCTAssertNil(HelperCommand(ks: ["set", "hosts", "nas=1.2.3.4"]))
+        XCTAssertTrue(HelperCommand.setHosts([]).needsAuthorization)
     }
 
     /// «Собрать отчёт» (ADR 0021): an absolute folder, one line; anything else is not a report.
