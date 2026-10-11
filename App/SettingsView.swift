@@ -112,6 +112,7 @@ private struct LaunchSection: View {
                     Text("Разреши KillSwitch в Системных настройках → Основные → Объекты входа.")
                 }
             }
+            StartMinimisedToggle()
             Toggle(isOn: $auto.enabled) {
                 Text("Подключаться автоматически")
                 Text(control.coreConfigured ? String(localized: "В любой сети, после включения Mac и при смене сети. Пароль не спрашивается.")

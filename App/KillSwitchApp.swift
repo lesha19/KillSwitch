@@ -38,6 +38,9 @@ struct KillSwitchApp: App {
                 .environment(updater)
         }
         .defaultSize(width: 860, height: 640)
+        // «Запускать без окна»: neither opened nor restored at launch, only the menu bar icon
+        .defaultLaunchBehavior(StartMinimised.isOn ? .suppressed : .automatic)
+        .restorationBehavior(StartMinimised.isOn ? .disabled : .automatic)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .appInfo) { CheckForUpdatesButton(updater: updater) }
