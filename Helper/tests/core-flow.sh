@@ -70,7 +70,7 @@ run "$fx/ok-full.json" import
 edit '$j->{dns} = { "direct-nameserver" => ["77.88.8.8"] }' < "$fx/ok-full.json" > "$tmp/dnsx.json"
 cp "$cfg" "$tmp/cfg.dns"
 run "$tmp/dnsx.json" refresh
-[ "$rc" = 3 ] && cmp -s "$cfg" "$tmp/cfg.dns" && ok "refresh: a new DNS server outside the tunnel needs the admin (exit 3)" || bad "refresh dns: $rc $(cat "$tmp/err")"
+[ "$rc" = 3 ] && cmp -s "$cfg" "$tmp/cfg.dns" && grep -qF "(DIRECT)" "$tmp/err" && ok "refresh: a new DNS server outside the tunnel needs the admin (exit 3)" || bad "refresh dns: $rc $(cat "$tmp/err")"
 # the copy of the profile and the generated config hold server passwords: root-only from the
 # moment they are written (core/ is 711, a known name would be readable), not after a chmod
 MODES="$tmp/modes"   # core_import has a local $tmp
@@ -114,7 +114,7 @@ run "$tmp/p.json" refresh
 # DIRECT changes
 edit 'unshift @{$j->{rules}}, "DOMAIN-SUFFIX,com,DIRECT"' < "$fx/ok-full.json" > "$tmp/p.json"
 run "$tmp/p.json" refresh
-[ "$rc" = 3 ] && grep -q 'нужно подтверждение' "$tmp/err" && ok "refresh: new DIRECT rule refused" || bad "DIRECT rule: $rc $(cat "$tmp/err")"
+[ "$rc" = 3 ] && grep -qF "(DIRECT)" "$tmp/err" && ok "refresh: new DIRECT rule refused" || bad "DIRECT rule: $rc $(cat "$tmp/err")"
 edit '$j->{rules}[-1] = "MATCH,DIRECT"' < "$fx/ok-full.json" > "$tmp/p.json"
 run "$tmp/p.json" refresh
 [ "$rc" = 3 ] && ok "refresh: MATCH,DIRECT refused" || bad "MATCH,DIRECT: $rc"

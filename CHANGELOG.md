@@ -21,6 +21,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   connections now work without the password only for the user who installed KillSwitch while at
   the Mac's screen (or root); another account, or an ssh session while someone else or nobody is
   at the Mac, is refused. Reading the state stays open.
+- Subscription update that changes what goes past the VPN (KS-12, #47): it was shown as «В подписке
+  новые серверы». Now the banner, the notification and Settings say «Подписка меняет правила
+  „напрямую“» and that part of the traffic will go past the VPN, so the admin knows what the
+  password approves.
 
 ## [0.18.1] - 2026-10-11
 

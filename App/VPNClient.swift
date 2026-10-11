@@ -43,6 +43,8 @@ final class VPNClient {
     /// An automatic update brought new server addresses: the helper refused `core refresh`, and
     /// only a click (`confirmNewServers`) may import it with the admin password.
     private(set) var needsConfirmation = false
+    /// KS-12: what waits for the admin is a change of what goes past the VPN (DIRECT, DNS), not servers.
+    private(set) var routingChanged = false
     /// Settings › «Дополнительно»: fingerprint and multiplexing per server (Transport, ADR 0007).
     private(set) var transportOverrides = Transport.decode(UserDefaults.standard.data(forKey: Transport.storeKey))
     /// Servers of the cached profile whose transport can be changed, with the subscription's values.
@@ -368,7 +370,7 @@ final class VPNClient {
         UserDefaults.standard.set([CoreProxies.xrayGroup], forKey: KillSwitchControl.groupOrderKey)
         lastError = nil
         needsPassword = false
-        needsConfirmation = false
+        needsConfirmation = false; routingChanged = false
     }
 
     /// The cached subscription of the way the helper runs, to the helper again.
@@ -555,18 +557,21 @@ final class VPNClient {
         if control.coreConfigured, UserDefaults.standard.string(forKey: Self.importedKey) == hash {
             lastError = nil
             needsPassword = false
-            needsConfirmation = false
+            needsConfirmation = false; routingChanged = false
             return true
         }
         guard interactive else {
-            switch await control.coreRefresh(file: file.path) {
+            let outcome = await control.coreRefresh(file: file.path)
+            switch outcome {
             case .applied:
                 done(hash)
                 return true
-            case .newServers:
+            case .newServers, .routingChanged:
                 lastError = nil
-                if !needsConfirmation { Notifier.shared.post(.newServers) }
+                let routing = outcome == .routingChanged
+                if !needsConfirmation || routing != routingChanged { Notifier.shared.post(routing ? .routingChanged : .newServers) }
                 needsConfirmation = true
+                routingChanged = routing
             case .needsPassword: needsPassword = true
             case .failed(let message): lastError = UserError.from(raw: message, context: .subscription)
             }
@@ -636,7 +641,7 @@ final class VPNClient {
         UserDefaults.standard.set(groups, forKey: KillSwitchControl.groupOrderKey)
         lastError = nil
         needsPassword = false
-        needsConfirmation = false
+        needsConfirmation = false; routingChanged = false
     }
 
     /// The stored name wins: a `.conf` carries none, and it is what the list shows.

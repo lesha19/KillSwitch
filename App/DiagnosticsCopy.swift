@@ -41,7 +41,8 @@ enum DiagnosticsCopy {
             ("Обновлена", date(client.status.lastUpdate)),
             ("Следующее обновление", date(client.nextUpdate)),
             ("Ждёт пароля для применения", yes(client.needsPassword)),
-            ("Ждёт подтверждения новых серверов", yes(client.needsConfirmation)),
+            ("Ждёт подтверждения новых серверов", yes(client.needsConfirmation && !client.routingChanged)),
+            ("Ждёт подтверждения правил «напрямую»", yes(client.routingChanged)),
             ("Своих серверов", "\(client.manual.count)"),
         ]
         let errors = [control.error, control.coreError, control.proxiesError, client.lastError].compactMap { $0 }
