@@ -116,6 +116,16 @@ final class AutoConnector: NSObject, CLLocationManagerDelegate {
         UserDefaults.standard.set(WiFiRules.encode(new), forKey: WiFiRules.key)
     }
 
+    /// After «Перенос настроек» (SettingsBackup) wrote the defaults.
+    func reloadSettings() {
+        let defaults = UserDefaults.standard
+        enabled = AutoConnect.enabled(stored: defaults.object(forKey: "autoConnect") as? Bool)
+        let skip = AutoConnect.skipTrusted(stored: defaults.object(forKey: "autoConnectSkipTrusted") as? Bool)
+        if skip != skipTrusted { skipTrusted = skip }
+        trusted = AutoConnect.normalized(defaults.stringArray(forKey: "trustedNetworks") ?? [])
+        rules = WiFiRules.decode(defaults.data(forKey: WiFiRules.key))
+    }
+
     // MARK: -
 
     private func setTrusted(_ names: [String]) {

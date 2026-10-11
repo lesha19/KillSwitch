@@ -4,6 +4,14 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Added
+- Settings › Дополнительно «Перенос настроек» (#15, ADR 0024): «Сохранить в файл…» writes the app
+  and protection settings to a JSON file, «Загрузить из файла…» reads one back, «Сбросить…» returns
+  them to the defaults. Both show every change first; protection settings go through the usual
+  commands and password. The file never contains the subscription link, own servers or keys.
+
 ## [0.18.1] - 2026-10-11
 
 ### Added
