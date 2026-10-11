@@ -21,8 +21,9 @@ fails=0
 ok()  { echo "ok    $*"; }
 bad() { echo "FAIL  $*"; fails=$((fails + 1)); }
 # edit <perl over $c, the fixture's config (and $a, the array)>: the changed subscription in $tmp/p.json
+# (~u017f~ in a string becomes the JSON escape \u017f; "\xc5\xbf" stays the raw UTF-8 bytes)
 edit() { /usr/bin/perl -MJSON::PP -e 'local $/; my $a = JSON::PP->new->decode(<STDIN>); my $c = $a->[0]; eval $ARGV[0]; die $@ if $@;
-           print JSON::PP->new->encode($a)' "$1" < "$fx/xray-panel.json" > "$tmp/p.json"; }
+           print JSON::PP->new->encode($a) =~ s/~u([0-9a-f]{4})~/\\u$1/gr' "$1" < "$fx/xray-panel.json" > "$tmp/p.json"; }
 j() { /usr/bin/perl -MJSON::PP -e 'local $/; my $c = JSON::PP->new->decode(<STDIN>); my $v = eval $ARGV[0]; die $@ if $@;
         print ref $v ? JSON::PP->new->canonical->encode($v) : $v // ""' "$1" < "${2:-$tmp/c}"; }
 gen() { core_generate_xray "$tmp/p.json" "$tmp/c" "$tmp/s" 2>"$tmp/err"; }
@@ -231,6 +232,31 @@ perhost "«sockopt» spelled «SockOpt» with an interface" '$b->{outbounds}[0]{
 if accepted "a ws Host header in any case is the subscription's own" '$c->{outbounds}[0]{streamSettings} = { network => "ws", security => "tls",
       wsSettings => { path => "/p", headers => { HOST => "a.example.com", "User-Agent" => "x" } } }'; then
   ok "  taken (header names are not Xray's keys)"
+fi
+
+# --- Go folds more than ASCII case: «ſ» (U+017F) reads as s and «K» (U+212A, Kelvin) as k, raw
+# or escaped, so «ſelector» is a balancer's selector to Xray and nothing to the checks here; it
+# sorts after «selector» and Xray applies it last (0.19.1 review, second round)
+for u in 'raw:\xc5\xbf:\xe2\x84\xaa' 'escaped:~u017f~:~u212a~'; do
+  IFS=: read -r form s k <<<"$u"
+  perhost "$form ſ: balancer «ſelector» to the freedom outbound" '$b->{routing}{balancers}[0]{"'"$s"'elector"} = ["LT_", "direct"]'
+  perhost "$form K: balancer «fallbacKTag»" '$b->{routing}{balancers}[0]{"fallbac'"$k"'Tag"} = "direct"'
+  perhost "$form ſ: burstObservatory «subjectſelector»" '$b->{burstObservatory}{"subject'"$s"'elector"} = ["dir"]'
+  perhost "$form ſ: vnext «addreſs»" '$b->{outbounds}[0]{settings}{vnext}[0]{"addre'"$s"'s"} = "evil.example.com"'
+  perhost "$form ſ: a DNS server «addreſs» +local" 'push @{$b->{dns}{servers}}, { "addre'"$s"'s" => "tcp+local://9.9.9.9" }'
+  perhost "$form ſ: outbound settings «reverſe»" '$b->{outbounds}[0]{settings}{"rever'"$s"'e"} = { tag => "r" }'
+  perhost "$form ſ: «ſockopt» with an interface" '$b->{outbounds}[0]{streamSettings}{"'"$s"'ockopt"} = { interface => "en0", mark => 7 }'
+  perhost "$form K: «socKopt» with an interface" '$b->{outbounds}[0]{streamSettings}{"soc'"$k"'opt"} = { interface => "en0" }'
+  perhost "$form ſ: «ſendThrough»" '$b->{outbounds}[0]{"'"$s"'endThrough"} = "192.168.1.5"'
+  perhost "$form ſ: «ſettings» of the DNS outbound" '$b->{outbounds}[4]{"'"$s"'ettings"} = { address => "1.1.1.1", port => 53 }'
+  perhost "$form ſ: «streamſettings»" '$b->{outbounds}[0]{"stream'"$s"'ettings"} = { sockopt => { interface => "en0" } }'
+done
+# header names, DNS hosts and rule attributes are data: any letters there are the subscription's
+if accepted "non-ASCII header names, DNS hosts and rule attributes" '$c->{outbounds}[0]{streamSettings} = { network => "ws", security => "tls",
+      wsSettings => { path => "/p", headers => { "X-\xc5\xbf" => "x", "X-~u212a~" => "y" } } };
+      $c->{dns}{hosts} = { "domain:\xd0\xbf\xd1\x80\xd0\xb8.example.com" => "198.51.100.3" };
+      unshift @{$c->{routing}{rules}}, { attrs => { ":\xc5\xbf" => "x" }, outboundTag => "LT_1" }'; then
+  ok "  taken"
 fi
 
 # --- an observatory that probes through a freedom outbound sends its probes past the tunnel to
