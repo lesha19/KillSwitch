@@ -81,6 +81,16 @@ touch -t 203001010000 "$CORE_DIR/profile-xray.json"   # replaced by a refresh af
 core_regen >/dev/null 2>&1
 [ ! -e "$CORE_DIR/approved-switch" ] && grep -q 'refreshed since the last import' "$EVENTS" &&
   ok "  a profile refreshed since the import: nothing approved without the password, logged" || bad "  refreshed: $(ls "$CORE_DIR") $(cat "$EVENTS")"
+: > "$EVENTS"; touch -r "$APPROVED_DIRECT" "$CORE_DIR/profile-xray.json"   # the same instant: a refresh within the import's second
+core_regen >/dev/null 2>&1
+[ ! -e "$CORE_DIR/approved-switch" ] && grep -q 'refreshed since the last import' "$EVENTS" &&
+  ok "  a profile as new as the approval: not taken for the imported one" || bad "  same time: $(ls "$CORE_DIR") $(cat "$EVENTS")"
+eval "$(declare -f core_generate | sed '1s/core_generate/real_core_generate/')"
+core_generate() { [ -z "${KS_APPROVE_ALL:-}" ] || { echo "no luck" >&2; return 1; }; real_core_generate "$@"; }
+: > "$EVENTS"; touch -t 202601010000 "$CORE_DIR/profile-xray.json"; core_regen >/dev/null 2>&1
+[ ! -e "$CORE_DIR/approved-switch" ] && grep -q 'server switch approval failed: no luck' "$EVENTS" &&
+  ok "  a failed build of the approval: logged with the reason" || bad "  failed: $(cat "$EVENTS")"
+eval "$(declare -f real_core_generate | sed '1s/real_core_generate/core_generate/')"
 put_setting core mihomo; touch -t 202601010000 "$CORE_DIR/profile-xray.json"; core_regen >/dev/null 2>&1; put_setting core xray
 [ ! -e "$CORE_DIR/approved-switch" ] && ok "  mihomo: none (switches are Xray's)" || bad "  mihomo approval"
 touch -t 202601010000 "$CORE_DIR/profile-xray.json"; core_regen >/dev/null 2>&1
@@ -113,6 +123,15 @@ UP=1
 old_config; RUN=0; : > "$T/launchd"
 out=$(core_regen 2>&1) && [ "$(restarts)" = 0 ] && ! cmp -s "$CORE_DIR/xray.json" "$T/old.json" &&
   ok "_regen, core off: new config, no restart" || bad "_regen off: $out $(restarts)"
+
+# --- mihomo's job loaded while the kind is already Xray ("core on" swapping, its _regen): mihomo
+# is not restarted for Xray's config, nor rolled back while it takes its time
+echo '<plist>mihomo</plist>' > "$CORE_DIR/plist.mihomo"; cp "$CORE_DIR/plist.mihomo" "$CORE_PLIST"
+old_config; RUN=1; UP=0; : > "$T/launchd"; : > "$EVENTS"
+core_regen >/dev/null 2>&1 && [ "$(restarts)" = 0 ] && ! cmp -s "$CORE_DIR/xray.json" "$T/old.json" && ! grep -q 'rolled back' "$EVENTS" &&
+  ok "_regen with mihomo's job loaded: the new Xray config in place, mihomo not restarted, nothing rolled back" ||
+  bad "_regen under mihomo: restarts $(restarts), $(cat "$EVENTS")"
+rm -f "$CORE_DIR/plist.mihomo" "$CORE_PLIST"; UP=1; RUN=0
 
 # --- (c) the stats port taken by another program
 RUN=0; API_HOLDER=4242; : > "$EVENTS"

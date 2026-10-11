@@ -173,7 +173,13 @@ touch -t "$(date -r $(($(date +%s) - 11)) +%Y%m%d%H%M.%S)" "$INVALIDF"
 passes 24 25
 grep -q utun9 "$tmp/anchor" && [ ! -e "$INVALIDF" ] && ok "  10 s later: tried again, the rules back, nothing named invalid" ||
   bad "  lockdown kept: $(cat "$tmp/anchor"), invalid: $(cat "$INVALIDF" 2>&1)"
-grep -q 'loaded on a retry' "$EVENTS" && ok "  logged" || bad "  log: $(cat "$EVENTS")"
+grep -q 'rules loaded again after pf had refused them' "$EVENTS" && ok "  logged" || bad "  log: $(cat "$EVENTS")"
+# the clock stepped back: the file's time is in the future, tried again rather than never
+echo 3 > "$tmp/busy"; load; echo 0 > "$tmp/busy"
+touch -t "$(date -r $(($(date +%s) + 3600)) +%Y%m%d%H%M.%S)" "$INVALIDF"
+passes 28 29
+grep -q utun9 "$tmp/anchor" && [ ! -e "$INVALIDF" ] && ok "  invalid written in the future (clock stepped back): tried again" ||
+  bad "  future mtime: $(cat "$tmp/anchor"), invalid: $(cat "$INVALIDF" 2>&1)"
 # still refused: the lockdown stays, tried again later, without flooding the log
 echo 3 > "$tmp/busy"; load; echo 3 > "$tmp/busy"; : > "$EVENTS"
 touch -t "$(date -r $(($(date +%s) - 11)) +%Y%m%d%H%M.%S)" "$INVALIDF"
