@@ -62,13 +62,11 @@ struct KillSwitchApp: App {
     }
 }
 
-/// `killswitch://…` links (the widget opens `killswitch://home`) land in a section of the window.
+/// `killswitch://…` links (the widget opens `killswitch://home`; the rest: DeepLinks, ADR 0029).
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func application(_ application: NSApplication, open urls: [URL]) {
         MainActor.assumeIsolated {
-            for url in urls {
-                if let route = Navigation.route(url: url) { Router.shared.go(route) }
-            }
+            for url in urls { DeepLinks.open(url) }
         }
     }
 }

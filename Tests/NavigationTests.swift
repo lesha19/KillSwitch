@@ -61,20 +61,5 @@ final class NavigationTests: XCTestCase {
         XCTAssertNil(Navigation.route(status: .chooseServer))
     }
 
-    func testLinks() {
-        func route(_ link: String) -> Route? { Navigation.route(url: URL(string: link)!) }
-        XCTAssertEqual(route("killswitch://home"), .section(.home))
-        XCTAssertEqual(route("killswitch://servers"), .section(.servers))
-        XCTAssertEqual(route("killswitch://traffic"), .section(.traffic))
-        XCTAssertEqual(route("killswitch://leaks"), .section(.leakTest))
-        XCTAssertEqual(route("killswitch://log"), .section(.log))
-        XCTAssertEqual(route("killswitch://about"), .section(.about))
-        XCTAssertEqual(route("killswitch://settings/vpn"), .section(.settings(.vpn)))
-        XCTAssertEqual(route("killswitch://settings"), .section(.settings(.general)))
-        XCTAssertEqual(route("killswitch://settings/nope"), .section(.settings(.general)))
-        XCTAssertEqual(route("killswitch://setup"), .onboarding)
-        XCTAssertEqual(route("killswitch://"), .window)
-        XCTAssertEqual(route("killswitch://whatever"), .window)
-        XCTAssertNil(route("https://example.com/settings"))
-    }
+    // `killswitch://` links: DeepLinkTests.
 }

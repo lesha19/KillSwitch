@@ -20,6 +20,8 @@ final class Router {
     }
     /// «Начало работы», a sheet on the window.
     var onboarding = false
+    /// A `killswitch://` link waiting for «Добавить» / «Отключить» (DeepLinks); one at a time.
+    var linkRequest: DeepLink.Confirmation?
 
     /// SwiftUI's openWindow for the main window, handed over by the menu bar label (which always
     /// exists). A `Window` scene has one instance: this fronts it when it is already open.
