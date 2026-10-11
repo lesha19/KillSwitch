@@ -228,7 +228,13 @@ private struct VPNSettings: View {
             Section("Свои серверы") {
                 ForEach(client.manual) { server in
                     HStack {
-                        ServerLabel(name: server.name)
+                        VStack(alignment: .leading, spacing: 2) {
+                            ServerLabel(name: server.name)
+                            if let reason = client.mainWayCannotUse(server) {
+                                Text("Работает только с запасным способом подключения: \(reason)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
                         Spacer()
                         Button("Убрать") { Task { await client.removeManual(server) } }
                     }

@@ -187,4 +187,32 @@ gen "$fx/xray-panel.json" && [ "$(j '$c->{routing}{rules}[2]{inboundTag}[0]')" =
   bad "adblock without geodata: $(j '$c->{routing}{rules}[2]')"
 rm -f "$SETTINGS"
 
+# --- own servers added by link (#33, ADR 0027): the app appends each as a host of its own
+# (App/Core/XrayManual.swift, the shape of Tests/XrayManualTests.swift): one server, DNS through it
+resolve_host() { case "$1" in lt.example.com) echo 203.0.113.40 ;; pl.example.com) echo 203.0.113.50 ;; *) return 1 ;; esac; }
+edit 'push @$a,
+  { remarks => "Варшава (свой)", dns => { servers => ["1.1.1.1", "8.8.8.8"], queryStrategy => "UseIPv4" },
+    outbounds => [{ tag => "proxy", protocol => "trojan", settings => { servers => [{ address => "pl.example.com", port => 443, password => "pw" }] },
+                    streamSettings => { network => "tcp", security => "tls", tlsSettings => { serverName => "pl.example.com" } } }] },
+  { remarks => "Рига (свой)", dns => { servers => ["1.1.1.1", "8.8.8.8"], queryStrategy => "UseIPv4" },
+    outbounds => [{ tag => "proxy", protocol => "vless",
+                    settings => { vnext => [{ address => "203.0.113.60", port => 443, users => [{ id => "00000000-0000-4000-8000-000000000002", encryption => "none" }] }] },
+                    streamSettings => { network => "xhttp", security => "reality",
+                      realitySettings => { serverName => "www.example.com", fingerprint => "chrome", publicKey => "Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBrjqnAw", shortId => "ab12" },
+                      xhttpSettings => { path => "/p", mode => "packet-up", extra => { xPaddingBytes => "100-1000" } } } }] }'
+gen "$tmp/p.json" && [ "$(paste -sd' ' - < "$tmp/s")" = "203.0.113.10 203.0.113.50 203.0.113.60" ] &&
+  ok "own servers: checked and pinned with the subscription's hosts (a new one needs the admin, like any)" || bad "own servers: $(cat "$tmp/err") $(cat "$tmp/s")"
+printf 'xrayserver=Варшава (свой)\n' > "$SETTINGS"
+gen "$tmp/p.json" || bad "own server refused: $(cat "$tmp/err")"
+[ "$(j '"$c->{outbounds}[0]{tag}:$c->{outbounds}[0]{settings}{servers}[0]{address}"')" = proxy:203.0.113.50 ] &&
+  [ "$(j 'join ",", map { $_->{outboundTag} } @{ $c->{routing}{rules} }')" = ks-dns-out,proxy ] &&
+  ok "  running one: its server first (what no rule takes), only our two rules" || bad "  own: $(j '$c->{routing}')"
+[ ! -s "$tmp/c.egress" ] && [ ! -s "$tmp/c.direct" ] && ok "  nothing past the VPN: no egress, an empty DIRECT signature" ||
+  bad "  egress: $(cat "$tmp/c.egress") direct: $(cat "$tmp/c.direct")"
+[ "$(j 'join ",", map { ref $_ ? $_->{address} : $_ } @{ $c->{dns}{servers} }')" = 1.1.1.1,8.8.8.8 ] && ok "  its DNS servers, reached through it" || bad "  dns: $(j '$c->{dns}')"
+xtest "own trojan server" "$tmp/c"
+printf 'xrayserver=Рига (свой)\n' > "$SETTINGS"
+gen "$tmp/p.json" && xtest "own vless reality xhttp server" "$tmp/c" || bad "own vless: $(cat "$tmp/err")"
+rm -f "$SETTINGS"
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
