@@ -75,6 +75,10 @@ TSRELAYS="$DIR/tsrelays" # Tailscale DERP relays + control plane, root-owned
 NB_GROUP="_ksnetbird"    # NetBird's daemon runs with this gid when tailscale=1 (netbird_sync)
 NB_PLIST="/Library/LaunchDaemons/netbird.plist" # NetBird's own launchd job, written by its installer
 NB_TEAM="TA739QLA7A"     # NetBird GmbH's Developer ID team
+# NetBird's TCP: 443 (NetBird Cloud and combined self-hosted setups: management, signal, relay,
+# TURN over TLS), 80 (rel:// relays), and the separate self-hosted defaults: management 33073,
+# signal 10000, relay 33080, coturn 3478 and 5349 (ADR 0026)
+NB_TCP_PORTS="80, 443, 3478, 5349, 10000, 33073, 33080"
 CORE_DIR="$DIR/core"     # mihomo, config.yaml, geoip.metadb, root-owned
 CORE_GROUP="_ksvpn"      # the core runs with this gid; nothing else can get it
 CORE_JOB="system/local.killswitch.core"
@@ -248,9 +252,15 @@ rules() {  # rules [allow-file] [servers-file] [manual-servers-file]
       echo 'pass out quick proto udp to <ts_relays> port 3478 keep state'
     fi
     # NetBird's root daemon, recognised by its group (netbird_sync): it binds WireGuard, STUN,
-    # relay and management sockets to the physical interface, and its relays change
-    dscl . -read "/Groups/$NB_GROUP" PrimaryGroupID >/dev/null 2>&1 &&
-      echo "pass out quick group $NB_GROUP flags any keep state"
+    # relay and management sockets to the physical interface, and its relays change. Only its
+    # own flows (ADR 0026): UDP anywhere (peers listen on any port), TCP to NetBird's management,
+    # signal, relay and TURN ports, never DNS: its upstream resolver (and a routing peer's
+    # forwarded traffic) follow the routing table and leave through the VPN while it is up.
+    if dscl . -read "/Groups/$NB_GROUP" PrimaryGroupID >/dev/null 2>&1; then
+      echo "block drop out quick proto { tcp udp } to any port { 53, 853 } group $NB_GROUP"
+      echo "pass out quick proto udp group $NB_GROUP keep state"
+      echo "pass out quick proto tcp to any port { $NB_TCP_PORTS } group $NB_GROUP flags any keep state"
+    fi
     # tailnet traffic only, not exit-node traffic (NetBird's network is in 100.64.0.0/10 too)
     [ -n "$ts" ] && echo "pass out quick on { $ts } inet to { 100.64.0.0/10 } flags any keep state"
     [ -n "$ts" ] && echo "pass out quick on { $ts } inet6 to { fd7a:115c:a1e0::/48 } flags any keep state"
@@ -416,8 +426,9 @@ watch_pass() {
 # the way our core gets _ksvpn) and rules() lets that group out. Tagged only while tailscale=1 and
 # the plist runs code signed by NetBird's team; an update that rewrites the plist or the binary is
 # looked at again. A change restarts the daemon (a few seconds without NetBird).
-# Known limit: the group passes everything NetBird's daemon sends, its DNS forwarder and netstack
-# proxy included, not only its WireGuard, STUN, relay and management traffic.
+# rules() lets the group out for UDP and NetBird's TCP ports only, never port 53/853 (ADR 0026).
+# Known limit: while the VPN is down, a routing peer's forwarded UDP and TCP to those ports still
+# leave directly.
 # The watchdog only starts this (netbird_bg): the codesign check and the restart run in the
 # background under a lock. What was last done is in $NB_SIGF; a restart whose bootstrap failed is
 # in $NB_RETRYF ("<failures> <epoch of the next try>") and tried again, 30 s later and doubling.

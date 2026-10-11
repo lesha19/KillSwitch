@@ -105,10 +105,28 @@ rules > "$tmp/out"
   { echo "FAIL  damaged + standby: $(cat "$tmp/out")"; fails=$((fails + 1)); }
 rm -f "$SETTINGS"
 
-# NetBird: its daemon is let out by its group (netbird_sync tags it), under the tailscale setting
+# NetBird: its daemon is let out by its group (netbird_sync tags it), under the tailscale setting,
+# for its own flows only (ADR 0026): UDP (WireGuard to peers on any port, STUN, QUIC relays) and
+# TCP to NetBird's management, signal, relay and TURN ports; never DNS (its upstream resolver).
 core_running() { return 0; }
 rm -f "$SETTINGS"; rules > "$tmp/out"
-expect "tailscale default on: NetBird's daemon group passes" "^pass out quick group $NB_GROUP flags any keep state$"
+expect "NetBird's daemon: no DNS or DoT/DoQ past the VPN" \
+  "^block drop out quick proto \{ tcp udp \} to any port \{ 53, 853 \} group $NB_GROUP$"
+expect "NetBird's daemon: UDP passes (peers listen on any port)" "^pass out quick proto udp group $NB_GROUP keep state$"
+expect "NetBird's daemon: TCP only to NetBird's ports" \
+  "^pass out quick proto tcp to any port \{ 80, 443, 3478, 5349, 10000, 33073, 33080 \} group $NB_GROUP flags any keep state$"
+expect "no broad NetBird rule" "^pass out quick group $NB_GROUP" absent
+dnsl=$(grep -n "^block drop out quick proto { tcp udp } to any port { 53, 853 } group $NB_GROUP" "$tmp/out" | cut -d: -f1)
+passl=$(grep -n "^pass out quick proto (udp|tcp)[^#]* group $NB_GROUP" -E "$tmp/out" | head -1 | cut -d: -f1)
+[ -n "$dnsl" ] && [ -n "$passl" ] && [ "$dnsl" -lt "$passl" ] && echo "ok    NetBird's DNS block comes before its passes" ||
+  { echo "FAIL  NetBird's DNS block comes before its passes"; fails=$((fails + 1)); }
+[ "$(tail -n 1 "$tmp/out")" = 'block drop out quick all' ] && echo "ok    still fail-closed with NetBird" ||
+  { echo "FAIL  still fail-closed with NetBird"; fails=$((fails + 1)); }
+# pfctl resolves group names: only where both groups exist (a Mac with KillSwitch installed)
+if ! /usr/bin/dscl . -read "/Groups/$NB_GROUP" >/dev/null 2>&1 || ! /usr/bin/dscl . -read "/Groups/$CORE_GROUP" >/dev/null 2>&1; then
+  echo "skip  pf parse: no $NB_GROUP/$CORE_GROUP group here"
+elif pfctl -nf - < "$tmp/out" >/dev/null 2>&1; then echo "ok    pf parses the rules with NetBird"
+else echo "FAIL  pf parses the rules with NetBird: $(pfctl -nf - < "$tmp/out" 2>&1 | grep -v -e 'Use of -f' -e 'present in the main' -e 'pf.conf' | head -3)"; fails=$((fails + 1)); fi
 echo tailscale=0 > "$SETTINGS"; rules > "$tmp/out"
 expect "tailscale=0: no NetBird pass" "group $NB_GROUP" absent
 rm -f "$SETTINGS"
