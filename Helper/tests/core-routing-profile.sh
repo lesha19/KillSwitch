@@ -313,4 +313,20 @@ SERVERS="$T/s5-xray-off.srv"; APPROVED_HOSTS="$T/none"; APPROVED_DIRECT="$T/s5-x
 refresh_check "$T/s5-xray-on.srv" "$T/pins" "$T/s5-xray-on.direct" 2>"$T/rc.err"
 grep -q '(DIRECT) \[profile\]:' "$T/rc.err" && ok "  Xray: [profile] when a direct profile is turned on" || bad "who xray: $(cat "$T/rc.err")"
 
+# --- re-review 2 N-A: the freedom outbounds keep their order. An untagged first one is Xray's
+# default (its "default" line has no tag), so swapping two untagged ones changes where what no
+# rule takes goes, with every line still approved
+printf 'core=xray\n' > "$SETTINGS"
+na() { /usr/bin/perl -MJSON::PP -e 'local $/; my $p = JSON::PP->new->decode(<STDIN>); my $c = $p->[0];
+  my @o = grep { $_->{protocol} ne "freedom" } @{ $c->{outbounds} };
+  my $a = { protocol => "freedom" }; my $b = { protocol => "freedom", settings => { redirect => "198.51.100.7:443" } };
+  $c->{outbounds} = $ARGV[0] eq "A" ? [ $a, $b, @o ] : [ $b, $a, @o ];
+  $c->{routing}{rules} = [ grep { ($_->{outboundTag} // "") ne "direct" } @{ $c->{routing}{rules} } ]; delete $c->{dns};
+  $#$p = 0; print JSON::PP->new->encode($p)' "$1" < "$fx/xray-panel.json" > "$T/na-$1.json"
+  gx "$T/na-$1.json" "na-$1" || bad "na $1: $(cat "$T/err")"; }
+na A; na B
+SERVERS="$T/na-A.srv"; APPROVED_HOSTS="$T/none"; APPROVED_DIRECT="$T/na-A.direct"; : > "$T/pins"
+refresh_check "$T/na-B.srv" "$T/pins" "$T/na-B.direct" 2>/dev/null; rc=$?
+[ "$rc" = 3 ] && ok "Xray: two untagged freedom outbounds swapped (the default moves): the admin" || bad "na: rc $rc"
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

@@ -2345,9 +2345,13 @@ core_commit() {
 # own, must not be taken over by a subscription's rule of the same text).
 direct_subset() {
   [ -f "$APPROVED_DIRECT" ] || return 1
-  local own=$'^(profile-rule|profile|outbound)\t'
+  local own=$'^(profile-rule|profile|outbound)\t' ob=$'^outbound\t'
   cmp -s <(grep -vE "$own" -- "$1") <(grep -vE "$own" -- "$APPROVED_DIRECT") &&
-    ! { grep -E "$own" -- "$1" || :; } | grep -qvxF -f "$APPROVED_DIRECT"
+    ! { grep -E $'^(profile-rule|profile)\t' -- "$1" || :; } | grep -qvxF -f "$APPROVED_DIRECT" &&
+    # the outbound lines, fewer or not, keep their order (an untagged first one is Xray's default:
+    # its "default" line has no tag, re-review 2 N-A)
+    awk 'FILENAME == ARGV[1] { a[++n] = $0; next } { while (i < n && a[++i] != $0); if (a[i] != $0) bad = 1 } END { exit bad }' \
+      <(grep -E "$ob" -- "$APPROVED_DIRECT") <(grep -E "$ob" -- "$1")
 }
 
 # direct_parts <direct>: which part of the signature is not the approved one, for the app to say
