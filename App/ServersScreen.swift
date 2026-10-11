@@ -9,7 +9,9 @@ struct ServersScreen: View {
 
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
-    @AppStorage("sortByLatency") private var sortByPing = false
+    /// «Порядок»; before it a checkbox «По пингу» (`sortByLatency`), which still gives the default.
+    @AppStorage("serverSort") private var sort: ServerPicker.Sort =
+        UserDefaults.standard.bool(forKey: "sortByLatency") ? .ping : .subscription
     @AppStorage("showProfileGroups") private var showProfileGroups = false
     @AppStorage(VPNClient.favouritesKey) private var favouritesText = ""
     @State private var query = ""
@@ -36,10 +38,13 @@ struct ServersScreen: View {
                     .focused($searchFocused)
                     .accessibilityLabel("Поиск сервера")
                 list
-                Toggle("По пингу", isOn: $sortByPing)
-                    .toggleStyle(.checkbox)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .help("Сортировать по пингу: быстрые сверху")
+                Picker("Порядок", selection: $sort) {
+                    ForEach(ServerPicker.Sort.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .fixedSize()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help("Порядок серверов: как в подписке, быстрые сверху или по имени")
             }
         }
         .padding(12)
@@ -88,7 +93,7 @@ struct ServersScreen: View {
     @ViewBuilder private var list: some View {
         if let proxies {
             let all = entries(proxies)
-            let sections = ServerPicker.sections(all, favourites: favourites, query: query, sortByPing: sortByPing,
+            let sections = ServerPicker.sections(all, favourites: favourites, query: query, sort: sort,
                                                  delays: delays(all))
             let current = choosingEntry ? control.multihopEntry : currentName(proxies)
             if sections.fastest == nil && sections.favourites.isEmpty && sections.all.isEmpty {

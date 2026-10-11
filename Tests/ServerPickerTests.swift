@@ -69,7 +69,7 @@ final class ServerPickerTests: XCTestCase {
 
     func testSections() throws {
         let entries = ServerPicker.entries(try proxies())
-        let sections = ServerPicker.sections(entries, favourites: ["🇩🇪 Германия"], query: "", sortByPing: false, delays: [:])
+        let sections = ServerPicker.sections(entries, favourites: ["🇩🇪 Германия"], query: "", sort: .subscription, delays: [:])
         XCTAssertEqual(sections.fastest?.name, "⚡ Авто")
         XCTAssertEqual(sections.favourites.map(\.name), ["🇩🇪 Германия"])
         // a favourite is listed once, under «Избранные»
@@ -79,13 +79,33 @@ final class ServerPickerTests: XCTestCase {
     func testSortByPingPutsSilentOnesLast() throws {
         let entries = ServerPicker.entries(try proxies())
         let delays = ["🇱🇹 Литва": 37, "🇩🇪 Германия": 48, "LT-Vilnius": 412, "Дом": CoreDelay.timeout]
-        let sections = ServerPicker.sections(entries, favourites: [], query: "", sortByPing: true, delays: delays)
+        let sections = ServerPicker.sections(entries, favourites: [], query: "", sort: .ping, delays: delays)
         XCTAssertEqual(sections.all.map(\.name), ["🇱🇹 Литва", "🇩🇪 Германия", "LT-Vilnius", "Дом", "🇵🇱 Варшава"])
     }
 
     func testSearchHidesTheFastestRowUnlessItMatches() throws {
         let entries = ServerPicker.entries(try proxies())
-        XCTAssertNil(ServerPicker.sections(entries, favourites: [], query: "лит", sortByPing: false, delays: [:]).fastest)
+        XCTAssertNil(ServerPicker.sections(entries, favourites: [], query: "лит", sort: .subscription, delays: [:]).fastest)
+    }
+
+    /// By the name without its flag, Russian order (Cyrillic first), numbers as numbers.
+    func testSortByName() throws {
+        let entries = ServerPicker.entries(try proxies()) + [
+            .init(name: "🇱🇹 Литва 10", title: "🇱🇹 Литва 10", path: []),
+            .init(name: "🇱🇹 Литва 2", title: "🇱🇹 Литва 2", path: []),
+        ]
+        let sections = ServerPicker.sections(entries, favourites: ["Дом"], query: "", sort: .name, delays: [:])
+        XCTAssertEqual(sections.fastest?.name, "⚡ Авто")   // stays on top
+        XCTAssertEqual(sections.favourites.map(\.name), ["Дом"])
+        XCTAssertEqual(sections.all.map(\.name),
+                       ["🇵🇱 Варшава", "🇩🇪 Германия", "🇱🇹 Литва", "🇱🇹 Литва 2", "🇱🇹 Литва 10", "LT-Vilnius"])
+    }
+
+    func testSortBySubscriptionKeepsItsOrder() throws {
+        let entries = ServerPicker.entries(try proxies())
+        let delays = ["🇩🇪 Германия": 30, "🇱🇹 Литва": 90]
+        XCTAssertEqual(ServerPicker.sections(entries, favourites: [], query: "", sort: .subscription, delays: delays).all.map(\.name),
+                       ["🇱🇹 Литва", "🇩🇪 Германия", "LT-Vilnius", "🇵🇱 Варшава", "Дом"])
     }
 
     func testPingWords() {

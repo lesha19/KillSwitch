@@ -89,13 +89,36 @@ enum ServerPicker {
         var all: [Entry]
     }
 
-    static func sections(_ entries: [Entry], favourites: Set<String>, query: String, sortByPing: Bool,
+    /// «Порядок» of the list: as the subscription lists them, fastest first, or by name.
+    enum Sort: String, CaseIterable {
+        case subscription, ping, name
+
+        var title: String {
+            switch self {
+            case .subscription: String(localized: "Как в подписке")
+            case .ping: String(localized: "По пингу")
+            case .name: String(localized: "По имени")
+            }
+        }
+    }
+
+    static func sections(_ entries: [Entry], favourites: Set<String>, query: String, sort: Sort,
                          delays: [String: Int]) -> Sections {
         let found = search(entries, query)
         var servers = found.filter { !$0.isFastest }
-        if sortByPing {
+        switch sort {
+        case .subscription: break
+        case .ping:
             let order = CoreDelay.sorted(servers.map(\.name), delays: delays)
             servers.sort { order.firstIndex(of: $0.name)! < order.firstIndex(of: $1.name)! }
+        case .name:
+            // without the flag, Russian order whatever the Mac's language, «Литва 2» before «Литва 10»
+            let russian = Locale(identifier: "ru_RU")
+            servers = servers.enumerated().sorted { a, b in
+                let order = ServerName.spoken(a.element.name).compare(ServerName.spoken(b.element.name),
+                                                                       options: [.caseInsensitive, .numeric], locale: russian)
+                return order == .orderedSame ? a.offset < b.offset : order == .orderedAscending
+            }.map(\.element)
         }
         return Sections(fastest: found.first(where: \.isFastest),
                         favourites: servers.filter { favourites.contains($0.name) },
