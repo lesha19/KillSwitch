@@ -4,6 +4,21 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Added
+- Settings › Дополнительно «Блокировка» (#14, ADR 0031): besides ads and trackers, «Блокировать сайты
+  для взрослых», «Блокировать соцсети» and «Блокировать букмекеров» (Russian bookmakers), from the
+  lists shipped in the app (`category-porn`, `category-social-media-!cn`, `category-betting-ru` of
+  the pinned geosite.dat); nothing is downloaded. Blocked sites are refused by both ways of
+  connecting before the subscription's rules; nothing goes anywhere, so the protection rules do not
+  change. Each switch asks for the administrator (`ks set blockadult|blocksocial|blockbetting 0|1`).
+  The ad blocking setting stays as it was. There is no malware list in that data, so no such switch.
+- «Свой сервер DNS-over-HTTPS» (#14, ADR 0031): names are asked from your DoH server (NextDNS,
+  AdGuard DNS…), always through the VPN; when it does not answer, from the usual resolvers, also
+  through the VPN, never the provider's. Only `https://` addresses of public servers, without a
+  login, `?` or `#` (`ks set doh <url>`, `""` clears). Both new settings travel with «Перенос настроек».
+
 ## [0.19.0] - 2026-10-11
 
 ### Added
