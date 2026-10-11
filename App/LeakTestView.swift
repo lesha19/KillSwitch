@@ -86,7 +86,7 @@ struct LeakTestView: View {
                     }
                     Button("Забыть", role: .destructive) { tester.forgetHome() }
                 } else {
-                    Text("Неизвестен. Чтобы проверка могла узнать твоего провайдера среди DNS-серверов, один раз запусти её с отключённым VPN и выключенной (или на паузе) защитой.")
+                    Text("Неизвестен, поэтому DNS провайдера не с чем сравнить. Он запоминается сам при первой настройке, а ещё при проверке во время паузы защиты, пока VPN отключён.")
                         .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             } header: {
