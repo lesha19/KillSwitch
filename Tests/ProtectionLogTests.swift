@@ -82,6 +82,16 @@ final class ProtectionLogTests: XCTestCase {
                        "Сеть сменилась — серверы снова подключаются так, как задано в подписке")
         XCTAssertEqual(text("2026-10-11 14:03:22 failover (no answer, same server): 🇱🇹Литва -> 🇱🇹Литва XHTTP"),
                        "«🇱🇹 Литва» не отвечал — переключились на «🇱🇹 Литва XHTTP»: тот же сервер, другой транспорт")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate probing: 🇱🇹Литва"),
+                       "«🇱🇹 Литва» не ответил дважды — проверяем другие способы подключения к нему")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate probing off: 🇱🇹Литва"),
+                       "«🇱🇹 Литва» снова отвечает — другие способы подключения больше не проверяем")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate settled: 🇱🇹Литва"),
+                       "«🇱🇹 Литва» снова работает так, как задано в подписке — вернулись к этому")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate probing failed: 🇱🇹Литва"),
+                       "Не получилось проверить другие способы подключения к «🇱🇹 Литва»")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate settle failed: 🇱🇹Литва"),
+                       "Не получилось вернуть «🇱🇹 Литва» к настройкам подписки")
         XCTAssertEqual(text("2026-10-11 14:03:22 connection escalation: on"), "Подбор отпечатка и транспорта включён")
         XCTAssertEqual(text("2026-10-11 14:03:22 connection escalation: off"), "Подбор отпечатка и транспорта выключен")
         // a name with the words in it: the kind is the last one

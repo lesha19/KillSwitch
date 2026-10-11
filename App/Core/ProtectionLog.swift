@@ -124,6 +124,17 @@ enum ProtectionLog {
     /// `escalate failed: A fingerprint|transport X -> Y, kept`. The kind is the last such word: a
     /// server name may hold one.
     private static func escalation(_ message: String) -> String? {
+        // the alternatives' probes on and off, back to the subscription's way, a failure of either
+        let simple: [(String, (String) -> String)] = [
+            ("escalate probing failed: ", { String(localized: "Не получилось проверить другие способы подключения к «\($0)»") }),
+            ("escalate probing off: ", { String(localized: "«\($0)» снова отвечает — другие способы подключения больше не проверяем") }),
+            ("escalate probing: ", { String(localized: "«\($0)» не ответил дважды — проверяем другие способы подключения к нему") }),
+            ("escalate settled: ", { String(localized: "«\($0)» снова работает так, как задано в подписке — вернулись к этому") }),
+            ("escalate settle failed: ", { String(localized: "Не получилось вернуть «\($0)» к настройкам подписки") }),
+        ]
+        if let (prefix, text) = simple.first(where: { message.hasPrefix($0.0) }) {
+            return text(ServerName.display(String(message.dropFirst(prefix.count))))
+        }
         let failed = message.hasPrefix("escalate failed: ")
         guard failed || message.hasPrefix("escalate (no answer): ") else { return nil }
         let rest = message.drop { $0 != ":" }.dropFirst(2)
