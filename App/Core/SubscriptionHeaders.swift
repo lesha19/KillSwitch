@@ -7,22 +7,46 @@ struct SubscriptionUsage: Codable, Equatable {
     var total: Int64?
     var expire: Date?
 
-    var used: Int64 { upload + download }
+    var used: Int64 { upload + download }  // both at most 2^53 (clamped), so no overflow
+
+    /// KS-13: the provider controls these numbers and the status is saved, so a value that traps
+    /// would crash every launch. Bytes are kept in 0…2^53, the expiry up to the end of year 9999.
+    static let maxBytes: Int64 = 1 << 53
+    static let maxExpire: Int64 = 253_402_300_799
+
+    private static func number(_ text: String) -> Int64? {
+        if let value = Int64(text) { return min(max(value, 0), maxBytes) }
+        guard let value = Double(text), value.isFinite else { return nil }
+        return Int64(min(max(value, 0), Double(maxBytes)))
+    }
 
     init?(header: String?) {
         guard let header else { return nil }
         var values: [String: Int64] = [:]
         for part in header.split(separator: ";") {
             let pair = part.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-            if pair.count == 2, let number = Int64(pair[1]) ?? Double(pair[1]).map({ Int64($0) }) {
+            if pair.count == 2, let number = Self.number(pair[1]) {
                 values[pair[0].lowercased()] = number
             }
         }
         guard !values.isEmpty, values.keys.contains(where: { ["upload", "download", "total", "expire"].contains($0) }) else { return nil }
-        upload = values["upload"] ?? 0
-        download = values["download"] ?? 0
-        total = (values["total"] ?? 0) > 0 ? values["total"] : nil
-        expire = (values["expire"] ?? 0) > 0 ? Date(timeIntervalSince1970: TimeInterval(values["expire"]!)) : nil
+        self.init(upload: values["upload"] ?? 0, download: values["download"] ?? 0, total: values["total"],
+                  expire: values["expire"].map { Date(timeIntervalSince1970: TimeInterval($0)) })
+    }
+
+    private init(upload: Int64, download: Int64, total: Int64?, expire: Date?) {
+        let bytes = { (value: Int64) in min(max(value, 0), Self.maxBytes) }
+        self.upload = bytes(upload)
+        self.download = bytes(download)
+        self.total = total.map(bytes).flatMap { $0 > 0 ? $0 : nil }
+        let seconds = expire?.timeIntervalSince1970 ?? 0
+        self.expire = seconds.isFinite && seconds >= 1 ? Date(timeIntervalSince1970: min(seconds, Double(Self.maxExpire))) : nil
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(upload: container.decode(Int64.self, forKey: .upload), download: container.decode(Int64.self, forKey: .download),
+                      total: container.decodeIfPresent(Int64.self, forKey: .total), expire: container.decodeIfPresent(Date.self, forKey: .expire))
     }
 }
 

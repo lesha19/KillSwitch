@@ -13,6 +13,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   than root could change (the file or a folder above it, links resolved; a folder only the admin
   group may write, like /Applications, is accepted) is no longer taken for NetBird: it gets no
   pass past the VPN and is never run.
+- Subscription header crash (KS-13, #49): a `subscription-userinfo` with huge, negative, `nan` or
+  `inf` numbers crashed the app, and one form was saved and crashed it on every launch. The numbers
+  are now kept in range (bytes up to 2^53, expiry up to year 9999), a saved status too.
 
 ## [0.18.1] - 2026-10-11
 
