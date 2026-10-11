@@ -286,13 +286,9 @@ physical_services() {
     /Device: (en|bridge)[0-9]+\)/ { if (name != "") print name; name = "" }'
 }
 
-log_event() {
-  echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$EVENTS"
+log_event() {  # the line and the trim to 500 lines under one lock (locked_rewrite, #50)
+  locked_rewrite "$EVENTS" 'push @L, $ARGV[0]; splice @L, 0, @L - 500 if @L > 500' "$(date '+%Y-%m-%d %H:%M:%S') $*"
   diag_event log msg="$*"
-  chmod 644 "$EVENTS"
-  if [ "$(wc -l < "$EVENTS")" -gt 500 ]; then
-    tail -n 500 "$EVENTS" > "$EVENTS.tmp" && mv "$EVENTS.tmp" "$EVENTS"
-  fi
 }
 
 # Rules pf refuses (an address the check let through, 999.1.1.1) block everything too, instead
@@ -344,7 +340,9 @@ loaded() {
 reload_if_on() { if loaded; then load; fi; }
 
 disable() {
-  echo "$1" > "$FLAG"
+  # a new file moved into place: guard never reads it empty (that would end the pause, #50)
+  local t
+  t=$(mktemp "$FLAG.XXXXXX") && echo "$1" > "$t" && chmod 644 "$t" && mv -f "$t" "$FLAG" || { rm -f "${t:-}"; return 1; }
   pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
 }
 
@@ -1908,13 +1906,30 @@ servers_migrate() {  # before the split every server was added by hand
   if [ -f "$SERVERS" ]; then cp "$SERVERS" "$SERVERS_MANUAL"; else : > "$SERVERS_MANUAL"; fi
 }
 
+# locked_rewrite <file> <perl code changing @L> [its args, in @ARGV]: the file's lines read,
+# changed and written back as a new 0644 file moved into place, all under an flock of <file>.lock
+# (#50): a concurrent writer (the failover's xrayserver next to "ks set", two log_event) loses
+# nothing, a reader never sees half a file, and the temporary file's name is this process's own.
+locked_rewrite() {
+  /usr/bin/perl -e 'use Fcntl qw(:flock O_WRONLY O_CREAT O_EXCL);
+    my ($f, $code) = splice @ARGV, 0, 2;
+    open my $lk, ">>", "$f.lock" or die "$f.lock: $!\n";
+    local $SIG{ALRM} = sub { die "$f.lock: busy\n" }; alarm 30; flock $lk, LOCK_EX or die "$f.lock: $!\n"; alarm 0;
+    our @L = ();
+    if (open my $in, "<", $f) { @L = <$in>; chomp @L; close $in }
+    eval $code; die $@ if $@;
+    my ($t, $o);
+    for my $n (0 .. 99) { $t = "$f.$$.$n.new"; last if sysopen $o, $t, O_WRONLY | O_CREAT | O_EXCL, 0600 }
+    $o or die "$f: $!\n";
+    print $o map { "$_\n" } @L;
+    close $o && chmod(0644, $t) && rename($t, $f) or do { unlink $t; die "$f: $!\n" }' "$@"
+}
 put_setting() {  # put_setting <key> <value> [settings-file]
-  local f=${3:-$SETTINGS}
-  { grep -vE "^$1=" "$f" 2>/dev/null; echo "$1=$2"; } > "$f.tmp" && chmod 644 "$f.tmp" && mv "$f.tmp" "$f"
+  locked_rewrite "${3:-$SETTINGS}" '@L = ((grep { !/\A\Q$ARGV[0]\E=/ } @L), "$ARGV[0]=$ARGV[1]")' "$1" "$2"
 }
 drop_setting() {  # drop_setting <key>: back to its default
   [ -f "$SETTINGS" ] || return 0
-  { grep -vE "^$1=" "$SETTINGS"; :; } > "$SETTINGS.tmp" && chmod 644 "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+  locked_rewrite "$SETTINGS" '@L = grep { !/\A\Q$ARGV[0]\E=/ } @L' "$1"
 }
 
 core_import() {  # core_import <profile.json> [import|refresh]
@@ -2324,8 +2339,8 @@ set_multihop() {
   s=$(mktemp) || return 1
   cp "$SETTINGS" "$s" 2>/dev/null
   put_setting multihop "$1" "$s"
-  if [ -f "$CORE_PROFILE" ] && [ -f "$PINS" ] && ! SETTINGS=$s core_rebuild "$PINS"; then rm -f "$s"; return 1; fi
-  rm -f "$s"
+  if [ -f "$CORE_PROFILE" ] && [ -f "$PINS" ] && ! SETTINGS=$s core_rebuild "$PINS"; then rm -f "$s" "$s.lock"; return 1; fi
+  rm -f "$s" "$s.lock"
   put_setting multihop "$1" || return 1
   reload_if_on; core_reload
 }
@@ -3274,9 +3289,9 @@ case "${1:-status}" in
   watch) watch_main ;;
   netrestore) net_restore || exit 1 ;;
   on)    rm -f "$FLAG"; load && echo "kill switch: ON" ;;
-  off)   disable 0; echo "kill switch: OFF (until 'ks on')" ;;
+  off)   disable 0 || exit 1; echo "kill switch: OFF (until 'ks on')" ;;
   pause) min=${2:-5}; [[ "$min" =~ ^[0-9]{1,4}$ ]] || { echo "bad minutes" >&2; exit 1; }
-         disable $(( $(date +%s) + min * 60 )); echo "kill switch: paused for $min min" ;;
+         disable $(( $(date +%s) + min * 60 )) || exit 1; echo "kill switch: paused for $min min" ;;
   set)
     key=${2:-}; val=${3:-}
     case "$key" in
@@ -3300,7 +3315,7 @@ case "${1:-status}" in
     # coredirect (until 0.14, «Российские сайты напрямую») is gone: what goes direct is the
     # subscription's alone (ADR 0013); install.sh drops the old line
     [[ "$key" =~ ^(lan|tailscale|dns|direct|wifiguard|adblock|failover)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns|direct|wifiguard|adblock|failover 0|1" >&2; exit 1; }
-    { grep -vE "^$key=" "$SETTINGS" 2>/dev/null; echo "$key=$val"; } > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+    put_setting "$key" "$val" || exit 1
     reload_if_on
     # the generator adds the ad block with adblock=1
     if [ "$key" = adblock ]; then core_apply_settings || exit 1; fi
