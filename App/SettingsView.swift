@@ -367,8 +367,11 @@ private struct MultihopRows: View {
             Text("Двойной VPN")
             Text("Через два сервера: вход видит твой адрес, выход — сайты. Медленнее.")
         }
-        .disabled(entry == nil && candidates.isEmpty)
-        if candidates.isEmpty && entry == nil {
+        .disabled(entry == nil && (candidates.isEmpty || !control.coreChoice.canTurnOnMultihop))
+        if entry == nil && !control.coreChoice.canTurnOnMultihop {
+            Text("С основным способом подключения двойного VPN нет — он есть у запасного")
+                .font(.caption).foregroundStyle(.secondary)
+        } else if candidates.isEmpty && entry == nil {
             Text(control.coreRunning ? String(localized: "Нужно хотя бы два сервера.") : String(localized: "Подключись, чтобы выбрать сервер входа."))
                 .font(.caption).foregroundStyle(.secondary)
         } else {

@@ -42,8 +42,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   (it still asks first). Sheet and leak test titles are VoiceOver headings.
 - «Проверка утечек» no longer tells you to turn protection off to learn your usual address: it is
   learnt in the first setup, or by a check during a pause.
-- With «Основной» (Xray) the main screen's «Двойной VPN» can no longer be turned on only to fail with
-  an error: it is greyed out with a hint that it works with «Запасной» (turning it off still works).
+- With «Основной» (Xray) «Двойной VPN» on the main screen and in Settings › VPN can no longer be
+  turned on only to fail with an error: it is greyed out with a hint that it works with «Запасной»
+  (turning it off still works).
 
 ### Security
 - The daemon accepts one more client, `com.lesha19.KillSwitch.cli`, signed by the same team; the
