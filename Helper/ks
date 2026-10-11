@@ -1444,6 +1444,7 @@ core_generate_xray() (
   # pass 2: the config and what goes with it
   W=$w PROTOS=$XRAY_PROTOCOLS PICK=$(setting xrayserver "") ADBLOCK=$(setting adblock 0) \
     GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) APPS=$(setting splitapps "") MULTIHOP=$(setting multihop off) \
+    ESC=$(setting escalate 1) ESC_FILE="$CORE_DIR/escalation" \
     TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT API_PORT=$([ -f "$CORE_DIR/api-off" ] || echo "$CORE_API_PORT") \
     ACCESS=$([ "$(setting diag 0)" = 1 ] && [ -d "$DIAG" ] && echo "$DIAG/access.log") \
     /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' build()' || exit 1
@@ -1499,6 +1500,21 @@ KS_XRAY_PL='
   sub chained { my $o = shift; $o->{proxySettings} || (ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" && exists $o->{streamSettings}{sockopt}{dialerProxy}) }
   # a host'"'"'s server: its first proxy outbound with a tag
   sub first_proxy { my $c = shift; my ($o) = grep { ref $_ eq "HASH" && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && length($_->{tag} // "") } @{ $c->{outbounds} }; $o }
+  # escalation (ADR 0030): a server'"'"'s transport (raw is tcp), its TLS fingerprint (undef without
+  # TLS or Reality, "" when the subscription sets none), the other transports a host offers for its
+  # server (its other outbounds to the same address with another network)
+  my %FP = map { $_ => 1 } qw(chrome firefox safari ios android edge 360 qq random randomized);
+  sub word { my $v = shift; defined $v && !ref $v && $v =~ /\A[a-z0-9]{1,16}\z/ ? $v : "other" }
+  sub network { my $o = shift; my $ss = ref $o->{streamSettings} eq "HASH" ? $o->{streamSettings} : {};
+    my $n = $ss->{network} // "tcp"; $n = "tcp" if !ref $n && $n eq "raw"; word($n) }
+  sub tls_of { my $o = shift; my $ss = $o->{streamSettings}; return undef unless ref $ss eq "HASH" && !ref $ss->{security} && ($ss->{security} // "") =~ /\A(tls|reality)\z/; $ss->{security} . "Settings" }
+  sub fp_of { my $o = shift; my $k = tls_of($o) // return undef; my $v = ref $o->{streamSettings}{$k} eq "HASH" ? $o->{streamSettings}{$k}{fingerprint} : undef; defined $v && !ref $v ? $v : "" }
+  sub set_fp { my ($o, $fp) = @_; my $k = tls_of($o) // return; $o->{streamSettings}{$k} = {} unless ref $o->{streamSettings}{$k} eq "HASH"; $o->{streamSettings}{$k}{fingerprint} = $fp }
+  sub addr0 { my $o = shift; my ($r) = addrs($o); $r && defined $$r && !ref $$r ? $$r : "" }
+  sub transports { my $c = shift; my $lead = first_proxy($c);
+    return () if !$lead || chained($lead) || !length addr0($lead);
+    grep { ref $_ eq "HASH" && $_ != $lead && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && length($_->{tag} // "") && !chained($_)
+      && addr0($_) eq addr0($lead) && network($_) ne network($lead) } @{ $c->{outbounds} } }
   sub check {
     my $a = load(); my %hosts;
     for my $i (0 .. $#$a) {
@@ -1544,6 +1560,24 @@ KS_XRAY_PL='
     }
     my ($ci) = grep { length $ENV{PICK} && name_of($a->[$_], $_) eq $ENV{PICK} } 0 .. $#$a;
     $ci //= 0;
+    # what worked per host (ADR 0030; written by the failover pass, gone with escalate=0): another
+    # of its outbounds to the same server first, another fingerprint for it; anything else ignored
+    my $esc = ($ENV{ESC} // "") eq "1";
+    my (%mem, %orig_fp);
+    if ($esc && length($ENV{ESC_FILE} // "") && open my $m, "<", $ENV{ESC_FILE}) {
+      for (<$m>) { chomp; my ($h, $k, $v) = split /\t/; $mem{$h}{$k} = $v if defined $v && $k =~ /\A(fp|lead)\z/ }
+      close $m;
+    }
+    for my $i (0 .. $#$a) {
+      my $lead = first_proxy($a->[$i]) or next;
+      my $m = $mem{ name_of($a->[$i], $i) };
+      if ($m && defined $m->{lead}) {
+        my ($alt) = grep { $_->{tag} eq $m->{lead} } transports($a->[$i]);
+        if ($alt) { my $o = $a->[$i]{outbounds}; my ($x, $y) = grep { $o->[$_] == $lead || $o->[$_] == $alt } 0 .. $#$o; @$o[$x, $y] = @$o[$y, $x]; $lead = $alt }
+      }
+      $orig_fp{$i} = fp_of($lead);
+      set_fp($lead, $m->{fp}) if $m && defined $m->{fp} && $FP{ $m->{fp} } && defined $orig_fp{$i};
+    }
     # ping (ADR 0023): every host'"'"'s server (its first proxy outbound, unless it is reached through
     # another outbound) once more as ks-ping-<n>, for the observatory only; no rule leads there
     my @pings;
@@ -1552,6 +1586,38 @@ KS_XRAY_PL='
       next if !$o || chained($o);
       $o = $J->decode($J->encode($o)); $o->{tag} = "ks-ping-$i";
       push @pings, $o; $servers[$i]{ping} = $o->{tag};
+    }
+    # the running host'"'"'s alternatives (ADR 0030), probed the same way: its server with two other
+    # fingerprints, the other transports the host offers for that server; and every host'"'"'s
+    # transport and server (the first host at the same address), for the failover pass
+    if ($esc) {
+      my $lead = first_proxy($a->[$ci]);
+      my @variants;
+      if ($lead && !chained($lead)) {
+        my $cur = fp_of($lead);
+        if (defined $cur) {
+          my %seen = ($cur => 1);
+          my @fps = grep { length && $FP{$_} && !$seen{$_}++ } ($orig_fp{$ci} // "", qw(chrome firefox safari));
+          for my $fp (grep { defined } @fps[0, 1]) {
+            my $o = $J->decode($J->encode($lead)); $o->{tag} = "ks-ping-$ci-fp-$fp"; set_fp($o, $fp);
+            push @pings, $o; push @variants, { kind => "fingerprint", value => $fp, tag => $o->{tag} };
+          }
+          $servers[$ci]{fingerprint} = word($cur) if length $cur;
+        }
+        my $outs = $a->[$ci]{outbounds}; my @alt = transports($a->[$ci]);
+        for my $j (grep { my $x = $outs->[$_]; grep { $_ == $x } @alt } 0 .. $#$outs) {
+          last if 3 <= grep { $_->{kind} eq "transport" } @variants;
+          my $o = $J->decode($J->encode($outs->[$j])); $o->{tag} = "ks-ping-$ci-t$j";
+          push @pings, $o; push @variants, { kind => "transport", value => network($outs->[$j]), outbound => $outs->[$j]{tag}, tag => $o->{tag} };
+        }
+      }
+      $servers[$ci]{variants} = \@variants;
+      my %first;
+      for my $i (0 .. $#$a) {
+        my $o = first_proxy($a->[$i]) or next;
+        my $ad = addr0($o); $first{$ad} //= $i;
+        $servers[$i]{transport} = network($o); $servers[$i]{endpoint} = $first{$ad};
+      }
     }
     # «Двойной VPN» (ADR 0027): the entry host'"'"'s server as ks-entry; never a silent single hop
     my $entry;
