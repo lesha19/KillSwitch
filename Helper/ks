@@ -1852,7 +1852,7 @@ KS_XRAY_PL='
         if ($act eq "direct") { unless (defined $direct) { $direct = "ks-direct"; push @$outs, { tag => $direct, protocol => "freedom" } } $to = $direct }
         my $rule = { $key => $vals, outboundTag => $to };
         push @prof, $rule;
-        if ($act eq "direct") { $egress{rules} = 1; push @direct, "rule\t" . $J->encode($rule) }
+        if ($act eq "direct") { $egress{rules} = 1; push @direct, "profile-rule\t" . $J->encode($rule) }
       }
       # its block and proxy rules sit in front of the direct ones and shadow them: with anything
       # of it going direct, the whole profile in order is approved (review B1)
@@ -2178,9 +2178,10 @@ json_edit() {
 # definition of every rule provider such a rule uses (its url or payload is the real list of
 # what goes direct), then every provider whose download proxy the profile set or that an http
 # provider lacks, which means a direct download (KS-DNS, our default, is not printed).
-# KS_PROFILE_RULES=n: the first n rules are the person's routing profile (ADR 0034); when one of
-# them can go direct, all n in order are printed too ("profile"), since its block and proxy rules
-# shadow its direct ones (review B1).
+# KS_PROFILE_RULES=n: the first n rules are the person's routing profile (ADR 0034), printed as
+# "profile-rule" (a subscription's rule of the same text is another approval); when one of them can
+# go direct, all n in order are printed too ("profile"), since its block and proxy rules shadow its
+# direct ones (review B1).
 direct_sig() {
   KS_DNS=$KS_DNS /usr/bin/perl -MJSON::PP -e '
     sub rd { local $/; open my $f, "<", $_[0] or die; JSON::PP->new->decode(<$f>) }
@@ -2209,7 +2210,7 @@ direct_sig() {
       my $rule = $r->[$i];
       my $t = ref $rule ? $c->encode($rule) : $rule;
       next unless grep { $d{$_} || $d{uc $_} } map { s/^[\s(]+|[\s)]+$//gr } split /,/, $t;
-      print "rule\t$t\n";
+      print $i < $np ? "profile-rule\t$t\n" : "rule\t$t\n";
       $pdirect = 1 if $i < $np;
       $used{$1} = 1 while $t =~ /RULE-SET\s*,\s*([^,()\s]+)/gi;
     }
@@ -2312,7 +2313,7 @@ refresh_check() {
   # Approved: the import's DIRECT, the running one, or one the import approved for a switch
   # (direct_unapproved); with no record of an import at all, only an import
   if { [ -s "$3" ] || [ -s "$APPROVED_DIRECT" ]; } && ! cmp -s "$3" "$APPROVED_DIRECT" &&
-     { [ ! -f "$APPROVED_DIRECT" ] || direct_unapproved "$3"; }; then
+     { [ ! -f "$APPROVED_DIRECT" ] || { direct_unapproved "$3" && ! direct_subset "$3"; }; }; then
     echo "Профиль меняет, что идёт мимо VPN (DIRECT): нужно подтверждение паролем администратора" >&2
     rc=3
   fi
@@ -2333,6 +2334,16 @@ core_commit() {
   mv "$tmp.pins" "$PINS"; mv "$tmp.direct" "$CORE_DIR/direct"; rm -f "$tmp.approved"
   core_publish "$tmp"
   mv "$tmp" "$(core_conf)"
+}
+
+# direct_subset <direct>: every line of this signature is one of the import's approved signature
+# (ADR 0034, review S5): a direct routing profile turned off or replaced by one that only blocks or
+# sends through the VPN, a subscription's DIRECT rule gone. Each line stands for a part that goes
+# direct as a whole (a rule with its target, a group with its members, a provider with its list, an
+# outbound, the DNS settings, the routing profile with all its rules in order), so fewer of them is
+# never more past the VPN; the profile's own rules are "profile-rule", never a subscription's.
+direct_subset() {
+  [ -f "$APPROVED_DIRECT" ] && [ -z "$(grep -vxF -f "$APPROVED_DIRECT" -- "$1")" ]
 }
 
 # direct_unapproved <direct>: a generated config for another Xray host sends past the VPN what

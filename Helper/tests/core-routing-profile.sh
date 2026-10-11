@@ -51,11 +51,11 @@ gm "$T/full.json" m-full || bad "profile refused: $(cat "$T/err")"
 [ "$(j 'join ",", map { $_->{from} } @{ $c->{rules} }[0 .. 8]' "$T/m-full.report")" = killswitch,profile,profile,profile,profile,profile,profile,profile,subscription ] &&
   [ "$(j 'join ",", map { $_->{profile} // "" } @{ $c->{rules} }[1 .. 7]' "$T/m-full.report")" = "RU напрямую,RU напрямую,RU напрямую,RU напрямую,RU напрямую,RU напрямую,RU напрямую" ] &&
   ok "  report: each rule from the profile, named" || bad "  report: $(j '[ @{ $c->{rules} }[0 .. 8] ]' "$T/m-full.report")"
-grep -q $'^rule\tDOMAIN-SUFFIX,ru,DIRECT$' "$T/m-full.direct" && grep -q $'^rule\tGEOIP,RU,DIRECT$' "$T/m-full.direct" &&
+grep -q $'^profile-rule\tDOMAIN-SUFFIX,ru,DIRECT$' "$T/m-full.direct" && grep -q $'^profile-rule\tGEOIP,RU,DIRECT$' "$T/m-full.direct" &&
   ! grep -v '^profile' "$T/m-full.direct" | grep -q 'REJECT\|example.org' &&
   ok "  its DIRECT rules in the DIRECT signature (an import or refresh with them needs the admin)" || bad "  direct: $(cat "$T/m-full.direct")"
-[ "$(grep '^profile' "$T/m-full.direct")" = "profile	$(j 'JSON::PP->new->canonical->encode([ @{ $c->{rules} }[1 .. 7] ])' "$T/m-full")" ] &&
-  ok "  and the whole profile in order, block and proxy rules too (they shadow the direct ones)" || bad "  profile line: $(grep '^profile' "$T/m-full.direct")"
+[ "$(grep $'^profile\t' "$T/m-full.direct")" = "profile	$(j 'JSON::PP->new->canonical->encode([ @{ $c->{rules} }[1 .. 7] ])' "$T/m-full")" ] &&
+  ok "  and the whole profile in order, block and proxy rules too (they shadow the direct ones)" || bad "  profile line: $(grep $'^profile\t' "$T/m-full.direct")"
 grep -qx rules "$T/m-full.egress" && ok "  egress: rules" || bad "  egress: $(cat "$T/m-full.egress")"
 cmp -s "$T/m-full.srv" "$T/m-none.srv" && ok "  the servers for pf unchanged" || bad "  servers"
 if [ -x "$MIHOMO" ]; then out=$("$MIHOMO" -t -d "$T/home" -f "$T/m-full" 2>&1) && ok "  mihomo -t" || bad "  mihomo -t: $(tail -2 <<<"$out")"
@@ -86,7 +86,7 @@ for h in '$h = []' '$h = { name => "x", direct => [] }' '$h = { name => "x", dir
 done
 ok "a malformed profile hint refuses the import (shape, unknown key or action, name, more than 10000 entries)"
 with_routing "$fx/ok-full.json" "$T/dgroup.json" '$h = { name => "x", proxy => { sites => ["domain:example.org"] } }'
-gm "$T/dgroup.json" m-dgroup && grep -q $'^rule\tDOMAIN-SUFFIX,example.org,' "$T/m-dgroup.direct" &&
+gm "$T/dgroup.json" m-dgroup && grep -q $'^profile-rule\tDOMAIN-SUFFIX,example.org,' "$T/m-dgroup.direct" &&
   ok "\"proxy\" into a group that also holds DIRECT: in the signature too (it can go direct)" || bad "dgroup: $(cat "$T/m-dgroup.direct")"
 
 # --- the DIRECT part needs the admin, the rest does not: refresh_check against the last import
@@ -110,8 +110,8 @@ gx "$T/xfull.json" x-full || bad "xray profile refused: $(cat "$T/err")"
   ok "  report: from the profile, named" || bad "  report: $(j '$c->{rules}' "$T/x-full.report")"
 grep -q 'domain:ru' "$T/x-full.direct" && grep -q 'geoip:ru' "$T/x-full.direct" && ! grep -v '^profile' "$T/x-full.direct" | grep -q 'ads.example\|youtube' &&
   ok "  its DIRECT rules in the signature" || bad "  direct: $(cat "$T/x-full.direct")"
-[ "$(grep '^profile' "$T/x-full.direct")" = "profile	$(j 'JSON::PP->new->canonical->encode([ @{ $c->{routing}{rules} }[2 .. 6] ])' "$T/x-full")" ] &&
-  ok "  and the whole profile in order (block and proxy rules shadow the direct ones)" || bad "  profile line: $(grep '^profile' "$T/x-full.direct")"
+[ "$(grep $'^profile\t' "$T/x-full.direct")" = "profile	$(j 'JSON::PP->new->canonical->encode([ @{ $c->{routing}{rules} }[2 .. 6] ])' "$T/x-full")" ] &&
+  ok "  and the whole profile in order (block and proxy rules shadow the direct ones)" || bad "  profile line: $(grep $'^profile\t' "$T/x-full.direct")"
 cmp -s "$T/x-full.srv" "$T/x-none.srv" && ok "  the servers for pf unchanged" || bad "  servers"
 if [ -x "$XRAY" ]; then out=$(XRAY_LOCATION_ASSET=$CORE_DIR "$XRAY" run -test -format json -c "$T/x-full" 2>&1) && ok "  xray run -test" || bad "  xray run -test: $(tail -2 <<<"$out")"
 else echo "skip  xray run -test (no $XRAY)"; fi
@@ -201,5 +201,39 @@ if [ -s "$here/../geosite.dat" ] && [ -s "$here/../geoip.dat" ]; then
     ok "Xray: unknown geosite and geoip codes left out with the reason" || bad "xray s3: $(j '$c->{routing}{rules}' "$T/s3-x") $(j '$c->{dropped}' "$T/s3-x.report")"
   if [ -x "$XRAY" ]; then out=$(XRAY_LOCATION_ASSET=$CORE_DIR "$XRAY" run -test -format json -c "$T/s3-x" 2>&1) && ok "  xray run -test" || bad "  xray run -test: $(tail -2 <<<"$out")"; fi
 else echo "skip  unknown geodata codes (no Helper/geosite.dat, geoip.dat: Helper/fetch-geodata.sh)"; fi
+
+# --- turning a direct profile off needs no password (review S5): a signature whose every line
+# is in the approved one sends past the VPN only what was approved (ADR 0034). The profile's own
+# direct rules are marked as the profile's, so a subscription cannot take them over
+# s5 <core> <gen> <base> [xray]
+s5() {
+  local core=$1 gen=$2 base=$3 x=${4:-} rc
+  printf 'core=%s\n' "$core" > "$SETTINGS"
+  with_routing "$base" "$T/s5-on.json" '$h = { name => "A", proxy => { sites => ["domain:a.example.com"] }, direct => { sites => ["domain:example.com", "domain:example.net"] } }' "$x"
+  with_routing "$base" "$T/s5-less.json" '$h = { name => "A", proxy => { sites => ["domain:a.example.com"] }, direct => { sites => ["domain:example.com"] } }' "$x"
+  with_routing "$base" "$T/s5-safe.json" '$h = { name => "B", block => { sites => ["domain:ads.example.com"] } }' "$x"
+  "$gen" "$T/s5-on.json" "s5-$core-on" || bad "s5 on: $(cat "$T/err")"
+  "$gen" "$base" "s5-$core-off" || bad "s5 off: $(cat "$T/err")"
+  "$gen" "$T/s5-less.json" "s5-$core-less" || bad "s5 less: $(cat "$T/err")"
+  "$gen" "$T/s5-safe.json" "s5-$core-safe" || bad "s5 safe: $(cat "$T/err")"
+  grep -q '^profile-rule	' "$T/s5-$core-on.direct" && ! grep -q '^rule	.*example\.com' "$T/s5-$core-on.direct" &&
+    ok "$core: the profile's direct rules are marked as its own in the signature" || bad "$core: marks: $(cat "$T/s5-$core-on.direct")"
+  SERVERS="$T/s5-$core-on.srv"; APPROVED_HOSTS="$T/none"; APPROVED_DIRECT="$T/s5-$core-on.direct"; : > "$T/pins"
+  refresh_check "$T/s5-$core-off.srv" "$T/pins" "$T/s5-$core-off.direct" 2>/dev/null && ok "$core: the direct profile turned off («Как в подписке»): no password" || bad "$core: turning it off needs the admin"
+  refresh_check "$T/s5-$core-safe.srv" "$T/pins" "$T/s5-$core-safe.direct" 2>/dev/null && ok "$core: replaced by a profile that only blocks: no password" || bad "$core: block-only replacement needs the admin"
+  refresh_check "$T/s5-$core-less.srv" "$T/pins" "$T/s5-$core-less.direct" 2>/dev/null; rc=$?
+  [ "$rc" = 3 ] && ok "$core: the profile itself changed (even narrower): the admin (its whole content is approved)" || bad "$core: changed profile rc $rc"
+  # the subscription now sends what was the profile's direct rule, with the profile off
+  if [ -z "$x" ]; then
+    /usr/bin/perl -MJSON::PP -e 'local $/; my $p = JSON::PP->new->decode(<STDIN>); unshift @{ $p->{rules} }, "DOMAIN-SUFFIX,example.com,DIRECT"; print JSON::PP->new->encode($p)' < "$base" > "$T/s5-takeover.json"
+  else
+    /usr/bin/perl -MJSON::PP -e 'local $/; my $p = JSON::PP->new->decode(<STDIN>); unshift @{ $p->[0]{routing}{rules} }, { domain => ["domain:example.com", "domain:example.net"], outboundTag => "direct" }; print JSON::PP->new->encode($p)' < "$base" > "$T/s5-takeover.json"
+  fi
+  "$gen" "$T/s5-takeover.json" "s5-$core-takeover" || bad "s5 takeover: $(cat "$T/err")"
+  refresh_check "$T/s5-$core-takeover.srv" "$T/pins" "$T/s5-$core-takeover.direct" 2>/dev/null; rc=$?
+  [ "$rc" = 3 ] && ok "$core: the subscription taking over the profile's direct rule: the admin" || bad "$core: takeover rc $rc"
+}
+s5 mihomo gm "$T/base.json"
+s5 xray gx "$fx/xray-panel.json" 1
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
