@@ -126,6 +126,7 @@ settings_lines_ok() {
       splitapps=*) splitapps_parse "${line#*=}" >/dev/null 2>&1 || return 1 ;;
       multihop=*) [ "${line#*=}" = off ] || valid_name "${line#*=}" || return 1 ;;
       core=xray|core=mihomo) ;;   # ADR 0020
+      xrayserver=) ;;   # no pick (an older ks wrote it after a refused switch): the first host
       xrayserver=*) valid_name "${line#*=}" || return 1 ;;
       diag=[01]) ;;   # «Подробная диагностика», ADR 0021
       failover=[01]) ;;   # automatic server switch with Xray, ADR 0023
@@ -1876,6 +1877,10 @@ put_setting() {  # put_setting <key> <value> [settings-file]
   local f=${3:-$SETTINGS}
   { grep -vE "^$1=" "$f" 2>/dev/null; echo "$1=$2"; } > "$f.tmp" && chmod 644 "$f.tmp" && mv "$f.tmp" "$f"
 }
+drop_setting() {  # drop_setting <key>: back to its default
+  [ -f "$SETTINGS" ] || return 0
+  { grep -vE "^$1=" "$SETTINGS"; :; } > "$SETTINGS.tmp" && chmod 644 "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+}
 
 core_import() {  # core_import <profile.json> [import|refresh]
   local src=${1:-} prof conf in tmp srv="$SERVERS_CORE.tmp" rc
@@ -2517,7 +2522,8 @@ xray_select() {
   put_setting xrayserver "$1" || return 1
   core_rebuild "$PINS" switch || rc=$?
   if [ "$rc" != 0 ]; then
-    put_setting xrayserver "$old"
+    # none before (the first host): no line, an empty one is no valid server name
+    if [ -n "$old" ]; then put_setting xrayserver "$old"; else drop_setting xrayserver; fi
     [ "$rc" = 3 ] && log_event "server switch to $1 refused: it sends other traffic past the VPN than approved"
     return "$rc"
   fi

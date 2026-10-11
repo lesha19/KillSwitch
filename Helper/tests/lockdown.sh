@@ -34,6 +34,8 @@ printf 'lan=1\ntailscale=0\ndns=1\ndirect=0\nwifiguard=1\nadblock=1\nsplitapps=/
 expect_open "every key ks writes, valid values"
 printf 'multihop=off\nsplitapps=\n' > "$SETTINGS"
 expect_open "multihop off, splitapps cleared"
+printf 'core=xray\nxrayserver=\n' > "$SETTINGS"
+expect_open "an empty xrayserver (no pick, left by a refused switch before 0.19)"
 printf 'lan=1\n\nlan=0\n' > "$SETTINGS"
 expect_open "a blank line and a repeated key (the last one counts)"
 printf 'coredirect=1\nlan=1\n' > "$SETTINGS"

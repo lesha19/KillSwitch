@@ -126,6 +126,15 @@ rc=0; core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>"$tmp/err" || rc=$?
 [ "$(setting xrayserver "")" = "" ] && cmp -s "$CORE_DIR/xray.json" "$tmp/before" && cmp -s "$CORE_EGRESS" "$tmp/egress-before" &&
   ok "  the running config, egress and the pick kept" || bad "  kept: $(setting xrayserver "") $(cat "$CORE_EGRESS")"
 grep -q 'Литва 2 refused' "$EVENTS" && ok "  logged" || bad "  events: $(cat "$EVENTS")"
+# a default install has no xrayserver line: the refused switch must not leave an empty one, which
+# settings_lines_ok used to call damaged, so the watchdog blocked everything (lockdown)
+grep -v '^xrayserver=' "$SETTINGS" > "$tmp/set" && cat "$tmp/set" > "$SETTINGS"
+rc=0; core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>/dev/null || rc=$?
+[ "$rc" = 3 ] && ! grep -q '^xrayserver=' "$SETTINGS" && [ -z "$(root_files_bad)" ] &&
+  ok "  a default install (no pick): refused switch leaves no xrayserver line, the rules stay as usual" ||
+  bad "  default install: rc $rc, settings $(paste -sd'|' "$SETTINGS"), bad: $(root_files_bad)"
+printf 'core=xray\nxrayserver=\n' > "$tmp/set"
+settings_lines_ok "$tmp/set" && ok "  an empty xrayserver= (left by an older ks) means no pick, not damage" || bad "  empty xrayserver= refused"
 core_select "$XRAY_GROUP" DE 2>"$tmp/err" && [ "$(setting xrayserver "")" = DE ] && ok "  a host approved at import still switches" || bad "  DE: $(cat "$tmp/err")"
 run "$tmp/three.json" import
 core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>"$tmp/err" && [ "$(setting xrayserver "")" = "🇱🇹Литва 2" ] && [ "$(paste -sd, - < "$CORE_EGRESS")" = rules,dns ] &&
