@@ -29,6 +29,24 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   listed as approximate. With a service of an older version it asks to update it instead of
   answering. «Private» addresses also cover 0/8, 192.0.0/24, 198.18/15 and the documentation
   networks.
+- `killswitch://` links that act (#23, ADR 0029): `connect` connects at once (no password prompt);
+  `disconnect` and `toggle` (when it would disconnect) ask «Отключить VPN?» in the window, and only
+  while protection is on — with protection off or paused they do nothing but open «Главная»;
+  `add?url=<https link>` always asks «Добавить подписку?» / «Заменить подписку?» and shows the
+  address with its port. No link turns protection off or pauses it; one link per 2 s; a question
+  nobody answered goes away and never blocks an update's restart; unknown links do nothing and are
+  logged without the link.
+
+### Changed
+- Replacing the subscription link (Settings, QR, a `killswitch://` link, «Начало работы») keeps the
+  old one until the new one answered: a link that fails no longer costs the working subscription,
+  its status or servers (#23, ADR 0029). A successful replace removes the old subscription's backup
+  link; a replace whose import was not confirmed with the password says «Новая подписка сохранена,
+  но не применена» instead of nothing.
+
+### Fixed
+- The shortcut «Отключить VPN» stopped the VPN while it was stuck on a server that does not answer;
+  it used to say «VPN и так не подключён» and leave the core running (#23).
 
 ## [0.19.0] - 2026-10-11
 

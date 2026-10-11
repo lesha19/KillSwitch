@@ -19,6 +19,7 @@ struct MainWindow: View {
         .frame(minWidth: MainWindow.minSize.width, minHeight: MainWindow.minSize.height)
         .sheet(isPresented: $router.onboarding) { OnboardingView() }
         .modifier(WidgetRequestAlert())
+        .modifier(LinkRequestSheet())
         // the helper is asked often only while something shows its answers
         .onAppear { control.viewAppeared() }
         .onDisappear { control.viewDisappeared() }

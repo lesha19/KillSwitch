@@ -125,16 +125,5 @@ enum Navigation {
         action == .install || action == .addSubscription ? .onboarding : nil
     }
 
-    /// `killswitch://settings/vpn` and the like (the widget opens `killswitch://home`).
-    static func route(url: URL) -> Route? {
-        guard url.scheme == "killswitch" else { return nil }
-        switch url.host() ?? "" {
-        case "setup": return .onboarding
-        case "settings":
-            let pane = url.pathComponents.dropFirst().first.flatMap(SettingsPane.init) ?? .general
-            return .section(.settings(pane))
-        case let host:
-            return AppSection(id: host).map(Route.section) ?? .window
-        }
-    }
+    // `killswitch://settings/vpn` and the other links: DeepLink.
 }

@@ -33,6 +33,8 @@ owner: «Я хочу, чтобы это было одно цельное при�
 - `killswitch://` URL scheme (Info.plist) for the widget (`widgetURL killswitch://home`) and
   future deep links. A link only changes the visible section or shows the wizard; it never
   changes protection or the VPN, so any program being able to open it is harmless.
+  (Widened by ADR 0029: links also connect, and after a question in the window disconnect or add
+  a subscription; still none changes protection.)
 
 ## Consequences
 
