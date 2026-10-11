@@ -26,6 +26,8 @@ enum SettingsBackup {
         var splitApps: [String]?
         /// The own DNS-over-HTTPS server (ADR 0031); "" = none.
         var doh: String?
+        /// Own addresses of sites (ADR 0033), "name=IPv4" each.
+        var hosts: [String]?
     }
 
     struct Settings: Equatable, Sendable {
@@ -60,7 +62,7 @@ enum SettingsBackup {
     /// lists emptied. The way of connecting stays (changing it imports the subscription again).
     static var reset: Settings {
         Settings(app: Dictionary(uniqueKeysWithValues: fields.map { ($0.key, $0.fallback) }),
-                 root: Root(core: nil, switches: defaultSwitches, exceptions: [], manualServers: [], splitApps: [], doh: ""))
+                 root: Root(core: nil, switches: defaultSwitches, exceptions: [], manualServers: [], splitApps: [], doh: "", hosts: []))
     }
 
     // MARK: app settings
@@ -187,6 +189,7 @@ enum SettingsBackup {
             if let servers = root.manualServers { part["manualServers"] = servers }
             if let apps = root.splitApps { part["splitApps"] = apps }
             if let doh = root.doh { part["doh"] = doh }
+            if let hosts = root.hosts { part["hosts"] = hosts }
             object["root"] = part
         }
         return (try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])) ?? Data()
@@ -243,6 +246,10 @@ enum SettingsBackup {
         if let raw = part["doh"] {
             guard let url = raw as? String, url.isEmpty || HelperCommand.isDoH(url) else { throw Problem.damaged(dohTitle) }
             root.doh = url
+        }
+        if let raw = part["hosts"] {
+            guard let list = raw as? [String], HelperCommand.setHosts(list).isValid else { throw Problem.damaged(hostsTitle) }
+            root.hosts = list
         }
         return root
     }
@@ -407,6 +414,7 @@ enum SettingsBackup {
             ("exceptions", String(localized: "Адреса без VPN"), now.exceptions, root.exceptions, true),
             ("manualServers", String(localized: "Адреса серверов для других VPN-программ"), now.manualServers, root.manualServers, true),
             ("splitApps", String(localized: "Программы без VPN"), now.splitApps, root.splitApps, false),
+            ("hosts", hostsTitle, now.hosts, root.hosts, false),
         ]
         if let doh = root.doh, doh != (now.doh ?? "") {
             result.append(Change(key: "doh", title: dohTitle, old: dohText(now.doh ?? ""), new: dohText(doh), root: true))
@@ -443,6 +451,9 @@ enum SettingsBackup {
         if let doh = new.doh, doh != (current.doh ?? "") {
             commands.append([helper, "set", "doh", doh])
         }
+        if let hosts = new.hosts, Set(hosts) != Set(current.hosts ?? []) {
+            commands.append([helper, "set", "hosts", hosts.joined(separator: ",")])
+        }
         return commands
     }
 
@@ -456,6 +467,7 @@ enum SettingsBackup {
         }
     }
 
+    private static var hostsTitle: String { String(localized: "Свои адреса сайтов") }
     private static var dohTitle: String { String(localized: "Свой сервер DNS-over-HTTPS") }
     private static func dohText(_ url: String) -> String { url.isEmpty ? String(localized: "нет") : url }
 

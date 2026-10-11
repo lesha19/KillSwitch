@@ -120,6 +120,12 @@ final class VPNClient {
         await update(interactive: true)
     }
 
+    /// The hosts of the subscription links (lower-cased): «Свои адреса сайтов» (ADR 0033) may not
+    /// redirect them. Never shown or logged.
+    func subscriptionHosts() -> Set<String> {
+        Set([Self.storedURL(), Self.storedBackupURL()].compactMap { $0.flatMap { URLComponents(string: $0)?.host?.lowercased() } })
+    }
+
     /// Shown only on request in Settings; never logged.
     func revealBackupURL() -> String? { Self.storedBackupURL() }
 

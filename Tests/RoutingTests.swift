@@ -96,6 +96,13 @@ final class RoutingReportTests: XCTestCase {
         XCTAssertFalse(added.why.isEmpty)
     }
 
+    /// ADR 0033: own addresses of sites, named as the person's choice.
+    func testOwnHostsAddition() throws {
+        let added = try JSONDecoder().decode(RoutingReport.Added.self, from: Data(#"{"kind":"hosts","items":["nas.lan → 192.168.1.10"]}"#.utf8))
+        XCTAssertEqual(added.title, "Свои адреса сайтов — твой выбор")
+        XCTAssertFalse(added.why.isEmpty)
+    }
+
     func testDroppedReasonsInWords() throws {
         let report = try RoutingReport(data: Self.sample)
         XCTAssertEqual(report.dropped.map(\.reasonText), [

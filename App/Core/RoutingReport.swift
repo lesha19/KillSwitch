@@ -241,6 +241,7 @@ extension RoutingReport.Added {
         case "sniffer": String(localized: "Распознавание сайтов")
         case "adblock": String(localized: "Блокировка — твой выбор")
         case "doh": String(localized: "Свой DNS-over-HTTPS — твой выбор")
+        case "hosts": String(localized: "Свои адреса сайтов — твой выбор")
         case "splitapps": String(localized: "Программы без VPN — твой выбор")
         case "multihop": String(localized: "Двойной VPN — твой выбор")
         case "default-rule": String(localized: "Правило по умолчанию")
@@ -273,6 +274,8 @@ extension RoutingReport.Added {
             String(localized: "В подписке его нет. Без него правила по доменам не срабатывают для программ, которые сами узнают адреса (DNS-over-HTTPS в Firefox). Адрес соединения не меняется, имя нужно только для выбора правила.")
         case "adblock":
             String(localized: "Включено в «Дополнительно»: выбранные категории сайтов из базы KillSwitch блокируются раньше правил подписки.")
+        case "hosts":
+            String(localized: "Выбрано в «Дополнительно»: на эти имена DNS отвечает твоим адресом. Куда пойдёт соединение — через VPN или напрямую — решают правила подписки, как для любого адреса.")
         case "doh":
             String(localized: "Выбрано в «Дополнительно»: имена сайтов сначала спрашиваются у твоего сервера, всегда через VPN. Если он не ответит — у обычных серверов, тоже через VPN, а не у провайдера.")
         case "splitapps":

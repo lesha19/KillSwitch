@@ -31,6 +31,8 @@ enum HelperCommand: Equatable, Sendable {
     case setMultihop(String?)
     /// The own DNS-over-HTTPS server (ADR 0031), used by the core through the VPN; nil clears it.
     case setDoH(String?)
+    /// Own addresses of sites (ADR 0033), "name=IPv4" each; [] clears them.
+    case setHosts([String])
     /// The way of connecting (ADR 0020); the subscription is imported again for it.
     case setCore(CoreChoice)
     case allow(String), unallow(String)
@@ -117,6 +119,7 @@ enum HelperCommand: Equatable, Sendable {
         case .setSplitApps(let names): ["set", "splitapps", names.joined(separator: ",")]
         case .setMultihop(let entry): ["set", "multihop", entry ?? Self.multihopOff]
         case .setDoH(let url): ["set", "doh", url ?? ""]
+        case .setHosts(let entries): ["set", "hosts", entries.joined(separator: ",")]
         case .setCore(let core): ["set", "core", core.rawValue]
         case .allow(let address): ["allow", address]
         case .unallow(let address): ["unallow", address]
@@ -145,6 +148,9 @@ enum HelperCommand: Equatable, Sendable {
             names.count <= Self.maxSplitApps && Set(names).count == names.count && names.allSatisfy(Self.isSplitApp)
         case .setMultihop(let entry): entry.map { Self.isName($0) && $0 != Self.multihopOff } ?? true
         case .setDoH(let url): url.map(Self.isDoH) ?? true
+        case .setHosts(let entries):
+            entries.count <= Self.maxHosts && entries.allSatisfy(Self.isHostsEntry)
+                && Set(entries.map { $0.split(separator: "=").first.map { $0.lowercased() } ?? "" }).count == entries.count
         case .setCore: true
         case .allow(let address), .serverAdd(let address): Self.isAddress(address)
         case .unallow(let address), .serverRemove(let address): Self.isListedAddress(address)
@@ -208,6 +214,8 @@ enum HelperCommand: Equatable, Sendable {
                     command = .setMultihop(arguments[2] == Self.multihopOff ? nil : arguments[2])
                 case "doh":
                     command = .setDoH(arguments[2].isEmpty ? nil : arguments[2])
+                case "hosts":
+                    command = .setHosts(arguments[2].isEmpty ? [] : arguments[2].split(separator: ",", omittingEmptySubsequences: false).map(String.init))
                 case "core":
                     guard let core = CoreChoice(rawValue: arguments[2]) else { return nil }
                     command = .setCore(core)
@@ -250,6 +258,32 @@ enum HelperCommand: Equatable, Sendable {
     /// The blocked categories (ADR 0031) are switches too: adblock, blockadult, blocksocial, blockbetting.
     static let switchKeys: Set<String> = ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag", "failover",
                                           "blockadult", "blocksocial", "blockbetting"]
+
+    /// ks hosts_parse (ADR 0033): at most 50 "name=IPv4" entries.
+    static let maxHosts = 50
+    /// Names KillSwitch itself needs (updates, the probes, the leak test), with their subdomains.
+    static let reservedHostNames = ["github.com", "githubusercontent.com", "cp.cloudflare.com", "ipify.org", "mullvad.net", "bash.ws"]
+
+    /// ks hosts_parse: an exact DNS name of two labels or more (not .local or localhost, not one of
+    /// `reservedHostNames`) and an IPv4 address without leading zeros, not this network, loopback,
+    /// link-local, 198.18/15 (our TUN) or multicast and up. Case does not matter (ks lower-cases).
+    static func isHostsEntry(_ entry: String) -> Bool {
+        let parts = entry.split(separator: "=", omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return false }
+        let name = parts[0].lowercased(), address = String(parts[1])
+        let octet = /(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/
+        guard address.split(separator: ".", omittingEmptySubsequences: false).count == 4,
+              address.split(separator: ".").allSatisfy({ $0.wholeMatch(of: octet) != nil }) else { return false }
+        let octets = address.split(separator: ".").compactMap { Int($0) }
+        let (a, b) = (octets[0], octets[1])
+        guard a != 0, a != 127, a < 224, !(a == 169 && b == 254), !(a == 198 && (18...19).contains(b)) else { return false }
+        let label = /[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?/
+        let labels = name.split(separator: ".", omittingEmptySubsequences: false)
+        guard name.utf8.count <= 253, labels.count >= 2, labels.allSatisfy({ $0.wholeMatch(of: label) != nil }),
+              labels.last?.first.map({ ("a"..."z").contains($0) }) == true,
+              labels.last != "local", labels.last != "localhost" else { return false }
+        return !reservedHostNames.contains { name == $0 || name.hasSuffix("." + $0) }
+    }
 
     /// ks valid_doh (ADR 0031): https, a public host name or IPv4 address, an optional port and
     /// path; no user, query or fragment, nothing local (the server is reached through the VPN).
