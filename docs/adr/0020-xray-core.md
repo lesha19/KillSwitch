@@ -64,7 +64,7 @@ clients the full Xray config (an array of configs, one per host).
 ## Consequences
 
 - No connections list, no ping, no speed in the menu bar with Xray yet (the stats API on a unix
-  socket is the next step).
+  socket is the next step). Ping, speed and failover came with ADR 0021 and ADR 0023.
 - Own servers added by link (manual servers) are mihomo proxies and are not passed to Xray.
 - Not verifiable here (the owner's Mac must not lose its internet): the utun address and routes
   of a running Xray, DNS through 127.0.0.1:53, routes after `kill -9`, LuLu with a new binary, the

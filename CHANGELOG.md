@@ -4,6 +4,27 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Added
+- Xray: ping per server, «Проверить пинг всех серверов» (⇧⌘P) and the menu bar speed work with the
+  main way of connecting (#32, ADR 0023). Every host of the subscription is probed in the
+  background by Xray's observatory (the subscription's own, or ours once a minute); the ping is
+  its last result.
+- Xray: automatic server switch (#32, ADR 0023). When the running server does not answer 3 times
+  in a row (a probe every 20 s) or answers more than 3× slower than usual for 2 minutes, KillSwitch
+  moves to the fastest working server of the same country, never to another country and not more
+  than once in 3 minutes. The protection stays on during the switch (about a second of restart,
+  pf blocks). Logged in Журнал защиты and the diagnostics journal; a notification and the status
+  line as with the fallback way. Settings › Способ подключения «Переключать сервер, если он
+  перестал отвечать», on by default (`ks set failover 0|1`).
+
+### Changed
+- The generated Xray config gets a probe-only outbound per host, the probes in its observatory and
+  the read-only `ObservatoryService` in the stats API (127.0.0.1:47891). The upgrade rebuilds the
+  config, so **Xray restarts once on upgrade** (about a second, pf blocks meanwhile; the previous
+  config comes back if it does not start, as in 0.18.0). mihomo's config does not change.
+
 ## [0.18.1] - 2026-10-11
 
 ### Added

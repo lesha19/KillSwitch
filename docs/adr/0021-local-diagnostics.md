@@ -97,4 +97,6 @@ the tunnel carried nothing.
   about 6–7 s with a rollback); install.sh restarts the core once more when the Xray binary or
   its plist changed, and that second restart has no rollback (the old binary is gone).
 - Port 47891 on loopback taken by another program: Xray runs without the counters (above).
+- ADR 0023 adds the read-only `ObservatoryService` to the same API (ping and failover).
+
 - Step 2 (upload) can summarise `metrics-*.jsonl` without parsing free text.
