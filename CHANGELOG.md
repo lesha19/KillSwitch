@@ -4,6 +4,15 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Fixed
+- Everything, the VPN included, could stay blocked with «Настройки защиты повреждены» after pf
+  refused one load of the rules because another load of them was under way (the watchdog and a
+  subscription refresh, an import, a setting or a server address change reloading at the same
+  moment): such a load is tried again, and «Сбросить настройки» now loads the rules again when the
+  files themselves are fine.
+
 ## [0.18.1] - 2026-10-11
 
 ### Added

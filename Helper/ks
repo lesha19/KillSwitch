@@ -282,6 +282,19 @@ log_event() {
 
 # Rules pf refuses (an address the check let through, 999.1.1.1) block everything too, instead
 # of leaving the old rules or, at boot, none. Either way $INVALIDF tells the app why.
+# pf also refuses a load while another load of the anchor is under way ("Device busy": a new
+# transaction voids the older one's ticket), as when the watchdog sees the files "ks core refresh"
+# just replaced and both reload: tried again before it counts as rules pf will not take, which
+# would block the VPN as well until something else changed.
+PF_TRIES=3
+load_rules() {
+  local i
+  for ((i = 1; i <= PF_TRIES; i++)); do
+    rules | pfctl -a "$ANCHOR" -f - 2>/dev/null && return 0
+    [ "$i" = "$PF_TRIES" ] || sleep 0.3
+  done
+  return 1
+}
 load() {  # load [tunnel_sig, if the caller has it]
   [ -f "$FLAG" ] && return 0   # a switch-off raced with the watchdog
   pf_enabled || pfctl -E >/dev/null 2>&1   # enable first: loading can take a moment
@@ -290,7 +303,7 @@ load() {  # load [tunnel_sig, if the caller has it]
   files=$(root_files_sig)
   bad=$(root_files_bad | paste -sd, -)
   STANDBY=0; [ -z "$bad" ] && vpn_standby && STANDBY=1
-  if ! rules | pfctl -a "$ANCHOR" -f - 2>/dev/null; then
+  if ! load_rules; then
     lockdown | pfctl -a "$ANCHOR" -f - 2>/dev/null || { echo "rules failed to load" >&2; return 1; }
     bad=rules
   fi
@@ -1968,7 +1981,8 @@ core_reload() {
 repair() {
   local bad f
   bad=$(root_files_bad | paste -sd, -)
-  [ -n "$bad" ] || { echo "nothing to repair"; return 0; }
+  # the files are fine but pf refused the rules once (load): loading them again is the repair
+  [ -n "$bad" ] || { echo "nothing to repair"; [ ! -f "$INVALIDF" ] || reload_if_on; return 0; }
   if ! root_file_ok "$SETTINGS" settings; then
     rm -rf "$SETTINGS.bad"; mv "$SETTINGS" "$SETTINGS.bad"
     [ -L "$SETTINGS.bad" ] || chmod -R go-rwx "$SETTINGS.bad"
