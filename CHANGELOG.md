@@ -8,9 +8,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 
 ### Added
 - `killswitch://` links that act (#23, ADR 0029): `connect` connects at once (no password prompt);
-  `disconnect` and `toggle` (when it would disconnect) ask «Отключить VPN?» in the window;
-  `add?url=<https link>` always asks «Добавить подписку?» and shows the subscription's host. No
-  link turns protection off or pauses it; unknown links do nothing and are logged without the link.
+  `disconnect` and `toggle` (when it would disconnect) ask «Отключить VPN?» in the window, and only
+  while protection is on — with protection off or paused they do nothing but open «Главная»;
+  `add?url=<https link>` always asks «Добавить подписку?» / «Заменить подписку?» and shows the
+  address with its port. No link turns protection off or pauses it; one link per 2 s; a question
+  nobody answered goes away and never blocks an update's restart; unknown links do nothing and are
+  logged without the link.
 - Settings › Дополнительно «Перенос настроек» (#15, ADR 0024): «Сохранить в файл…» writes the app
   and protection settings to a JSON file, «Загрузить из файла…» reads one back, «Сбросить…» returns
   them to the defaults. Both show every change first; protection settings go through the usual
@@ -34,6 +37,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   перестал отвечать», on by default (`ks set failover 0|1`).
 
 ### Changed
+- Replacing the subscription link (Settings, QR, a `killswitch://` link) keeps the old one until the
+  new one answered: a link that fails no longer costs the working subscription, its status or
+  servers (#23, ADR 0029).
 - The generated Xray config gets a probe-only outbound per host, the probes in its observatory and
   the read-only `ObservatoryService` in the stats API (127.0.0.1:47891). The upgrade rebuilds the
   config, so **Xray restarts once on upgrade** (about a second, pf blocks meanwhile; the previous
