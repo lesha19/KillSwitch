@@ -186,7 +186,8 @@ enum RoutingProfiles {
     /// The profiles' links ({id: url}): one may carry a token, so they live in the keychain like
     /// the subscription link (review N1); the list in UserDefaults has none.
     struct LinkStore: Sendable {
-        var read: @Sendable () -> Data?
+        /// nil: none kept; throws when the keychain did not answer (then nothing is written over).
+        var read: @Sendable () throws -> Data?
         /// nil: none left. False: not kept.
         var write: @Sendable (Data?) -> Bool
         // the app's: LinkStore.keychain (App/Keychain.swift)
@@ -200,18 +201,28 @@ enum RoutingProfiles {
     /// With their links. A link still in UserDefaults (stored before 0.20.0's review) moves to the keychain.
     static func load(_ defaults: UserDefaults = .standard, links: LinkStore) -> [RoutingProfile] {
         var list = stored(defaults)
-        let kept = links.read().flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+        let kept = (try? keptLinks(links)) ?? [:]
         let plain = list.contains { $0.url != nil }
         for i in list.indices where list[i].url == nil { list[i].url = kept[list[i].id.uuidString] }
         if plain { save(list, defaults, links: links) }
         return list
     }
 
+    private static func keptLinks(_ links: LinkStore) throws -> [String: String] {
+        try links.read().flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+    }
+
     /// The links to the keychain, the rest to UserDefaults; when the keychain does not take them
     /// they stay with the list rather than being lost.
+    /// A profile whose link did not load (the keychain did not answer then) keeps the one kept;
+    /// when the keychain does not answer now, it is not written at all.
     static func save(_ list: [RoutingProfile], _ defaults: UserDefaults = .standard, links: LinkStore) {
-        let urls = Dictionary(list.compactMap { p in p.url.map { (p.id.uuidString, $0) } }, uniquingKeysWith: { a, _ in a })
-        let written = links.write(urls.isEmpty ? nil : try? JSONEncoder().encode(urls))
+        var written = false
+        if let kept = try? keptLinks(links) {
+            var urls: [String: String] = [:]
+            for p in list { urls[p.id.uuidString] = p.url ?? kept[p.id.uuidString] }
+            written = links.write(urls.isEmpty ? nil : try? JSONEncoder().encode(urls))
+        }
         let bare = written ? list.map { p in var p = p; p.url = nil; return p } : list
         defaults.set(try? JSONEncoder().encode(bare), forKey: listKey)
     }

@@ -18,6 +18,24 @@ enum Keychain {
         return item as? Data
     }
 
+    struct ReadError: Error { var status: OSStatus }
+
+    /// nil when there is no such item; throws when the keychain did not answer (locked, an error).
+    static func readChecked(_ account: String) throws -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw ReadError(status: status) }
+        return item as? Data
+    }
+
     @discardableResult
     static func write(_ account: String, _ data: Data) -> Bool {
         let match: [String: Any] = [
@@ -45,7 +63,7 @@ enum Keychain {
 
 extension RoutingProfiles.LinkStore {
     /// The routing profiles' links (review N1), {id: url} as JSON.
-    static let keychain = Self(read: { Keychain.read(account) }, write: { data in
+    static let keychain = Self(read: { try Keychain.readChecked(account) }, write: { data in
         guard let data else { Keychain.delete(account); return true }
         return Keychain.write(account, data)
     })

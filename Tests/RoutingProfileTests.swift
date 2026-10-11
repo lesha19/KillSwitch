@@ -138,6 +138,31 @@ final class RoutingProfileTests: XCTestCase {
         XCTAssertTrue(String(decoding: try XCTUnwrap(box.data), as: UTF8.self).contains("SECRET"))
     }
 
+    /// Re-review nit: a keychain read that fails (locked, an error) is not «no links»: a save
+    /// then must not delete them.
+    func testFailedKeychainReadKeepsTheLinks() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "RoutingProfileTests-\(UUID().uuidString)"))
+        struct Locked: Error {}
+        final class Box: @unchecked Sendable { var data: Data?; var fail = false }
+        let box = Box()
+        let links = RoutingProfiles.LinkStore(read: { if box.fail { throw Locked() }; return box.data },
+                                              write: { box.data = $0; return true })
+        var p = try RoutingProfile.parse(incy)
+        p.url = "https://example.com/r.json?token=SECRET"
+        RoutingProfiles.save([p], defaults, links: links)
+        box.fail = true
+        var loaded = RoutingProfiles.load(defaults, links: links)
+        XCTAssertNil(loaded[0].url, "unknown while the keychain does not answer")
+        loaded[0].name = "renamed"
+        RoutingProfiles.save(loaded, defaults, links: links)
+        XCTAssertTrue(String(decoding: try XCTUnwrap(box.data), as: UTF8.self).contains("SECRET"), "not written over")
+        box.fail = false
+        RoutingProfiles.save(loaded, defaults, links: links)
+        XCTAssertEqual(RoutingProfiles.load(defaults, links: links).first?.url, p.url, "a save after it keeps the link it did not load")
+        RoutingProfiles.save([], defaults, links: links)
+        XCTAssertNil(box.data, "a profile deleted: its link goes")
+    }
+
     func testUpdateKeepsIdentity() throws {
         var old = try RoutingProfile.parse(incy)
         old.url = "https://example.com/r.json"
