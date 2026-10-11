@@ -54,7 +54,8 @@ for l in blockadult=2 blockmalware=1 doh=http://dns.example.com/dns-query doh=ht
          doh=https://dns.example.com:0/x doh=https://dns.example.com:99999/x doh=https://300.1.1.1/x doh=https://dns/x \
          "doh=https://dns.example.com/$(printf 'a%.0s' $(seq 300))" doh=dns.example.com 'doh=https://-bad.example.com/x' \
          'doh=https://dns.example.com/%zz' 'doh=https://dns.example.com/%' 'doh=https://dns.example.com/a%2' \
-         doh=https://Router.LOCAL/dns-query doh=https://nas.Home.Arpa/x doh=https://box.LAN/x; do
+         doh=https://Router.LOCAL/dns-query doh=https://nas.Home.Arpa/x doh=https://box.LAN/x \
+         doh=https://001.001.001.001/x doh=https://9.9.9.09/x doh=https://09.9.9.9/x; do
   lines_ok "$l" && bad "settings: took $l" || ok "settings: refuses ${l:0:60}"
 done
 

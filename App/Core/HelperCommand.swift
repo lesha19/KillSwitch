@@ -295,8 +295,10 @@ enum HelperCommand: Equatable, Sendable {
         }
         let host = String(match.1)
         if host.wholeMatch(of: /[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/) != nil {
+            // no leading zeros (as isHostsEntry): Xray refuses such an address in a rule
+            let octet = /(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/
+            guard host.split(separator: ".").allSatisfy({ $0.wholeMatch(of: octet) != nil }) else { return false }
             let octets = host.split(separator: ".").compactMap { Int($0) }
-            guard octets.count == 4, octets.allSatisfy({ $0 <= 255 }) else { return false }
             let (a, b) = (octets[0], octets[1])
             // this network, private, loopback, link-local, CGNAT, 198.18/15 (our TUN), multicast and up
             return ![0, 10, 127].contains(a) && a < 224 && !(a == 169 && b == 254) && !(a == 172 && (16...31).contains(b))

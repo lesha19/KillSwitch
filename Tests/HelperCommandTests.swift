@@ -220,7 +220,8 @@ final class HelperCommandTests: XCTestCase {
                     "https://dns.example.com:0/x", "https://dns.example.com:99999/x", "https://300.1.1.1/x", "https://dns/x",
                     "https://dns.example.com/" + String(repeating: "a", count: 300), "dns.example.com", "https://-bad.example.com/x",
                     "https://router.local/x", "", "https://dns.example.com/\n", "https://dns.example.com/%zz", "https://dns.example.com/%",
-                    "https://dns.example.com/a%2", "https://Router.LOCAL/x", "https://box.LAN/x"] {
+                    "https://dns.example.com/a%2", "https://Router.LOCAL/x", "https://box.LAN/x",
+                    "https://001.001.001.001/x", "https://9.9.9.09/x", "https://09.9.9.9/x"] {
             XCTAssertFalse(HelperCommand.isDoH(url), url)
             XCTAssertFalse(HelperCommand.setDoH(url).isValid, url)
         }
