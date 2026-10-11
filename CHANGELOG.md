@@ -62,13 +62,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   (by hand, the CLI, and since this release automatic failover), blocked everything with
   «Настройки защиты повреждены»: the helper wrote the previous choice back as an empty value, which
   it then took for damaged settings. Since 0.17. The switch now just stays on the running server,
-  and a settings file left empty that way is accepted.
+  and a settings file left empty that way is accepted. A server whose name has control characters
+  or is longer than 256 bytes is refused for a switch and skipped by failover, for the same reason.
 - After pf refused the rules three times in a row (another load under way), everything stayed
   blocked until «Сбросить настройки». The watchdog now loads the rules again every 10 s until pf
   takes them; damaged settings files still keep everything blocked.
 - Going back to the way of connecting that was running (Основной → Запасной after the Xray import
   failed) deleted the config that core was running on, so its next restart (sleep, crash,
-  upgrade) left the VPN off with «Нет конфига».
+  upgrade) left the VPN off with «Нет конфига». Switching back while that core is off keeps its
+  config too when it was the last one imported.
 - Automatic failover no longer counts the running server as dead while the Mac itself has no
   network, so a hand-picked server is not left after a Wi‑Fi outage.
 - `ks core on` checks Xray's statistics port before stopping mihomo, so a port held by another
@@ -142,6 +144,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   (needed for passwordless switches and failover) is built from the imported profile when no
   refresh changed it since the import; otherwise the next import with the password builds it.
 - `ks repair` keeps only host addresses in the Tailscale relay list (KS-19), as the check does.
+- Xray server switch (by hand, the CLI or failover): the choice is saved only after the check of
+  what that server sends past the VPN (KS-10) passed. Before, a helper stopped in the middle could
+  leave a server chosen that the check would refuse, and the next rebuild (every 30 minutes) ran it
+  without the password.
 
 ## [0.18.1] - 2026-10-11
 
