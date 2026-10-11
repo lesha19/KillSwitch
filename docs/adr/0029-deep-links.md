@@ -63,9 +63,25 @@ The links (`App/Core/DeepLink.swift`, unit-tested; the app side is `App/DeepLink
   old subscription's backup link; only a successful fetch writes it to the keychain, starts the
   status over and replaces the cache. A failed fetch leaves the old link, its status and its
   servers, and is not recorded as a failed update of the old one. A first link is still kept
-  before its fetch, so the timer tries it again. «Отмена» is disabled while the fetch runs: the
-  change happens whole or not at all. The check of «Начало работы» (`VPNClient.check`) follows
-  the same order.
+  before its fetch, so the timer tries it again. The check of «Начало работы» (`VPNClient.check`)
+  follows the same order. What is and is not atomic:
+  - the link, status, cache and backup change together, at the moment the new link answered;
+  - the import into the core comes after and may need the administrator's password. If that is
+    cancelled or refused, the new link stays kept while the core still runs the old servers. This
+    is said (the sheet shows «Новая подписка сохранена, но не применена…»; Settings shows
+    «Подписка изменилась. Нажми «Обновить»…» through `needsPassword`), and the next update or
+    «Обновить» applies the new link;
+  - a successful replace removes the backup link (#11): it belonged to the old provider, and a
+    later fallback to it would bring the old provider's servers back. The sheet says so when
+    there is one;
+  - the link's sheet cannot be dismissed while the fetch runs («Отмена» disabled,
+    `interactiveDismissDisabled`); if it goes away anyway (an update's quit) or the link is removed
+    or replaced elsewhere meanwhile, the answer is not kept (`setURL(stillWanted:)` and a
+    generation count of the kept link);
+  - a replace whose service has no Xray config while the main way is Xray says to switch to the
+    fallback way first and add the link again (the refresh's own advice would fetch the old link).
+  - «Добавить» / «Заменить» is read again on the click: if the kept subscription changed since the
+    sheet was drawn, the sheet shows the new state and wants a second click.
 - **The address shown.** `add` takes exactly one `url` item: at most 2048 characters, printable
   ASCII only (no lookalike letters, no line breaks), `https` only, no user name or password
   (`https://bank.com@other.host` would read as bank.com). The host must be a DNS name (≤ 253
@@ -73,16 +89,19 @@ The links (`App/Core/DeepLink.swift`, unit-tested; the app side is `App/DeepLink
   `xn--…`), a dotted-quad IPv4 address without leading zeros, or a bracketed IPv6 address;
   `0x7f.1`, `2130706433`, `127.1`, `.` and the like are refused. It is shown in ASCII (`xn--…`),
   because `URLComponents.host` decodes punycode and a lookalike name would read as the real one,
-  with the port when it is not 443 (`trusted.com:8443`), on one line truncated in the middle.
+  with the port when it is not 443 (`trusted.com:8443`; 0 and above 65535 are refused), on one
+  line truncated in the middle.
 - **Strict parameters.** Scheme and command are case-insensitive; nothing else is. Section and VPN
   links take no path (one pane for `settings`), no query, no fragment, user or port.
 - **Logging.** Unknown, malformed, refused, throttled and done links write one line to the unified
   log (subsystem `com.lesha19.KillSwitch`, category `link`): the command or the reason, never the
   link; the host of an `add` only as a private value.
 - **Questions never block.** One at a time: while a sheet waits, further acting links are ignored.
-  At most one link every 2 seconds is taken (`DeepLink.Throttle`), so a page looping links cannot
-  keep taking the front or keep the app from ever being idle for an update. A question is dropped
-  after 2 minutes, or when the app loses the front before the sheet appeared (it never pops up
+  At most one acting link every 2 seconds is taken (`DeepLink.Throttle`; section links such as the
+  widget's `killswitch://home` are not counted), so a page looping links cannot keep taking the
+  front or keep the app from ever being idle for an update. Times are system uptime, so a clock
+  change neither blocks links nor keeps a question. An ignored link brings the window with the
+  waiting question forward. A question is dropped after 2 minutes, or when the app loses the front before the sheet appeared (it never pops up
   later out of context), and before an update quits or relaunches the app
   (`Router.dropSheets` before `UpdateRelaunch.closeSheets`, else the binding brings the sheet back
   and AppKit refuses to quit). A question is not opened over «Начало работы». An answer that comes

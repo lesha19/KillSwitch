@@ -39,7 +39,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 ### Changed
 - Replacing the subscription link (Settings, QR, a `killswitch://` link, «Начало работы») keeps the
   old one until the new one answered: a link that fails no longer costs the working subscription,
-  its status or servers (#23, ADR 0029).
+  its status or servers (#23, ADR 0029). A successful replace removes the old subscription's backup
+  link; a replace whose import was not confirmed with the password says «Новая подписка сохранена,
+  но не применена» instead of nothing.
 - The generated Xray config gets a probe-only outbound per host, the probes in its observatory and
   the read-only `ObservatoryService` in the stats API (127.0.0.1:47891). The upgrade rebuilds the
   config, so **Xray restarts once on upgrade** (about a second, pf blocks meanwhile; the previous
