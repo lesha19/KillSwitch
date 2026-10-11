@@ -89,10 +89,19 @@ enum SubscriptionHeaders {
         return ["x-hwid-max-devices-reached", "x-hwid-not-supported"].first(where: flag)
     }
 
+    static let minInterval: TimeInterval = 3600
+    static let maxInterval: TimeInterval = 30 * 24 * 3600
+
     /// `profile-update-interval` is in hours.
     static func updateInterval(_ header: String?) -> TimeInterval {
-        guard let hours = header.flatMap({ Double($0.trimmingCharacters(in: .whitespaces)) }), hours > 0 else { return defaultInterval }
-        return hours * 3600
+        clampedInterval(header.flatMap { Double($0.trimmingCharacters(in: .whitespaces)) }.map { $0 * 3600 })
+    }
+
+    /// The provider controls the header and the status is saved (like KS-13): kept in an hour …
+    /// 30 days, so no later arithmetic on it can trap; nan, inf and ≤ 0 mean the default.
+    static func clampedInterval(_ seconds: TimeInterval?) -> TimeInterval {
+        guard let seconds, seconds.isFinite, seconds > 0 else { return defaultInterval }
+        return min(max(seconds, minInterval), maxInterval)
     }
 
     static let maxTitleLength = 64

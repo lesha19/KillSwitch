@@ -13,19 +13,7 @@ final class VPNClient {
         var name: String
     }
 
-    /// Saved state of the last successful fetch; no secrets in it.
-    struct Status: Codable, Equatable {
-        var title: String?
-        var usage: SubscriptionUsage?
-        var serverInterval: TimeInterval = SubscriptionHeaders.defaultInterval
-        var lastUpdate: Date?
-        /// The service's page (`profile-web-page-url` or `support-url`), for «Открыть кабинет».
-        var accountURL: URL?
-        /// Which link and way the last fetched profile came from (#11); nil before 0.16.
-        var source: SubscriptionSource?
-        /// Announcement, support contacts and `hide-url` from the last fetch (#22, #26).
-        var provider: ProviderInfo?
-    }
+    typealias Status = SubscriptionStatus
 
     private(set) var hasURL = false
     private(set) var maskedURL: String?

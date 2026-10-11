@@ -220,7 +220,7 @@ private struct VPNSettings: View {
                     BackupLinkRow(revealed: $backupRevealed, editing: $editingBackup, newURL: $newBackupURL)
                 }
                 Picker("Обновлять", selection: $client.intervalHours) {
-                    Text("как просит подписка (\(Int(client.status.serverInterval / 3600)) ч)").tag(0)
+                    Text("как просит подписка (\(client.status.serverIntervalHours) ч)").tag(0)
                     ForEach([1, 3, 6, 12, 24, 48], id: \.self) { Text("каждые \($0) ч").tag($0) }
                 }
             }

@@ -84,6 +84,19 @@ final class SubscriptionHeadersTests: XCTestCase {
         XCTAssertEqual(SubscriptionHeaders.updateInterval("x"), 12 * 3600)
     }
 
+    /// The provider sends the header and the status is saved: a huge value once made Settings ›
+    /// Подписка trap on `Int(serverInterval / 3600)` every time it opened.
+    func testUpdateIntervalIsKeptBetweenAnHourAndThirtyDays() {
+        let month: TimeInterval = 30 * 24 * 3600
+        XCTAssertEqual(SubscriptionHeaders.updateInterval("1e300"), month)
+        XCTAssertEqual(SubscriptionHeaders.updateInterval("1000000"), month)
+        XCTAssertEqual(SubscriptionHeaders.updateInterval("inf"), 12 * 3600)
+        XCTAssertEqual(SubscriptionHeaders.updateInterval("nan"), 12 * 3600)
+        XCTAssertEqual(SubscriptionHeaders.updateInterval("-5"), 12 * 3600)
+        XCTAssertEqual(SubscriptionHeaders.updateInterval("0.01"), 3600)
+        XCTAssertEqual(SubscriptionHeaders.updateInterval("720"), month)
+    }
+
     func testTitle() throws {
         XCTAssertEqual(SubscriptionHeaders.title("StorkVPN"), "StorkVPN")
         let encoded = "base64:" + Data("Сторк VPN".utf8).base64EncodedString()
