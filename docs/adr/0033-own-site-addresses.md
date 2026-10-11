@@ -35,17 +35,26 @@ administrator and the core lock like every setting the generator reads.
 Configs: mihomo top-level `hosts` with `dns.use-hosts: true` (answered before fake-ip, so the
 program gets the real address); Xray `dns.hosts` with `full:<name>`. Xray answers with every
 matching entry at once (measured, 26.9.30), so a template entry that also matches the name — `full:`,
-plain, `domain:`, `keyword:` (compared lower-cased, as Xray does) or `regexp:` — is left out and
-reported as `own-hosts`; the template's other entries stay. `geosite:` and `ext:` entries are not
-looked into (accepted: a template that maps a whole category to an address is unusual). Both are added after the DIRECT signature.
+plain, `domain:` (a leading dot ignored, as Xray does) or `keyword:`, compared lower-cased — is
+left out and reported as `own-hosts`; the template's other entries stay. Such an entry goes as a
+whole: a broad one (`domain:corp.example`, `keyword:ads`) then stops applying to every other name it
+covered too, which get ordinary answers through the VPN — accepted, Xray has no way to except one
+name from an entry. Every `regexp:` entry goes as soon as there is an own name (decided by agent,
+re-review of #28): the alternative, running the subscription's pattern in Perl with a time limit
+in a child process, is more code and still not Xray's dialect (RE2: linear, `(?U)`, an empty
+pattern matches all), and Perl's backtracking let a crafted pattern hold the generator and the
+core lock for minutes. `geosite:` and `ext:` entries are not looked into (accepted: a template that
+maps a whole category to an address is unusual). Both are added after the DIRECT signature.
 
 **What an answer changes**: only the address a program connects to. The rules decide where that
 connection goes, exactly as for any address: through the VPN, or DIRECT only if the
 subscription's rules (already approved by the admin and listed in egress) send that address or
 name there. Except home and Tailscale addresses: mihomo's TUN leaves 10/8, 172.16/12, 192.168/16
-and 100.64/10 out of its routes, and with Xray the home network's own subnet keeps its more
-specific route, so those go straight out, past the core — allowed only by pf's «Доступ к домашней
-сети» / «Tailscale, NetBird» switches, and unseen by category blocking. The table adds no rule, no pf address, nothing to the DIRECT signature or egress, so
+and 100.64/10 out of its routes; Xray's TUN takes 0.0.0.0/0 and excludes nothing
+(`autoSystemRoutingTable`), so there only what has a more specific route on the Mac (the home
+network's own subnet, a route another tunnel added) skips it. Those go straight out, past the
+core — allowed only by pf's «Доступ к домашней сети» / «Tailscale, NetBird» switches, and unseen by
+category blocking. The table adds no rule, no pf address, nothing to the DIRECT signature or egress, so
 `ks core refresh` asks nothing new. An address in the home network is reached only if pf allows
 the home network. The report names each entry as the person's choice; events.log only the count. `ks set hosts`
 puts the old list back when the core does not take the config, and builds the config again with
