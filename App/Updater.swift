@@ -82,6 +82,15 @@ final class Updater {
             }
         }
     }
+
+    /// «Бета-версии» (#16), kept in the user defaults; QuietInstaller gives Sparkle the channels.
+    var betaUpdates = UpdateChannel.isBeta() {
+        didSet {
+            UserDefaults.standard.set(betaUpdates, forKey: UpdateChannel.betaKey)
+            // Sparkle: after a change of the allowed channels, so the next check uses them
+            controller.updater.resetUpdateCycleAfterShortDelay()
+        }
+    }
 }
 
 /// A downloaded automatic update is installed (and the app relaunched) as soon as KillSwitch is
@@ -93,6 +102,10 @@ final class QuietInstaller: NSObject, SPUUpdaterDelegate {
 
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
         MainActor.assumeIsolated { lastCheckFailed = UpdateRetry.isNetworkFailure(error) }
+    }
+
+    func allowedChannels(for updater: SPUUpdater) -> Set<String> {
+        UpdateChannel.allowed(beta: UpdateChannel.isBeta())
     }
     @MainActor private var timer: Timer?
 

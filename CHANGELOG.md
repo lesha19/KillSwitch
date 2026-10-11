@@ -4,6 +4,16 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Added
+- «Бета-версии» in «О программе»: updates from Sparkle's beta channel (#16);
+  `KS_CHANNEL=beta scripts/release.sh --publish` publishes one.
+
+### Fixed
+- «Установить и перезапустить» did nothing while a sheet was open (e.g. «Начало работы»); a build
+  installed but not relaunched is now relaunched or offered with «Перезапустить» (#35).
+
 ## [0.17.0] - 2026-10-11
 
 ### Added

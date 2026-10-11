@@ -256,6 +256,11 @@ addresses found in dropweb and Happ configs are passed to it). After updating th
 репозиторию. Приложение читает `releases/latest/download/appcast.xml`, поэтому опубликованный выпуск
 сразу становится обновлением для всех.
 
+Бета: `KS_CHANNEL=beta scripts/release.sh --publish`. Выпуск создаётся как pre-release (он не
+становится «latest»), его пункт с `<sparkle:channel>beta</sparkle:channel>` дописывается в
+`appcast.xml` последнего обычного выпуска (и его `SHA256SUMS` пересчитывается). Ставят его только
+те, у кого включены «Бета-версии» в «О программе»; следующий обычный выпуск убирает пункт беты.
+
 ### Проверка загрузки
 
 Каждый выпуск в `lesha19/KillSwitch-releases` несёт `SHA256SUMS` — суммы `.dmg`, `appcast.xml`,

@@ -8,6 +8,12 @@
 #   scripts/release.sh --publish     full release, then `gh release create v<version>` in
 #                                    lesha19/KillSwitch-releases with the .dmg, appcast.xml,
 #                                    geosite.dat and geoip.metadb (+ .sha256), and SHA256SUMS of them all
+#   KS_CHANNEL=beta scripts/release.sh --publish
+#                                    a beta (#16): its appcast item is in Sparkle's "beta" channel, the
+#                                    GitHub release is a pre-release (never "latest"), and the item is
+#                                    added to the latest stable release's appcast.xml (+ its SHA256SUMS),
+#                                    the one feed every app reads; only «Бета-версии» installs it.
+#                                    The next stable release's appcast has no beta item again.
 #
 # What it needs (found automatically, nothing secret is printed):
 #   - certificate + private key "Developer ID Application: … (YR58655PJ7)" in the login keychain
@@ -52,6 +58,36 @@ write_sums() {
     { rm -f "$dir/SHA256SUMS.tmp"; return 1; }
 }
 
+# appcast_with_beta <stable appcast> <beta appcast>: the stable appcast with its old beta items
+# replaced by the items of the beta appcast (generate_appcast --channel beta), put first (#16).
+# Fails if the beta appcast has no beta item.
+appcast_with_beta() {
+  grep -q '<sparkle:channel>beta</sparkle:channel>' "$2" || return 1
+  awk '
+    FNR == NR { if ($0 ~ /<item>/) on = 1; if (on) beta = beta $0 "\n"; if ($0 ~ /<\/item>/) on = 0; next }
+    /<item>/ { item = $0 "\n"; on = 1; next }
+    on {
+      item = item $0 "\n"
+      if ($0 ~ /<\/item>/) {
+        on = 0
+        if (!done) { printf "%s", beta; done = 1 }
+        if (item !~ /<sparkle:channel>beta<\/sparkle:channel>/) printf "%s", item
+      }
+      next
+    }
+    /<\/channel>/ && !done { printf "%s", beta; done = 1 }
+    { print }' "$2" "$1"
+}
+
+# sums_replace <SHA256SUMS> <name> <file>: the line of <name> gets the sha256 of <file> (the stable
+# release's appcast.xml after a beta went into it). Fails if <name> is not listed.
+sums_replace() {
+  local hash
+  awk -v n="$2" '$2 == n { found = 1 } END { exit !found }' "$1" || return 1
+  hash=$(shasum -a 256 < "$3" | cut -d' ' -f1)
+  awk -v n="$2" -v h="$hash" '$2 == n { $0 = h "  " n } { print }' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+}
+
 [ "${BASH_SOURCE[0]}" = "$0" ] || return 0   # sourced by Helper/tests
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -69,6 +105,7 @@ OUT=build/release
 SPM=build/spm   # SwiftPM checkouts + Sparkle's binary tools (generate_appcast), kept between releases
 RELEASES_REPO=lesha19/KillSwitch-releases
 MODE=${1:-}
+CHANNEL=${KS_CHANNEL:-}
 
 problems=()
 problem() { problems+=("$1"); }
@@ -151,6 +188,12 @@ security find-generic-password -s https://sparkle-project.org -a ed25519 >/dev/n
   problem "Нет ключа EdDSA Sparkle в связке ключей (им подписываются обновления).
     Создать один раз: <SourcePackages>/artifacts/sparkle/Sparkle/bin/generate_keys,
     затем открытый ключ (generate_keys -p) — в project.yml, SUPublicEDKey."
+
+case "$CHANNEL" in
+  "") ;;
+  beta) [ "$MODE" = --publish ] || [ "$MODE" = --check ] || problem "KS_CHANNEL=beta выпускается только с --publish." ;;
+  *) problem "KS_CHANNEL: только beta (или не задан), а не «$CHANNEL»." ;;
+esac
 
 NOTES=${KS_RELEASE_NOTES:-}
 if [ "$MODE" = --publish ]; then
@@ -287,7 +330,7 @@ cp "$DMG" "$OUT/appcast/"
 "$SPM/artifacts/sparkle/Sparkle/bin/generate_appcast" \
   --download-url-prefix "https://github.com/$RELEASES_REPO/releases/download/v$VERSION/" \
   --full-release-notes-url "https://github.com/$RELEASES_REPO/releases/tag/v$VERSION" \
-  -o "$OUT/appcast.xml" "$OUT/appcast"
+  ${CHANNEL:+--channel "$CHANNEL"} -o "$OUT/appcast.xml" "$OUT/appcast"
 rm -rf "$OUT/appcast"
 grep -q 'sparkle:edSignature=' "$OUT/appcast.xml" || { echo "appcast.xml без подписи EdDSA" >&2; exit 1; }
 
@@ -304,8 +347,20 @@ echo "Готово: $DMG, $OUT/appcast.xml, $OUT/SHA256SUMS"
 cat "$OUT/SHA256SUMS"
 
 if [ "$MODE" = --publish ]; then
-  gh release create "v$VERSION" --repo "$RELEASES_REPO" --title "KillSwitch $VERSION" \
+  gh release create "v$VERSION" --repo "$RELEASES_REPO" --title "KillSwitch $VERSION" ${CHANNEL:+--prerelease} \
     --notes-file "$NOTES" "$DMG" "$OUT/appcast.xml" "$OUT/geosite.dat" "$OUT/geosite.dat.sha256" \
     "$OUT/geoip.metadb" "$OUT/geoip.metadb.sha256" "$OUT/geoip.dat" "$OUT/geoip.dat.sha256" "$OUT/SHA256SUMS"
+  if [ "$CHANNEL" = beta ]; then
+    # The app reads releases/latest/download/appcast.xml and a pre-release is never "latest": the
+    # beta item goes into the latest stable release's appcast; its SHA256SUMS follows.
+    STABLE_TAG=$(gh release view --repo "$RELEASES_REPO" --json tagName --jq .tagName)
+    mkdir "$OUT/stable"
+    gh release download "$STABLE_TAG" --repo "$RELEASES_REPO" --dir "$OUT/stable" --pattern appcast.xml --pattern SHA256SUMS
+    appcast_with_beta "$OUT/stable/appcast.xml" "$OUT/appcast.xml" > "$OUT/stable/appcast.new"
+    mv "$OUT/stable/appcast.new" "$OUT/stable/appcast.xml"
+    sums_replace "$OUT/stable/SHA256SUMS" appcast.xml "$OUT/stable/appcast.xml"
+    gh release upload "$STABLE_TAG" --repo "$RELEASES_REPO" --clobber "$OUT/stable/appcast.xml" "$OUT/stable/SHA256SUMS"
+    echo "Бета добавлена в appcast.xml выпуска $STABLE_TAG."
+  fi
   echo "Опубликовано: https://github.com/$RELEASES_REPO/releases/tag/v$VERSION"
 fi

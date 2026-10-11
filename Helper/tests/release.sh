@@ -23,4 +23,40 @@ printf 'tampered\n' > "$tmp/appcast.xml"
 check "a changed file is caught" "$(cd "$tmp" && shasum -a 256 -c SHA256SUMS 2>/dev/null | grep -c FAILED)" 1
 check "a missing file fails the release" "$(write_sums "$tmp" nope.dmg 2>/dev/null && echo written || echo refused)" refused
 
+# #16: a beta goes into the stable release's appcast as a <sparkle:channel>beta</sparkle:channel>
+# item; the app reads only releases/latest/download/appcast.xml.
+item() {  # item <build> [channel]
+  printf '        <item>\n            <title>%s</title>\n' "$1"
+  if [ -n "${2:-}" ]; then printf '            <sparkle:channel>%s</sparkle:channel>\n' "$2"; fi
+  printf '            <sparkle:version>%s</sparkle:version>\n' "$1"
+  printf '            <enclosure url="https://x/%s.dmg" length="1" type="application/octet-stream" sparkle:edSignature="sig%s"/>\n        </item>\n' "$1" "$1"
+}
+feed() {  # feed <item>...
+  printf '<?xml version="1.0" standalone="yes"?>\n<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">\n    <channel>\n        <title>KillSwitch</title>\n'
+  for i in "$@"; do printf '%s\n' "$i"; done
+  printf '    </channel>\n</rss>\n'
+}
+builds() { sed -nE 's|.*<sparkle:version>([0-9]+)</sparkle:version>.*|\1|p' "$1" | paste -sd' ' -; }
+feed "$(item 23)" "$(item 22 beta)" > "$tmp/stable.xml"
+feed "$(item 24 beta)" > "$tmp/beta.xml"
+feed > "$tmp/empty.xml"
+appcast_with_beta "$tmp/stable.xml" "$tmp/beta.xml" > "$tmp/merged.xml"
+check "merged appcast is well-formed XML" "$(xmllint --noout "$tmp/merged.xml" 2>&1 && echo ok)" ok
+check "the new beta, then the stable; the old beta is gone" "$(builds "$tmp/merged.xml")" "24 23"
+check "the stable item keeps its signature" "$(grep -c 'sparkle:edSignature="sig23"' "$tmp/merged.xml")" 1
+check "only the beta item is in the beta channel" "$(grep -c '<sparkle:channel>beta</sparkle:channel>' "$tmp/merged.xml")" 1
+appcast_with_beta "$tmp/empty.xml" "$tmp/beta.xml" > "$tmp/merged-empty.xml"
+check "an appcast without items gets the beta" "$(builds "$tmp/merged-empty.xml")" 24
+check "a beta appcast without a beta item is refused" \
+  "$(appcast_with_beta "$tmp/stable.xml" "$tmp/empty.xml" >/dev/null 2>&1 && echo merged || echo refused)" refused
+
+# the stable release's SHA256SUMS follows its rewritten appcast.xml
+printf '<rss/>\n' > "$tmp/appcast.xml"
+write_sums "$tmp" KillSwitch-0.13.dmg appcast.xml
+cp "$tmp/merged.xml" "$tmp/appcast.xml"
+sums_replace "$tmp/SHA256SUMS" appcast.xml "$tmp/appcast.xml"
+check "new appcast hash, the other lines kept" "$(cd "$tmp" && shasum -a 256 -c SHA256SUMS 2>/dev/null | grep -c ': OK')" 2
+check "a name not in SHA256SUMS is refused" \
+  "$(sums_replace "$tmp/SHA256SUMS" nope.xml "$tmp/appcast.xml" 2>/dev/null && echo replaced || echo refused)" refused
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
