@@ -64,6 +64,7 @@ enum ProtectionLog {
             ("xray stats port free again", String(localized: "Счётчики трафика VPN снова работают")),
             ("xray stats port", String(localized: "Порт 47891 занят другой программой — VPN работает без счётчиков трафика")),
             ("core config rolled back", String(localized: "VPN не запустился с новыми настройками — возвращены прежние")),
+            ("MTU change cut short", String(localized: "Прерванная смена размера пакетов VPN отменена")),
             ("core config: the new one refused", String(localized: "Новые настройки VPN не прошли проверку — оставлены прежние")),
             ("netbird: its daemon did not start again", String(localized: "NetBird не запустился после перезапуска — следующая попытка позже")),
             ("netbird: its daemon started again", String(localized: "NetBird снова запущен")),

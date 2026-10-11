@@ -72,6 +72,7 @@ final class ProtectionLogTests: XCTestCase {
         XCTAssertEqual(text("2026-10-12 14:03:22 tunnel MTU: 1380"), "Размер пакетов VPN (MTU): 1380")
         XCTAssertEqual(text("2026-10-12 14:03:22 tunnel MTU: 1280 refused, back to auto: the VPN did not start with it"),
                        "VPN не запустился с размером пакетов 1280 — вернули прежний: Авто")
+        XCTAssertEqual(text("2026-10-12 14:03:22 MTU change cut short: undone"), "Прерванная смена размера пакетов VPN отменена")
     }
 
     func testXrayFailover() {
