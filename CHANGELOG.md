@@ -164,13 +164,21 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 - Xray subscriptions: a host that cannot be used (a placeholder at 0.0.0.0 or 127.0.0.1, a `ks-…`
   tag, a selector or `fallbackTag` that would pick KillSwitch's outbounds, a transport address
   nothing pins) is left out and named in «Трафик», the others stay; the subscription is refused
-  only when no host is left. XHTTP's older name `splithttpSettings` is checked like
+  when no host is left. XHTTP's older name `splithttpSettings` is checked like
   `xhttpSettings` (#37, review).
-- Xray subscriptions (as 0.19.1): a key in another case (`Selector`, `Address`, `fallbacktag`),
-  which Xray reads, or a selector given as one string makes the host unusable; an observatory may
-  not probe through a freedom outbound; VLESS `settings.reverse` is removed; a host picked by hand
-  that is left out is noted in Журнал защиты. After the update a subscription whose XHTTP
-  connection downloads from a server given by name needs one import with the password.
+- Xray subscriptions (as 0.19.1): a key in another case (`Selector`, `Address`, `fallbacktag`) or
+  with look-alike letters Xray reads as Latin (`ſelector`, `socKopt`), which Xray reads, or a
+  selector given as one string or as `""` makes the host unusable; so does a transport that talks
+  to other addresses than the server (an ECH config from a DNS server, finalmask `realm`, `xdns`,
+  `xicmp`, `udphop` to other addresses, `xdrive`), a server type KillSwitch does not take or a
+  server without a usable address. The ECH lookup's socket is bound to nothing and a TLS key log
+  removed; an observatory may not probe through a freedom outbound; VLESS `settings.reverse` is
+  removed; a host picked by hand that is left out is noted in Журнал защиты with the reason. The
+  subscription is still refused when no host is left, a server name does not resolve, or a config
+  is broken (two outbounds with one tag, a chain through a missing outbound). After the update a
+  host whose XHTTP connection downloads from a server given by name is left out until the next
+  import with the password; the other hosts keep working. `probeURL` (Xray's spelling) and an
+  empty dialer chain no longer refuse a host or cost it its latency check.
 - Lock files of the service are root's alone (0600): a local user can no longer hold one and stall
   settings, the protection log and the watchdog; the log never waits more than 2 s (#50, review).
 - Password prompt: a script command in any other shape than the app's install.sh/uninstall.sh is
