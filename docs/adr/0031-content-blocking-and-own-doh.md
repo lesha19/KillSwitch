@@ -37,29 +37,39 @@ fragment; no loopback, private, link-local, CGNAT, 198.18/15 or multicast addres
 names; at most 256 bytes. The same check in ks (`valid_doh`, also for the settings file — a bad
 line blocks everything, ADR 0015) and the app (`HelperCommand.isDoH`).
 
-- mihomo: `nameserver: [<url>#KS-DNS]`, `fallback: [1.1.1.1, 8.8.8.8 DoH #KS-DNS]` with
-  `fallback-filter: {geoip: false}` — the fallback is asked only when the own server gives no
-  answer. Its name is resolved by `default-nameserver` (our DoH through KS-DNS). With fake-ip,
-  sites that go through a VPN server are resolved by that server; the own DoH answers what the
-  core resolves itself (address rules, DIRECT, the subscription's `fake-ip-filter`).
-- Xray: the server `{address: <url>, tag: ks-doh}` goes first in `dns.servers`; the template's
-  servers follow (Xray asks the next one on failure; `disableFallback` is dropped and reported).
-  Without template servers, Cloudflare's DoH (also tagged `ks-doh`) follows. Two of our rules,
-  before the subscription's, send `inboundTag ks-doh` and the host (`full:<host>` or its address)
-  to a VPN server. The template's domain-specific servers (e.g. Yandex for `category-ru`) stay its
-  policy, as with mihomo's `nameserver-policy`.
+- mihomo: `nameserver: [<url>#KS-DNS]`, alone. mihomo asks `fallback` at the same time as the
+  nameservers, not after a failure (review of #14, reproduced), so a fallback would overrule the
+  own server (its NXDOMAIN included): none. Its name is resolved by `default-nameserver` (our DoH
+  through KS-DNS). With fake-ip, sites that go through a VPN server are resolved by that server;
+  the own DoH answers what the core resolves itself (address rules, DIRECT, `fake-ip-filter`). When
+  it does not answer, those names fail — nothing else is asked.
+- Xray: `dns.servers` = the own server `{address: <url>, tag: ks-doh}`, then Cloudflare's DoH
+  (also tagged `ks-doh`), which Xray asks when the first gives no answer. Template servers with
+  `domains` stay for those domains only (`skipFallback: true`, e.g. Yandex for `category-ru`, the
+  template's approved policy like mihomo's `nameserver-policy`); template servers without domains
+  go (reported as `own-doh`). Review of #14: dropping `disableFallback` let a failed query cascade
+  to every template server, including one the template routes DIRECT (77.88.8.8 → freedom), i.e.
+  DNS outside the VPN that nobody approved; now no template server is ever a fallback, and the
+  template's `disableFallback` is kept (then the own server alone). Two of our rules, before the
+  subscription's, send `inboundTag ks-doh` and the host (`full:<host>` or its address) to a VPN
+  server.
 - Both: added after the DIRECT signature; no address enters pf; refresh asks nothing new. The
   world-readable report, events.log and the report's DNS list show only the host (a DoH path can
   hold an account id). An invalid stored value is ignored by the generator (our resolvers).
+- `ks set doh` writes the value, rebuilds the config and puts the old value back when the core
+  does not take it (otherwise every later rebuild would fail). The path takes `%` only as `%XX`.
+- The full URL stays in `settings` (644, read by the app to show it): an account id in a DoH path
+  (NextDNS) only lets someone on this Mac use that profile; it is not a password. Accepted.
 
-Fail-safe: the own server is never queried outside the tunnel, and when it fails the core falls
-back to the configuration's resolvers through the VPN — never the ISP's or the LAN's resolver.
-A DoH server that answers NXDOMAIN for what it blocks may be overruled by the fallback; staying
-connected wins over that filter.
+Fail-safe: the own server is never queried outside the tunnel, and no fallback ever leaves it:
+Xray falls back to Cloudflare's DoH through the VPN, mihomo to nothing — never the ISP's, the
+LAN's or a DIRECT-routed template resolver.
 
 ## Consequences
 
 - Settings › Дополнительно «Блокировка»: four switches; «Свой сервер DNS-over-HTTPS» with a sheet.
 - Settings transfer (ADR 0024) carries the three new switches and `doh`; the daemon takes them.
-- Live check needed: the Xray DNS tag routing and mihomo fallback against a real DoH server and a
-  dead one, on the owner's subscription.
+- Going back to 0.19 with any of the new settings set: 0.19 does not know the keys and blocks
+  everything until «Сбросить настройки» (ADR 0015). Said in the changelog.
+- Live check needed: the Xray DNS tag routing and fallback, and mihomo with a real DoH server and
+  a dead one, on the owner's subscription.

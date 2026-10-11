@@ -209,7 +209,7 @@ final class HelperCommandTests: XCTestCase {
     /// ADR 0031: the own DoH server as Helper/ks valid_doh takes it (Helper/tests/blocking.sh has the same list).
     func testDoHAddress() {
         for url in ["https://dns.example.com/dns-query", "https://dns.nextdns.io/abc123", "https://9.9.9.9/dns-query",
-                    "https://dns.example.com:8443/q/x_y~z", "https://d.adguard-dns.com/dns-query/a1b2", "https://dns.example.com"] {
+                    "https://dns.example.com:8443/q/x_y~z", "https://d.adguard-dns.com/dns-query/a1b2", "https://dns.example.com", "https://dns.example.com/q%2Fx%20y"] {
             XCTAssertTrue(HelperCommand.isDoH(url), url)
             XCTAssertTrue(HelperCommand.setDoH(url).isValid, url)
         }
@@ -219,7 +219,8 @@ final class HelperCommandTests: XCTestCase {
                     "https://198.18.0.1/dns-query", "https://172.20.0.1/x", "https://100.100.100.100/x", "https://[::1]/dns-query",
                     "https://dns.example.com:0/x", "https://dns.example.com:99999/x", "https://300.1.1.1/x", "https://dns/x",
                     "https://dns.example.com/" + String(repeating: "a", count: 300), "dns.example.com", "https://-bad.example.com/x",
-                    "https://router.local/x", "", "https://dns.example.com/\n"] {
+                    "https://router.local/x", "", "https://dns.example.com/\n", "https://dns.example.com/%zz", "https://dns.example.com/%",
+                    "https://dns.example.com/a%2", "https://Router.LOCAL/x", "https://box.LAN/x"] {
             XCTAssertFalse(HelperCommand.isDoH(url), url)
             XCTAssertFalse(HelperCommand.setDoH(url).isValid, url)
         }

@@ -15,8 +15,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   change. Each switch asks for the administrator (`ks set blockadult|blocksocial|blockbetting 0|1`).
   The ad blocking setting stays as it was. There is no malware list in that data, so no such switch.
 - «Свой сервер DNS-over-HTTPS» (#14, ADR 0031): names are asked from your DoH server (NextDNS,
-  AdGuard DNS…), always through the VPN; when it does not answer, from the usual resolvers, also
-  through the VPN, never the provider's. Only `https://` addresses of public servers, without a
+  AdGuard DNS…), always through the VPN, never directly or from the provider. When it does not
+  answer, the main way of connecting (Xray) asks Cloudflare's DoH, also through the VPN; the
+  fallback way (mihomo) asks no one else. Only `https://` addresses of public servers, without a
   login, `?` or `#` (`ks set doh <url>`, `""` clears). Both new settings travel with «Перенос настроек».
 - «Свои адреса сайтов» (#28, ADR 0033): up to 50 «name → IPv4» pairs that the VPN's DNS answers
   with your address (a home server, a DoH server's address). Only the answer changes: where the
@@ -24,6 +25,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   out. Exact names only; not IPv6, 127.x, the VPN's servers, the subscription link or the hosts the
   app needs for updates and checks (`ks set hosts <name=ip,…>`, `""` clears). Travels with
   «Перенос настроек».
+
+### Changed
+- Going back to 0.19 or older after turning on a new blocking category, the own DoH server or own
+  site addresses blocks all traffic (the older helper does not know these settings) until Settings ›
+  «Сбросить настройки». Turn them off before downgrading.
 
 ## [0.19.0] - 2026-10-11
 

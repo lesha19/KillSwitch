@@ -139,7 +139,7 @@ the bundled geodata in place or kept the old file because its sha256 was not the
   control characters; also their `<name> Helper…` processes; `""` clears), DIRECT; blocked
   categories (ADR 0031: `adblock`, `blockadult`, `blocksocial`, `blockbetting` = `category-ads-all`,
   `category-porn`, `category-social-media-!cn`, `category-betting-ru`) go first as `GEOSITE,…,REJECT`;
-  the own DoH server (`ks set doh <https url>`) is asked through KS-DNS first, our resolvers after it;
+  the own DoH server (`ks set doh <https url>`) is asked through the VPN only (Xray: Cloudflare DoH after it; mihomo: alone);
   own addresses of sites (`ks set hosts <name=IPv4,…>`, ADR 0033) go into the core's hosts table. Both are the user's own choices and are
   reported as such. `core/geosite.dat` and `core/geoip.metadb` (`Helper/fetch-geodata.sh`,
   sha256-pinned, shipped in the app) serve the profile's `GEOSITE`/`GEOIP` rules; without them such

@@ -289,7 +289,7 @@ enum HelperCommand: Equatable, Sendable {
     /// path; no user, query or fragment, nothing local (the server is reached through the VPN).
     static func isDoH(_ text: String) -> Bool {
         guard text.utf8.count <= 256,
-              let match = text.wholeMatch(of: /https:\/\/([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?(\/[A-Za-z0-9._~%\/-]*)?/) else { return false }
+              let match = text.wholeMatch(of: /https:\/\/([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?(\/(?:[A-Za-z0-9._~\/-]|%[0-9A-Fa-f]{2})*)?/) else { return false }
         if let port = match.2 {
             guard let number = Int(port), (1...65535).contains(number) else { return false }
         }
