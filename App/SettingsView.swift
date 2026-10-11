@@ -255,8 +255,7 @@ private struct VPNSettings: View {
                 }
                 if let warning = SplitApps.writableWarning(SplitApps.userWritable(control.splitApps,
                                                                                   isWritable: FileManager.default.isWritableFile)) {
-                    Label(warning, systemImage: "exclamationmark.triangle")
-                        .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                    StatusLabel(warning, systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.callout)
                 }
             }
             .disabled(control.busy || control.state == .notInstalled)
@@ -740,11 +739,9 @@ private struct ServiceSection: View {
             }
             HelperApprovalNote()
             ForEach(GeoDataInstall.problems(try? String(contentsOfFile: GeoDataInstall.path, encoding: .utf8)), id: \.self) { problem in
-                Label(problem, systemImage: "exclamationmark.triangle")
-                    .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                StatusLabel(problem, systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.callout)
             }
             Button("Удалить KillSwitch из системы…", role: .destructive) { confirmUninstall = true }
-                .foregroundStyle(.red)
         }
         .disabled(control.busy || control.state == .notInstalled)
         .confirmationDialog("Удалить KillSwitch из системы?", isPresented: $confirmUninstall) {
@@ -790,7 +787,7 @@ struct ProtectionLogView: View {
                 Text("Отчёт — архив на Рабочем столе: журнал за 7 дней, состояние защиты и сети, отчёты о сбоях.")
                     .foregroundStyle(.secondary)
                 if let error = control.reportError {
-                    Text(error).foregroundStyle(.red).textSelection(.enabled)
+                    StatusLabel(error, systemImage: "xmark.octagon.fill", tint: .red).textSelection(.enabled)
                 }
             }
         }
