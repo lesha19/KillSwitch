@@ -1104,7 +1104,8 @@ core_generate_mihomo() (
     # fields only; no path, mihomo picks its own in its directory.
     NOTES="$w/notes" KS_DNS=$KS_DNS json_edit "$RP" '
       die "rule-providers: не объект\n" unless ref $j eq "HASH";
-      my %field = map { ($_ => 1) } qw(type behavior format url interval proxy size-limit payload path);
+      # header: request headers of the download (mihomo docs; #37), names and plain strings only
+      my %field = map { ($_ => 1) } qw(type behavior format url interval proxy size-limit payload path header);
       open my $notes, ">>", $ENV{NOTES} or die;
       for my $n (sort keys %$j) {
         my $shown = $n =~ s/[\x00-\x1f\x7f]/?/gr;
@@ -1115,6 +1116,14 @@ core_generate_mihomo() (
         my $t = $p->{type};
         die "rule-provider «$n»: тип «" . (ref $t ? "?" : ($t // "") =~ s/[\x00-\x1f\x7f]/?/gr) . "» не допускается (только http и inline)\n"
           unless defined $t && !ref $t && $t =~ /\A(http|inline)\z/;
+        if (exists $p->{header}) {
+          my $h = $p->{header};
+          die "rule-provider «$n»: header не объект\n" unless ref $h eq "HASH";
+          for (sort keys %$h) {
+            die "rule-provider «$n»: плохой заголовок\n" unless /\A[A-Za-z0-9-]{1,64}\z/ && ref $h->{$_} eq "ARRAY" && @{ $h->{$_} } <= 8 &&
+              !grep { !defined || ref || /[\x00-\x1f\x7f]/ || length > 1024 } @{ $h->{$_} };
+          }
+        }
         print $notes "provider-path\t$n\n" if exists $p->{path};
         delete $p->{path};
         if ($t eq "http") {

@@ -1,0 +1,3 @@
+{"proxies": [{"name": "x", "type": "ss", "server": "198.51.100.7", "port": 8388, "cipher": "aes-128-gcm", "password": "x"}],
+ "rule-providers": {"p": {"type": "http", "behavior": "domain", "url": "https://example.com/p.txt", "header": {"X-Evil": ["a\r\nHost: evil.example.com"]}}},
+ "rules": ["RULE-SET,p,x", "MATCH,x"]}
