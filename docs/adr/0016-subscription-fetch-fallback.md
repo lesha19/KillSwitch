@@ -42,5 +42,8 @@ Already true and kept: a failed fetch, or a body without servers (`ProfileConver
 - If another program holds port 47890 the listener does not start and only the fallback through
   the VPN is lost.
 - Sparkle itself is never proxied; while the VPN is off and protection on, update checks fail
-  until it connects.
+  until it connects. Checked for Sparkle 2.10.0 (#11): `SPUDownloader` fetches the appcast and the
+  archive with its own `defaultSessionConfiguration` session and offers no hook for a proxy (only
+  the feed URL, headers and user agent); `ks-fetch` is a forward proxy, not a mirror. So the retry
+  on connect stays the only path.
 - Not verifiable here: the listener on a running core, a real blocked host, Sparkle's retry.
