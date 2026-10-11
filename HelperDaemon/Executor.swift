@@ -10,17 +10,23 @@ enum Executor {
     private static let queue = DispatchQueue(label: "com.lesha19.KillSwitch.helper.run", attributes: .concurrent)
 
     static func perform(_ command: HelperCommand, authorization: Data? = nil, profile: FileHandle? = nil,
-                        output: FileHandle? = nil, reply: @escaping @Sendable (Int32, String, String) -> Void) {
+                        output: FileHandle? = nil, caller: uid_t, reply: @escaping @Sendable (Int32, String, String) -> Void) {
         Activity.shared.begin()
         queue.async {
             defer { Activity.shared.end() }
-            let result = output.map { report(command, into: $0) } ?? run(command, authorization: authorization, profile: profile)
+            let result = output.map { report(command, into: $0) } ?? run(command, caller: caller, authorization: authorization, profile: profile)
             Log.daemon.info("\(String(describing: command.program), privacy: .public) \(command.arguments.first ?? "", privacy: .public): \(result.status)")
             reply(result.status, result.stdout, result.stderr)
         }
     }
 
-    private static func run(_ command: HelperCommand, authorization: Data?, profile: FileHandle?) -> HelperReply {
+    private static func run(_ command: HelperCommand, caller: uid_t, authorization: Data?, profile: FileHandle?) -> HelperReply {
+        // KS-11: by the connecting uid (audit token), whatever program the client is
+        if command.onlyForConsoleUser, !HelperCommand.mayChangeWithoutPassword(
+            caller: caller, console: DiagReport.consoleUser(), installer: DiagReport.installingUser()) {
+            return HelperReply(status: HelperReply.refused, stdout: "",
+                               stderr: "Без пароля это может только пользователь, который установил KillSwitch и сейчас работает за этим Mac")
+        }
         if command.needsAuthorization {
             guard let authorization, Authorizer.check(authorization) else {
                 return HelperReply(status: HelperReply.notAuthorized, stdout: "", stderr: "Нужно подтверждение администратора")

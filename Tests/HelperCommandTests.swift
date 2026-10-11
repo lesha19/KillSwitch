@@ -130,6 +130,36 @@ final class HelperCommandTests: XCTestCase {
         XCTAssertNotEqual(HelperCommand.upgrade.program, .ks)
     }
 
+    /// KS-11: the daemon serves every local account (and, with the CLI, ssh sessions). Without the
+    /// password, only what reads state is open to anyone; what changes something (or shows the
+    /// live connections) is for root or the user at the console who installed KillSwitch.
+    func testPasswordlessChangesOnlyForTheConsoleUserWhoInstalled() {
+        let restricted: [HelperCommand] = [
+            .protectionOn, .netRestore, .coreOn, .coreOff, .coreSelect(group: "g", proxy: "p"),
+            .coreRefresh(profile: "/tmp/p.json"), .upgrade, .coreConnections,
+        ]
+        let open: [HelperCommand] = [.state, .probe, .coreState, .coreProxies, .coreTraffic, .coreDelay("g")]
+        for command in restricted { XCTAssertTrue(command.onlyForConsoleUser, "\(command)") }
+        for command in open { XCTAssertFalse(command.onlyForConsoleUser, "\(command)") }
+        // behind the right (the admin's password) or gated on its own (diagReport, mayCollect)
+        for command: HelperCommand in [.protectionOff, .pause(minutes: 5), .coreImport(profile: "/tmp/p.json"), .uninstall,
+                                       .diagReport(directory: "/tmp")] {
+            XCTAssertFalse(command.onlyForConsoleUser, "\(command)")
+        }
+
+        func may(_ caller: uid_t, console: uid_t?, installer: uid_t?) -> Bool {
+            HelperCommand.mayChangeWithoutPassword(caller: caller, console: console, installer: installer)
+        }
+        XCTAssertTrue(may(501, console: 501, installer: 501), "the owner at the Mac")
+        XCTAssertTrue(may(0, console: nil, installer: 501), "root")
+        XCTAssertTrue(may(501, console: 501, installer: nil), "no sudoers entry known: the user at the Mac")
+        XCTAssertFalse(may(502, console: 502, installer: 501), "another account at the console")
+        XCTAssertFalse(may(501, console: 502, installer: 501), "the owner over ssh while another account is at the Mac")
+        XCTAssertFalse(may(501, console: 0, installer: 501), "over ssh with nobody logged in at the Mac")
+        XCTAssertFalse(may(501, console: nil, installer: 501), "console unknown")
+        XCTAssertFalse(may(503, console: nil, installer: nil))
+    }
+
     // MARK: validation (Helper/ks is the authority; the daemon checks before it runs anything)
 
     func testAddressesAsKsTakesThem() {

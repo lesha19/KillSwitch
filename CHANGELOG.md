@@ -16,6 +16,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 - Subscription header crash (KS-13, #49): a `subscription-userinfo` with huge, negative, `nan` or
   `inf` numbers crashed the app, and one form was saved and crashed it on every launch. The numbers
   are now kept in range (bytes up to 2^53, expiry up to year 9999), a saved status too.
+- Other accounts on the Mac (KS-11, #48): the helper ran the passwordless commands for every local
+  user. Connecting, disconnecting, switching or refreshing servers, the update step and the live
+  connections now work without the password only for the user who installed KillSwitch while at
+  the Mac's screen (or root); another account, or an ssh session while someone else or nobody is
+  at the Mac, is refused. Reading the state stays open.
 
 ## [0.18.1] - 2026-10-11
 

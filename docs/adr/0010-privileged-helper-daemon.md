@@ -69,6 +69,13 @@ A test reads the sudoers line of `install.sh` and fails if the two columns stop 
 either direction; `Helper/tests/args.sh` holds ks's own check to the same list. `set adblock`
 (0.13) is a switch like the others: it changes what the core refuses, so it stays behind the right.
 
+Who (KS-11, audit 2026-10-12): sudoers granted the left column to one user, the daemon serves any
+local account whose process is our signed app (and, with a CLI, ssh sessions). So the left-column
+commands that change something (`on`, `netrestore`, `core on|off|select|refresh`, `upgrade`) and
+`core connections` (every user's traffic) run only for root or the uid at the console that is also
+the sudoers user (`HelperCommand.mayChangeWithoutPassword`, by the audit token's uid, whatever the
+client program); the rest of the left column stays open. `diagReport` has its own `mayCollect`.
+
 - **Profiles** come as a file handle the app opened; the daemon copies at most 20 000 001 bytes of
   a regular file into a fresh 0700 directory of root's and gives ks that copy. Root never opens a
   path the user named.
