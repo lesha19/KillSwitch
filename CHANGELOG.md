@@ -157,6 +157,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   tags `ks-…` and balancer or observatory selectors that would pick KillSwitch's own outbounds are
   refused; invalid server addresses (999.1.1.1, 01.2.3.4, 0/127/224+) are refused instead of
   blocking everything in pf; raw socket options (`customSockopt`) are removed.
+- Xray subscriptions: a host that cannot be used (a placeholder at 0.0.0.0 or 127.0.0.1, a `ks-…`
+  tag, a selector or `fallbackTag` that would pick KillSwitch's outbounds, a transport address
+  nothing pins) is left out and named in «Трафик», the others stay; the subscription is refused
+  only when no host is left. XHTTP's older name `splithttpSettings` is checked like
+  `xhttpSettings` (#37, review).
+- Lock files of the service are root's alone (0600): a local user can no longer hold one and stall
+  settings, the protection log and the watchdog; the log never waits more than 2 s (#50, review).
+- Password prompt: a script command in any other shape than the app's install.sh/uninstall.sh is
+  refused instead of run in place (#37, review).
 - `KS_NOW`, `KS_APPROVE_ALL` and `KS_LOCKED` never come from the caller; the core lock's re-exec
   is believed only from its own lockf (#50).
 - NetBird: every link on the way to its binary is followed and its folder checked; a link in a

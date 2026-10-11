@@ -73,6 +73,22 @@ left. Decisions marked "decided by the agent" can be changed by the owner.
   wait would risk a DNS state written half); `probe`, `coreDelay`, `coreProxies` stay open to local
   accounts by design.
 
+## Review round 2
+
+- Per host, not per subscription (8cef1f5): load() leaves out a host with an unusable address
+  (0/127/224+, digits and dots that are no IPv4), a `ks-…` tag, a balancer/observatory selector or
+  a `fallbackTag` that is not the host's own outbound, a nested `downloadSettings` or any other
+  `address` in `streamSettings`; listed in the report's `dropped` (section `servers`). Refused
+  only when no host is left, so a stored profile with a placeholder host still rebuilds. A
+  `streamSettings` key allow-list was not added (decided by the agent): Xray keeps adding
+  transports, and an unknown key would cut hosts off; the "no other address" rule covers what an
+  allow-list would protect. `splithttpSettings` is read like `xhttpSettings`. `ipv4()` uses [0-9].
+- Locks (75ac542): every lock file is a plain 0600 file of root (KS_LOCK_OPEN_PL, lock_ready before
+  each lockf); one that is not is unlinked and made again, which can break the exclusion once
+  while an older ks holds it during the upgrade. log_event waits 2 s at most, then appends.
+  set_multihop's copy lives in a mktemp -d folder.
+- `AdminScript.staged` refuses a `/bin/bash` command it cannot stage (dacf52e).
+
 ## Needs a live check
 
 - The password prompt path on a real install and on an «Восстановить службу…» (the copy runs as
