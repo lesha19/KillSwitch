@@ -1629,9 +1629,10 @@ KS_XRAY_PL='
       return "download" if grep { downloads({ streamSettings => $_ }) } @d;
     }
     my $rt = ref $c->{routing} eq "HASH" ? $c->{routing} : {};
-    # (Xray also takes a selector as one string, which the checks here would not see)
+    # (Xray also takes a selector as one string, which the checks here would not see; "" too, as
+    # [""], which picks every outbound: only null is no selector)
     for my $b (grep { ref $_ eq "HASH" } @{ ref $rt->{balancers} eq "ARRAY" ? $rt->{balancers} : [] }) {
-      return "selector" if set($b->{selector}) && ref $b->{selector} ne "ARRAY";
+      return "selector" if defined $b->{selector} && ref $b->{selector} ne "ARRAY";
       return "selector" if grep { picks_ours($_) } @{ ref $b->{selector} eq "ARRAY" ? $b->{selector} : [] };
       my $f = $b->{fallbackTag};
       return "fallback" if set($f) && (ref $f || !$tags{$f});   # "": no fallback
@@ -1640,7 +1641,7 @@ KS_XRAY_PL='
     # subscription, past the tunnel and outside the direct signature (0.19.1 review)
     my @free = map { $_->{tag} } grep { ($_->{protocol} // "") eq "freedom" && set($_->{tag}) && !ref $_->{tag} } @outs;
     for my $obs (qw(observatory burstObservatory)) {
-      next unless ref $c->{$obs} eq "HASH" && set($c->{$obs}{subjectSelector});
+      next unless ref $c->{$obs} eq "HASH" && defined $c->{$obs}{subjectSelector};
       my $sel = $c->{$obs}{subjectSelector};
       return "selector" if ref $sel ne "ARRAY";
       return "selector" if grep { my $x = $_; picks_ours($x) || (defined $x && !ref $x && grep { index($_, $x) == 0 } @free) } @$sel;

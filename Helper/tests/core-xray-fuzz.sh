@@ -296,6 +296,12 @@ for s in "" k ks ks- ks-d; do
   perhost "burstObservatory selector «$s»" '$b->{burstObservatory}{subjectSelector} = ["'"$s"'"]'
 done
 perhost "observatory selector «»" '$b->{observatory} = { subjectSelector => [""] }'
+# a selector "" is not unset to Xray: one string becomes a list of it, and "" is a prefix of every
+# tag, the freedom one and KillSwitch's among them (0.19.1 review, second round); only null is
+for v in '""' '{}' 0; do
+  perhost "balancer selector $v" '$b->{routing}{balancers}[0]{selector} = '"$v"
+  perhost "burstObservatory selector $v" '$b->{burstObservatory}{subjectSelector} = '"$v"
+done
 # a balancer falls back to fallbackTag when every member is down: never KillSwitch's, only an
 # outbound of the same host, and a freedom one counts in the direct signature
 for f in ks-direct ks-block nope; do
