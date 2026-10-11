@@ -7,7 +7,8 @@
 #   scripts/release.sh --sign-only   build and sign build/release/KillSwitch.app, no notarization
 #   scripts/release.sh --publish     full release, then `gh release create v<version>` in
 #                                    lesha19/KillSwitch-releases with the .dmg, appcast.xml,
-#                                    geosite.dat and geoip.metadb (+ .sha256), and SHA256SUMS of them all
+#                                    geosite.dat and geoip.metadb (+ .sha256), the source tarballs of the
+#                                    pinned mihomo (GPL-3.0) and Xray-core tags, and SHA256SUMS of them all
 #   KS_CHANNEL=beta scripts/release.sh --publish
 #                                    a beta (#16): its appcast item is in Sparkle's "beta" channel, the
 #                                    GitHub release is a pre-release (never "latest"), and the item is
@@ -47,6 +48,27 @@ geodata_pinned() {
   case "$2" in geosite.dat) var=SHA256_GEOSITE ;; geoip.metadb) var=SHA256_GEOIP ;; geoip.dat) var=SHA256_GEOIP_DAT ;; *) return 1 ;; esac
   pin=$(sed -nE "s/^$var=\"([0-9a-f]{64})\".*/\\1/p" "$1/fetch-geodata.sh")
   [ -n "$pin" ] && [ -f "$1/$2" ] && [ "$(shasum -a 256 < "$1/$2" | cut -d' ' -f1)" = "$pin" ]
+}
+
+# core_source <fetch script> <owner/repo> <dir>: downloads the source tarball of the tag pinned in
+# <fetch script> (VERSION) into <dir>/<repo>-<tag>-source.tar.gz and prints that name. It must have
+# the sha256 pinned there as SOURCE_SHA256, otherwise nothing is left in <dir>. mihomo is GPL-3.0:
+# the binary in the app is published with its source (§6); Xray-core (MPL-2.0) the same way.
+# KS_SOURCE_BASE replaces https://github.com (tests).
+core_source() {
+  local tag pin name
+  tag=$(sed -nE 's/^VERSION=([^ ]+).*/\1/p' "$1")
+  pin=$(sed -nE 's/^SOURCE_SHA256=([0-9a-f]{64})( .*)?$/\1/p' "$1")
+  name="${2#*/}-$tag-source.tar.gz"
+  [ -n "$tag" ] && [ -n "$pin" ] || { echo "$1: нет VERSION или SOURCE_SHA256" >&2; return 1; }
+  if curl -q --max-time 300 -fsSL -o "$3/$name" "${KS_SOURCE_BASE:-https://github.com}/$2/archive/refs/tags/$tag.tar.gz" &&
+     [ "$(shasum -a 256 < "$3/$name" | cut -d' ' -f1)" = "$pin" ]; then
+    echo "$name"
+  else
+    rm -f "$3/$name"
+    echo "Исходники $2 $tag: не скачались или sha256 не $pin ($1)" >&2
+    return 1
+  fi
 }
 
 # write_sums <dir> <file>...: <dir>/SHA256SUMS for files in <dir>, by bare name, in the format
@@ -225,6 +247,11 @@ echo "Проверка пройдена: сертификат, профиль н
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
+# Before the long build, so a broken pin stops the release early.
+if [ "$MODE" != --sign-only ]; then
+  MIHOMO_SRC=$(core_source Helper/fetch-mihomo.sh MetaCubeX/mihomo "$OUT")
+  XRAY_SRC=$(core_source Helper/fetch-xray.sh XTLS/Xray-core "$OUT")
+fi
 xcodegen generate --quiet
 # Built unsigned; everything is signed below, inside out, with Developer ID entitlements.
 xcodebuild archive -project KillSwitch.xcodeproj -scheme KillSwitch -configuration Release \
@@ -341,7 +368,7 @@ for f in geosite.dat geoip.metadb geoip.dat; do
 done
 
 # Checksums of what is published, for people who verify the download (README).
-write_sums "$OUT" "$(basename "$DMG")" appcast.xml geosite.dat geoip.metadb geoip.dat
+write_sums "$OUT" "$(basename "$DMG")" appcast.xml geosite.dat geoip.metadb geoip.dat "$MIHOMO_SRC" "$XRAY_SRC"
 
 echo "Готово: $DMG, $OUT/appcast.xml, $OUT/SHA256SUMS"
 cat "$OUT/SHA256SUMS"
@@ -349,7 +376,8 @@ cat "$OUT/SHA256SUMS"
 if [ "$MODE" = --publish ]; then
   gh release create "v$VERSION" --repo "$RELEASES_REPO" --title "KillSwitch $VERSION" ${CHANNEL:+--prerelease} \
     --notes-file "$NOTES" "$DMG" "$OUT/appcast.xml" "$OUT/geosite.dat" "$OUT/geosite.dat.sha256" \
-    "$OUT/geoip.metadb" "$OUT/geoip.metadb.sha256" "$OUT/geoip.dat" "$OUT/geoip.dat.sha256" "$OUT/SHA256SUMS"
+    "$OUT/geoip.metadb" "$OUT/geoip.metadb.sha256" "$OUT/geoip.dat" "$OUT/geoip.dat.sha256" \
+    "$OUT/$MIHOMO_SRC" "$OUT/$XRAY_SRC" "$OUT/SHA256SUMS"
   if [ "$CHANNEL" = beta ]; then
     # The app reads releases/latest/download/appcast.xml and a pre-release is never "latest": the
     # beta item goes into the latest stable release's appcast; its SHA256SUMS follows.

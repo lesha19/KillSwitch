@@ -250,9 +250,11 @@ addresses found in dropweb and Happ configs are passed to it). After updating th
 
 Кроме `.dmg` выпуск делает `build/release/appcast.xml` для Sparkle, подписанный ключом EdDSA.
 `scripts/release.sh --publish` — то же, а затем `gh release create v<версия>` в
-`lesha19/KillSwitch-releases` с `.dmg`, `appcast.xml`, копией `geosite.dat` (с `geosite.dat.sha256`)
-и `SHA256SUMS` всех трёх; описание берётся из раздела «## <версия>»
-`CHANGELOG.md` (или из файла в `KS_RELEASE_NOTES`). Нужен `gh`, вошедший с доступом к этому
+`lesha19/KillSwitch-releases` с `.dmg`, `appcast.xml`, копией `geosite.dat` (с `geosite.dat.sha256`),
+исходниками закреплённых тегов ядер (`mihomo-<тег>-source.tar.gz` — GPL-3.0 требует их рядом с
+бинарником; `Xray-core-<тег>-source.tar.gz`; sha256 закреплены как `SOURCE_SHA256` в
+`Helper/fetch-mihomo.sh` и `Helper/fetch-xray.sh`) и `SHA256SUMS` всех них; описание берётся из
+раздела «## <версия>» `CHANGELOG.md` (или из файла в `KS_RELEASE_NOTES`). Нужен `gh`, вошедший с доступом к этому
 репозиторию. Приложение читает `releases/latest/download/appcast.xml`, поэтому опубликованный выпуск
 сразу становится обновлением для всех.
 
@@ -264,7 +266,7 @@ addresses found in dropweb and Happ configs are passed to it). After updating th
 ### Проверка загрузки
 
 Каждый выпуск в `lesha19/KillSwitch-releases` несёт `SHA256SUMS` — суммы `.dmg`, `appcast.xml`,
-`geosite.dat` и `geoip.metadb`. Скачать `.dmg` и `SHA256SUMS` в одну папку и в ней:
+`geosite.dat`, `geoip.metadb` и исходников ядер. Скачать `.dmg` и `SHA256SUMS` в одну папку и в ней:
 
 ```bash
 shasum -a 256 -c SHA256SUMS --ignore-missing      # KillSwitch-<версия>.dmg: OK

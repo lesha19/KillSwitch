@@ -59,4 +59,29 @@ check "new appcast hash, the other lines kept" "$(cd "$tmp" && shasum -a 256 -c 
 check "a name not in SHA256SUMS is refused" \
   "$(sums_replace "$tmp/SHA256SUMS" nope.xml "$tmp/appcast.xml" 2>/dev/null && echo replaced || echo refused)" refused
 
+# GPL-3.0 §6 (#36): each release carries the source of the bundled mihomo (and Xray-core, MPL-2.0)
+# for the tag pinned in Helper/fetch-*.sh, checked against SOURCE_SHA256 there. Offline: the
+# "GitHub" here is a file:// tree (KS_SOURCE_BASE).
+mkdir -p "$tmp/gh/Org/core/archive/refs/tags" "$tmp/pins" "$tmp/src"
+printf 'core source\n' > "$tmp/gh/Org/core/archive/refs/tags/v1.2.tar.gz"
+good=$(shasum -a 256 < "$tmp/gh/Org/core/archive/refs/tags/v1.2.tar.gz" | cut -d' ' -f1)
+pin() { printf 'VERSION=%s\nSHA256=%064d\nSOURCE_SHA256=%s   # comment\n' "$1" 0 "$2" > "$tmp/pins/fetch.sh"; }
+export KS_SOURCE_BASE="file://$tmp/gh"
+pin v1.2 "$good"
+check "the pinned tag's tarball, named after repo and tag" "$(core_source "$tmp/pins/fetch.sh" Org/core "$tmp/src")" \
+  core-v1.2-source.tar.gz
+check "its content is the archive of that tag" "$(cat "$tmp/src/core-v1.2-source.tar.gz")" "core source"
+pin v1.2 "$(printf '%064d' 1)"
+rm -f "$tmp/src/"*
+check "another sha256 is refused" "$(core_source "$tmp/pins/fetch.sh" Org/core "$tmp/src" 2>/dev/null || echo refused)" refused
+check "and nothing is left to publish" "$(ls "$tmp/src" | wc -l | tr -d ' ')" 0
+pin v1.2 ""
+check "no pin is refused" "$(core_source "$tmp/pins/fetch.sh" Org/core "$tmp/src" 2>/dev/null || echo refused)" refused
+pin v9.9 "$good"
+check "a missing tag is refused" "$(core_source "$tmp/pins/fetch.sh" Org/core "$tmp/src" 2>/dev/null || echo refused)" refused
+unset KS_SOURCE_BASE
+for f in fetch-mihomo.sh fetch-xray.sh; do
+  check "$f pins the source tarball" "$(grep -cE '^SOURCE_SHA256=[0-9a-f]{64}( |$)' "$here/../$f")" 1
+done
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
