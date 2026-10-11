@@ -12,6 +12,7 @@
 #   ks set multihop <proxy>|off  double VPN: every other proxy (Xray: the running host) is reached through this one
 #   ks set core xray|mihomo the core that runs (ADR 0020); the subscription is imported again for it
 #   ks set diag 0|1         «Подробная диагностика»: Xray's access log in the journal (ADR 0021)
+#   ks set mtu auto|<n>     the TUN's MTU for both cores, 1280…1500 (ADR 0032); restarts the core
 #   ks allow <addr[/n]>     always let this address or network out without VPN
 #   ks unallow <addr[/n]>
 #   ks server-add <addr>    VPN server: reachable by any process (needed by Happ)
@@ -129,6 +130,7 @@ settings_lines_ok() {
       xrayserver=) ;;   # no pick (an older ks wrote it after a refused switch): the first host
       xrayserver=*) valid_name "${line#*=}" || return 1 ;;
       diag=[01]) ;;   # «Подробная диагностика», ADR 0021
+      mtu=*) mtu_ok "${line#*=}" || return 1 ;;   # the TUN's MTU, ADR 0032
       failover=[01]) ;;   # automatic server switch with Xray, ADR 0023
       *) return 1 ;;
     esac
@@ -1392,6 +1394,8 @@ core_generate_mihomo() (
     # which it already has through the TUN.
     printf '"listeners":[{"name":"ks-fetch","type":"http","listen":"127.0.0.1","port":%s,"proxy":"%s"}],' "$FETCH_PORT" "$KS_DNS"
     printf '"tun":{"enable":true,"stack":"gvisor","auto-route":true,"auto-detect-interface":true,'
+    # the person's MTU (ADR 0032); none: mihomo's own, as before
+    [ -z "$(tun_mtu)" ] || printf '"mtu":%s,' "$(tun_mtu)"
     printf '"dns-hijack":["any:53"],"route-exclude-address":[%s]},' "$excl"
     # answers the system's DNS on 127.0.0.1:53; our resolvers are reached through the tunnel,
     # the subscription's DNS policy on top (see above)
@@ -1445,7 +1449,7 @@ core_generate_xray() (
   done < "$w/hosts"
   # pass 2: the config and what goes with it
   W=$w PROTOS=$XRAY_PROTOCOLS PICK=$(setting xrayserver "") ADBLOCK=$(setting adblock 0) \
-    GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) APPS=$(setting splitapps "") MULTIHOP=$(setting multihop off) \
+    GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) APPS=$(setting splitapps "") MULTIHOP=$(setting multihop off) MTU=$(tun_mtu) \
     TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT API_PORT=$([ -f "$CORE_DIR/api-off" ] || echo "$CORE_API_PORT") \
     ACCESS=$([ "$(setting diag 0)" = 1 ] && [ -d "$DIAG" ] && echo "$DIAG/access.log") \
     /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' build()' || exit 1
@@ -1755,7 +1759,7 @@ KS_XRAY_PL='
     push @$outs, $entry if $entry;
     $cfg{inbounds} = [
       { tag => "ks-tun", protocol => "tun", sniffing => $sniff,
-        settings => { mtu => 1500, gateway => [ $ENV{TUN_GW} ], autoSystemRoutingTable => ["0.0.0.0/0"], autoOutboundsInterface => "auto" } },
+        settings => { mtu => ($ENV{MTU} // "") =~ /\A[0-9]{4}\z/ ? $ENV{MTU} + 0 : 1500, gateway => [ $ENV{TUN_GW} ], autoSystemRoutingTable => ["0.0.0.0/0"], autoOutboundsInterface => "auto" } },
       { tag => "ks-dns", protocol => "dokodemo-door", listen => "127.0.0.1", port => 53,
         settings => { address => "1.1.1.1", port => 53, network => "tcp,udp" } },
       { tag => "ks-fetch", protocol => "http", listen => "127.0.0.1", port => $ENV{FETCH_PORT} + 0 } ];
@@ -2402,6 +2406,28 @@ core_on() {
   core_running || { echo "Ядро не запустилось" >&2; return 1; }
   dns_locked apply >/dev/null
   log_event "core on"
+}
+
+# The TUN's MTU (ADR 0032, #18): 1280 (IPv6's minimum) to 1500, a plain number; none = «Авто», each
+# core's own (Xray 1500, mihomo its default). tun_mtu: the setting if it is one, else nothing.
+mtu_ok() { [[ "$1" =~ ^1[2-5][0-9][0-9]$ ]] && [ "$1" -ge 1280 ] && [ "$1" -le 1500 ]; }
+tun_mtu() { local v; v=$(setting mtu ""); if mtu_ok "$v"; then echo "$v"; fi; }
+core_restart() { if launchctl print "$CORE_JOB" >/dev/null 2>&1; then launchctl kickstart -k "$CORE_JOB"; fi; }
+# "ks set mtu auto|<n>": the config rebuilt with it and the core restarted, so the TUN is made
+# anew (about a second, pf keeps blocking); one the generator or the core does not take leaves the
+# old value. Admin, like the other core settings.
+set_mtu() {
+  local prev
+  [ "$1" = auto ] || mtu_ok "$1" || { echo "MTU — число от 1280 до 1500 или auto" >&2; return 1; }
+  prev=$(setting mtu auto)
+  mtu_store "$1" || return 1
+  if ! core_apply_settings; then mtu_store "$prev"; return 1; fi
+  core_restart
+}
+mtu_store() {  # mtu_store auto|<n>
+  if [ "$1" = auto ]; then
+    { grep -vE '^mtu=' "$SETTINGS" 2>/dev/null || :; } > "$SETTINGS.tmp" && chmod 644 "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+  else put_setting mtu "$1"; fi
 }
 
 # "ks set splitapps <list>": apps outside the VPN, "" clears. The rebuilt config lets the core out
@@ -3414,7 +3440,7 @@ passwordless_args_ok() {
 # (core_lock_exec 0); the watchdog's rotation skips its turn while it is held.
 core_lock_wanted() {
   case "${1:-}:${2:-}" in
-    core:import|core:refresh|core:select|set:splitapps|set:multihop|set:adblock|set:diag|_regen:|repair:) return 0 ;;
+    core:import|core:refresh|core:select|set:splitapps|set:multihop|set:adblock|set:diag|set:mtu|_regen:|repair:) return 0 ;;
   esac
   return 1
 }
@@ -3460,6 +3486,10 @@ case "${1:-status}" in
         [ $# -eq 3 ] || { echo "usage: ks set diag 0|1" >&2; exit 1; }
         set_diag "$val" || exit 1
         log_event "detailed diagnostics: $([ "$val" = 1 ] && echo on || echo off)"; exit 0 ;;
+      mtu)
+        [ $# -eq 3 ] || { echo "usage: ks set mtu auto|1280…1500" >&2; exit 1; }
+        set_mtu "$val" || exit 1
+        log_event "tunnel MTU: $val"; exit 0 ;;
       multihop)
         [ $# -eq 3 ] || { echo "usage: ks set multihop <entry proxy>|off" >&2; exit 1; }
         set_multihop "$val" || exit 1
