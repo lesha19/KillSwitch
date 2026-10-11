@@ -237,7 +237,13 @@ diag_crash_read "$EUID" "$tmp/crash/KillSwitch-2026-10-10-130000.ips" >/dev/null
 diag_crash_read 0 "$tmp/crash/xray-2026-10-10-120000.ips" >/dev/null 2>&1 && bad "crash read: file of another owner" ||
   ok "crash read: refuses a file of another owner"
 diag_crash_dirs() { echo "$EUID $tmp/crash"; echo "$EUID $tmp/no-such-dir"; }
-launchctl() { return 1; }; pfctl() { return 1; }
+launchctl() { return 1; }
+# addresses no list knows any more: an old server in the rules, routes and logs
+pfctl() { [ "$*" = "-a $ANCHOR -s rules" ] && echo 'pass out quick inet from any to 192.0.2.55 flags S/SA keep state'; return 0; }
+netstat() { printf 'default 192.168.1.1 UGScg en0\n192.0.2.55 link#4 UHWIi utun9\n198.18.0.1 198.18.0.1 UH utun7\n'; }
+printf '2026-10-11 13:00:00 server addresses changed: old.example 198.51.100.7 -> 198.51.100.8\n' >> "$EVENTS"
+printf 'connect 198.51.100.7:443 [2001:db8:1::5]:443 dns 1.1.1.1 lan 10.0.0.1 tun 198.18.0.1 lo ::1 ll fe80::1%%en0 ts 100.100.100.100 at 14:38:44 in Foo::bar\n' > "$CORE_DIR/core.log.1"
+echo '2026/10/11 14:38:45 from 127.0.0.1:59996 accepted tcp:93.184.216.34:443 [ks-tun >> LT_1]' >> "$DIAG/access.log"
 core_job() { CORE_RUN=0; CORE_PID=""; }
 mkdir -m 755 "$tmp/out"
 out=$(diag_report "$tmp/out" 2>"$tmp/err") || bad "report failed: $(cat "$tmp/err")"
@@ -246,7 +252,7 @@ out=$(diag_report "$tmp/out" 2>"$tmp/err") || bad "report failed: $(cat "$tmp/er
 mkdir "$tmp/x"; tar -xzf "$out" -C "$tmp/x" 2>/dev/null
 r=$(echo "$tmp"/x/KillSwitch-report-*)
 names=$(cd "$r" && find . -type f | sed 's|^\./||' | sort | paste -sd' ' -)
-for f in events.log settings core.log routing.json status.txt versions.txt network.txt diag/access.log diag/events-2026-10-11.jsonl \
+for f in events.log settings core.log core.log.1 routing.json status.txt versions.txt network.txt diag/access.log diag/events-2026-10-11.jsonl \
          diag/metrics-2026-10-11.jsonl crash/xray-2026-10-10-120000.ips crash/KillSwitch-2026-10-10-120000.ips; do
   [ -f "$r/$f" ] || bad "report lacks $f ($names)"
 done
@@ -263,6 +269,17 @@ grep -rqE 'sub\.example\.org|00000000-0000-4000|Z84J2Iel' "$r" && bad "report ho
   ok "report: links, uuids and keys masked"
 grep -rq 'root only secret' "$r" && bad "report holds a file planted by link: $names" || ok "report: no hard-linked or symlinked crash file"
 [ "$(cat "$r/crash/xray-2026-10-10-120000.ips")" = '{"procName":"xray"}' ] && ok "report: crash report copied whole" || bad "crash copy: $(cat "$r/crash/xray-2026-10-10-120000.ips")"
+grep -rqE '198\.51\.100|192\.0\.2\.55|2001:db8:1::5|93\.184\.216' "$r" && bad "report holds a public address: $(grep -rE '198\.51\.100|192\.0\.2\.55|2001:db8|93\.184' "$r" | head -4)" ||
+  ok "report: public addresses no list knows (old servers, rules, routes) masked"
+t=$(grep -o 'connect ip-[0-9]*' "$r/core.log.1" | cut -d' ' -f2)
+[ -n "$t" ] && grep -q "$t" "$r/events.log" && ok "report: one address, one stable ip-N token in every file" || bad "ip tokens: $(cat "$r/core.log.1") / $(cat "$r/events.log")"
+grep -q 'pass out quick inet from any to ip-[0-9]' "$r/status.txt" && grep -q '^ip-[0-9]* link#4' "$r/network.txt" &&
+  ok "report: pf rules and routes keep their shape" || bad "status/network: $(cat "$r/status.txt" "$r/network.txt")"
+for keep in '1.1.1.1' 'lan 10.0.0.1' 'tun 198.18.0.1' 'lo ::1' 'fe80::1%en0' 'ts 100.100.100.100' 'at 14:38:44' 'Foo::bar'; do
+  grep -qF "$keep" "$r/core.log.1" || bad "report masked what may stay ($keep): $(cat "$r/core.log.1")"
+done
+grep -q 'default 192.168.1.1' "$r/network.txt" && grep -q 'from 127.0.0.1:59996' "$r/diag/access.log" &&
+  ok "report: loopback, LAN, our TUN, Tailscale, link-local and our DNS stay readable" || bad "kept: $(cat "$r/network.txt")"
 grep -q 'www.youtube.com' "$r/diag/access.log" && ok "report: visited domains kept (only recorded with diag=1)" || bad "access log: $(cat "$r/diag/access.log")"
 grep -q '🇱🇹Литва' "$r/settings" && ok "report: server names (not addresses) kept" || bad "settings: $(cat "$r/settings")"
 grep -q "$KS_VERSION" "$r/versions.txt" && ok "report: versions" || bad "versions: $(cat "$r/versions.txt")"
