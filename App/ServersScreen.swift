@@ -82,8 +82,9 @@ struct ServersScreen: View {
                 }
             }
             .buttonStyle(.borderless)
-            .disabled(!control.coreRunning || control.proxies == nil || !control.testing.isEmpty)
-            .help(control.coreRunning ? String(localized: "Проверить пинг всех серверов (⇧⌘P)") : String(localized: "Пинг проверяется при подключённом VPN"))
+            .disabled(!control.coreRunning || control.proxies == nil || !control.testing.isEmpty || control.coreChoice == .xray)
+            .help(control.coreChoice == .xray ? String(localized: "С основным способом подключения пинг пока не проверяется")
+                  : control.coreRunning ? String(localized: "Проверить пинг всех серверов (⇧⌘P)") : String(localized: "Пинг проверяется при подключённом VPN"))
             .accessibilityLabel("Проверить пинг всех серверов")
             .frame(width: 60, alignment: .trailing)
         }
@@ -256,16 +257,15 @@ private struct ServerPickerRow: View {
 }
 
 /// «37 мс» with signal bars: three when fast, one when slow, none without an answer — the shape
-/// carries the meaning, the colour only helps (spec §9.3).
+/// carries the meaning, the colour only helps (spec §9.3). Without a test result (and with Xray,
+/// which has no latency test yet) nothing is drawn. VoiceOver reads the number, not the bars.
 struct PingView: View {
     let ping: ServerPicker.Ping
 
     var body: some View {
         if let bars = ping.bars {
             HStack(spacing: 3) {
-                Image(systemName: "cellularbars", variableValue: bars)
-                    .foregroundStyle(color)
-                    .imageScale(.small)
+                PingBars(lit: bars, color: color)
                 Text(ping.text).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
             }
             .accessibilityElement(children: .ignore)
@@ -280,5 +280,23 @@ struct PingView: View {
         case .slow, .noAnswer: .red
         case .unknown: .secondary
         }
+    }
+}
+
+/// Three rising bars, `lit` of them filled; the rest stay as faint outlines of the shape.
+private struct PingBars: View {
+    let lit: Int
+    let color: Color
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 1.5) {
+            ForEach(1...ServerPicker.Ping.maxBars, id: \.self) { bar in
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(bar <= lit ? AnyShapeStyle(color) : AnyShapeStyle(.quaternary))
+                    .frame(width: 3, height: 4 + 3 * CGFloat(bar))
+            }
+        }
+        .frame(height: 13, alignment: .bottom)
+        .accessibilityHidden(true)
     }
 }

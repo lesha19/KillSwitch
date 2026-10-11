@@ -161,12 +161,15 @@ enum ServerPicker {
             }
         }
 
-        /// 0…1 for the signal bars: three for fast, two for medium, one for slow.
-        var bars: Double? {
+        static let maxBars = 3
+
+        /// Signal bars lit: three for fast, two for medium, one for slow, none without an answer;
+        /// nil (nothing drawn) while there is no test result.
+        var bars: Int? {
             switch self {
-            case .fast: 1
-            case .medium: 0.67
-            case .slow: 0.34
+            case .fast: 3
+            case .medium: 2
+            case .slow: 1
             case .noAnswer: 0
             case .unknown: nil
             }

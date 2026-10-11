@@ -132,6 +132,21 @@ final class ServerPickerTests: XCTestCase {
         XCTAssertEqual(ServerPicker.Ping.noAnswer.text, "нет ответа")
     }
 
+    /// Signal bars: three fast, two medium, one slow (≥ 400), none without an answer; nothing at
+    /// all without a test (also with Xray, which has no latency test yet).
+    func testPingBars() {
+        XCTAssertEqual(ServerPicker.Ping(delay: 149, timedOut: false).bars, 3)
+        XCTAssertEqual(ServerPicker.Ping(delay: 150, timedOut: false).bars, 2)
+        XCTAssertEqual(ServerPicker.Ping(delay: 399, timedOut: false).bars, 2)
+        XCTAssertEqual(ServerPicker.Ping(delay: 400, timedOut: false).bars, 1)
+        XCTAssertEqual(ServerPicker.Ping(delay: nil, timedOut: true).bars, 0)
+        XCTAssertNil(ServerPicker.Ping(delay: nil, timedOut: false).bars)
+        XCTAssertEqual(ServerPicker.Ping.maxBars, 3)
+        // VoiceOver reads the number, not the bars
+        XCTAssertEqual(ServerPicker.Ping.fast(37).spoken, "37 миллисекунд")
+        XCTAssertEqual(ServerPicker.Ping.unknown.spoken, "")
+    }
+
     func testProxiesFromAProfileBeforeConnecting() throws {
         let profile: Profile = [
             "proxies": [["name": "A", "type": "vless"], ["name": "B", "type": "trojan"]],
