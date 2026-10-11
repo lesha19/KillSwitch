@@ -82,6 +82,32 @@ final class ProfileConverterTests: XCTestCase {
         XCTAssertThrowsError(try ProfileConverter.profile(fromSubscription: "rules:\n  - MATCH,DIRECT\n"))
     }
 
+    /// KS-21: aliases are expanded when the YAML is turned into values; a few lines of nested
+    /// aliases ("billion laughs") would take all memory. Refused before that, anchors still work.
+    func testAliasBombRefused() {
+        var yaml = "a0: &a0 [x, x, x, x, x, x, x, x, x, x]\n"
+        for level in 1...9 {
+            yaml += "a\(level): &a\(level) [" + Array(repeating: "*a\(level - 1)", count: 10).joined(separator: ", ") + "]\n"
+        }
+        yaml += "proxies:\n  - {name: a, type: ss, server: 192.0.2.1, port: 1, cipher: aes-128-gcm, password: p, x: *a9}\n"
+        let start = Date()
+        XCTAssertThrowsError(try ProfileConverter.read(subscription: yaml)) { error in
+            guard case ProfileError.badYAML = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+    }
+
+    func testAnchorsStillWork() throws {
+        let yaml = """
+        base: &base {type: ss, cipher: aes-128-gcm, password: p, port: 1}
+        proxies:
+          - {<<: *base, name: a, server: 192.0.2.1}
+          - {<<: *base, name: b, server: 192.0.2.2}
+        """
+        let proxies = try XCTUnwrap(ProfileConverter.read(subscription: yaml).profile["proxies"] as? [[String: Any]])
+        XCTAssertEqual(proxies.map { $0["type"] as? String }, ["ss", "ss"])
+    }
+
     func testRejectsHTML() {
         XCTAssertThrowsError(try ProfileConverter.profile(fromSubscription: "<!DOCTYPE html><html><body>hi</body></html>"))
     }

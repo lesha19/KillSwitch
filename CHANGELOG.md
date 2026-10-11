@@ -74,6 +74,38 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   refresh changed needs the subscription taken again with the password. The running config, egress
   and choice stay, Журнал защиты logs the refusal. The subscription's `dns` outbounds get our
   settings only (`nonIPQuery: reject`, KS-15), so they cannot send queries out by themselves.
+- NetBird (KS-09, #45): root no longer runs NetBird's binary. Its CLI (`status`, `up` after a
+  restart) runs as the user at the console, never while nobody is logged in, and only when the
+  binary passes NetBird's code signature check right before the run. A binary that someone other
+  than root could change (the file or a folder above it, links resolved; a folder only the admin
+  group may write, like /Applications, is accepted) is no longer taken for NetBird: it gets no
+  pass past the VPN and is never run.
+- Subscription header crash (KS-13, #49): a `subscription-userinfo` with huge, negative, `nan` or
+  `inf` numbers crashed the app, and one form was saved and crashed it on every launch. The numbers
+  are now kept in range (bytes up to 2^53, expiry up to year 9999), a saved status too.
+- Other accounts on the Mac (KS-11, #48): the helper ran the passwordless commands for every local
+  user. Connecting, disconnecting, switching or refreshing servers, the update step and the live
+  connections now work without the password only for the user who installed KillSwitch while at
+  the Mac's screen (or root); another account, or an ssh session while someone else or nobody is
+  at the Mac, is refused. Reading the state stays open.
+- Subscription update that changes what goes past the VPN (KS-12, #47): it was shown as «В подписке
+  новые серверы». Now the banner, the notification and Settings say «Подписка меняет правила
+  „напрямую“» and that part of the traffic will go past the VPN, so the admin knows what the
+  password approves.
+- DHCP rule (KS-14): UDP from port 68 to a server's port 67 passed for any program, a way past the
+  kill switch. It now passes only from root's sockets (the system's DHCP client); broadcasts are
+  unchanged.
+- Tailscale relay list (KS-19): a network (such as `0.0.0.0/0`) in `/Library/KillSwitch/tsrelays`
+  is now refused like any damaged settings file (everything blocked until «Сбросить настройки»);
+  `Helper/update-tsrelays.sh` stops on any failed step and replaces the list only with host
+  addresses, at least 50 of them.
+- Provider texts and links (KS-20): `profile-title`, shown as the sender of announcements and in
+  notifications, is cleaned like the announcement (one line, no control or bidi characters, at most
+  64 characters). Provider links are kept only as https, `mailto:` and a Telegram chat
+  (`tg://resolve?domain=…`); plain http and other `tg:` links (log-in, proxy) are dropped.
+- Subscription fetch (KS-21): the body is read only up to 20 MB (what the helper takes), a
+  redirect is followed only to https and the device headers (HWID, model) go only to the link's
+  own host, and YAML whose aliases expand to millions of nodes is refused before it is expanded.
 
 ## [0.18.1] - 2026-10-11
 

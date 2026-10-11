@@ -65,6 +65,26 @@ enum HelperCommand: Equatable, Sendable {
         }
     }
 
+    /// KS-11: the daemon serves every local account (ssh sessions too, through the CLI) and sudoers
+    /// grants the passwordless commands to one user only. Those that change something, and the
+    /// live connections (every user's traffic), run only for `mayChangeWithoutPassword`; reading
+    /// the state stays open. Commands behind the right are authorized by the admin's password.
+    var onlyForConsoleUser: Bool {
+        switch self {
+        case .protectionOn, .netRestore, .coreOn, .coreOff, .coreSelect, .coreRefresh, .upgrade, .coreConnections: true
+        default: false
+        }
+    }
+
+    /// Root, or the user at the Mac's console who is install.sh's sudoers user (any user at the
+    /// console when that entry is unknown). Another account, or an ssh session while someone else
+    /// or nobody is at the console (`console` 0 or nil), is refused.
+    static func mayChangeWithoutPassword(caller: uid_t, console: uid_t?, installer: uid_t?) -> Bool {
+        if caller == 0 { return true }
+        guard let console, console != 0, caller == console else { return false }
+        return installer == nil || caller == installer
+    }
+
     /// The daemon could not run this bundled script (no verified copy of the app, 0.14.2): nothing
     /// ran, so the app runs it behind the password prompt instead (ADR 0002), after its own check
     /// of the bundle. `ks` commands are not retried: there failedToRun means the helper is missing.

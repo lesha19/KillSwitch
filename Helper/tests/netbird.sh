@@ -10,7 +10,9 @@ here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 SETTINGS="$tmp/settings"; EVENTS="$tmp/events.log"; NB_PLIST="$tmp/netbird.plist"
 NB_SIGF="$tmp/netbird-sig"; NB_RETRYF="$tmp/netbird-retry"; NB_UPF="$tmp/netbird-up"; DIR=$tmp
-SIGNED=1; GROUP=1; BOOT_FAIL=0
+SIGNED=1; GROUP=1; BOOT_FAIL=0; CONSOLE=1
+NB_OWNER=$(id -u)  # the test's files are ours, not root's
+nb_user() { [ "$CONSOLE" = 1 ] && id -u; }  # the user at the console
 codesign() { echo "codesign $*" >> "$tmp/calls"; [ "$SIGNED" = 1 ]; }
 dscl() { [ "$GROUP" = 1 ]; }
 launchctl() { echo "launchctl $*" >> "$tmp/calls"; [ "$1" != print ] && { [ "$1" != bootstrap ] || [ "$BOOT_FAIL" = 0 ]; }; }
@@ -138,6 +140,38 @@ check "retry succeeded: up run" [ "$(ups)" = 1 ] && [ -e "$tmp/connected" ]
 grep -q 'netbird: reconnected' "$EVENTS"; check "retry succeeded: reconnect logged" [ $? = 0 ]
 : > "$tmp/calls"; netbird_sync $((now + 200))
 check "then quiet again" [ ! -s "$tmp/calls" ]
+
+# KS-09: root never runs NetBird's binary. Its CLI runs as the user at the console, and only a
+# binary signed by NetBird's team that only root can change; anything else is not NetBird.
+tagged() { /usr/libexec/PlistBuddy -c 'Delete :GroupName' "$NB_PLIST" >/dev/null 2>&1
+  /usr/libexec/PlistBuddy -c "Add :GroupName string $NB_GROUP" "$NB_PLIST"
+  rm -f "$NB_SIGF" "$SETTINGS"; : > "$tmp/calls"; : > "$EVENTS"; touch "$tmp/connected"; }
+ran() { grep -c '^netbird ' "$tmp/calls" 2>/dev/null || true; }
+
+tagged; SIGNED=0; netbird_sync; SIGNED=1
+check "replaced by a foreign binary: group taken off" [ -z "$(group)" ]
+check "replaced by a foreign binary: it is never run" [ "$(ran)" = 0 ]
+
+tagged; chmod 775 "$bin"; netbird_sync; chmod 755 "$bin"
+check "binary writable by its group: not NetBird, group taken off" [ -z "$(group)" ]
+check "binary writable by its group: never run" [ "$(ran)" = 0 ]
+grep -q 'netbird: .*can be changed' "$EVENTS"; check "binary writable by others: in events.log" [ $? = 0 ]
+
+open="$tmp/open"; mkdir "$open"; chmod 777 "$open"; cp -p "$bin" "$open/netbird"
+/usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $open/netbird" "$NB_PLIST"
+tagged; netbird_sync
+check "folder anyone can write: not NetBird, never run" [ -z "$(group)" ] && [ "$(ran)" = 0 ]
+ln -s "$bin" "$open/link"; /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $open/link" "$NB_PLIST"
+/usr/libexec/PlistBuddy -c 'Delete :GroupName' "$NB_PLIST" >/dev/null 2>&1; rm -f "$NB_SIGF"; netbird_sync
+check "a link to a binary only root can change: NetBird" [ "$(group)" = "$NB_GROUP" ]
+/usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $bin" "$NB_PLIST"
+
+tagged; CONSOLE=0; echo tailscale=0 > "$SETTINGS"; netbird_sync; CONSOLE=1
+check "nobody at the console: restarted" [ -z "$(group)" ] && [ "$(restarts)" = 1 ]
+check "nobody at the console: its CLI never run (not as root either)" [ "$(ran)" = 0 ]
+
+tagged; echo tailscale=0 > "$SETTINGS"; netbird_sync
+check "signed, only root can change it: its CLI asked (as the console user)" [ "$(ran)" -gt 0 ]
 
 # the watchdog never waits for it: in the background, under its own lock
 lockf() { echo "lockf $*" >> "$tmp/calls"; }
