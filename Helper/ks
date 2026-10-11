@@ -1541,7 +1541,9 @@ KS_XRAY_PL='
   # Xray reads JSON keys in any case (Go): «Selector», «Address» or «TAG» are the keys below to it,
   # but not to the checks here, which read the exact spelling. A key that folds to one of them
   # without being it, or two keys of one object that fold alike, make the host unusable (0.19.1
-  # review). Names of HTTP headers, DNS hosts and attributes are data, not keys of Xray.
+  # review). Go also folds «ſ» (U+017F) to s and «K» (U+212A) to k, raw or escaped, so a key with
+  # any character outside ASCII is refused the same way (second round). Names of HTTP headers, DNS
+  # hosts and rule attributes are data, not keys of Xray. Only the sections the config takes.
   my %KEYS = map { (lc $_ => $_) } qw(remarks outbounds inbounds routing dns policy observatory burstObservatory api stats
     reverse fakedns log transport meta tag protocol settings vnext servers address port users streamSettings sockopt
     dialerProxy interface mark customSockopt sendThrough proxySettings network security tlsSettings realitySettings
@@ -1554,14 +1556,15 @@ KS_XRAY_PL='
       my %seen;
       for my $k (keys %$x) {
         my $f = lc $k;
-        return 1 if $seen{$f}++ || (exists $KEYS{$f} && $KEYS{$f} ne $k);
+        return 1 if $k =~ /[^\x00-\x7f]/ || $seen{$f}++ || (exists $KEYS{$f} && $KEYS{$f} ne $k);
         next if $k =~ /\A(headers|hosts|attrs)\z/;
         return 1 if odd_case($x->{$k});
       }
     } elsif (ref $x eq "ARRAY") { odd_case($_) and return 1 for @$x }
     0 }
   sub unusable { my $c = shift; my %tags;
-    return "case" if odd_case($c);
+    return "case" if odd_case([ @$c{ grep { exists $c->{$_} } qw(outbounds routing dns policy observatory burstObservatory) },
+      map { ref $_ eq "HASH" && exists $_->{sniffing} ? $_->{sniffing} : () } @{ ref $c->{inbounds} eq "ARRAY" ? $c->{inbounds} : [] } ]);
     my @outs = grep { ref $_ eq "HASH" } @{ $c->{outbounds} };
     for my $o (@outs) { my $t = $o->{tag}; $tags{$t} = 1 if defined $t && !ref $t; return "tag" if defined $t && !ref $t && $t =~ /\Aks-/ }
     for my $o (@outs) {
