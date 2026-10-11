@@ -301,11 +301,14 @@ log_event() {
 # transaction voids the older one's ticket), as when the watchdog sees the files "ks core refresh"
 # just replaced and both reload: tried again before it counts as rules pf will not take, which
 # would block the VPN as well until something else changed.
+# Refused on every try, the lockdown goes in (tried the same way) and the watchdog tries the rules
+# again every PF_RETRY seconds (rules_retry_due), so a long busy spell does not block for good.
 PF_TRIES=3
-load_rules() {
+PF_RETRY=10
+load_rules() {  # load_rules [lockdown]
   local i
   for ((i = 1; i <= PF_TRIES; i++)); do
-    rules | pfctl -a "$ANCHOR" -f - 2>/dev/null && return 0
+    "${1:-rules}" | pfctl -a "$ANCHOR" -f - 2>/dev/null && return 0
     [ "$i" = "$PF_TRIES" ] || sleep 0.3
   done
   return 1
@@ -319,11 +322,12 @@ load() {  # load [tunnel_sig, if the caller has it]
   bad=$(root_files_bad | paste -sd, -)
   STANDBY=0; [ -z "$bad" ] && vpn_standby && STANDBY=1
   if ! load_rules; then
-    lockdown | pfctl -a "$ANCHOR" -f - 2>/dev/null || { echo "rules failed to load" >&2; return 1; }
+    load_rules lockdown || { echo "rules failed to load" >&2; return 1; }
     bad=rules
   fi
   if [ -n "$bad" ]; then
-    log_event "invalid $bad: everything blocked until repaired"
+    # a retry pf refused again is not news (every PF_RETRY seconds)
+    [ "${LOAD_RETRY:-0}" = 1 ] && [ "$bad" = rules ] || log_event "invalid $bad: everything blocked until repaired"
     echo "$bad" > "$INVALIDF.tmp" && chmod 644 "$INVALIDF.tmp" && mv "$INVALIDF.tmp" "$INVALIDF"
   else
     rm -f "$INVALIDF"
@@ -380,10 +384,24 @@ guard() {
   elif [ "$(root_files_sig)" != "$(cat "$FILESF" 2>/dev/null)" ]; then why="settings files changed"
   elif [ "$(rules_hash)" != "$(cat "$HASHF" 2>/dev/null)" ]; then why="rules were changed or flushed"
   elif standby_changed; then why="standby $([ "$STANDBY" = 1 ] && echo ended || echo began)"
+  elif rules_retry_due; then why=retry
   fi
   if [ -z "$why" ]; then PROT=on; return 0; fi
+  if [ "$why" = retry ]; then
+    LOAD_RETRY=1
+    if load "$TSIG"; then PROT=on; else PROT=off; log_event "reload failed"; fi
+    LOAD_RETRY=0
+    [ -f "$INVALIDF" ] || log_event "rules pf refused before loaded on a retry"
+    return 0
+  fi
   log_event "$why: reloading"
   if load "$TSIG"; then PROT=on; else PROT=off; log_event "reload failed"; fi
+}
+# pf refused the rules (load): the lockdown holds, the rules are tried again every PF_RETRY seconds
+rules_retry_due() {
+  local t
+  [ "$(cat "$INVALIDF" 2>/dev/null)" = rules ] && t=$(stat -f %m "$INVALIDF" 2>/dev/null) || return 1
+  [ $(($(date +%s) - t)) -ge "$PF_RETRY" ]
 }
 # Standby (ADR 0018) also depends on whether our core runs, which the tunnel list does not show:
 # our core's TUN can go a moment before launchd says the core stopped, and rules loaded then block

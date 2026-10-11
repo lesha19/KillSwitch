@@ -162,6 +162,27 @@ sleep() { :; }
 grep -q utun9 "$tmp/anchor" && [ ! -e "$INVALIDF" ] && ok "pf busy once: the rules loaded on the next try, nothing named invalid" ||
   bad "pf busy once: $(cat "$tmp/anchor"), invalid: $(cat "$INVALIDF" 2>&1)"
 grep -q 'invalid' "$EVENTS" && bad "  logged as invalid: $(cat "$EVENTS")" || ok "  not logged as invalid"
+# refused on every try (pf busy for longer): the lockdown, but the watchdog tries the rules again
+# about every 10 s instead of blocking the VPN until something else changes
+echo 3 > "$tmp/busy"; : > "$EVENTS"; load
+[ "$(cat "$tmp/anchor")" = "$LOCKDOWN" ] && [ "$(cat "$INVALIDF")" = rules ] && ok "pf busy on every try: everything blocked, named" ||
+  bad "busy 3: $(cat "$tmp/anchor"), invalid: $(cat "$INVALIDF" 2>&1)"
+: > "$EVENTS"; passes 20 23
+[ "$(cat "$tmp/anchor")" = "$LOCKDOWN" ] && [ ! -s "$EVENTS" ] && ok "  pf healthy again: not hammered within 10 s" || bad "  retried at once: $(cat "$EVENTS")"
+touch -t "$(date -r $(($(date +%s) - 11)) +%Y%m%d%H%M.%S)" "$INVALIDF"
+passes 24 25
+grep -q utun9 "$tmp/anchor" && [ ! -e "$INVALIDF" ] && ok "  10 s later: tried again, the rules back, nothing named invalid" ||
+  bad "  lockdown kept: $(cat "$tmp/anchor"), invalid: $(cat "$INVALIDF" 2>&1)"
+grep -q 'loaded on a retry' "$EVENTS" && ok "  logged" || bad "  log: $(cat "$EVENTS")"
+# still refused: the lockdown stays, tried again later, without flooding the log
+echo 3 > "$tmp/busy"; load; echo 3 > "$tmp/busy"; : > "$EVENTS"
+touch -t "$(date -r $(($(date +%s) - 11)) +%Y%m%d%H%M.%S)" "$INVALIDF"
+passes 26 27
+[ "$(cat "$tmp/anchor")" = "$LOCKDOWN" ] && [ "$(cat "$INVALIDF")" = rules ] && [ ! -s "$EVENTS" ] &&
+  ok "  refused again on the retry: still blocked, not logged every 10 s" || bad "  retry refused: $(cat "$tmp/anchor"), log: $(cat "$EVENTS")"
+echo 2 > "$tmp/busy"; lockdown > "$tmp/anchor"; load_rules lockdown && [ "$(cat "$tmp/anchor")" = "$LOCKDOWN" ] &&
+  ok "the lockdown itself is retried when pf is busy" || bad "lockdown not retried"
+echo 0 > "$tmp/busy"
 # a lockdown left by such a refusal (an older ks): «Сбросить настройки» loads the rules again
 lockdown > "$tmp/anchor"; echo rules > "$INVALIDF"; : > "$EVENTS"
 repair >/dev/null
