@@ -7,6 +7,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 ## [Unreleased]
 
 ### Added
+- Xray: «Двойной VPN» works with the main way of connecting (#33, ADR 0027). The entry is another
+  server of the subscription; the running server is reached through it. Nothing new goes past the
+  VPN; an entry that is gone refuses the config instead of quietly going one hop. Failover never
+  picks the entry as the exit; changing the way of connecting turns double VPN off.
+- Xray: own servers added by link work with the main way (#33, ADR 0027): each is a server of its
+  own in the list, «<имя> (свой)», everything and DNS through it. Those the main way cannot use
+  (hysteria2, TUIC, WireGuard, a Shadowsocks plugin, IPv6, a skipped certificate check…) say so in
+  Settings and keep working with the fallback way.
+- Xray: «Трафик» › «Проверить адрес» (#33, ADR 0027) walks Xray's rules from the routing report;
+  what cannot be told here (a program, the address a name gets) is listed as approximate.
 - Settings › Дополнительно «Перенос настроек» (#15, ADR 0024): «Сохранить в файл…» writes the app
   and protection settings to a JSON file, «Загрузить из файла…» reads one back, «Сбросить…» returns
   them to the defaults. Both show every change first; protection settings go through the usual
