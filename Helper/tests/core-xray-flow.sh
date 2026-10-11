@@ -111,23 +111,29 @@ core_select "$XRAY_GROUP" DE 2>"$tmp/err" && [ "$(setting xrayserver "")" = DE ]
   ok "select DE: stored, config rebuilt for it, core restarted" || bad "select: $(cat "$tmp/err") $(setting xrayserver "")"
 [ "$(j '$c->{proxies}{$ENV{G}}{now}' <(core_proxies))" = DE ] && ok "  proxies says DE now" || bad "  now: $(core_proxies)"
 core_select "$XRAY_GROUP" Nowhere 2>/dev/null && bad "unknown host selected" || ok "select of a host not in the subscription: refused"
-# KS-10: a host whose config sends more past the VPN than the approved one is never switched to
-# without the admin (the import approved what the running host sends DIRECT, ADR 0013)
+# KS-10: the import approves what every host sends DIRECT; a switch (passwordless) to a host whose
+# config sends something else past the VPN, e.g. one a refresh added, needs the admin (ADR 0013)
 /usr/bin/perl -MJSON::PP -e 'local $/; my $a = JSON::PP->new->decode(<STDIN>); my $b = JSON::PP->new->decode(JSON::PP->new->encode($a->[0]));
   $b->{remarks} = "🇱🇹Литва 2"; unshift @{ $b->{routing}{rules} }, { network => "tcp,udp", outboundTag => "direct" }; push @$a, $b;
   print JSON::PP->new->encode($a)' < "$tmp/two.json" > "$tmp/three.json"
 LOADED=0; put_setting xrayserver ""
-run "$tmp/three.json" import
-[ "$rc" = 0 ] || bad "three hosts import: $rc $(cat "$tmp/err")"
+run "$tmp/two.json" import
+run "$tmp/three.json" refresh
+[ "$rc" = 0 ] && ok "refresh adding a host on an approved server, the running one unchanged: taken" || bad "three hosts refresh: $rc $(cat "$tmp/err")"
 cp "$CORE_DIR/xray.json" "$tmp/before"; cp "$CORE_EGRESS" "$tmp/egress-before"; : > "$EVENTS"
 rc=0; core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>"$tmp/err" || rc=$?
-[ "$rc" = 3 ] && grep -q 'мимо VPN' "$tmp/err" && ok "KS-10: select of a host with more DIRECT: refused (exit 3, the admin)" || bad "KS-10 select: $rc $(cat "$tmp/err")"
+[ "$rc" = 3 ] && grep -q '(DIRECT)' "$tmp/err" && ok "KS-10: select of a host with unapproved DIRECT: refused (exit 3, «(DIRECT)»)" || bad "KS-10 select: $rc $(cat "$tmp/err")"
 [ "$(setting xrayserver "")" = "" ] && cmp -s "$CORE_DIR/xray.json" "$tmp/before" && cmp -s "$CORE_EGRESS" "$tmp/egress-before" &&
   ok "  the running config, egress and the pick kept" || bad "  kept: $(setting xrayserver "") $(cat "$CORE_EGRESS")"
 grep -q 'Литва 2 refused' "$EVENTS" && ok "  logged" || bad "  events: $(cat "$EVENTS")"
-core_select "$XRAY_GROUP" DE 2>"$tmp/err" && [ "$(setting xrayserver "")" = DE ] && ok "  a host with the same DIRECT still switches" || bad "  DE: $(cat "$tmp/err")"
+core_select "$XRAY_GROUP" DE 2>"$tmp/err" && [ "$(setting xrayserver "")" = DE ] && ok "  a host approved at import still switches" || bad "  DE: $(cat "$tmp/err")"
+run "$tmp/three.json" import
+core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>"$tmp/err" && [ "$(setting xrayserver "")" = "🇱🇹Литва 2" ] && [ "$(paste -sd, - < "$CORE_EGRESS")" = rules,dns ] &&
+  ok "  after an import with the password (approving every host) it switches" || bad "  approved: $(cat "$tmp/err")"
+[ "$(stat -f %Lp "$CORE_DIR/approved-switch")" = 600 ] && ok "  the approval root-only" || bad "  approved-switch mode"
+core_select "$XRAY_GROUP" "🇱🇹Литва" 2>/dev/null
 put_setting splitapps Telegram; core_apply_settings 2>/dev/null
-core_select "$XRAY_GROUP" "🇱🇹Литва" 2>"$tmp/err" && ok "  after the admin changed apps outside the VPN, the switch still works" || bad "  splitapps: $(cat "$tmp/err")"
+core_select "$XRAY_GROUP" DE 2>"$tmp/err" && ok "  after the admin changed apps outside the VPN, a switch to a host like the running one works" || bad "  splitapps: $(cat "$tmp/err")"
 put_setting splitapps ""; core_apply_settings 2>/dev/null
 core_select Other DE 2>/dev/null && bad "another group accepted" || ok "select of another group: refused"
 xray_observe() { printf 'ks-ping-0\t1\t80\nks-ping-1\t0\t0\n'; }   # the API is in core-xray-ping.sh

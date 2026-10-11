@@ -68,12 +68,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   including the DNS queries its resolver forwards when the VPN is down. A self-hosted NetBird on
   other TCP ports cannot connect with protection on.
 - Xray: switching to another server of the subscription (by hand, the CLI or automatic failover)
-  is refused when that server's config sends other traffic past the VPN than the running one
-  (#46, KS-10): the import's approval covered only the running host, so a passwordless switch could
-  open a DIRECT route without the admin. The running config, egress and choice stay; Журнал защиты
-  logs the refusal; taking the subscription again with the password approves it. The subscription's
-  `dns` outbound is now part of the DIRECT signature (KS-15), so **the first auto-refresh after the
-  upgrade may ask for the administrator once** when the subscription sends anything DIRECT.
+  is refused when that server's config sends other traffic past the VPN than the admin approved
+  (#46, KS-10): the import approved only the running host, so a passwordless switch could open a
+  DIRECT route without the admin. An import now approves what every host sends DIRECT; a host a
+  refresh changed needs the subscription taken again with the password. The running config, egress
+  and choice stay, Журнал защиты logs the refusal. The subscription's `dns` outbounds get our
+  settings only (`nonIPQuery: reject`, KS-15), so they cannot send queries out by themselves.
 
 ## [0.18.1] - 2026-10-11
 

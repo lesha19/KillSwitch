@@ -1403,9 +1403,23 @@ core_generate_xray() (
     TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT API_PORT=$([ -f "$CORE_DIR/api-off" ] || echo "$CORE_API_PORT") \
     ACCESS=$([ "$(setting diag 0)" = 1 ] && [ -d "$DIAG" ] && echo "$DIAG/access.log") \
     /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' build()' || exit 1
-  rm -f "$out" "$srv_out" "$out.pins" "$out.direct" "$out.egress" "$out.report"   # a leftover would keep its mode
+  # an import (KS_APPROVE_ALL): the DIRECT signature of every host, which the admin approves
+  # with it, so a passwordless switch can be measured against it (KS-10)
+  : > "$w/approved"
+  if [ -n "${KS_APPROVE_ALL:-}" ]; then
+    mkdir "$w/e" && ln "$w/in.json" "$w/pins" "$w/e/" || exit 1
+    /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); print "$_->{name}\n" for @{ $r->{servers} || [] }' \
+      < "$w/report.json" > "$w/names" || exit 1
+    while IFS= read -r n; do
+      W=$w/e PROTOS=$XRAY_PROTOCOLS PICK=$n ADBLOCK=$(setting adblock 0) GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) \
+        APPS=$(setting splitapps "") TUN_GW=10.0.0.1/30 FETCH_PORT=$FETCH_PORT API_PORT="" ACCESS="" \
+        /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' build()' || exit 1
+      shasum -a 256 < "$w/e/direct" | cut -d' ' -f1
+    done < "$w/names" | sort -u > "$w/approved"
+  fi
+  rm -f "$out" "$srv_out" "$out.pins" "$out.direct" "$out.egress" "$out.report" "$out.approved"   # a leftover would keep its mode
   cp "$w/config.json" "$out" && cp "$w/servers" "$srv_out" && cp "$w/pins" "$out.pins" && cp "$w/direct" "$out.direct" &&
-    cp "$w/egress" "$out.egress" && cp "$w/report.json" "$out.report"
+    cp "$w/egress" "$out.egress" && cp "$w/report.json" "$out.report" && cp "$w/approved" "$out.approved"
 )
 
 # shellcheck disable=SC2016 # perl, not shell
@@ -1522,11 +1536,14 @@ KS_XRAY_PL='
       $dnsout //= $t if $p eq "dns" && length $t;
       $block //= $t if $p eq "blackhole" && length $t;
       $proxy //= $t if $p =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && length $t;
+      # its own address/port would send queries out by itself, outside the DIRECT signature
+      # (KS-15): A/AAAA go to the DNS servers above (signed), everything else is refused
+      $o->{settings} = { nonIPQuery => "reject" } if $p eq "dns";
       $tame->($o, $t);
     }
     $tame->($_, undef) for @pings;   # their changes are those of the hosts
     die "В конфиге «" . name_of($c, $ci) . "» нет ни одного сервера\n" unless defined $proxy;
-    unless (defined $dnsout) { $dnsout = "ks-dns-out"; push @$outs, { tag => $dnsout, protocol => "dns" }; push @added, { kind => "dns-out", items => [$dnsout] } }
+    unless (defined $dnsout) { $dnsout = "ks-dns-out"; push @$outs, { tag => $dnsout, protocol => "dns", settings => { nonIPQuery => "reject" } }; push @added, { kind => "dns-out", items => [$dnsout] } }
     my $r = ref $cfg{routing} eq "HASH" ? $cfg{routing} : {};
     my %rt = map { exists $r->{$_} ? ($_ => $r->{$_}) : () } qw(domainStrategy domainMatcher balancers);
     for (sort grep { !/\A(domainStrategy|domainMatcher|balancers|rules)\z/ } keys %$r) { push @dropped, { section => "routing", item => $_, reason => "not-allowed" } }
@@ -1578,9 +1595,6 @@ KS_XRAY_PL='
       push @ours, $rule; push @added, { kind => "splitapps", items => \@apps };
       $egress{splitapps} = 1; push @direct, "rule\t" . $J->encode($rule);
     }
-    # ks-dns goes to the dns outbound, which can dial its own address (KS-15): once anything may
-    # leave the tunnel, a change to it needs the admin like a DIRECT rule
-    push @direct, map { "dns-outbound\t" . $J->encode($_) } grep { $_->{protocol} eq "dns" } @$outs if @direct;
     unshift @report, map { { rule => rule_text($_), from => "killswitch" } } @ours;
     $rt{rules} = [ @ours, @rules ];
     # DNS: the system resolver is ourselves (127.0.0.1:53), fakedns would outlive the core
@@ -1860,18 +1874,23 @@ core_import() {  # core_import <profile.json> [import|refresh]
     # refresh is passwordless (subscription auto-update): nothing new may be let out
     refresh_check "$srv" "$tmp.pins" "$tmp.direct" || { rc=$?; core_clean "$tmp" "$srv"; rm -f "$in"; return "$rc"; }
   else
-    core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; rm -f "$in"; return 1; }
-    # what the admin just approved: refresh and rotation measure against it
-    rm -f "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new"
-    ( umask 077; cut -f1 "$tmp.pins" > "$APPROVED_HOSTS.new"; cp "$tmp.direct" "$APPROVED_DIRECT.new" )
-    chmod 600 "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new"
+    KS_APPROVE_ALL=1 core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; rm -f "$in"; return 1; }
+    # what the admin just approved: refresh and rotation measure against it, an Xray server
+    # switch against every host's DIRECT (approved-switch, KS-10)
+    rm -f "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new"
+    ( umask 077; cut -f1 "$tmp.pins" > "$APPROVED_HOSTS.new"; cp "$tmp.direct" "$APPROVED_DIRECT.new"
+      cp "$tmp.approved" "$CORE_DIR/approved-switch.new" 2>/dev/null || : > "$CORE_DIR/approved-switch.new" )
+    chmod 600 "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new"
   fi
-  core_commit "$tmp" "$srv" || { rm -f "$in" "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new"; return 1; }
+  core_commit "$tmp" "$srv" || { rm -f "$in" "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new"; return 1; }
   mv "$in" "$prof"
-  if [ "${2:-}" != refresh ]; then mv "$APPROVED_HOSTS.new" "$APPROVED_HOSTS"; mv "$APPROVED_DIRECT.new" "$APPROVED_DIRECT"; fi
+  if [ "${2:-}" != refresh ]; then
+    mv "$APPROVED_HOSTS.new" "$APPROVED_HOSTS"; mv "$APPROVED_DIRECT.new" "$APPROVED_DIRECT"
+    mv "$CORE_DIR/approved-switch.new" "$CORE_DIR/approved-switch"
+  fi
 }
 
-core_clean() { rm -f "$1" "$1.pins" "$1.direct" "$1.egress" "$1.report" "$2" "$SERVERS.tmp"; }
+core_clean() { rm -f "$1" "$1.pins" "$1.direct" "$1.egress" "$1.report" "$1.approved" "$2" "$SERVERS.tmp"; }
 
 # core_publish <config.tmp>: the world-readable companions of an accepted config (egress for pf,
 # the report for the app) into place. Fails (1) when egress stayed the same, so a caller knows
@@ -1919,19 +1938,20 @@ core_commit() {
   rules "$ALLOW" "$SERVERS.tmp" | pfctl -n -a "$ANCHOR" -f - >/dev/null 2>&1 || {
     core_clean "$tmp" "$srv"; echo "pf не принял адреса серверов" >&2; return 1; }
   mv "$srv" "$SERVERS_CORE"; mv "$SERVERS.tmp" "$SERVERS"
-  mv "$tmp.pins" "$PINS"; mv "$tmp.direct" "$CORE_DIR/direct"
+  mv "$tmp.pins" "$PINS"; mv "$tmp.direct" "$CORE_DIR/direct"; rm -f "$tmp.approved"
   core_publish "$tmp"
   mv "$tmp" "$(core_conf)"
 }
 
-# direct_differs <direct> <egress>: a generated config would send past the VPN other than the
-# running one does (KS-10). What runs was approved by the admin (import, a setting) or checked
-# the same way; a helper from before 0.19 kept no copy, then the import's approved-direct.
-direct_differs() {
+# direct_unapproved <direct>: a generated config for another Xray host sends past the VPN what
+# the admin did not approve (KS-10): neither what the running config sends (approved at import or
+# with a setting; before 0.19 no copy was kept, then the import's approved-direct) nor what that
+# import found for one of the subscription's hosts (approved-switch). Egress follows the signature.
+direct_unapproved() {
   local run="$CORE_DIR/direct"
   [ -f "$run" ] || run=$APPROVED_DIRECT
-  if { [ -s "$1" ] || [ -s "$run" ]; } && ! cmp -s "$1" "$run"; then return 0; fi
-  { [ -s "$2" ] || [ -s "$CORE_EGRESS" ]; } && ! cmp -s "$2" "$CORE_EGRESS"
+  if cmp -s "$1" "$run" || { [ ! -s "$1" ] && [ ! -s "$run" ]; }; then return 1; fi
+  ! grep -qxF -- "$(shasum -a 256 < "$1" | cut -d' ' -f1)" "$CORE_DIR/approved-switch" 2>/dev/null
 }
 
 # core_rebuild <pins> [switch]: the config again from the kept profile with these addresses, no
@@ -1942,7 +1962,7 @@ core_rebuild() {
   prof=$(core_profile); tmp="$(core_conf).tmp"
   [ -f "$prof" ] && [ -f "$1" ] || { echo "Нет сохранённого профиля: возьми профиль заново" >&2; return 2; }
   KS_PINS=$1 core_generate "$prof" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; return 1; }
-  if [ "${2:-}" = switch ] && direct_differs "$tmp.direct" "$tmp.egress"; then
+  if [ "${2:-}" = switch ] && direct_unapproved "$tmp.direct"; then
     core_clean "$tmp" "$srv"
     echo "Этот сервер подписки меняет, что идёт мимо VPN (DIRECT): нужно подтверждение паролем администратора (возьми подписку заново)" >&2
     return 3

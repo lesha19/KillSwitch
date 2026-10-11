@@ -66,12 +66,14 @@ gen "$fx/xray-panel.json" || bad "panel config refused: $(cat "$tmp/err")"
 grep -q '^rule	' "$tmp/c.direct" && grep -q '"outboundTag":"direct"' "$tmp/c.direct" && ok "direct signature: the rules to freedom" ||
   bad "direct sig: $(head -3 "$tmp/c.direct")"
 grep -qE '00000000-0000-4000|Z84J2Iel|0123abcd|fake-path' "$tmp/c.direct" && bad "direct signature holds a secret" || ok "direct signature: no secret"
-# KS-15: ks-dns goes to the subscription's dns outbound, which may dial out by itself
-grep -q '^dns-outbound	{.*"tag":"dns-out"' "$tmp/c.direct" && ok "direct signature: the dns outbound (KS-15)" || bad "dns outbound sig: $(cat "$tmp/c.direct")"
-cp "$tmp/c.direct" "$tmp/direct-before"
-edit '$_->{settings} = { address => "9.9.9.9", port => 53, nonIPQuery => "skip" } for grep { $_->{protocol} eq "dns" } @{ $a->[0]{outbounds} }'
-gen "$tmp/p.json" && ! cmp -s "$tmp/c.direct" "$tmp/direct-before" && grep -q '^dns-outbound	.*9\.9\.9\.9' "$tmp/c.direct" &&
-  ok "direct signature: changed dns outbound settings change it (a refresh needs the admin)" || bad "dns outbound settings: $(grep dns-outbound "$tmp/c.direct")"
+# KS-15: ks-dns goes to the subscription's dns outbound; its settings could send queries out by
+# themselves, outside the DIRECT signature: ours only, A/AAAA to the DNS above, the rest refused
+[ "$(j 'JSON::PP->new->canonical->encode([ map { $_->{settings} } grep { $_->{protocol} eq "dns" } @{ $c->{outbounds} } ])')" = '[{"nonIPQuery":"reject"}]' ] &&
+  ok "dns outbound: settings are ours, non-A/AAAA refused (KS-15)" || bad "dns outbound: $(j '[ grep { $_->{protocol} eq "dns" } @{ $c->{outbounds} } ]')"
+cp "$tmp/c" "$tmp/c-before"; cp "$tmp/c.direct" "$tmp/direct-before"
+edit '$_->{settings} = { address => "8.8.8.8", port => 53, nonIPQuery => "skip" } for grep { $_->{protocol} eq "dns" } @{ $a->[0]{outbounds} }'
+gen "$tmp/p.json" && cmp -s "$tmp/c" "$tmp/c-before" && cmp -s "$tmp/c.direct" "$tmp/direct-before" &&
+  ok "  the subscription's own dns outbound settings change nothing" || bad "  dns outbound settings: $(j '[ grep { $_->{protocol} eq "dns" } @{ $c->{outbounds} } ]')"
 gen "$fx/xray-panel.json"
 grep -qE '00000000-0000-4000|Z84J2Iel|0123abcd|fake-path' "$tmp/c.report" && bad "report holds a secret" || ok "report: no uuid, key, short id or path"
 [ "$(q 'join "|", map { $_->{from} . ":" . ($_->{index} // "") } @{ $r = $c->{rules} }[0..3]')" = "killswitch:|killswitch:|subscription:0|subscription:1" ] &&
