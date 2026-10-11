@@ -38,6 +38,12 @@ with status (`--json`), connect, disconnect, pause and server choice, authorized
   the daemon checks the external form as for the app. The right is `shared false`, so the CLI does
   not reuse the app's five minutes, and each run is a new process: every `protection off` /
   `pause` asks again. Without a GUI session (ssh) macOS cannot ask and the command is refused.
+- **Whose session.** The commands that change state without the right (`connect`, `disconnect`,
+  `server select`, `protection on`) are accepted only from the person sitting at the Mac: the
+  console session's user, who installed the service (KS-11). Over ssh, from Screen Sharing into a
+  background session, or from another account under fast user switching they are refused by
+  design, as are the ones that need the right. The read-only commands (`status`, `server list`)
+  work for any local account.
 - **Who may connect.** The daemon's per-connection requirement becomes
   `anchor apple generic and (identifier "com.lesha19.KillSwitch" or identifier "com.lesha19.KillSwitch.cli")
   and certificate leaf[subject.OU] = "YR58655PJ7"`: the same anchor and team, one more identifier
