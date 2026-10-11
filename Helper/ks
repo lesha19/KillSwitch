@@ -1809,7 +1809,10 @@ KS_XRAY_PL='
     # what no rule takes goes to the first outbound
     if ($outs->[0]{protocol} eq "freedom") { $egress{rules} = 1; push @direct, "default\t" . ($outs->[0]{tag} // "") }
     for my $t (sort keys %bal) { push @direct, "balancer\t" . $J->encode({ tag => $t, members => $bal{$t} }) if grep { $freedom{$_} } @{ $bal{$t} } }
-    for my $o (grep { $_->{protocol} eq "freedom" } @$outs) { push @direct, "outbound\t" . $J->encode($o) if @direct }
+    # the subscription'"'"'s freedom outbounds, here in the signature once anything goes direct, also
+    # when only split apps or the routing profile below do through them (review S1)
+    my $outat = @direct;
+    my @outlines = map { "outbound\t" . $J->encode($_) } grep { $_->{protocol} eq "freedom" } @$outs;
     push @direct, "dns\t" . $J->encode($cfg{dns}) if $egress{dns};
     # ours, first: the system DNS to the template DNS outbound, the fetch to a server (never
     # direct, ADR 0016), then the person'"'"'s choices
@@ -1855,6 +1858,7 @@ KS_XRAY_PL='
       push @direct, "profile\t" . $J->encode(\@prof) if grep { $_->{outboundTag} eq $direct } @prof;
       push @added, { kind => "routing-profile", items => [$pname] };
     }
+    splice @direct, $outat, 0, @outlines if @direct;
     unshift @report, (map { { rule => rule_text($_), from => "killswitch", xray => $_ } } @ours),
       (map { { rule => rule_text($_), from => "profile", profile => $pname, xray => $_ } } @prof);
     $rt{rules} = [ @ours, @prof, @rules ];

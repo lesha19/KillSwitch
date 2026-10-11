@@ -147,4 +147,25 @@ b1() {
 b1 mihomo gm "$T/base.json"
 b1 xray gx "$fx/xray-panel.json" 1
 
+# --- Xray: the subscription's freedom outbound is in the signature whenever something goes
+# direct through it, also when only the profile or split apps do (review S1): a "redirect" added to
+# it sends the person's direct traffic elsewhere
+printf 'core=xray\n' > "$SETTINGS"
+s1panel() { /usr/bin/perl -MJSON::PP -e 'local $/; my $p = JSON::PP->new->decode(<STDIN>); my $c = $p->[0];
+  $c->{routing}{rules} = [ grep { ($_->{outboundTag} // "") ne "direct" } @{ $c->{routing}{rules} } ]; delete $c->{dns};
+  for (@{ $c->{outbounds} }) { $_->{settings} = { redirect => $ARGV[0] } if $_->{protocol} eq "freedom" && length $ARGV[0] }
+  $#$p = 0; print JSON::PP->new->encode($p)' "$1" < "$fx/xray-panel.json"; }
+s1panel "" > "$T/s1-plain.json"; s1panel "198.51.100.7:443" > "$T/s1-redir.json"
+for v in plain redir; do
+  with_routing "$T/s1-$v.json" "$T/s1-$v-p.json" '$h = { name => "P", direct => { sites => ["domain:example.com"] } }' 1
+  gx "$T/s1-$v-p.json" s1-$v-p || bad "s1 $v: $(cat "$T/err")"
+done
+! cmp -s "$T/s1-plain-p.direct" "$T/s1-redir-p.direct" && grep -q '^outbound	.*redirect' "$T/s1-redir-p.direct" &&
+  ok "Xray: the freedom outbound the profile's direct rules use is in the signature" || bad "s1 profile: $(cat "$T/s1-redir-p.direct")"
+put_setting splitapps /Applications/Foo.app
+for v in plain redir; do gx "$T/s1-$v.json" s1-$v-a || bad "s1 apps $v: $(cat "$T/err")"; done
+put_setting splitapps ""
+! cmp -s "$T/s1-plain-a.direct" "$T/s1-redir-a.direct" && grep -q '^outbound	.*redirect' "$T/s1-redir-a.direct" &&
+  ok "  and the one split apps use" || bad "s1 apps: $(cat "$T/s1-redir-a.direct")"
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
