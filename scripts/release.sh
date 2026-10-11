@@ -268,6 +268,7 @@ VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/C
 for f in mihomo xray geosite.dat geoip.metadb geoip.dat; do
   cmp -s "Helper/$f" "$APP/Contents/Resources/Helper/$f" || { echo "В приложении нет Helper/$f" >&2; exit 1; }
 done
+[ ! -e "$APP/Contents/Resources/Helper/tests" ] || { echo "В приложение попали Helper/tests (project.yml)" >&2; exit 1; }
 
 # Entitlements as in the repo, with the Developer ID NetworkExtension value and the identifiers
 # from the profile (AMFI matches them against the embedded profile at launch).

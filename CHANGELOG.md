@@ -9,6 +9,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 ### Added
 - «Бета-версии» in «О программе»: updates from Sparkle's beta channel (#16);
   `KS_CHANNEL=beta scripts/release.sh --publish` publishes one.
+- Each release carries the source of the bundled mihomo (GPL-3.0) and Xray-core tags, sha256-pinned,
+  and the app no longer ships `Helper/tests` and other dev-only scripts (#36).
 
 ### Fixed
 - «Установить и перезапустить» did nothing while a sheet was open (e.g. «Начало работы»); a build
