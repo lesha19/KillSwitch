@@ -49,8 +49,15 @@ rule in the core; everything the core cannot attribute stays in the VPN.
   core that was running must come up again (`core_up`, ~5 s); if it does not, or the restart itself
   fails, the previous value, config and its files go back and the core is restarted with them
   (logged, the app shows the message). A config that cannot be built keeps the old value and
-  restarts nothing. The same value again changes nothing. With the VPN off (no job) or no
-  subscription yet the value is only stored and used at the next start or import. The daemon takes
+  restarts nothing. The copy of the settings the build ran on becomes the settings, so whatever
+  the build changed in it reaches the app too (a double VPN entry it cannot use goes off and
+  «Двойной VPN выключен» is told, as on every other rebuild); a rollback puts the settings back with
+  the config. A config byte for byte the old one (Xray's «Авто» and 1500) is stored without a
+  restart. The same value again changes nothing, except after a change cut short (killed between
+  the commit and the restart: its `.prev` copies are still there): that one is undone, logged, and
+  the change made again. With the VPN off (no job) or no subscription yet the value is only stored
+  and used at the next start or import. The journal says «VPN перезапущен» only when a running
+  core was restarted and came up (a job loaded but not running is started, not «restarted»). The daemon takes
   it as its own call (`setMTU`, 0 = auto) with the same check (HelperCommand.setMTU).
 - The app: Settings › Дополнительно «Размер пакетов VPN» — «MTU»: «Авто», 1500, 1460, 1420, 1400,
   1380, 1340, 1280 (a value set elsewhere stays selectable), with a footnote. The settings file
