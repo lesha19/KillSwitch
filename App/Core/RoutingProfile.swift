@@ -170,7 +170,7 @@ enum RoutingChangeSource: Equatable, Sendable {
     case profileOff
 }
 
-/// The profiles in UserDefaults and the one in use (nil: «Как в подписке»).
+/// The profiles in UserDefaults (their links in the keychain) and the one in use (nil: «Как в подписке»).
 enum RoutingProfiles {
     static let listKey = "routingProfiles"
     static let activeKey = "routingProfileActive"
@@ -195,17 +195,42 @@ enum RoutingProfiles {
         return defaults.bool(forKey: appliedDirectKey) ? .profileOff : .subscription
     }
 
-    static func load(_ defaults: UserDefaults = .standard) -> [RoutingProfile] {
+    /// The profiles' links ({id: url}): one may carry a token, so they live in the keychain like
+    /// the subscription link (review N1); the list in UserDefaults has none.
+    struct LinkStore: Sendable {
+        var read: @Sendable () -> Data?
+        /// nil: none left. False: not kept.
+        var write: @Sendable (Data?) -> Bool
+        // the app's: LinkStore.keychain (App/Keychain.swift)
+    }
+
+    /// The list without links: what the core is handed needs none.
+    private static func stored(_ defaults: UserDefaults) -> [RoutingProfile] {
         defaults.data(forKey: listKey).flatMap { try? JSONDecoder().decode([RoutingProfile].self, from: $0) } ?? []
     }
 
-    static func save(_ list: [RoutingProfile], _ defaults: UserDefaults = .standard) {
-        defaults.set(try? JSONEncoder().encode(list), forKey: listKey)
+    /// With their links. A link still in UserDefaults (stored before 0.20.0's review) moves to the keychain.
+    static func load(_ defaults: UserDefaults = .standard, links: LinkStore) -> [RoutingProfile] {
+        var list = stored(defaults)
+        let kept = links.read().flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+        let plain = list.contains { $0.url != nil }
+        for i in list.indices where list[i].url == nil { list[i].url = kept[list[i].id.uuidString] }
+        if plain { save(list, defaults, links: links) }
+        return list
+    }
+
+    /// The links to the keychain, the rest to UserDefaults; when the keychain does not take them
+    /// they stay with the list rather than being lost.
+    static func save(_ list: [RoutingProfile], _ defaults: UserDefaults = .standard, links: LinkStore) {
+        let urls = Dictionary(list.compactMap { p in p.url.map { (p.id.uuidString, $0) } }, uniquingKeysWith: { a, _ in a })
+        let written = links.write(urls.isEmpty ? nil : try? JSONEncoder().encode(urls))
+        let bare = written ? list.map { p in var p = p; p.url = nil; return p } : list
+        defaults.set(try? JSONEncoder().encode(bare), forKey: listKey)
     }
 
     static func active(_ defaults: UserDefaults = .standard) -> RoutingProfile? {
         guard let id = defaults.string(forKey: activeKey) else { return nil }
-        return load(defaults).first { $0.id.uuidString == id }
+        return stored(defaults).first { $0.id.uuidString == id }
     }
 
     static let hintKey = "x-ks-routing"

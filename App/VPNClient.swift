@@ -36,7 +36,7 @@ final class VPNClient {
     /// Where that change comes from: the subscription, or the routing profile (review S5).
     private(set) var routingSource: RoutingChangeSource = .subscription
     /// Settings › «Маршрутизация» (ADR 0034): the profiles added, the one in use (nil: «Как в подписке»).
-    private(set) var routingProfiles = RoutingProfiles.load()
+    private(set) var routingProfiles = RoutingProfiles.load(links: .keychain)
     private(set) var activeRoutingProfile = UserDefaults.standard.string(forKey: RoutingProfiles.activeKey).flatMap(UUID.init(uuidString:))
     /// Settings › «Дополнительно»: fingerprint and multiplexing per server (Transport, ADR 0007).
     private(set) var transportOverrides = Transport.decode(UserDefaults.standard.data(forKey: Transport.storeKey))
@@ -280,7 +280,7 @@ final class VPNClient {
             return String(localized: "Не удалось скачать профиль: \(Self.describe(error))")
         }
         routingProfiles.append(profile)
-        RoutingProfiles.save(routingProfiles)
+        RoutingProfiles.save(routingProfiles, links: .keychain)
         return nil
     }
 
@@ -297,7 +297,7 @@ final class VPNClient {
     func removeRoutingProfile(_ id: UUID) async {
         guard !updating else { return }   // a fetch puts its result back by id; the button waits too
         routingProfiles.removeAll { $0.id == id }
-        RoutingProfiles.save(routingProfiles)
+        RoutingProfiles.save(routingProfiles, links: .keychain)
         if activeRoutingProfile == id { await useRoutingProfile(nil) }
     }
 
@@ -328,7 +328,7 @@ final class VPNClient {
                 }
             }
         }
-        RoutingProfiles.save(routingProfiles)
+        RoutingProfiles.save(routingProfiles, links: .keychain)
         updating = false
         if changedActive { await applyRouting() }
     }

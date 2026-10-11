@@ -111,6 +111,33 @@ final class RoutingProfileTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode([RoutingProfile].self, from: data), [p])
     }
 
+    /// Review N1: a profile's link may carry a token, so it is kept in the keychain as the
+    /// subscription link is, never in UserDefaults; links stored there before move on first load.
+    func testLinksKeptOutOfUserDefaults() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "RoutingProfileTests-\(UUID().uuidString)"))
+        final class Box: @unchecked Sendable { var data: Data? }
+        let box = Box()
+        let links = RoutingProfiles.LinkStore(read: { box.data }, write: { box.data = $0; return true })
+        var p = try RoutingProfile.parse(incy)
+        p.url = "https://example.com/r.json?token=SECRET"
+        let hand = try RoutingProfile.parse("{\"Name\":\"B\",\"BlockSites\":[\"domain:ads.example\"]}")
+        RoutingProfiles.save([p, hand], defaults, links: links)
+        XCTAssertFalse(String(decoding: try XCTUnwrap(defaults.data(forKey: RoutingProfiles.listKey)), as: UTF8.self).contains("SECRET"))
+        XCTAssertTrue(String(decoding: try XCTUnwrap(box.data), as: UTF8.self).contains("SECRET"))
+        XCTAssertEqual(RoutingProfiles.load(defaults, links: links), [p, hand])
+        XCTAssertEqual(RoutingProfiles.active(defaults)?.id, nil)
+        defaults.set(p.id.uuidString, forKey: RoutingProfiles.activeKey)
+        XCTAssertEqual(RoutingProfiles.active(defaults)?.name, "RU напрямую")
+        RoutingProfiles.save([hand], defaults, links: links)
+        XCTAssertNil(box.data, "no links left: nothing in the keychain")
+
+        // stored before: the link in UserDefaults moves to the keychain on load
+        defaults.set(try JSONEncoder().encode([p]), forKey: RoutingProfiles.listKey)
+        XCTAssertEqual(RoutingProfiles.load(defaults, links: links), [p])
+        XCTAssertFalse(String(decoding: try XCTUnwrap(defaults.data(forKey: RoutingProfiles.listKey)), as: UTF8.self).contains("SECRET"))
+        XCTAssertTrue(String(decoding: try XCTUnwrap(box.data), as: UTF8.self).contains("SECRET"))
+    }
+
     func testUpdateKeepsIdentity() throws {
         var old = try RoutingProfile.parse(incy)
         old.url = "https://example.com/r.json"
