@@ -246,8 +246,10 @@ private struct QuickSwitches: View {
             row(Text(multihopTitle(exit: exit)), String(localized: "Двойной VPN"),
                 isOn: Binding(get: { control.multihopEntry != nil },
                               set: { control.setMultihop(entry: $0 ? candidates.first : nil) }))
-                .disabled(control.multihopEntry == nil && candidates.isEmpty)
-                .help("Через два сервера: вход видит твой адрес, выход — сайты. Спросит пароль.")
+                .disabled(control.multihopEntry == nil && (candidates.isEmpty || !control.coreChoice.canTurnOnMultihop))
+                .help(control.coreChoice.canTurnOnMultihop
+                      ? String(localized: "Через два сервера: вход видит твой адрес, выход — сайты. Спросит пароль.")
+                      : String(localized: "С основным способом подключения двойного VPN нет — он есть у запасного"))
         }
         .disabled(control.busy)
     }

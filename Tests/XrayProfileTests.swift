@@ -55,6 +55,11 @@ final class XrayProfileTests: XCTestCase {
         XCTAssertTrue(CoreChoice.mihomo.hasConnections)
     }
 
+    func testDoubleVPNOnlyWithMihomoButAlwaysOff() {
+        XCTAssertTrue(CoreChoice.mihomo.canTurnOnMultihop)
+        XCTAssertFalse(CoreChoice.xray.canTurnOnMultihop, "ks set multihop refuses an entry with Xray")
+    }
+
     func testServersBeforeTheCoreRuns() {
         let proxies = CoreProxies(xrayServers: ["🇱🇹Литва", "DE"])
         XCTAssertEqual(proxies.mainGroup?.name, CoreProxies.xrayGroup)
