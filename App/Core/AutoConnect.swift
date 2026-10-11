@@ -9,6 +9,8 @@ enum AutoConnect {
         /// «Не подключаться в доверенных сетях Wi-Fi».
         var skipTrusted: Bool
         var trusted: [String]
+        /// «Сети Wi‑Fi» (WiFiRules).
+        var rules: [WiFiRules.Rule] = []
     }
 
     struct Network: Equatable {
@@ -45,12 +47,16 @@ enum AutoConnect {
         case skip(Reason)
     }
 
+    /// A network's own «Подключаться автоматически» connects there even when the general switch is
+    /// off or the network is in the trusted list: on a conflict the more protective answer wins.
     static func decide(_ settings: Settings, network: Network, core: Core) -> Decision {
-        guard settings.enabled else { return .skip(.disabled) }
+        let ruleConnects = network.wifi && WiFiRules.rule(for: network.ssid, in: settings.rules)?.autoConnect == true
+        guard settings.enabled || ruleConnects else { return .skip(.disabled) }
         guard network.online else { return .skip(.offline) }
         guard core.ready else { return .skip(.notReady) }
         guard !core.connected else { return .skip(.connected) }
         guard !core.otherVPN else { return .skip(.otherVPN) }
+        if ruleConnects { return .connect }
         if settings.skipTrusted, network.wifi, let ssid = network.ssid, settings.trusted.contains(ssid) {
             return .skip(.trusted(ssid))
         }
