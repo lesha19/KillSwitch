@@ -81,6 +81,39 @@ final class ProtectionLogTests: XCTestCase {
         XCTAssertEqual(text("2026-10-11 14:03:22 automatic server switch: off"), "Автопереключение сервера выключено")
     }
 
+    /// Transport escalation (ADR 0030): the same server another way first, then another server.
+    func testXrayEscalation() {
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate (no answer): 🇱🇹Литва fingerprint chrome -> safari"),
+                       "«🇱🇹 Литва» не отвечал — подключаемся к нему с другим отпечатком TLS: safari вместо chrome")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate (no answer): 🇱🇹Литва transport tcp -> xhttp"),
+                       "«🇱🇹 Литва» не отвечал — подключаемся к нему по другому транспорту из подписки: xhttp вместо tcp")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate failed: 🇱🇹Литва fingerprint chrome -> safari, kept"),
+                       "Не получилось сменить отпечаток TLS для «🇱🇹 Литва» — оставлен прежний")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate failed: 🇱🇹Литва transport tcp -> xhttp, kept"),
+                       "Не получилось сменить транспорт для «🇱🇹 Литва» — оставлен прежний")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate reset (network changed)"),
+                       "Сеть сменилась — серверы снова подключаются так, как задано в подписке")
+        XCTAssertEqual(text("2026-10-11 14:03:22 failover (no answer, same server): 🇱🇹Литва -> 🇱🇹Литва XHTTP"),
+                       "«🇱🇹 Литва» не отвечал — переключились на «🇱🇹 Литва XHTTP»: тот же сервер, другой транспорт")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate probing: 🇱🇹Литва"),
+                       "«🇱🇹 Литва» не ответил дважды — проверяем другие способы подключения к нему")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate probing off: 🇱🇹Литва"),
+                       "«🇱🇹 Литва» снова отвечает — другие способы подключения больше не проверяем")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate settled: 🇱🇹Литва"),
+                       "«🇱🇹 Литва» снова работает так, как задано в подписке — вернулись к этому")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate probing failed: 🇱🇹Литва"),
+                       "Не получилось проверить другие способы подключения к «🇱🇹 Литва»")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate settle failed: 🇱🇹Литва"),
+                       "Не получилось вернуть «🇱🇹 Литва» к настройкам подписки")
+        XCTAssertEqual(text("2026-10-11 14:03:22 connection escalation: on"), "Подбор отпечатка и транспорта включён")
+        XCTAssertEqual(text("2026-10-11 14:03:22 connection escalation: off"), "Подбор отпечатка и транспорта выключен")
+        // a name with the words in it: the kind is the last one
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate (no answer): A transport B fingerprint chrome -> firefox"),
+                       "«A transport B» не отвечал — подключаемся к нему с другим отпечатком TLS: firefox вместо chrome")
+        XCTAssertNotNil(text("2026-10-11 14:03:22 escalate (no answer):  transport"))
+        XCTAssertNotNil(text("2026-10-11 14:03:22 escalate failed: x"))
+    }
+
     /// A server name that begins with the separator once made the line trap, and it stays in
     /// events.log, so Журнал защиты crashed every time it opened.
     func testServerNamesThatBeginWithTheSeparator() {

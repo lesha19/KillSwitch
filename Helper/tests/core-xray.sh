@@ -7,6 +7,8 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=../ks
 . "$here/../ks"
+# the probes of the running host's alternatives (ADR 0030) are tested in core-xray-escalate.sh
+eval "ks_$(declare -f setting)"; setting() { if [ "$1" = escalate ]; then echo 0; else ks_setting "$@"; fi; }
 XRAY=${XRAY:-/Library/KillSwitch/core/xray}; [ -x "$XRAY" ] || [ ! -x "$here/../xray" ] || XRAY="$here/../xray"
 fx="$here/fixtures"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT

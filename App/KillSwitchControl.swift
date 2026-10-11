@@ -79,6 +79,9 @@ final class KillSwitchControl {
     private(set) var diagVerbose = false
     /// Xray: the helper moves to another host of the country when this one stops answering (ADR 0023).
     private(set) var autoSwitch = true
+    /// Xray: before another server, the same one with another TLS fingerprint or another transport
+    /// the subscription offers (escalate, ADR 0030).
+    private(set) var escalate = true
     /// «Собрать отчёт» is running, and why the last one failed (nil after a good one).
     private(set) var reportBusy = false
     private(set) var reportError: String?
@@ -301,7 +304,8 @@ final class KillSwitchControl {
 
     /// «Перенос настроек» (SettingsBackup, ADR 0024): the root settings as Settings shows them.
     var rootSettings: SettingsBackup.Root {
-        .init(core: coreChoice, switches: switches.merging(["direct": allowDirect, "adblock": adBlock, "diag": diagVerbose, "failover": autoSwitch]) { $1 },
+        .init(core: coreChoice, switches: switches.merging(["direct": allowDirect, "adblock": adBlock, "diag": diagVerbose, "failover": autoSwitch,
+                                                      "escalate": escalate]) { $1 },
               exceptions: exceptions, manualServers: manualServers, splitApps: splitApps)
     }
     /// A loaded or reset set of root settings: the commands of their own screens, one password;
@@ -1143,6 +1147,7 @@ final class KillSwitchControl {
         adBlock = (values["adblock"] ?? "0") == "1"
         diagVerbose = (values["diag"] ?? "0") == "1"
         autoSwitch = (values["failover"] ?? "1") == "1"
+        escalate = (values["escalate"] ?? "1") == "1"
         splitApps = SplitApps.parse(setting: values["splitapps"])
         let entry = Multihop.entry(setting: values["multihop"])
         let asked = multihopAskedAt.map { Date().timeIntervalSince($0) < 120 } ?? false

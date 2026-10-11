@@ -34,7 +34,8 @@ final class SettingsBackupTests: XCTestCase {
 
     private let root = SettingsBackup.Root(core: .xray,
                                            switches: ["lan": true, "tailscale": true, "dns": false, "wifiguard": true,
-                                                      "direct": false, "adblock": false, "diag": false, "failover": true],
+                                                      "direct": false, "adblock": false, "diag": false, "failover": true,
+                                                      "escalate": true],
                                            exceptions: ["10.8.0.0/24"], manualServers: [], splitApps: ["Telegram"])
 
     // MARK: export
@@ -265,6 +266,21 @@ final class SettingsBackupTests: XCTestCase {
         XCTAssertEqual(SettingsBackup.reset.root?.switches?["failover"], true, "on by default, as in ks (ADR 0023)")
         XCTAssertEqual(SettingsBackup.rootCommands(helper: helper, current: new, new: try XCTUnwrap(SettingsBackup.reset.root)).first,
                        [helper, "set", "failover", "1"])
+    }
+
+    /// «Пробовать другой отпечаток и транспорт» (ADR 0030): saved, loaded, on after a reset.
+    func testEscalationTravels() throws {
+        var current = root
+        current.switches?["escalate"] = true
+        var new = root
+        new.switches?["escalate"] = false
+        let read = try SettingsBackup.read(file(root: ["switches": ["escalate": false]]))
+        XCTAssertEqual(read.root?.switches, ["escalate": false])
+        let changes = SettingsBackup.changes(from: .init(app: [:], root: current), to: .init(app: [:], root: new))
+        XCTAssertEqual(changes.map(\.key), ["escalate"])
+        XCTAssertEqual(changes.first?.title, "Пробовать другой отпечаток и транспорт, если сервер не отвечает")
+        XCTAssertEqual(SettingsBackup.rootCommands(helper: helper, current: current, new: new), [[helper, "set", "escalate", "0"]])
+        XCTAssertEqual(SettingsBackup.reset.root?.switches?["escalate"], true, "on by default, as in ks (ADR 0030)")
     }
 
     func testResetIsTheDefaults() throws {

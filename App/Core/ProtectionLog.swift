@@ -35,6 +35,7 @@ enum ProtectionLog {
         }
         if let failover = failover(message) { return failover }
         if let doubleVPN = doubleVPN(message) { return doubleVPN }
+        if let escalation = escalation(message) { return escalation }
         if message.hasPrefix("double VPN: ") {
             let value = message.dropFirst("double VPN: ".count)
             return value == "off" ? String(localized: "Двойной VPN выключен") : String(localized: "Двойной VPN: вход через «\(ServerName.display(String(value)))»")
@@ -57,6 +58,9 @@ enum ProtectionLog {
             ("detailed diagnostics: off", String(localized: "Подробная диагностика выключена, записанные соединения удалены")),
             ("automatic server switch: on", String(localized: "Автопереключение сервера включено")),
             ("automatic server switch: off", String(localized: "Автопереключение сервера выключено")),
+            ("connection escalation: on", String(localized: "Подбор отпечатка и транспорта включён")),
+            ("connection escalation: off", String(localized: "Подбор отпечатка и транспорта выключен")),
+            ("escalate reset (network changed)", String(localized: "Сеть сменилась — серверы снова подключаются так, как задано в подписке")),
             ("core on", String(localized: "VPN подключён")),
             ("core off", String(localized: "VPN отключён")),
             ("core config imported", String(localized: "Серверы подписки загружены")),
@@ -137,10 +141,13 @@ enum ProtectionLog {
             return String(localized: "Не получилось переключиться с «\(name(from))» на «\(name(to))»")
         }
         let slow = message.hasPrefix("failover (slow): ")
-        guard slow || message.hasPrefix("failover (no answer): ") else { return nil }
+        // a host at the same address: another transport of the same server (ADR 0030)
+        let same = message.hasPrefix("failover (no answer, same server): ")
+        guard slow || same || message.hasPrefix("failover (no answer): ") else { return nil }
         let rest = message.drop { $0 != ":" }.dropFirst(2)
         if let arrow = rest.range(of: " -> ") {
             let from = name(rest[..<arrow.lowerBound]), to = name(rest[arrow.upperBound...])
+            if same { return String(localized: "«\(from)» не отвечал — переключились на «\(to)»: тот же сервер, другой транспорт") }
             return slow ? String(localized: "«\(from)» стал отвечать слишком медленно — переключились на «\(to)»")
                 : String(localized: "«\(from)» не отвечал — переключились на «\(to)»")
         }
@@ -148,5 +155,39 @@ enum ProtectionLog {
         let server = name(rest[..<comma.lowerBound])
         return slow ? String(localized: "«\(server)» отвечает медленно, а быстрее в этой стране нет")
             : String(localized: "«\(server)» не отвечает, а других работающих серверов этой страны нет")
+    }
+
+    /// The same server another way (ADR 0030): `escalate (no answer): A fingerprint|transport X -> Y`,
+    /// `escalate failed: A fingerprint|transport X -> Y, kept`. The kind is the last such word: a
+    /// server name may hold one.
+    private static func escalation(_ message: String) -> String? {
+        // the alternatives' probes on and off, back to the subscription's way, a failure of either
+        let simple: [(String, (String) -> String)] = [
+            ("escalate probing failed: ", { String(localized: "Не получилось проверить другие способы подключения к «\($0)»") }),
+            ("escalate probing off: ", { String(localized: "«\($0)» снова отвечает — другие способы подключения больше не проверяем") }),
+            ("escalate probing: ", { String(localized: "«\($0)» не ответил дважды — проверяем другие способы подключения к нему") }),
+            ("escalate settled: ", { String(localized: "«\($0)» снова работает так, как задано в подписке — вернулись к этому") }),
+            ("escalate settle failed: ", { String(localized: "Не получилось вернуть «\($0)» к настройкам подписки") }),
+        ]
+        if let (prefix, text) = simple.first(where: { message.hasPrefix($0.0) }) {
+            return text(ServerName.display(String(message.dropFirst(prefix.count))))
+        }
+        let failed = message.hasPrefix("escalate failed: ")
+        guard failed || message.hasPrefix("escalate (no answer): ") else { return nil }
+        let rest = message.drop { $0 != ":" }.dropFirst(2)
+        let fingerprint = rest.range(of: " fingerprint ", options: .backwards)
+        let transport = rest.range(of: " transport ", options: .backwards)
+        guard let kind = [fingerprint, transport].compactMap({ $0 }).max(by: { $0.lowerBound < $1.lowerBound }) else { return nil }
+        let isFingerprint = kind == fingerprint
+        let server = ServerName.display(String(rest[..<kind.lowerBound]))
+        if failed {
+            return isFingerprint ? String(localized: "Не получилось сменить отпечаток TLS для «\(server)» — оставлен прежний")
+                : String(localized: "Не получилось сменить транспорт для «\(server)» — оставлен прежний")
+        }
+        let values = rest[kind.upperBound...]
+        guard let arrow = values.range(of: " -> ") else { return nil }
+        let from = String(values[..<arrow.lowerBound]), to = String(values[arrow.upperBound...])
+        return isFingerprint ? String(localized: "«\(server)» не отвечал — подключаемся к нему с другим отпечатком TLS: \(to) вместо \(from)")
+            : String(localized: "«\(server)» не отвечал — подключаемся к нему по другому транспорту из подписки: \(to) вместо \(from)")
     }
 }
