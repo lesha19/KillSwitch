@@ -400,7 +400,7 @@ watch_pass() {
   LAST_FLAG=$flag
   guard "$mode"
   [ $(($1 % 2)) = 0 ] && core_guard
-  [ $(($1 % 10)) = 5 ] && netbird_sync
+  [ $(($1 % 10)) = 5 ] && netbird_bg
   if [ -f "$WIFI_MARK" ] && { [ -f "$FLAG" ] || [ "$PROT" = on ]; }; then
     while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" on; done < "$WIFI_MARK"
     rm -f "$WIFI_MARK"; log_event "rules up: network on"
@@ -416,6 +416,13 @@ watch_pass() {
 # the way our core gets _ksvpn) and rules() lets that group out. Tagged only while tailscale=1 and
 # the plist runs code signed by NetBird's team; an update that rewrites the plist or the binary is
 # looked at again. A change restarts the daemon (a few seconds without NetBird).
+# Known limit: the group passes everything NetBird's daemon sends, its DNS forwarder and netstack
+# proxy included, not only its WireGuard, STUN, relay and management traffic.
+# The watchdog only starts this (netbird_bg): the codesign check and the restart run in the
+# background under a lock. What was last done is in $NB_SIGF; a restart whose bootstrap failed is
+# in $NB_RETRYF ("<failures> <epoch of the next try>") and tried again, 30 s later and doubling.
+NB_SIGF="$DIR/netbird-sig"
+NB_RETRYF="$DIR/netbird-retry"
 nb_bin() { /usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$NB_PLIST" 2>/dev/null; }
 nb_group() { /usr/libexec/PlistBuddy -c 'Print :GroupName' "$NB_PLIST" 2>/dev/null; }
 nb_want() {
@@ -427,17 +434,32 @@ nb_want() {
 nb_sig() { echo "$(setting tailscale 1) $(stat -L -f '%i %Fm %z' "$NB_PLIST" "$(nb_bin)" 2>/dev/null | paste -sd' ' -)"; }
 nb_restart() {
   local label
-  label=$(/usr/libexec/PlistBuddy -c 'Print :Label' "$NB_PLIST" 2>/dev/null) || return 1
+  label=$(/usr/libexec/PlistBuddy -c 'Print :Label' "$NB_PLIST" 2>/dev/null) && [ -n "$label" ] || return 1
   launchctl bootout "system/$label" 2>/dev/null
   for _ in $(seq 1 50); do launchctl print "system/$label" >/dev/null 2>&1 || break; sleep 0.2; done
   launchctl bootstrap system "$NB_PLIST" 2>/dev/null
 }
-NB_SIG=""
-netbird_sync() {  # the watchdog, every few seconds: nothing to do unless the plist, binary or setting changed
-  local sig want=0 have=0
-  [ -f "$NB_PLIST" ] || { NB_SIG=""; return 0; }
+nb_try_restart() {  # nb_try_restart <failures so far> <now>
+  local n delay
+  if nb_restart; then rm -f "$NB_RETRYF"; return 0; fi
+  n=$(($1 + 1)); delay=$((30 << (n > 6 ? 6 : n - 1)))
+  echo "$n $(($2 + delay))" > "$NB_RETRYF"
+  log_event "netbird: its daemon did not start again (launchctl bootstrap failed), next try in ${delay} s"
+  return 1
+}
+netbird_bg() { [ -f "$NB_PLIST" ] || return 0; lockf -k -t 0 "$DIR/netbird.lock" "$0" _netbird >/dev/null 2>&1 & }
+netbird_sync() {  # netbird_sync [now]: nothing to do unless the plist, binary or setting changed
+  local sig want=0 have=0 now=${1:-$(date +%s)} n next
+  [ -f "$NB_PLIST" ] || { rm -f "$NB_SIGF" "$NB_RETRYF"; return 0; }
+  if [ -f "$NB_RETRYF" ]; then
+    read -r n next < "$NB_RETRYF"
+    [[ "$n" =~ ^[0-9]+$ && "$next" =~ ^[0-9]+$ ]] || { n=0; next=0; }
+    [ "$now" -ge "$next" ] || return 0
+    nb_try_restart "$n" "$now" || return 0
+    log_event "netbird: its daemon started again"
+  fi
   sig=$(nb_sig)
-  [ "$sig" = "$NB_SIG" ] && return 0
+  [ "$sig" = "$(cat "$NB_SIGF" 2>/dev/null)" ] && return 0
   nb_want && want=1
   [ "$(nb_group)" = "$NB_GROUP" ] && have=1
   if [ "$want" != "$have" ]; then
@@ -448,10 +470,10 @@ netbird_sync() {  # the watchdog, every few seconds: nothing to do unless the pl
     [ "$want" = "$have" ] || return 0
     if [ "$want" = 1 ]; then log_event "netbird: its daemon let past the VPN, restarting it"
     else log_event "netbird: its daemon goes through the VPN again, restarting it"; fi
-    nb_restart
+    nb_try_restart 0 "$now" || return 0
     sig=$(nb_sig)
   fi
-  NB_SIG=$sig
+  echo "$sig" > "$NB_SIGF"
 }
 
 # Boot window guard, run when launchd stops the watchdog (see "ks watch"). A watchdog switched
@@ -2760,6 +2782,7 @@ case "${1:-status}" in
   _rotate) core_rotate ;;  # internal, under the lock, started by the watchdog
   _regen) core_regen ;;    # internal, under the lock, run by install.sh after an upgrade
   _diag) diag_pass ;;      # internal, under the journal's lock, started by the watchdog (ADR 0021)
+  _netbird) netbird_sync ;; # internal, under its lock, started by the watchdog
   _dns)  # internal, under the lock of dns_locked
     case "${2:-}" in apply) dns_apply ;; restore) dns_restore ;; *) exit 1 ;; esac ;;
   watch) watch_main ;;
