@@ -2288,8 +2288,9 @@ core_on() {
   fi
   core_log_tidy
   diag_dir   # a config with the access log names it (ADR 0021)
-  # the stats port taken by another program (or free again): the config follows first
-  if ! core_running && xray_api_check; then "$0" _regen >/dev/null 2>&1 || true; fi
+  # the stats port taken by another program (or free again): the config follows first, before the
+  # loaded job of the other core (mihomo to Xray) goes; not while Xray itself runs (a restart)
+  if { ! core_running || ! cmp -s "$CORE_DIR/plist.xray" "$CORE_PLIST"; } && xray_api_check; then "$0" _regen >/dev/null 2>&1 || true; fi
   launchctl enable "$CORE_JOB"
   # the job of the chosen core (ADR 0020); a loaded job of the other one goes first
   if core_plist_sync 2>/dev/null; then launchctl bootout "$CORE_JOB" 2>/dev/null; job_gone "$CORE_JOB"; fi

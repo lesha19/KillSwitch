@@ -209,6 +209,13 @@ core_on 2>"$tmp/err" && rc=0 || rc=$?
 rm -f "$CORE_DIR/xray.json"; echo '<plist>mihomo</plist>' > "$CORE_PLIST"; echo loaded > "$tmp/job"; : > "$tmp/launchd"
 core_on 2>/dev/null && bad "core on without the new core's config accepted" ||
   { grep -q bootout "$tmp/launchd" && bad "core on without a config stopped the running core" || ok "core on before the import: refused, the running core kept"; }
+# mihomo running, Xray to start: its stats port is checked before mihomo goes (a taken port means a
+# config without the api first, else Xray would not start and the VPN be gone)
+xray_api_check() { echo "launchctl api-check" >> "$tmp/launchd"; return 1; }
+echo '{}' > "$CORE_DIR/xray.json"; echo '<plist>mihomo</plist>' > "$CORE_PLIST"; echo loaded > "$tmp/job"; : > "$tmp/launchd"
+core_on 2>/dev/null
+[ "$(grep -oE 'api-check|bootout' "$tmp/launchd" | head -2 | paste -sd, -)" = "api-check,bootout" ] &&
+  ok "core on, mihomo to Xray: the stats port checked before the running core is stopped" || bad "api check: $(paste -sd'|' "$tmp/launchd")"
 unset -f pgrep dns_locked sleep
 put_setting core xray
 set_multihop LT_1_FB 2>"$tmp/err" && bad "double VPN accepted with Xray" || ok "double VPN: refused with Xray (not yet)"
