@@ -220,6 +220,20 @@ core_rebuild() { built="$built $(setting doh -)"; return 1; }
 set_doh "https://other.example.com/q" 2>/dev/null
 [ "$built" = " https://other.example.com/q" ] && [ "$reloads" = 1 ] && ok "set doh: a refused config is not rebuilt again (nothing was put in place)" ||
   bad "set doh refused: built:$built reloads=$reloads"
+# said, not only exit 1; the log names what really happened when going back fails too (re-review of #14)
+: > "$EVENTS"; built=""; reloads=0
+core_rebuild() { built="$built $(setting doh -)"; }
+set_doh "https://other.example.com/q" 2>"$tmp/err"
+grep -q 'перезапуст' "$tmp/err" && [ ! -s "$EVENTS" ] && ok "set doh: a failed reload said on stderr" || bad "set doh reload message: $(cat "$tmp/err" "$EVENTS")"
+: > "$EVENTS"; built=""; reloads=0
+core_rebuild() { built="$built $(setting doh -)"; [ "$(setting doh -)" = https://other.example.com/q ]; }
+set_doh "https://other.example.com/q" 2>"$tmp/err"
+grep -q 'previous settings refused.*new value' "$EVENTS" && grep -q 'перезапуст' "$tmp/err" &&
+  ok "set doh: the old value refused on the way back is logged as such" || bad "set doh refused back: $(cat "$EVENTS")"
+: > "$EVENTS"; built=""; reloads=-5
+core_rebuild() { built="$built $(setting doh -)"; }
+set_doh "https://other.example.com/q" 2>/dev/null
+grep -q 'previous config in place, not reloaded either' "$EVENTS" && ok "set doh: two failed reloads logged as such" || bad "set doh two reloads: $(cat "$EVENTS")"
 rm -f "$SETTINGS"
 
 echo
