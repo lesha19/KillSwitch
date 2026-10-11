@@ -10,6 +10,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 DIR="$tmp"; FLAG="$DIR/disabled"; SETTINGS="$DIR/settings"; ALLOW="$DIR/allow"; TSRELAYS="$DIR/none"
 SERVERS="$DIR/servers"; SERVERS_MANUAL="$DIR/servers-manual"; EVENTS="$DIR/events.log"
 HASHF="$DIR/rules.sha256"; SIGF="$DIR/tunnels"; FILESF="$DIR/rules.files"; INVALIDF="$DIR/invalid"; CORE_EGRESS="$DIR/none"; WIFI_MARK="$DIR/wifi-off-by-ks"; STATEF="$DIR/daemon-state"
+NB_PLIST="$DIR/none"   # no NetBird: netbird_sync has its own test
 PF_CONF="$tmp/pf.conf"; echo 'anchor "com.apple/*"' > "$PF_CONF"
 dscl() { return 1; }   # no core group: fewer rules, same logic
 core_running() { [ "${CORE_RUNS:-1}" = 1 ]; }   # no standby (ADR 0018) unless said so

@@ -9,6 +9,10 @@ set -eu
 cd "$(dirname "$0")"
 VERSION=v26.9.30
 SHA256=4b363bd924df5bf09f87bd445755ff8e5742b9a8a0480cda261061416c3c7dce   # Xray-macos-arm64-v8a.zip
+# github.com/XTLS/Xray-core/archive/refs/tags/$VERSION.tar.gz: the MPL-2.0 source that
+# scripts/release.sh --publish attaches to each release. Update it together with VERSION.
+# shellcheck disable=SC2034  # read by scripts/release.sh (core_source)
+SOURCE_SHA256=85162fa61eb6d1adc9199afff7b41299e69dedd094907e9c56ef665c236b3ef0
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 curl -q --max-time 300 -fsSL -o "$tmp/xray.zip" \
   "https://github.com/XTLS/Xray-core/releases/download/$VERSION/Xray-macos-arm64-v8a.zip"

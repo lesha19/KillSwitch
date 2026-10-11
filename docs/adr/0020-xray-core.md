@@ -56,7 +56,7 @@ clients the full Xray config (an array of configs, one per host).
   balancers, freedom outbounds and the DNS section.
 - **Checked** with `xray run -test -format json` before a config is put in place (the file
   names do not end in .json).
-- **Without an API.** `ks core proxies` answers from the report in mihomo's shape: one Selector
+- **Without an API** (0.18.0: a stats API for counters only, ADR 0021). `ks core proxies` answers from the report in mihomo's shape: one Selector
   `Сервер` of the subscription's hosts. Delay, traffic and connections answer «С ядром Xray это
   недоступно»; the app hides the connections list. A server switch or a setting restarts the core
   (about a second; pf blocks meanwhile).

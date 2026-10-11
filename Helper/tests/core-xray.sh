@@ -34,8 +34,8 @@ xtest() {  # xtest <name> <config>
 gen "$fx/xray-panel.json" || bad "panel config refused: $(cat "$tmp/err")"
 [ "$(cat "$tmp/s")" = 203.0.113.10 ] && ok "servers: the outbounds' addresses" || bad "servers: $(cat "$tmp/s")"
 [ ! -s "$tmp/c.pins" ] && ok "addresses already IPs: nothing pinned" || bad "pins: $(cat "$tmp/c.pins")"
-[ "$(j 'join ",", sort keys %$c')" = "burstObservatory,dns,inbounds,log,outbounds,policy,routing" ] &&
-  ok "top level: the template's sections, our inbounds and log, no remarks" || bad "keys: $(j 'join ",", sort keys %$c')"
+[ "$(j 'join ",", sort keys %$c')" = "api,burstObservatory,dns,inbounds,log,outbounds,policy,routing,stats" ] &&
+  ok "top level: the template's sections, our inbounds, log and stats API (ADR 0021), no remarks" || bad "keys: $(j 'join ",", sort keys %$c')"
 [ "$(j 'join ",", map { "$_->{tag}:$_->{protocol}" } @{ $c->{inbounds} }')" = "ks-tun:tun,ks-dns:dokodemo-door,ks-fetch:http" ] &&
   ok "inbounds: ours only (the template's socks/http on 10808/10809 gone)" || bad "inbounds: $(j '$c->{inbounds}')"
 [ "$(j '$c->{inbounds}[0]{settings}{gateway}[0]')" = 198.18.128.0/30 ] && [ "$CORE_TUN_ADDR" = 198.18.128.1 ] &&
@@ -113,9 +113,9 @@ gen "$tmp/p.json" || bad "panel with extras refused: $(cat "$tmp/err")"
 [ "$(q 'join "|", map { "$_->{section}:" . ($_->{index} // $_->{item}) . "=$_->{reason}" } @{ $c->{dropped} }')" = \
   "profile:api=not-allowed|profile:inbounds=managed|profile:remarks=managed|profile:reverse=not-allowed|profile:stats=not-allowed|rules:0=not-allowed|rules:1=target:nope|dns:localhost=bad-value|dns:fakedns=bad-value" ] &&
   ok "left out with reasons: api, stats, reverse, a webhook rule, a rule to nowhere, system and fake DNS" || bad "dropped: $(q '$c->{dropped}')"
-[ "$(j 'exists $c->{api} || exists $c->{stats} || exists $c->{reverse} ? "kept" : "gone"')" = gone ] &&
+[ "$(j 'exists $c->{reverse} || $c->{api}{tag} ne "ks-api" || $c->{api}{listen} !~ /\A127\.0\.0\.1:/ ? "kept" : "gone"')" = gone ] &&
   [ "$(j 'exists $c->{outbounds}[0]{sendThrough} || exists $c->{outbounds}[2]{streamSettings}{sockopt}{interface} ? "kept" : "gone"')" = gone ] &&
-  ok "config: no api/stats/reverse, no sendThrough or bound interface" || bad "extras: $(j '[keys %$c]')"
+  ok "config: the subscription's api/stats/reverse gone (ours only), no sendThrough or bound interface" || bad "extras: $(j '[keys %$c]')"
 [ "$(q 'join ",", map { @{ $_->{items} } } grep { $_->{kind} eq "unbound" } @{ $c->{added} }')" = "LT_1,direct" ] &&
   ok "report: unbound outbounds named" || bad "unbound: $(q '$c->{added}')"
 [ "$(j 'join ",", map { ref $_ ? $_->{address} : $_ } @{ $c->{dns}{servers} }')" = "77.88.8.8,8.8.8.8,1.1.1.1" ] &&

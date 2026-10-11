@@ -4,7 +4,7 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
-## [Unreleased]
+## [0.18.1] - 2026-10-11
 
 ### Added
 - Server list: «Недавние» (last 5 chosen, #13), «Порядок» by subscription / ping / name (#25), a
@@ -25,8 +25,49 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   checks as a typed link; no Screen Recording permission. «QR-код…» shows the subscription link as
   a QR code for a phone after a warning; not offered when the subscription sends `hide-url`.
 
+## [0.18.0] - 2026-10-11
+
+### Added
+- A local diagnostics journal (ADR 0021) in `/Library/KillSwitch/diag` (root-only, kept 7 days and
+  about 50 MB): once a minute the state as a JSON line (core, protection, a probe through the VPN,
+  traffic, network, DNS), and the events the watchdog notices (sleep and wake, tunnels, the core's
+  start, stop and restart, network and DNS changes). Nothing leaves the Mac.
+- «Подробная диагностика (все соединения)» in Settings › Дополнительно, off by default: with Xray
+  every connection is recorded with its site (`ks set diag 0|1`); switching it off deletes them.
+- «Собрать отчёт» in «Журнал защиты»: one archive on the Desktop with the journal, logs, state,
+  versions, network and crash reports of the last 7 days (`ks diag report <folder>`, no password).
+  Server addresses and names become `server-N`, every other public IP address `ip-N` (loopback,
+  LAN, Tailscale and our TUN stay readable); links, UUIDs and keys are masked; the subscription's
+  profile and the core's config are never included. Crash reports are only the system's and the
+  asking user's, read with that user's rights (never a linked file); through the helper daemon
+  only the user at the Mac (or the one who installed the helper) can collect the report.
+- Xray: the stats API (counters only, on 127.0.0.1:47891), so `ks core traffic` works with Xray.
+  If another program holds that port, Xray starts without the counters (logged in «Журнал защиты»).
+- Upgrades with Xray: the rebuilt config replaces the running one only after `xray run -test`, and
+  if Xray does not come up with it within about 5 s the previous config is restored.
+- «О программе → Лицензии»: the licences of Xray-core, mihomo, the geodata, Sparkle and Yams with
+  links to their source code; the project's own `LICENSE` (#36).
+- «Бета-версии» in «О программе»: updates from Sparkle's beta channel (#16);
+  `KS_CHANNEL=beta scripts/release.sh --publish` publishes one.
+- Each release carries the source of the bundled mihomo (GPL-3.0) and Xray-core tags, sha256-pinned,
+  and the app no longer ships `Helper/tests` and other dev-only scripts (#36).
+
 ### Fixed
-- Diagnostics also drop the port and path of a link without its scheme (`host/token`) (#26).
+- NetBird works with protection on: its daemon binds WireGuard, STUN, relay and management
+  connections to Wi‑Fi/Ethernet, past any VPN, so pf dropped them and peers stayed «Connecting».
+  The watchdog now starts NetBird's launchd job with the new group `_ksnetbird` (only while the
+  plist runs code signed by NetBird GmbH, team TA739QLA7A, and the Tailscale setting is on) and pf
+  lets that group out; the content filter trusts NetBird's signature like Tailscale's. One switch
+  for both: Settings › Защита › «Tailscale, NetBird». A NetBird update that rewrites its plist is
+  tagged again within seconds; turning the switch off or uninstalling takes the group off. Each
+  change restarts NetBird's daemon once, in the background (the kill-switch loop never waits for
+  it); a restart that fails is tried again (30 s, doubling) and logged.
+  Known limit: pf lets out everything NetBird's daemon sends, its DNS forwarder and netstack proxy
+  included, not only WireGuard, STUN, relay and management traffic.
+- «Установить и перезапустить» did nothing while a sheet was open (e.g. «Начало работы»); a build
+  installed but not relaunched is now relaunched or offered with «Перезапустить» (#35).
+- A subscription link without its scheme (`host/token`) kept its token in «Скопировать диагностику»
+  and in «Собрать отчёт»; the host is now masked with its port and path (#26).
 
 ## [0.17.0] - 2026-10-11
 

@@ -18,7 +18,7 @@ watch_run() {  # watch_run <signal>: starts the watchdog loop on fakes, sends th
   (
     # shellcheck source=../ks
     . "$here/../ks"
-    DIR="$d"; FLAG="$d/disabled"; SETTINGS="$d/settings"; EVENTS="$d/events.log"; STATEF="$d/daemon-state"
+    DIR="$d"; FLAG="$d/disabled"; SETTINGS="$d/settings"; EVENTS="$d/events.log"; STATEF="$d/daemon-state"; NB_PLIST="$d/none"
     WIFI_MARK="$d/wifi-off-by-ks"
     printf '#!/bin/bash\necho "$*" > %s/execd\n' "$d" > "$d/new-ks"; chmod +x "$d/new-ks"
     KS_SELF="$d/new-ks"
@@ -57,7 +57,7 @@ regen() {  # regen <same|different>: prints what was called
   (
     # shellcheck source=../ks
     . "$here/../ks"
-    DIR="$d"; CORE_DIR="$d/core"; EVENTS="$d/events.log"; CORE_PROFILE="$d/core/profile.json"; PINS="$d/core/pins"
+    DIR="$d"; CORE_DIR="$d/core"; EVENTS="$d/events.log"; SETTINGS="$d/settings"; CORE_PROFILE="$d/core/profile.json"; PINS="$d/core/pins"
     SERVERS_CORE="$d/servers-core"; SERVERS_MANUAL="$d/servers-manual"; CORE_EGRESS="$d/core/egress"; REPORT="$d/core/routing.json"
     echo '{}' > "$CORE_PROFILE"; : > "$PINS"; echo old > "$CORE_DIR/config.yaml"; echo rules > "$CORE_EGRESS"
     mode=$1
@@ -313,6 +313,20 @@ check "no sudoers user to keep: refused (exit 2)" "$rc" 2
   echo "$r"
 ) > "$tmp/order"
 check "version_lt: 0.13<0.14, 0.9.1<0.13, not 0.14<0.14, 0.14<0.13, 1.0<0.99; 0.13<0.13.1" "$(cat "$tmp/order")" "<<===<"
+
+# a group id for _ksvpn / _ksnetbird from 450-499: the first free one, never a taken one
+gids=$(
+  # shellcheck source=../install.sh
+  . "$here/../install.sh"; set +e
+  GIDS=$(seq 450 451; echo 453)
+  dscl() { printf '_x %s\n' $GIDS; }
+  g=$(free_gid); echo "$g rc=$?"
+  GIDS=$(seq 450 499)
+  g=$(free_gid 2>"$tmp/gid-err"); echo "$g rc=$?"
+)
+check "free_gid: the first free one" "$(head -1 <<<"$gids")" "452 rc=0"
+check "free_gid: none free fails (no taken id reused)" "$(sed -n 2p <<<"$gids")" " rc=1"
+check "free_gid: says why" "$(grep -c '450-499' "$tmp/gid-err")" 1
 
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

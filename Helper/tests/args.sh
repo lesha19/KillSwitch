@@ -15,9 +15,10 @@ refuses() { if passwordless_args_ok "$@"; then bad "took: ks $(printf '%q ' "$@"
 # every passwordless command of install.sh's sudoers, as written there
 eval "$(sed -n '/^sudoers_text() {/,/^}/p' "$here/../install.sh")"
 cmds=$(sudoers_text someone /k | sed -n 's/^someone ALL=(root) NOPASSWD: //p' | tr ',' '\n' | sed 's/^ *\/k //')
-[ "$(wc -l <<<"$cmds")" -eq 13 ] && ok "sudoers lists 13 passwordless commands" || bad "sudoers commands: $cmds"
+[ "$(wc -l <<<"$cmds")" -eq 14 ] && ok "sudoers lists 14 passwordless commands" || bad "sudoers commands: $cmds"
 grep -qx 'core traffic' <<<"$cmds" && ok "sudoers: core traffic (the menu bar speed)" || bad "sudoers: no core traffic"
 grep -qx 'core connections' <<<"$cmds" && ok "sudoers: core connections (the «Трафик» window)" || bad "sudoers: no core connections"
+grep -qx 'diag report \*' <<<"$cmds" && ok "sudoers: diag report («Собрать отчёт», ADR 0021)" || bad "sudoers: no diag report"
 # settings, ad blocking included, keep asking for the password (ADR 0010 right in the daemon)
 grep -q '^set' <<<"$cmds" && bad "sudoers: a set command without password" || ok "sudoers: no set command"
 while IFS= read -r c; do
@@ -43,6 +44,10 @@ refuses core refresh
 refuses core refresh relative.json
 refuses core refresh $'/tmp/a\nb'
 refuses core refresh /a /b
+takes diag report /Users/me/Desktop
+refuses diag report Desktop
+refuses diag report /a /b
+refuses diag status
 # the rest needs the admin password and is checked further on
 takes set lan 0
 takes set adblock 1

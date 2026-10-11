@@ -80,6 +80,7 @@ private struct HomeContent: View {
                 .overlay(alignment: .topTrailing) {
                     if style == .window { ActionsMenu(style: style) }
                 }
+            RelaunchBanner()
             TopErrorBanner(chooseServer: chooseServer) { NoticeBanner(chooseServer: chooseServer) }
             if status.showsServer {
                 ServerRow(action: chooseServer)

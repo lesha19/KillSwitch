@@ -17,7 +17,8 @@ final class HelperCommandTests: XCTestCase {
             (.coreRefresh(profile: "/private/tmp/p.json"), ["core", "refresh", "/private/tmp/p.json"]),
             (.protectionOff, ["off"]), (.pause(minutes: 5), ["pause", "5"]),
             (.setSwitch("lan", true), ["set", "lan", "1"]), (.setSwitch("wifiguard", false), ["set", "wifiguard", "0"]),
-            (.setSwitch("adblock", true), ["set", "adblock", "1"]),
+            (.setSwitch("adblock", true), ["set", "adblock", "1"]), (.setSwitch("diag", true), ["set", "diag", "1"]),
+            (.diagReport(directory: "/Users/me/Desktop"), ["diag", "report", "/Users/me/Desktop"]),
             (.setSplitApps(["/Applications/Telegram.app", "zoom.us"]),
              ["set", "splitapps", "/Applications/Telegram.app,zoom.us"]),
             (.setSplitApps([]), ["set", "splitapps", ""]),
@@ -111,14 +112,16 @@ final class HelperCommandTests: XCTestCase {
             .setMultihop(nil), .setCore(.xray),
             .allow("192.0.2.1"), .unallow("192.0.2.1"), .serverAdd("192.0.2.1"), .serverRemove("192.0.2.1"),
             .coreImport(profile: "/tmp/p.json"), .install(user: "alex", servers: []), .uninstall, .repair,
+            .setSwitch("diag", true), .diagReport(directory: "/Users/me/Desktop"),
         ]
+        let twoWords: Set<String> = ["core", "diag"]
         for command in all {
-            let words = command.program == .ks ? command.arguments.prefix(command.arguments.first == "core" ? 2 : 1)
+            let words = command.program == .ks ? command.arguments.prefix(twoWords.contains(command.arguments.first ?? "") ? 2 : 1)
                 .joined(separator: " ") : "-"
             XCTAssertEqual(command.needsAuthorization, !sudoers.contains(words), "\(command)")
         }
         let passwordless = Set(all.filter { !$0.needsAuthorization }
-            .map { $0.arguments.prefix($0.arguments.first == "core" ? 2 : 1).joined(separator: " ") })
+            .map { $0.arguments.prefix(twoWords.contains($0.arguments.first ?? "") ? 2 : 1).joined(separator: " ") })
         XCTAssertEqual(passwordless, sudoers)
         // ADR 0012: the one daemon command without the right that is not a sudoers one. It runs only
         // the verified bundle's install.sh --upgrade, never older than what is installed; sudo and
@@ -159,13 +162,25 @@ final class HelperCommandTests: XCTestCase {
     }
 
     func testSwitchKeys() {
-        for key in ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock"] {
+        for key in ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag"] {
             XCTAssertTrue(HelperCommand.setSwitch(key, true).isValid, key)
         }
         // «Российские сайты напрямую» is gone (ADR 0013): ks refuses it, so the daemon does too
         for key in ["", "coredirect", "splitapps", "multihop", "LAN", "lan ", "x"] {
             XCTAssertFalse(HelperCommand.setSwitch(key, true).isValid, key)
         }
+    }
+
+    /// «Собрать отчёт» (ADR 0021): an absolute folder, one line; anything else is not a report.
+    func testDiagReportFolder() {
+        XCTAssertTrue(HelperCommand.diagReport(directory: "/Users/me/Desktop").isValid)
+        XCTAssertFalse(HelperCommand.diagReport(directory: "Desktop").isValid)
+        XCTAssertFalse(HelperCommand.diagReport(directory: "/a\nb").isValid)
+        XCTAssertFalse(HelperCommand.diagReport(directory: "/" + String(repeating: "a", count: 1024)).isValid)
+        XCTAssertNil(HelperCommand(ks: ["diag", "status"]))
+        XCTAssertNil(HelperCommand(ks: ["diag", "report"]))
+        XCTAssertNil(HelperCommand(ks: ["diag", "report", "/a", "/b"]))
+        XCTAssertFalse(HelperCommand.diagReport(directory: "/tmp").needsAuthorization)
     }
 
     func testNamesOfServersAndGroups() {

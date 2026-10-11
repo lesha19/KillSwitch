@@ -57,11 +57,23 @@ sudoers_text() {  # sudoers_text <user> <ks>
   echo "Defaults!$ks env_keep-=\"HOME MAIL CHARSET LANG LANGUAGE LC_ALL LC_COLLATE LC_CTYPE LC_MESSAGES LC_MONETARY LC_NUMERIC LC_TIME SSH_AUTH_SOCK TZ EDITOR VISUAL\""
   echo "Defaults!$ks env_delete+=\"HOME CURL_HOME BASH_ENV ENV LC_ALL\""
   echo "$1 ALL=(root) NOPASSWD: $ks state, $ks probe, $ks on, $ks netrestore, $ks core state, $ks core on, $ks core off," \
-    "$ks core proxies, $ks core traffic, $ks core connections, $ks core select *, $ks core delay *, $ks core refresh *"
+    "$ks core proxies, $ks core traffic, $ks core connections, $ks core select *, $ks core delay *, $ks core refresh *, $ks diag report *"
 }
 
 # --upgrade: the user the installed entry names (install.sh wrote it), so nobody gains anything.
 sudoers_user() { sed -nE 's/^([A-Za-z_][A-Za-z0-9_.-]{0,31}) ALL=\(root\) NOPASSWD: .*/\1/p' "$SUDOERS" 2>/dev/null | head -1; }
+
+# A group id for our groups: the first one 450-499 nobody has; none left is an error, never a
+# taken id (its members would get what the group is let through).
+free_gid() {
+  local gid taken
+  taken=$(dscl . -list /Groups PrimaryGroupID | awk '{print $2}')
+  for gid in $(seq 450 499); do
+    grep -qx "$gid" <<<"$taken" || { echo "$gid"; return 0; }
+  done
+  echo "no free group id in 450-499 for KillSwitch's groups" >&2
+  return 1
+}
 
 script_version() { sed -nE 's/^KS_VERSION="([^"]+)".*/\1/p' "$1" 2>/dev/null | head -1; }
 
@@ -243,16 +255,22 @@ main() {
   if put_file local.killswitch.plist "$WATCH_PLIST" 644; then plist_new=1; fi
   put_file tsrelays "$DIR/tsrelays" 644 || true
   if ! dscl . -read /Groups/_ksvpn >/dev/null 2>&1; then
-    for gid in $(seq 450 499); do
-      dscl . -list /Groups PrimaryGroupID | awk '{print $2}' | grep -qx "$gid" || break
-    done
+    gid=$(free_gid) || exit 1
     dscl . -create /Groups/_ksvpn PrimaryGroupID "$gid"
     dscl . -create /Groups/_ksvpn RealName "KillSwitch VPN core"
+  fi
+  # NetBird's daemon gets it (ks netbird_sync) so pf can let NetBird past the VPN
+  if ! dscl . -read /Groups/_ksnetbird >/dev/null 2>&1; then
+    gid=$(free_gid) || exit 1
+    dscl . -create /Groups/_ksnetbird PrimaryGroupID "$gid"
+    dscl . -create /Groups/_ksnetbird RealName "KillSwitch: NetBird past the VPN"
   fi
   # 711: the app checks files in it by name; the core's log in it is root-only (ks core_log_tidy)
   install -d -o root -g wheel -m 711 "$DIR/core"
   [ -f "$DIR/core/core.log" ] || install -o root -g wheel -m 600 /dev/null "$DIR/core/core.log"
   chmod 600 "$DIR/core/core.log"
+  # the diagnostics journal (ADR 0021): root-only, the app gets it redacted through «Собрать отчёт»
+  install -d -o root -g wheel -m 700 "$DIR/diag"
   if [ -f mihomo ] || [ -f xray ]; then core_update; fi
   [ -e "$DIR/events.log" ] || install -o root -g wheel -m 644 /dev/null "$DIR/events.log"
 

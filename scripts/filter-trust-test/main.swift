@@ -47,6 +47,7 @@ expect("\(fixtures)/signed-core", .core, "core signed by scripts/sign-core.sh is
 expect("/Applications/Tailscale.app", .tailscale, "Tailscale app (App Store) is trusted")
 expect("/Applications/Tailscale.app/Contents/PlugIns/IPNExtension.appex", .tailscale,
        "Tailscale network extension is trusted")
+expect("/Applications/NetBird.app/Contents/MacOS/netbird", .netbird, "NetBird daemon (Developer ID) is trusted")
 
 print("\(checked) checked, \(failures) failed")
 exit(failures == 0 && checked > 0 ? 0 : 1)

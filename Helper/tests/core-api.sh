@@ -11,7 +11,7 @@ MIHOMO=${MIHOMO:-/Library/KillSwitch/core/mihomo}; [ -x "$MIHOMO" ] || [ ! -x "$
 [ -x "$MIHOMO" ] || { echo "skip: no $MIHOMO"; exit 0; }
 tmp=$(mktemp -d)
 CORE_CTL="$tmp/ctl/mihomo.sock"
-EVENTS="$tmp/events.log"
+EVENTS="$tmp/events.log"; SETTINGS="$tmp/settings"   # not the installed core choice
 cat > "$tmp/config.yaml" <<'EOF'
 {"mode":"rule","log-level":"warning","external-controller-unix":"ctl/mihomo.sock",
  "proxies":[{"name":"NL 1","type":"ss","server":"192.0.2.1","port":8388,"cipher":"aes-128-gcm","password":"x"},

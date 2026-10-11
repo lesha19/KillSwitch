@@ -75,6 +75,11 @@ final class KillSwitchControl {
     private(set) var coreChoice: CoreChoice = .mihomo
     /// «Блокировать рекламу и трекеры»: the core refuses category-ads-all of the shipped geosite.dat.
     private(set) var adBlock = false
+    /// «Подробная диагностика» (diag, ADR 0021): Xray records every connection in the local journal.
+    private(set) var diagVerbose = false
+    /// «Собрать отчёт» is running, and why the last one failed (nil after a good one).
+    private(set) var reportBusy = false
+    private(set) var reportError: String?
     /// «Раздельный туннель»: process names that go around the VPN (the user's own addition, ADR 0013).
     private(set) var splitApps: [String] = []
     /// «Двойной VPN»: the entry server; the exit is the selected one. Nil = off.
@@ -1111,6 +1116,7 @@ final class KillSwitchControl {
         allowRouterDNS = (values["dns"] ?? "0") == "1"
         allowDirect = (values["direct"] ?? "0") == "1"
         adBlock = (values["adblock"] ?? "0") == "1"
+        diagVerbose = (values["diag"] ?? "0") == "1"
         splitApps = SplitApps.parse(setting: values["splitapps"])
         multihopEntry = Multihop.entry(setting: values["multihop"])
         exceptions = Self.readLines("/Library/KillSwitch/allow")
@@ -1192,6 +1198,26 @@ final class KillSwitchControl {
             busy = false
             refresh()
             loadProxies(force: true)
+        }
+    }
+
+    /// «Собрать отчёт» (ADR 0021): `ks diag report` into the Desktop without a password (the daemon,
+    /// else sudo), then the archive is shown in Finder.
+    func collectReport() {
+        guard !reportBusy else { return }
+        reportBusy = true
+        Task {
+            let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first?.path ?? ""
+            let result = await readHelper(["diag", "report", desktop])
+            let path = result.output.split(separator: "\n").last.map(String.init) ?? ""
+            if result.status == 0, path.hasPrefix(desktop + "/"), FileManager.default.fileExists(atPath: path) {
+                reportError = nil
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+            } else {
+                reportError = result.output.isEmpty ? String(localized: "Не получилось собрать отчёт") : result.output
+                recentErrors.append("report: " + result.output)
+            }
+            reportBusy = false
         }
     }
 

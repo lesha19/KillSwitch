@@ -33,6 +33,18 @@ final class ProtectionLogTests: XCTestCase {
         XCTAssertEqual(text("2026-10-10 14:03:22 watchdog switched off (Login Items): network left on"),
                        "Службу выключили в Объектах входа — сеть не отключалась")
         XCTAssertEqual(text("2026-10-10 14:03:22 network turned back on by hand"), "Сеть включена вручную")
+        XCTAssertEqual(text("2026-10-11 14:03:22 detailed diagnostics: on"), "Подробная диагностика включена")
+        XCTAssertEqual(text("2026-10-11 14:03:22 detailed diagnostics: off"), "Подробная диагностика выключена, записанные соединения удалены")
+        XCTAssertEqual(text("2026-10-11 14:03:22 xray stats port 127.0.0.1:47891 is taken by another program: VPN without traffic counters"),
+                       "Порт 47891 занят другой программой — VPN работает без счётчиков трафика")
+        XCTAssertEqual(text("2026-10-11 14:03:22 xray stats port free again: traffic counters back"), "Счётчики трафика VPN снова работают")
+        XCTAssertEqual(text("2026-10-11 14:03:22 core config rolled back: Xray did not come up with the new one"),
+                       "VPN не запустился с новыми настройками — возвращены прежние")
+        XCTAssertEqual(text("2026-10-11 14:03:22 core config: the new one refused by the core, the running one kept: x"),
+                       "Новые настройки VPN не прошли проверку — оставлены прежние")
+        XCTAssertEqual(text("2026-10-11 14:03:22 netbird: its daemon did not start again (launchctl bootstrap failed), next try in 30 s"),
+                       "NetBird не запустился после перезапуска — следующая попытка позже")
+        XCTAssertEqual(text("2026-10-11 14:03:22 netbird: its daemon started again"), "NetBird снова запущен")
     }
 
     func testUnknownLineStaysAsIs() {

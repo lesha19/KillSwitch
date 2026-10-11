@@ -8,7 +8,7 @@ import os
 /// It only covers the case pf exists for in the first place, from a different part of the
 /// system: while no VPN tunnel is up, a new flow is let through only to the local network,
 /// to listed addresses (VPN servers, Tailscale relays, exceptions) or from trusted programs
-/// (our own core, Tailscale), identified by code signature. Everything else is dropped.
+/// (our own core, Tailscale, NetBird), identified by code signature. Everything else is dropped.
 /// With a tunnel up, flows are allowed and pf does the fine-grained filtering.
 ///
 /// The app passes the lists in `vendorConfiguration` (see FilterConfig in the app).
@@ -54,7 +54,7 @@ final class FilterDataProvider: NEFilterDataProvider {
     private static func isTrusted(_ token: Data, config: [String: Any]) -> Bool {
         switch trustedProgram(token) {
         case .core: return true
-        case .tailscale: return config["tailscale"] as? Bool ?? true
+        case .tailscale, .netbird: return config["tailscale"] as? Bool ?? true
         case nil: return false
         }
     }
