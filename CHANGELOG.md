@@ -28,6 +28,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 - DHCP rule (KS-14): UDP from port 68 to a server's port 67 passed for any program, a way past the
   kill switch. It now passes only from root's sockets (the system's DHCP client); broadcasts are
   unchanged.
+- Tailscale relay list (KS-19): a network (such as `0.0.0.0/0`) in `/Library/KillSwitch/tsrelays`
+  is now refused like any damaged settings file (everything blocked until «Сбросить настройки»);
+  `Helper/update-tsrelays.sh` stops on any failed step and replaces the list only with host
+  addresses, at least 50 of them.
 
 ## [0.18.1] - 2026-10-11
 

@@ -112,6 +112,7 @@ setting() {  # setting <key> <default>
 # switch read wrong could open the home network or leave the boot window open.
 OWNER_UID=$EUID
 ADDR_LINE='[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?|[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*(/[0-9]{1,3})?'   # valid_addr
+HOST_LINE='[0-9]{1,3}(\.[0-9]{1,3}){3}|[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*'   # one address, no network (tsrelays, KS-19)
 settings_lines_ok() {
   local line
   while IFS= read -r line || [ -n "$line" ]; do
@@ -135,7 +136,7 @@ root_file_ok() {  # root_file_ok <file> settings|addrs|relays|any
   case "$2" in
     settings) settings_lines_ok "$1" ;;
     addrs) ! grep -qvE "^($ADDR_LINE)\$" "$1" ;;
-    relays) ! grep -qvE "^(#.*|$ADDR_LINE)?\$" "$1" ;;
+    relays) ! grep -qvE "^(#.*|$HOST_LINE)?\$" "$1" ;;
   esac
 }
 root_files_bad() {  # root_files_bad [allow-file] [servers-file] [manual-servers-file]: the bad ones' names

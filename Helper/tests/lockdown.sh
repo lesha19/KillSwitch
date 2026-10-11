@@ -73,6 +73,11 @@ reset; printf '192.0.2.1;pass\n' > "$SERVERS"; expect_locked "servers with garba
 reset; printf '192.0.2.1 192.0.2.2\n' > "$SERVERS_MANUAL"; expect_locked "servers-manual with two addresses on a line"
 reset; echo 192.0.2.1 > "$ALLOW"; chmod 666 "$ALLOW"; expect_locked "allow writable by anyone"
 reset; printf '# relays\nrelay.example\n' > "$TSRELAYS"; expect_locked "tsrelays with a host name"
+# KS-19: relays are host addresses; a network (0.0.0.0/0 above all) would open everything to everyone
+for net in 0.0.0.0/0 ::/0 192.0.2.0/24 2001:db8::/32 192.0.2.1/32; do
+  reset; printf '# relays\n100.64.0.1\n%s\n' "$net" > "$TSRELAYS"; expect_locked "tsrelays with a network ($net)"
+done
+reset; printf '# relays\n2001:db8::1\n' > "$TSRELAYS"; expect_open "tsrelays with an IPv6 host address"
 reset; echo rules > "$CORE_EGRESS"; chmod 666 "$CORE_EGRESS"; expect_locked "egress writable by anyone (it lets the core out)"
 reset
 [ -z "$(root_files_bad)" ] && ok "nothing reported when all is well" || bad "reported: $(root_files_bad)"
