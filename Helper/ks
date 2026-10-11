@@ -1448,6 +1448,10 @@ core_generate_xray() (
     TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT API_PORT=$([ -f "$CORE_DIR/api-off" ] || echo "$CORE_API_PORT") \
     ACCESS=$([ "$(setting diag 0)" = 1 ] && [ -d "$DIAG" ] && echo "$DIAG/access.log") \
     /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' build()' || exit 1
+  if [ -f "$w/multihop-gone" ]; then   # built one hop: the setting says so too (ADR 0027)
+    log_event "double VPN off: its entry «$(setting multihop off)»: $(head -1 "$w/multihop-gone")"
+    put_setting multihop off || exit 1
+  fi
   # an import (KS_APPROVE_ALL): the DIRECT signature of every host, which the admin approves
   # with it, so a passwordless switch can be measured against it (KS-10)
   : > "$w/approved"
@@ -1497,6 +1501,8 @@ KS_XRAY_PL='
     @r }
   sub name_of { my ($c, $i) = @_; my $r = $c->{remarks}; defined $r && !ref $r && length $r ? $r : "#" . ($i + 1) }
   # reached through another outbound of its config (proxySettings, sockopt.dialerProxy)
+  # a rule object for the report: at most 16 KB, or left out (the app says it cannot tell)
+  sub small { length($J->encode($_[0])) <= 16384 }
   sub chained { my $o = shift; $o->{proxySettings} || (ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" && exists $o->{streamSettings}{sockopt}{dialerProxy}) }
   # a host'"'"'s server: its first proxy outbound with a tag
   sub first_proxy { my $c = shift; my ($o) = grep { ref $_ eq "HASH" && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && length($_->{tag} // "") } @{ $c->{outbounds} }; $o }
@@ -1504,6 +1510,9 @@ KS_XRAY_PL='
     my $a = load(); my %hosts;
     for my $i (0 .. $#$a) {
       my $c = $a->[$i]; my $n = name_of($c, $i);
+      # the name goes into settings (xrayserver=, multihop=) and the report (ADR 0027)
+      die "Имя сервера «" . substr($n, 0, 64) . "…» в подписке не подходит: управляющие символы или длиннее 256 байт\n"
+        if $n =~ /[\x00-\x1f\x7f]/ || length $n > 256;
       my %tags;
       for my $o (@{ $c->{outbounds} }) {
         die "$n: outbound не объект\n" unless ref $o eq "HASH";
@@ -1554,16 +1563,18 @@ KS_XRAY_PL='
       $o = $J->decode($J->encode($o)); $o->{tag} = "ks-ping-$i";
       push @pings, $o; $servers[$i]{ping} = $o->{tag};
     }
-    # «Двойной VPN» (ADR 0027): the entry host'"'"'s server as ks-entry; never a silent single hop
-    my $entry;
+    # «Двойной VPN» (ADR 0027): the entry host'"'"'s server as ks-entry. One the build cannot use (gone
+    # from the subscription, a mihomo name from before, chained itself) turns double VPN off, said in
+    # $W/multihop-gone, so no refresh or rebuild is ever refused for it
+    my ($entry, $ei, $gone);
     if (length($ENV{MULTIHOP} // "") && $ENV{MULTIHOP} ne "off") {
-      my ($ei) = grep { name_of($a->[$_], $_) eq $ENV{MULTIHOP} } 0 .. $#$a;
-      die "Двойной VPN: сервера входа «$ENV{MULTIHOP}» нет в подписке\n" unless defined $ei;
-      if ($ei != $ci) {
+      ($ei) = grep { name_of($a->[$_], $_) eq $ENV{MULTIHOP} } 0 .. $#$a;
+      if (!defined $ei) { $gone = "not a server of the subscription" }
+      elsif ($ei != $ci) {
         my $o = first_proxy($a->[$ei]);
-        die "Двойной VPN: у сервера входа «$ENV{MULTIHOP}» нет сервера, через который можно подключиться\n" unless $o;
-        die "Двойной VPN: сервер входа «$ENV{MULTIHOP}» сам подключается через другой\n" if chained($o);
-        $entry = $J->decode($J->encode($o)); $entry->{tag} = "ks-entry";
+        if (!$o) { $gone = "no server to connect through" }
+        elsif (chained($o)) { $gone = "it connects through another server itself" }
+        else { $entry = $J->decode($J->encode($o)); $entry->{tag} = "ks-entry" }
       }
     }
     my $c = $a->[$ci];
@@ -1604,18 +1615,21 @@ KS_XRAY_PL='
       $tame->($o, $t);
     }
     $tame->($_, undef) for @pings;   # their changes are those of the hosts
+    if ($entry && $tag{"ks-entry"}) { $gone = "the subscription has its own ks-entry"; undef $entry }
     if ($entry) {
-      die "Двойной VPN: в подписке уже есть outbound «ks-entry»\n" if $tag{"ks-entry"};
       $tame->($entry, undef);   # its changes are those of its host
       # every server of this host through the entry; one the subscription reaches through another
-      # outbound goes through that one, and so through the entry too
-      for my $o (grep { $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && !chained($_) } @$outs) {
+      # outbound goes through that one, and so through the entry too. So do the other hosts'"'"'
+      # probes: no exit ever sees this Mac'"'"'s address, and the ping is that of the chain
+      my $via = sub { my $o = shift;
         $o->{streamSettings} = {} unless ref $o->{streamSettings} eq "HASH";
         $o->{streamSettings}{sockopt} = {} unless ref $o->{streamSettings}{sockopt} eq "HASH";
-        $o->{streamSettings}{sockopt}{dialerProxy} = "ks-entry";
-      }
+        $o->{streamSettings}{sockopt}{dialerProxy} = "ks-entry" };
+      $via->($_) for grep { $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && !chained($_) } @$outs;
+      $via->($_) for grep { $_->{tag} ne "ks-ping-$ei" } @pings;
       push @added, { kind => "multihop", items => [ $ENV{MULTIHOP} ] };
     }
+    if (defined $gone) { open my $g, ">", "$W/multihop-gone" or die; print $g "$gone\n"; close $g }
     die "В конфиге «" . name_of($c, $ci) . "» нет ни одного сервера\n" unless defined $proxy;
     unless (defined $dnsout) { $dnsout = "ks-dns-out"; push @$outs, { tag => $dnsout, protocol => "dns", settings => { nonIPQuery => "reject" } }; push @added, { kind => "dns-out", items => [$dnsout] } }
     my $r = ref $cfg{routing} eq "HASH" ? $cfg{routing} : {};
@@ -1641,7 +1655,7 @@ KS_XRAY_PL='
       if (ref $x ne "HASH" || grep { !$RULE_KEYS{$_} } keys %$x) { push @dropped, { section => "rules", index => $i, item => $text, reason => "not-allowed" }; next }
       if (defined $x->{outboundTag} ? !$tag{ $x->{outboundTag} } : !(defined $x->{balancerTag} && $bal{ $x->{balancerTag} })) {
         push @dropped, { section => "rules", index => $i, item => $text, reason => "target:" . ($x->{outboundTag} // $x->{balancerTag} // "") }; next }
-      push @rules, $x; push @report, { rule => $text, from => "subscription", index => $i, xray => $x };
+      push @rules, $x; push @report, { rule => $text, from => "subscription", index => $i, small($x) ? (xray => $x) : () };
       if ($todirect->($x)) {
         my @k = grep { !/\A(outboundTag|balancerTag|type|ruleTag)\z/ } keys %$x;
         my $dnsonly = @k == 1 && $k[0] eq "inboundTag" && ref $x->{inboundTag} eq "ARRAY" && !grep { !$dnstags{$_} } @{ $x->{inboundTag} };
@@ -1734,7 +1748,8 @@ KS_XRAY_PL='
       servers => \@servers, selected => name_of($c, $ci),
       # «Проверить адрес» (ADR 0027): the rules above as objects (xray), where each outbound leads,
       # and the one that takes what no rule does; tags and kinds only
-      targets => { map { ($_->{tag} => $kind{ $_->{protocol} } // "vpn") } grep { length($_->{tag} // "") && $_->{tag} !~ /\Aks-(ping-|entry\z)/ } @$outs },
+      # an untagged first outbound: its kind under "" (no rule can name it), so the fallback says it
+      targets => { (length($outs->[0]{tag} // "") ? () : ("" => $kind{ $outs->[0]{protocol} } // "vpn")), map { ($_->{tag} => $kind{ $_->{protocol} } // "vpn") } grep { length($_->{tag} // "") && $_->{tag} !~ /\Aks-(ping-|entry\z)/ } @$outs },
       fallback => $outs->[0]{tag} // "" });
   }
   # the sha256 of the DIRECT signature of every host, one per line, from one parse of the profile; a
@@ -2090,6 +2105,7 @@ core_regen() {
   local prof conf tmp srv="$SERVERS_CORE.tmp" was=0 pid f files other=0
   [ "$(core_kind)" = xray ] && xray_api_check
   switch_approval_migrate
+  multihop_stale_drop
   prof=$(core_profile); conf=$(core_conf); tmp="$conf.tmp"
   [ -f "$prof" ] && [ -f "$PINS" ] && [ -f "$conf" ] || { echo "core config: none"; return 0; }
   KS_PINS=$PINS core_generate "$prof" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; return 1; }
@@ -2372,10 +2388,18 @@ set_splitapps() {
 # with it first; the setting is stored only if that works. With Xray the entry is a host of the
 # subscription (its first server, ADR 0027); "ks set core" turns it off.
 set_multihop() {
-  local s
+  local s pid="" i
   if [ "$1" != off ]; then
     valid_name "$1" || { echo "Плохое имя прокси" >&2; return 1; }
     [ -f "$(core_profile)" ] && [ -f "$PINS" ] || { echo "Сначала возьми профиль" >&2; return 1; }
+    if [ "$(core_kind)" = xray ]; then
+      # the generator would turn a host it cannot use off by itself: here it is refused, said why
+      grep -qxF -- "$1" <(report_servers) || { echo "Двойной VPN: в подписке нет сервера «$1»" >&2; return 1; }
+      [ "$1" != "$(report_selected)" ] || { echo "Двойной VPN: «$1» сейчас выход, выбери другой сервер входа" >&2; return 1; }
+      ! xray_pings 2>/dev/null | awk -F'\t' -v n="$1" '$1 == n && $2 == 0 { f = 1 } END { exit !f }' ||
+        { echo "Двойной VPN: сервер входа «$1» сейчас не отвечает" >&2; return 1; }
+      core_job; [ "$CORE_RUN" = 1 ] && pid=$CORE_PID
+    fi
   fi
   s=$(mktemp) || return 1
   cp "$SETTINGS" "$s" 2>/dev/null
@@ -2384,6 +2408,31 @@ set_multihop() {
   rm -f "$s"
   put_setting multihop "$1" || return 1
   reload_if_on; core_reload
+  [ -n "$pid" ] || return 0
+  # Xray was running: the chain must answer after the restart, or one hop again (fail closed, pf
+  # blocked all along, and recoverable: the VPN is not left on a dead entry)
+  if core_up "$pid"; then
+    for ((i = 0; i < ${CHAIN_TRIES:-3}; i++)); do
+      [ "$(diag_probe | cut -d' ' -f2)" = 1 ] && return 0
+      sleep "${CHAIN_WAIT:-2}"
+    done
+  fi
+  log_event "double VPN off: no answer through «$1»"
+  set_multihop off >/dev/null 2>&1
+  echo "Двойной VPN: через «$1» соединение не установилось, двойной VPN выключен" >&2
+  return 1
+}
+report_servers() { /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); print "$_->{name}\n" for @{ $r->{servers} || [] }' < "$REPORT" 2>/dev/null; }
+report_selected() { /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); print $r->{selected} // ""' < "$REPORT" 2>/dev/null; }
+
+# "ks _regen" (the upgrade): a multihop= kept from the mihomo era (set_core did not clear it before
+# ADR 0027) names a mihomo proxy, and an Xray report written before ADR 0027 (no "targets") says it
+# was never set for Xray; a name that happens to match a host would quietly turn double VPN on
+multihop_stale_drop() {
+  [ "$(core_kind)" = xray ] && [ "$(setting multihop off)" != off ] && [ -s "$REPORT" ] || return 0
+  grep -q '"targets"' "$REPORT" && return 0
+  log_event "double VPN off: «$(setting multihop off)» was set for the other way of connecting"
+  put_setting multihop off
 }
 
 # System DNS -> 127.0.0.1 (the core), the way Mullvad does it on macOS (talpid-dns macos.rs):
@@ -2644,6 +2693,8 @@ xray_select() {
   # a name the settings would call damaged (control characters, too long) would block everything;
   # failover takes names from the subscription, not through passwordless_args_ok
   valid_name "$1" || { echo "Плохое имя сервера" >&2; return 1; }
+  # «Двойной VPN»: the entry as the exit would be one hop while the app shows two (ADR 0027)
+  [ "$1" != "$(setting multihop off)" ] || { echo "«$1» — сервер входа двойного VPN: выбери другой выход или выключи двойной VPN" >&2; return 1; }
   # Built and gated with the pick in a copy of the settings; the pick itself is written only after
   # the gate and the commit passed. A ks killed in between leaves the pick that the running config
   # was approved for, never one the gate refused, for the next rebuild without a gate (rotation,
@@ -2700,9 +2751,12 @@ KS_FAILOVER_PL='
   elsif ($now - $s{last} >= 180) {
     my %p = map { my @f = split /\t/; ($f[0] => [ $f[1], $f[2] ]) } split /\n/, $ENV{P} // "";
     my $country = $flag->($cur);
-    my $entry = $ENV{ENTRY} // "";   # «Двойной VPN»: the entry is no exit (ADR 0027)
-    my ($best) = sort { $p{$a}[1] <=> $p{$b}[1] }
-      grep { $_ ne $cur && $_ ne $entry && length $_ <= 256 && !/[\x00-\x1f\x7f]/ && length $country && $flag->($_) eq $country && $p{$_} && $p{$_}[0] && ($why ne "slow" || $p{$_}[1] * 2 < $ms) } @names;
+    # «Двойной VPN» (ADR 0027): the entry is no exit, and with it dead no exit answers: no switch.
+    # Own servers («(свой)») route unlike the subscription'"'"'s hosts: never a target
+    my $entry = $ENV{ENTRY} // "";
+    my $stuck = length $entry && $p{$entry} && !$p{$entry}[0];
+    my ($best) = $stuck ? () : sort { $p{$a}[1] <=> $p{$b}[1] }
+      grep { $_ ne $cur && $_ ne $entry && !/ \(свой\)(?: \([0-9]+\))?\z/ && length $_ <= 256 && !/[\x00-\x1f\x7f]/ && length $country && $flag->($_) eq $country && $p{$_} && $p{$_}[0] && ($why ne "slow" || $p{$_}[1] * 2 < $ms) } @names;
     if (defined $best) { $out = join "\t", "switch", $cur, $best, $why, $ms, $usual; %s = (server => $best, last => $now, manual => "") }
     elsif (!$s{told}) { $out = join "\t", "stay", $cur, "-", $why, $ms, $usual; $s{told} = 1 }
   }

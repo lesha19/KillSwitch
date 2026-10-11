@@ -173,7 +173,21 @@ OBS=$'ks-ping-0\t0\t0\nks-ping-1\t1\t120\nks-ping-2\t1\t30'
 reset_fo; put_setting multihop "🇱🇹Литва 2"; PROBE="0 0"
 for _ in 1 2 3 4; do pass; done
 [ ! -e "$T/selected" ] && ok "double VPN (ADR 0027): the entry host is never failover's new exit (that would be one hop)" || bad "switched to the entry: $(cat "$T/selected")"
+# the entry dead: every exit is unreachable through it, moving the exit would only churn
+OBS=$'ks-ping-0\t0\t0\nks-ping-1\t1\t120\nks-ping-2\t0\t0'
+reset_fo; put_setting multihop "🇩🇪Германия"; PROBE="0 0"
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do pass; done
+[ ! -e "$T/selected" ] && ok "  the entry's own probe dead: no failover at all (the exit stays the person's)" || bad "churned with a dead entry: $(cat "$T/selected")"
+OBS=$'ks-ping-0\t0\t0\nks-ping-1\t1\t120\nks-ping-2\t1\t30'
+reset_fo; PROBE="0 0"
+for _ in 1 2 3 4; do pass; done
+[ "$(cat "$T/selected" 2>/dev/null)" = "🇱🇹Литва 2" ] && ok "  the entry alive: the exit still fails over" || bad "  entry alive: $(cat "$T/selected" 2>&1)"
 put_setting multihop off
+# own servers (ADR 0027) route differently from the subscription's hosts: never a failover target
+reset_fo
+/usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); $r->{servers}[1]{name} = "🇱🇹Литва 2 (свой)"; print JSON::PP->new->encode($r)' < "$REPORT" > "$REPORT.n" && mv "$REPORT.n" "$REPORT"
+PROBE="0 0"; for _ in 1 2 3 4; do pass; done
+[ ! -e "$T/selected" ] && ok "an own server («(свой)») is never failover's target" || bad "switched to an own server: $(cat "$T/selected")"
 
 OBS=$'ks-ping-0\t1\t100\nks-ping-1\t1\t110\nks-ping-2\t1\t30'
 reset_fo; put_setting xrayserver ""; PROBE="100 1"   # no server picked by hand: the first host, auto
