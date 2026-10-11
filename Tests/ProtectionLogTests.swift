@@ -33,6 +33,8 @@ final class ProtectionLogTests: XCTestCase {
         XCTAssertEqual(text("2026-10-10 14:03:22 watchdog switched off (Login Items): network left on"),
                        "Службу выключили в Объектах входа — сеть не отключалась")
         XCTAssertEqual(text("2026-10-10 14:03:22 network turned back on by hand"), "Сеть включена вручную")
+        XCTAssertEqual(text("2026-10-11 14:03:22 detailed diagnostics: on"), "Подробная диагностика включена")
+        XCTAssertEqual(text("2026-10-11 14:03:22 detailed diagnostics: off"), "Подробная диагностика выключена, записанные соединения удалены")
     }
 
     func testUnknownLineStaysAsIs() {

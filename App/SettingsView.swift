@@ -644,6 +644,16 @@ private struct AdvancedSettings: View {
 
             TransportSection()
 
+            Section("Диагностика") {
+                Toggle(isOn: Binding(get: { control.diagVerbose }, set: { control.set("diag", $0) })) {
+                    Text("Подробная диагностика (все соединения)")
+                    Text("KillSwitch записывает на этом Mac, куда ходили программы через VPN, — чтобы найти, что не открывается.")
+                }
+                .disabled(control.busy || control.state == .notInstalled)
+                Footnote(text: String(localized: "Записи хранятся 7 дней и никуда не отправляются."),
+                         more: String(localized: "Без подробной диагностики KillSwitch раз в минуту записывает только состояние: работает ли VPN, задержку, объём трафика и смену сети, без адресов сайтов. С ней добавляются все соединения с адресами сайтов (только с основным способом подключения, Xray). Выключение удаляет записанные соединения. Всё это попадает в отчёт только по кнопке «Собрать отчёт»."))
+            }
+
             Section("Старая схема с dropweb") {
                 Toggle(isOn: Binding(get: { control.allowDirect }, set: { control.set("direct", $0) })) {
                     Text("Пускать dropweb мимо VPN (слабее защиты)")
@@ -766,8 +776,18 @@ struct ProtectionLogView: View {
                 Text("Что происходило с защитой и VPN, новое сверху.").foregroundStyle(.secondary)
             }
             Section {
-                Button("Скопировать диагностику") { DiagnosticsCopy.copy(control: control, client: client) }
+                HStack {
+                    Button("Скопировать диагностику") { DiagnosticsCopy.copy(control: control, client: client) }
+                    Button("Собрать отчёт") { control.collectReport() }
+                        .disabled(control.reportBusy || control.state == .notInstalled)
+                    if control.reportBusy { ProgressView().controlSize(.small) }
+                }
                 Text("Без ссылок, ключей и адресов серверов. Можно отправить в поддержку.").foregroundStyle(.secondary)
+                Text("Отчёт — архив на Рабочем столе: журнал за 7 дней, состояние защиты и сети, отчёты о сбоях.")
+                    .foregroundStyle(.secondary)
+                if let error = control.reportError {
+                    Text(error).foregroundStyle(.red).textSelection(.enabled)
+                }
             }
         }
         .task { control.refreshEvents() }

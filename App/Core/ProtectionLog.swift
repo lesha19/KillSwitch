@@ -51,6 +51,8 @@ enum ProtectionLog {
             ("shutdown: network off", String(localized: "Mac выключается — сеть отключена")),
             ("watchdog switched off", String(localized: "Службу выключили в Объектах входа — сеть не отключалась")),
             ("network turned back on", String(localized: "Сеть включена вручную")),
+            ("detailed diagnostics: on", String(localized: "Подробная диагностика включена")),
+            ("detailed diagnostics: off", String(localized: "Подробная диагностика выключена, записанные соединения удалены")),
             ("core on", String(localized: "VPN подключён")),
             ("core off", String(localized: "VPN отключён")),
             ("core config imported", String(localized: "Серверы подписки загружены")),
