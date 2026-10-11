@@ -30,6 +30,8 @@ struct CoreProxies: Equatable {
     static let helperDNSGroup = "KS-DNS"
     /// The one selector Helper/ks offers with Xray (XRAY_GROUP): the subscription's hosts.
     static let xrayGroup = "Сервер"
+    /// The app's defaults: the profile's group names in order (VPNClient saves them on import).
+    static let groupOrderKey = "coreGroupOrder"
     static let groupTypes: Set<String> = ["Selector", "URLTest", "Fallback", "LoadBalance", "Relay"]
 
     /// `order`: group names in profile order (mihomo's JSON object has none); unknown ones follow,
@@ -63,10 +65,13 @@ struct CoreProxies: Equatable {
             groups.append(Group(name: name, type: type, now: now, all: members.filter { !Failover.isGroup($0) }, offers: members))
         }
         failover.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        // without an order, a selector no other group offers is the one the rules use
+        let offered = Set(groups.flatMap(\.offers))
         groups.sort { a, b in
             let ia = order.firstIndex(of: a.name) ?? Int.max, ib = order.firstIndex(of: b.name) ?? Int.max
             if ia != ib { return ia < ib }
             if a.selectable != b.selectable { return a.selectable }
+            if offered.contains(a.name) != offered.contains(b.name) { return !offered.contains(a.name) }
             return a.name < b.name
         }
         self.groups = groups

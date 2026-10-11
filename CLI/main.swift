@@ -101,7 +101,7 @@ func fail(_ reply: HelperReply) -> Never {
 }
 
 func proxies(_ daemon: DaemonConnection) async -> CoreProxies? {
-    try? CoreProxies(data: Data(await daemon.read(.coreProxies).utf8))
+    CLI.proxies(await daemon.read(.coreProxies), appDefaults: UserDefaults(suiteName: CLI.appDefaultsSuite))
 }
 
 let command: CLI.Command

@@ -162,6 +162,15 @@ enum CLI {
 
     // MARK: servers
 
+    /// The app's defaults domain (the CLI's own is com.lesha19.KillSwitch.cli).
+    static let appDefaultsSuite = "com.lesha19.KillSwitch"
+
+    /// `ks core proxies` read as the app reads it, with the profile's group order the app saved:
+    /// mihomo's JSON has none, and without it another selector could pass for the main one.
+    static func proxies(_ answer: String, appDefaults: UserDefaults?) -> CoreProxies? {
+        try? CoreProxies(data: Data(answer.utf8), order: appDefaults?.stringArray(forKey: CoreProxies.groupOrderKey) ?? [])
+    }
+
     enum SelectionError: Error, Equatable {
         case notFound
         /// Several servers match: their names, in list order.
