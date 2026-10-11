@@ -817,6 +817,7 @@ struct AboutView: View {
                     Text("Обновлять автоматически")
                     Text("KillSwitch ставит обновления сам, пока вы им не пользуетесь. VPN и защита при этом не прерываются.")
                 }
+                LicensesButton()
             }
             NetworkHintsSection()
             Section("Советы") {

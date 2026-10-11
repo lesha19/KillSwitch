@@ -18,6 +18,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   Server addresses and names become `server-N`; links, UUIDs and keys are masked; the subscription's
   profile and the core's config are never included.
 - Xray: the stats API (counters only, on 127.0.0.1:47891), so `ks core traffic` works with Xray.
+- «О программе → Лицензии»: the licences of Xray-core, mihomo, the geodata, Sparkle and Yams with
+  links to their source code; the project's own `LICENSE` (#36).
 
 ## [0.17.0] - 2026-10-11
 
