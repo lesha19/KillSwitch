@@ -11,7 +11,7 @@ enum DaemonExecutable {
     static func current() -> String? {
         var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))   // PROC_PIDPATHINFO_MAXSIZE
         guard proc_pidpath(getpid(), &buffer, UInt32(buffer.count)) > 0 else { return nil }
-        return String(cString: buffer)
+        return String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     /// `…/X.app/Contents/MacOS/KillSwitchHelper` → `…/X.app`; nil for anything else (a relative
