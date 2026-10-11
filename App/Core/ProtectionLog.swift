@@ -62,6 +62,8 @@ enum ProtectionLog {
             ("core config: the new one refused", String(localized: "Новые настройки VPN не прошли проверку — оставлены прежние")),
             ("netbird: its daemon did not start again", String(localized: "NetBird не запустился после перезапуска — следующая попытка позже")),
             ("netbird: its daemon started again", String(localized: "NetBird снова запущен")),
+            ("netbird: reconnected", String(localized: "NetBird снова подключён")),
+            ("netbird: did not reconnect", String(localized: "NetBird не подключился после перезапуска — подключите его заново")),
             ("another VPN tunnel", String(localized: "Рядом работает другой VPN")),
             ("other VPN tunnel gone", String(localized: "Другой VPN отключился")),
             ("server addresses changed", String(localized: "Адреса серверов обновлены")),

@@ -25,6 +25,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   checks as a typed link; no Screen Recording permission. «QR-код…» shows the subscription link as
   a QR code for a phone after a warning; not offered when the subscription sends `hide-url`.
 
+### Fixed
+- NetBird stayed disconnected after KillSwitch restarted its daemon (0.18.0, NetBird 0.78): when
+  it was connected before, KillSwitch now runs `netbird up` once the daemon is back (bounded in
+  time, in the background) and logs whether it reconnected; a NetBird the user turned off with
+  `netbird down` is left down.
+
 ## [0.18.0] - 2026-10-11
 
 ### Added

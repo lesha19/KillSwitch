@@ -45,6 +45,10 @@ final class ProtectionLogTests: XCTestCase {
         XCTAssertEqual(text("2026-10-11 14:03:22 netbird: its daemon did not start again (launchctl bootstrap failed), next try in 30 s"),
                        "NetBird не запустился после перезапуска — следующая попытка позже")
         XCTAssertEqual(text("2026-10-11 14:03:22 netbird: its daemon started again"), "NetBird снова запущен")
+        XCTAssertEqual(text("2026-10-11 14:03:22 netbird: reconnected after the restart (netbird up)"), "NetBird снова подключён")
+        XCTAssertEqual(text("2026-10-11 14:03:22 netbird: reconnected by itself after the restart"), "NetBird снова подключён")
+        XCTAssertEqual(text("2026-10-11 14:03:22 netbird: did not reconnect after the restart, run netbird up"),
+                       "NetBird не подключился после перезапуска — подключите его заново")
     }
 
     func testUnknownLineStaysAsIs() {

@@ -423,6 +423,11 @@ watch_pass() {
 # in $NB_RETRYF ("<failures> <epoch of the next try>") and tried again, 30 s later and doubling.
 NB_SIGF="$DIR/netbird-sig"
 NB_RETRYF="$DIR/netbird-retry"
+# NetBird 0.78 may come back from the restart disconnected until "netbird up" (seen with 0.18.0).
+# If it was connected before ($NB_UPF), its CLI is asked to connect again once the daemon is up;
+# every CLI call is killed after its timeout. Never run when it was down (the user's "netbird down").
+NB_UPF="$DIR/netbird-up"
+NB_UP_TIMEOUT=30; NB_STATUS_TIMEOUT=5; NB_SETTLE=20; NB_SOCK_WAIT=50  # settle/sock: 0.5 s polls
 nb_bin() { /usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$NB_PLIST" 2>/dev/null; }
 nb_group() { /usr/libexec/PlistBuddy -c 'Print :GroupName' "$NB_PLIST" 2>/dev/null; }
 nb_want() {
@@ -430,6 +435,37 @@ nb_want() {
   [ "$(setting tailscale 1)" = 1 ] && dscl . -read "/Groups/$NB_GROUP" PrimaryGroupID >/dev/null 2>&1 || return 1
   bin=$(nb_bin) && [ -n "$bin" ] || return 1
   codesign -v -R="anchor apple generic and certificate leaf[subject.OU] = \"$NB_TEAM\"" "$bin" 2>/dev/null
+}
+nb_addr() {  # the daemon address from the plist's --daemon-addr, NetBird's default otherwise
+  local a i=1 prev=""
+  while a=$(/usr/libexec/PlistBuddy -c "Print :ProgramArguments:$i" "$NB_PLIST" 2>/dev/null); do
+    [ "$prev" = --daemon-addr ] && { echo "$a"; return; }
+    case $a in --daemon-addr=*) echo "${a#--daemon-addr=}"; return ;; esac
+    prev=$a; i=$((i + 1))
+  done
+  echo unix:///var/run/netbird.sock
+}
+nb_cli() {  # nb_cli <seconds> <args...>: NetBird's CLI against its daemon, killed after <seconds>
+  local t=$1; shift
+  perl -e '$t = shift; $p = fork; defined $p or exit 1; if (!$p) { exec @ARGV; exit 127 }
+    $SIG{ALRM} = sub { kill 9, $p; exit 124 }; alarm $t; waitpid $p, 0; exit($? >> 8)' \
+    "$t" "$(nb_bin)" "$@" --daemon-addr "$(nb_addr)"
+}
+nb_connected() { nb_cli "$NB_STATUS_TIMEOUT" status 2>/dev/null | grep -q '^Management: Connected'; }
+nb_reconnect() {  # after a restart that worked: connect again if it was connected before
+  local addr sock
+  [ -f "$NB_UPF" ] || return 0
+  rm -f "$NB_UPF"
+  addr=$(nb_addr)
+  case $addr in unix://*) sock=${addr#unix://}
+    for _ in $(seq 1 "$NB_SOCK_WAIT"); do [ -S "$sock" ] && break; sleep 0.5; done ;; esac
+  for _ in $(seq 1 "$NB_SETTLE"); do
+    nb_connected && { log_event "netbird: reconnected by itself after the restart"; return 0; }
+    sleep 0.5
+  done
+  nb_cli "$NB_UP_TIMEOUT" up --no-browser >/dev/null 2>&1
+  if nb_connected; then log_event "netbird: reconnected after the restart (netbird up)"
+  else log_event "netbird: did not reconnect after the restart, run netbird up"; fi
 }
 nb_sig() { echo "$(setting tailscale 1) $(stat -L -f '%i %Fm %z' "$NB_PLIST" "$(nb_bin)" 2>/dev/null | paste -sd' ' -)"; }
 nb_restart() {
@@ -450,13 +486,14 @@ nb_try_restart() {  # nb_try_restart <failures so far> <now>
 netbird_bg() { [ -f "$NB_PLIST" ] || return 0; lockf -k -t 0 "$DIR/netbird.lock" "$0" _netbird >/dev/null 2>&1 & }
 netbird_sync() {  # netbird_sync [now]: nothing to do unless the plist, binary or setting changed
   local sig want=0 have=0 now=${1:-$(date +%s)} n next
-  [ -f "$NB_PLIST" ] || { rm -f "$NB_SIGF" "$NB_RETRYF"; return 0; }
+  [ -f "$NB_PLIST" ] || { rm -f "$NB_SIGF" "$NB_RETRYF" "$NB_UPF"; return 0; }
   if [ -f "$NB_RETRYF" ]; then
     read -r n next < "$NB_RETRYF"
     [[ "$n" =~ ^[0-9]+$ && "$next" =~ ^[0-9]+$ ]] || { n=0; next=0; }
     [ "$now" -ge "$next" ] || return 0
     nb_try_restart "$n" "$now" || return 0
     log_event "netbird: its daemon started again"
+    nb_reconnect
   fi
   sig=$(nb_sig)
   [ "$sig" = "$(cat "$NB_SIGF" 2>/dev/null)" ] && return 0
@@ -470,7 +507,9 @@ netbird_sync() {  # netbird_sync [now]: nothing to do unless the plist, binary o
     [ "$want" = "$have" ] || return 0
     if [ "$want" = 1 ]; then log_event "netbird: its daemon let past the VPN, restarting it"
     else log_event "netbird: its daemon goes through the VPN again, restarting it"; fi
+    rm -f "$NB_UPF"; nb_connected && : > "$NB_UPF"
     nb_try_restart 0 "$now" || return 0
+    nb_reconnect
     sig=$(nb_sig)
   fi
   echo "$sig" > "$NB_SIGF"
