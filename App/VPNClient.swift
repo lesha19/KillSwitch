@@ -292,11 +292,11 @@ final class VPNClient {
 
     private func fetchProfile(_ url: URL, source: SubscriptionSource, title: String?) async throws -> Profile {
         let (body, headers) = try await Self.fetch(url, viaVPN: source.viaVPN)
-        let (profile, leftOut) = try ProfileConverter.read(subscription: body)
-        UserDefaults.standard.set(leftOut, forKey: RoutingReport.leftOutKey)
-        Self.cache(profile)
+        let read = try await ProfileConverter.readInBackground(subscription: body)   // off the main actor (#50)
+        UserDefaults.standard.set(read.leftOut, forKey: RoutingReport.leftOutKey)
+        if let json = read.json { Self.cache(json: json) }
         took(headers, source: source, title: title)
-        return profile
+        return read.profile
     }
 
     // MARK: the main way of connecting (ADR 0020)
@@ -726,8 +726,8 @@ final class VPNClient {
         return dir.appendingPathComponent("subscription.json")
     }
 
-    private static func cache(_ profile: Profile) {
-        guard let data = try? ProfileConverter.json(profile) else { return }
+    /// `data`: the profile as ProfileConverter.json gives it.
+    private static func cache(json data: Data) {
         let dir = cacheFile.deletingLastPathComponent()
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try? data.write(to: cacheFile, options: [.atomic])
