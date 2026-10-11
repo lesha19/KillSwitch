@@ -102,13 +102,15 @@ final class RoutingReportTests: XCTestCase {
 
     /// Hosts of an Xray subscription the helper left out (section "servers", 0.19.1).
     func testLeftOutHostsInWords() {
-        XCTAssertEqual(["address", "tag", "selector", "fallback", "download", "case"].map(RoutingReport.Dropped.reasonText), [
+        XCTAssertEqual(["address", "tag", "selector", "fallback", "download", "case", "protocol", "transport"].map(RoutingReport.Dropped.reasonText), [
             "Адрес сервера не годится (например, 0.0.0.0 — заглушка панели)",
             "Тег ks-… занят KillSwitch",
             "Балансировщик или проверка выбирают служебный или прямой выход",
             "Запасной выход балансировщика не из этого сервера",
             "Адрес в настройках транспорта, который KillSwitch не закрепляет",
-            "Ключ в другом регистре: Xray его прочтёт, проверка — нет",
+            "Ключ записан необычно (другой регистр или не латинские буквы), KillSwitch не может его проверить",
+            "Тип сервера, который KillSwitch не поддерживает (например, hysteria2)",
+            "Транспорт связывается не только с сервером, но и с другими адресами",
         ])
         XCTAssertEqual(RoutingReport.Dropped(section: "servers", item: "Плохой", reason: "address").sectionTitle, "Сервер")
     }
