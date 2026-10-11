@@ -109,6 +109,14 @@ check "a greater build: taken" "$(build_problem 26 25)" ""
 check "nothing published yet: taken" "$(build_problem 1 '')" ""
 check "the same build: refused" "$(build_problem 25 25 | grep -c 'Поставь 26')" 1
 check "not a number: refused" "$(build_problem 2x 25 | grep -c 'не целое число')" 1
+printf '<item>\n  <sparkle:version> 30 </sparkle:version>\n</item>\n<item><sparkle:version>\n28\n</sparkle:version></item>\n' > "$tmp/spaced.xml"
+check "spaces inside the element are read" "$(appcast_max_build "$tmp/spaced.xml")" 30
+check "the published appcast: a greater build taken" "$(published_build_problem 31 "$tmp/spaced.xml")" ""
+check "the published appcast: the same build refused" "$(published_build_problem 30 "$tmp/spaced.xml" | grep -c 'Поставь 31')" 1
+printf '<item><title>KillSwitch</title><sparkle:version>v30</sparkle:version></item>\n' > "$tmp/unreadable.xml"
+check "items without a readable build: refused, not taken as nothing published" \
+  "$(published_build_problem 31 "$tmp/unreadable.xml" | grep -c 'номер сборки')" 1
+check "an appcast without items: taken" "$(published_build_problem 1 "$tmp/empty.xml")" ""
 printf 'KS_VERSION="0.19.0" # the app'"'"'s version\n' > "$tmp/ks"
 check "KS_VERSION equal to the app's: taken" "$(ks_version_problem "$tmp/ks" 0.19.0)" ""
 check "KS_VERSION different: refused" "$(ks_version_problem "$tmp/ks" 0.19.1 | grep -c 'KS_VERSION «0.19.0»')" 1

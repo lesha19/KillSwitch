@@ -115,7 +115,21 @@ sums_replace() {
 # appcast_max_build <appcast.xml>: the highest build (sparkle:version) of its items, beta ones too;
 # nothing when it has none. Sparkle offers only a build greater than the installed one.
 appcast_max_build() {
-  { grep -oE 'sparkle:version(>|=")[0-9]+' "$1" || true; } | sed -E 's/.*[^0-9]//' | sort -n | tail -1
+  # one line, so an element split over lines or padded with spaces is still read
+  { tr '\n\r\t' '   ' < "$1" | grep -oE 'sparkle:version(>|=")[[:space:]]*[0-9]+' || true; } |
+    sed -E 's/.*[^0-9]//' | sort -n | tail -1
+}
+
+# published_build_problem <build> <published appcast.xml>: why <build> cannot be published after
+# that appcast, or nothing. Items whose build cannot be read are a problem, not "nothing published".
+published_build_problem() {
+  local last
+  last=$(appcast_max_build "$2")
+  if [ -z "$last" ] && grep -q '<item' "$2"; then
+    echo "В appcast.xml последнего выпуска есть выпуски, но номер сборки (sparkle:version) не прочитать: проверь его вручную."
+    return
+  fi
+  build_problem "$1" "$last"
 }
 
 # build_problem <build> <last published build>: why <build> cannot be published, or nothing.
@@ -264,7 +278,7 @@ if [ "$MODE" = --publish ]; then
     # The latest stable release's appcast is the feed every app reads; betas are added to it.
     rm -rf build/published && mkdir -p build/published
     if gh release download --repo "$RELEASES_REPO" --dir build/published --pattern appcast.xml >/dev/null 2>&1; then
-      build_problem=$(build_problem "$BUILD" "$(appcast_max_build build/published/appcast.xml)")
+      build_problem=$(published_build_problem "$BUILD" build/published/appcast.xml)
       [ -z "$build_problem" ] || problem "$build_problem"
     else
       problem "Не скачался appcast.xml последнего выпуска $RELEASES_REPO: номер сборки не проверить."
