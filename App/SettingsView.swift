@@ -313,6 +313,11 @@ private struct CoreChoiceSection: View {
                     Text("На самый быстрый работающий сервер той же страны. Другую страну KillSwitch сам не выбирает.")
                 }
                 .disabled(control.busy || control.state == .notInstalled)
+                Toggle(isOn: Binding(get: { control.escalate }, set: { control.set("escalate", $0) })) {
+                    Text("Пробовать другой отпечаток и транспорт, если сервер не отвечает")
+                    Text("Сначала тот же сервер с другим отпечатком TLS, потом с другим транспортом из подписки (например, xHTTP вместо TCP), и только потом другой сервер. Что сработало, запоминается до смены сети.")
+                }
+                .disabled(control.busy || control.state == .notInstalled)
             }
         }
     }
