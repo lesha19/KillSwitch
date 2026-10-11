@@ -78,6 +78,12 @@ enum SubscriptionHeaders {
         return text
     }
 
+    /// `hide-url` (INCY's header): the provider asks clients not to show the link, so KillSwitch
+    /// offers no QR code of it (#24).
+    static func hidesURL(_ header: String?) -> Bool {
+        ["1", "true"].contains(header?.trimmingCharacters(in: .whitespaces).lowercased() ?? "")
+    }
+
     /// The URL is a secret: only the host and the last four characters are shown.
     static func masked(_ url: String) -> String {
         guard let components = URLComponents(string: url), let scheme = components.scheme, let host = components.host else {

@@ -69,4 +69,10 @@ final class SubscriptionHeadersTests: XCTestCase {
         XCTAssertNil(SubscriptionHeaders.hwidProblem(headers: ["x-hwid-active": "true"]))
         XCTAssertNil(SubscriptionHeaders.hwidProblem(headers: [:]))
     }
+
+    /// `hide-url` (INCY): the provider asks not to show the link as a QR code (#24).
+    func testHideURL() {
+        for value in ["1", "true", " True "] { XCTAssertTrue(SubscriptionHeaders.hidesURL(value), value) }
+        for value in [nil, "", "0", "false", "no"] { XCTAssertFalse(SubscriptionHeaders.hidesURL(value), value ?? "nil") }
+    }
 }
