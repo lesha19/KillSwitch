@@ -63,6 +63,8 @@ final class ProtectionLogTests: XCTestCase {
         XCTAssertEqual(text("2026-10-11 14:03:22 failover failed: 🇱🇹Литва -> 🇱🇹Литва 2, 🇱🇹Литва kept"),
                        "Не получилось переключиться с «🇱🇹 Литва» на «🇱🇹 Литва 2»")
         XCTAssertEqual(text("2026-10-11 14:03:22 automatic server switch: on"), "Автопереключение сервера включено")
+        XCTAssertEqual(text("2026-10-11 14:03:22 server switch to 🇱🇹Литва 2 refused: it sends other traffic past the VPN than approved"),
+                       "Не переключились на «🇱🇹 Литва 2»: он пускает мимо VPN не то, что было подтверждено. Возьми подписку заново с паролем")
         XCTAssertEqual(text("2026-10-11 14:03:22 automatic server switch: off"), "Автопереключение сервера выключено")
     }
 

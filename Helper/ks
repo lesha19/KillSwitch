@@ -1554,6 +1554,9 @@ KS_XRAY_PL='
       push @ours, $rule; push @added, { kind => "splitapps", items => \@apps };
       $egress{splitapps} = 1; push @direct, "rule\t" . $J->encode($rule);
     }
+    # ks-dns goes to the dns outbound, which can dial its own address (KS-15): once anything may
+    # leave the tunnel, a change to it needs the admin like a DIRECT rule
+    push @direct, map { "dns-outbound\t" . $J->encode($_) } grep { $_->{protocol} eq "dns" } @$outs if @direct;
     unshift @report, map { { rule => rule_text($_), from => "killswitch" } } @ours;
     $rt{rules} = [ @ours, @rules ];
     # DNS: the system resolver is ourselves (127.0.0.1:53), fakedns would outlive the core
@@ -1885,25 +1888,41 @@ refresh_check() {
 # its servers and pins.
 core_commit() {
   local tmp=$1 srv=$2
-  chmod 600 "$tmp" "$tmp.pins"
+  chmod 600 "$tmp" "$tmp.pins" "$tmp.direct"
   core_test "$tmp" >/dev/null 2>&1 || {
     core_test "$tmp" 2>&1 | tail -3 >&2; core_clean "$tmp" "$srv"; return 1; }
   servers_merge "$srv" > "$SERVERS.tmp"
   rules "$ALLOW" "$SERVERS.tmp" | pfctl -n -a "$ANCHOR" -f - >/dev/null 2>&1 || {
     core_clean "$tmp" "$srv"; echo "pf не принял адреса серверов" >&2; return 1; }
   mv "$srv" "$SERVERS_CORE"; mv "$SERVERS.tmp" "$SERVERS"
-  mv "$tmp.pins" "$PINS"; rm -f "$tmp.direct"
+  mv "$tmp.pins" "$PINS"; mv "$tmp.direct" "$CORE_DIR/direct"
   core_publish "$tmp"
   mv "$tmp" "$(core_conf)"
 }
 
-# core_rebuild <pins>: the config again from the kept profile with these addresses, no DNS
-# (rotation, settings the generator reads).
+# direct_differs <direct> <egress>: a generated config would send past the VPN other than the
+# running one does (KS-10). What runs was approved by the admin (import, a setting) or checked
+# the same way; a helper from before 0.19 kept no copy, then the import's approved-direct.
+direct_differs() {
+  local run="$CORE_DIR/direct"
+  [ -f "$run" ] || run=$APPROVED_DIRECT
+  if { [ -s "$1" ] || [ -s "$run" ]; } && ! cmp -s "$1" "$run"; then return 0; fi
+  { [ -s "$2" ] || [ -s "$CORE_EGRESS" ]; } && ! cmp -s "$2" "$CORE_EGRESS"
+}
+
+# core_rebuild <pins> [switch]: the config again from the kept profile with these addresses, no
+# DNS (rotation, settings the generator reads). "switch" (another Xray host, passwordless): refused
+# with 3 when that host's config sends something else past the VPN (ADR 0013, KS-10).
 core_rebuild() {
   local prof tmp srv="$SERVERS_CORE.tmp"
   prof=$(core_profile); tmp="$(core_conf).tmp"
   [ -f "$prof" ] && [ -f "$1" ] || { echo "Нет сохранённого профиля: возьми профиль заново" >&2; return 2; }
   KS_PINS=$1 core_generate "$prof" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; return 1; }
+  if [ "${2:-}" = switch ] && direct_differs "$tmp.direct" "$tmp.egress"; then
+    core_clean "$tmp" "$srv"
+    echo "Этот сервер подписки меняет, что идёт мимо VPN (DIRECT): нужно подтверждение паролем администратора (возьми подписку заново)" >&2
+    return 3
+  fi
   core_commit "$tmp" "$srv"
 }
 
@@ -1927,11 +1946,12 @@ core_regen() {
   [ -f "$prof" ] && [ -f "$PINS" ] && [ -f "$conf" ] || { echo "core config: none"; return 0; }
   KS_PINS=$PINS core_generate "$prof" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; return 1; }
   if cmp -s "$tmp" "$conf"; then
-    # an older helper wrote no report or egress: those still come into place
+    # an older helper wrote no report, egress or running DIRECT: those still come into place
     if core_publish "$tmp"; then reload_if_on; fi
+    chmod 600 "$tmp.direct"; mv "$tmp.direct" "$CORE_DIR/direct"
     core_clean "$tmp" "$srv"; echo "core config: kept"; return 0
   fi
-  files=("$conf" "$SERVERS" "$SERVERS_CORE" "$PINS" "$CORE_EGRESS" "$REPORT")
+  files=("$conf" "$SERVERS" "$SERVERS_CORE" "$PINS" "$CORE_EGRESS" "$REPORT" "$CORE_DIR/direct")
   if [ "$(core_kind)" = xray ]; then
     core_job
     [ "$CORE_RUN" = 1 ] && was=1 && pid=$CORE_PID
@@ -2398,8 +2418,14 @@ xray_select() {
     { echo "В подписке нет сервера «$1»" >&2; return 1; }
   local old
   old=$(setting xrayserver "")
+  local rc=0
   put_setting xrayserver "$1" || return 1
-  core_rebuild "$PINS" || { put_setting xrayserver "$old"; return 1; }
+  core_rebuild "$PINS" switch || rc=$?
+  if [ "$rc" != 0 ]; then
+    put_setting xrayserver "$old"
+    [ "$rc" = 3 ] && log_event "server switch to $1 refused: it sends other traffic past the VPN than approved"
+    return "$rc"
+  fi
   reload_if_on; core_reload
 }
 # Automatic failover with Xray (ADR 0023; the default decision of #43). Every 20 s the watchdog
@@ -2482,7 +2508,7 @@ core_select() {  # core_select <group> <proxy>: switch a select group, e.g. to a
   local body rc
   if [ "$(core_kind)" = xray ]; then
     [ "$1" = "$XRAY_GROUP" ] || { echo "С ядром Xray выбирается только сервер" >&2; return 1; }
-    xray_select "$2" || return 1
+    xray_select "$2" || return   # 3: that host needs the admin (KS-10)
     # a pick by hand starts the failover over and is kept for its cooldown at least (ADR 0023)
     printf 'server=%s\nlast=%s\nfails=0\nmanual=%s\n' "$2" "${KS_NOW:-$(date +%s)}" "$2" > "$CORE_DIR/failover.tmp" &&
       mv "$CORE_DIR/failover.tmp" "$CORE_DIR/failover"
