@@ -4,6 +4,21 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [0.18.0] - 2026-10-11
+
+### Added
+- A local diagnostics journal (ADR 0021) in `/Library/KillSwitch/diag` (root-only, kept 7 days and
+  about 50 MB): once a minute the state as a JSON line (core, protection, a probe through the VPN,
+  traffic, network, DNS), and the events the watchdog notices (sleep and wake, tunnels, the core's
+  start, stop and restart, network and DNS changes). Nothing leaves the Mac.
+- «Подробная диагностика (все соединения)» in Settings › Дополнительно, off by default: with Xray
+  every connection is recorded with its site (`ks set diag 0|1`); switching it off deletes them.
+- «Собрать отчёт» in «Журнал защиты»: one archive on the Desktop with the journal, logs, state,
+  versions, network and crash reports of the last 7 days (`ks diag report <folder>`, no password).
+  Server addresses and names become `server-N`; links, UUIDs and keys are masked; the subscription's
+  profile and the core's config are never included.
+- Xray: the stats API (counters only, on 127.0.0.1:47891), so `ks core traffic` works with Xray.
+
 ## [0.17.0] - 2026-10-11
 
 ### Added
