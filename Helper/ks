@@ -1697,7 +1697,9 @@ KS_XRAY_PL='
     my @pings;
     for my $i (0 .. $#$a) {
       my ($o) = grep { ref $_ eq "HASH" && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && length($_->{tag} // "") } @{ $a->[$i]{outbounds} };
-      next if !$o || $o->{proxySettings} || (ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" && exists $o->{streamSettings}{sockopt}{dialerProxy});
+      # (a chain the way check() reads one: null or "" is none)
+      next if !$o || (ref $o->{proxySettings} eq "HASH" && set($o->{proxySettings}{tag}))
+        || (ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" && set($o->{streamSettings}{sockopt}{dialerProxy}));
       $o = $J->decode($J->encode($o)); $o->{tag} = "ks-ping-$i";
       push @pings, $o; $servers[$i]{ping} = $o->{tag};
     }
