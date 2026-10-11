@@ -167,6 +167,15 @@ set_core xray 2>"$tmp/err"
   [ -s "$CORE_DIR/config.yaml" ] && [ ! -e "$CORE_DIR/xray.json" ] && [ "$(setting core "")" = xray ] && grep -q 'подписку' "$tmp/err" &&
   ok "set core while running: stored, the running core keeps the VPN up until core on, a stale config of the new one gone" ||
   bad "set core running: $(cat "$tmp/launchd") / $(cat "$CORE_PLIST") / $(ls "$CORE_DIR") / $(cat "$tmp/err")"
+# ...and back before the import for the new one worked: mihomo still runs on config.yaml, which
+# must stay, or its next restart has no config and no VPN
+set_core mihomo 2>/dev/null
+[ -s "$CORE_DIR/config.yaml" ] && [ "$(setting core "")" = mihomo ] &&
+  ok "set core back to the running one: its config kept" || bad "set core back: $(ls "$CORE_DIR")"
+echo '{}' > "$CORE_DIR/xray.json"; put_setting core xray
+set_core xray 2>/dev/null
+[ -s "$CORE_DIR/xray.json" ] && ok "set core to the one already chosen: its config kept" || bad "set core same: $(ls "$CORE_DIR")"
+rm -f "$CORE_DIR/xray.json"; put_setting core xray
 set_core sing-box 2>/dev/null && bad "set core sing-box accepted" || ok "set core: only xray or mihomo"
 
 # "ks core on" then swaps the job: launchd returns from bootout before the old job is gone and

@@ -2215,12 +2215,17 @@ core_plist_sync() {
 # belong to the last import, which was in the other core's format: the app imports the subscription
 # for the new one next ("ks core import", then "ks core on", which swaps the launchd job). A running
 # core keeps running until then: with protection on, the subscription in the new format can only
-# be fetched, and its server names resolved, through it.
+# be fetched, and its server names resolved, through it. The new core's config is from an older
+# import and goes ("ks core on" waits for a new one), except when it is the one already chosen or
+# its job is the loaded one (back before the other core's import worked): that core runs on it.
 set_core() {
+  local keep=0
   [[ "$1" =~ ^(xray|mihomo)$ ]] || { echo "usage: ks set core xray|mihomo" >&2; return 1; }
   [ -x "$CORE_DIR/$1" ] || { echo "Ядро $1 не установлено" >&2; return 1; }
+  [ "$(core_kind)" = "$1" ] && keep=1
+  launchctl print "$CORE_JOB" >/dev/null 2>&1 && cmp -s "$CORE_DIR/plist.$1" "$CORE_PLIST" && keep=1
   put_setting core "$1" || return 1
-  rm -f "$(core_conf)"   # built from an older import: "ks core on" waits for a new one
+  [ "$keep" = 1 ] || rm -f "$(core_conf)"
   log_event "core: $1 (waits for the subscription)"
   echo "Ядро $1 выбрано: возьми подписку заново, чтобы его запустить" >&2
 }
