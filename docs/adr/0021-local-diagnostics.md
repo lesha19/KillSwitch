@@ -54,29 +54,47 @@ the tunnel carried nothing.
   through `xray api statsquery`, so the menu bar speed can work with Xray too. Only counters: no
   HandlerService or RoutingService, nothing can be changed through it. It listens on loopback
   TCP, so any local program can read (or reset) the byte counters; that is all it exposes. A unix
-  socket would close that, but Xray 26.9.30's `api.listen` is an address and port.
+  socket would close that, but Xray 26.9.30's `api.listen` is an address and port. If another
+  program holds the port, `core on` and `_regen` notice it (`xray_api_check`, our own running
+  core does not count) and the config goes without `api`, `stats` and the stats policy
+  (`core/api-off`) until the port is free again, so the VPN still starts; both are logged.
 - **«Собрать отчёт».** `ks diag report <folder>` (passwordless, in sudoers and the daemon) builds
   `KillSwitch-report-YYYY-MM-DD-HHMM.tar.gz`: the journal, `events.log`, `core.log(.1)`,
   `daemon-state`, `settings`, `installed`, `invalid`, `routing.json`, a status (protection, both
   launchd jobs, pf info and our anchor, other VPN, egress), versions (ks, app, Xray, mihomo,
   macOS, Mac model), the network (primary interface, tunnels, `scutil --dns`, routes), and crash
-  reports of KillSwitch, its helper and filter, Xray and mihomo from the last 7 days (system and
-  the console user's). Through sudo the archive is written as the user who ran it; through the
+  reports of KillSwitch, its helper and filter, Xray and mihomo from the last 7 days (the
+  system's and those of the user who asked: `SUDO_UID` through sudo, the caller's audit uid
+  through the daemon, `ks diag report <folder> <uid>`). The user's folder is listed and read as
+  that user; every crash file is opened with `O_NOFOLLOW` and read from that descriptor only if
+  it is a regular file with one link owned by the expected user (root in
+  `/Library/Logs/DiagnosticReports`), so a planted hard link or symlink cannot bring a root-only
+  file into the archive. Through sudo the archive is written as the user who ran it; through the
   daemon ks writes into the daemon's root-only folder and the daemon copies that one archive into
-  a file the app opened on the Desktop. Root never opens a user's path.
+  a file the app opened on the Desktop. Root never opens a user's path. The daemon serves the
+  report only to root, the console user and the user of our sudoers entry: the journal holds
+  every user's connections.
 - **Redaction** (`diag_redact`, every file): server addresses and names from `servers`,
   `servers-core`, `servers-manual`, `approved-hosts`, `pins` and the profiles' outbounds/proxies
   (`address`, `server`, `serverName`, `sni`, `host`) become `server-1`, `server-2`… (a pinned
   name and its address the same one; an address that followed one of them in a line as `<old>`);
-  then links, UUIDs and keys as `App/Core/Diagnostics.swift` masks them. Other addresses and
-  domains stay: what was visited is the point of the access log, recorded only with verbose on.
+  then links, UUIDs and keys as `App/Core/Diagnostics.swift` masks them; then every other public
+  IPv4/IPv6 address becomes `ip-1`, `ip-2`… (one address, one token across the files: old
+  servers in the 7-day events, pf rules in `status.txt`, routes, the core's logs, the access
+  log). Loopback, RFC 1918, link-local, ULA, Tailscale's 100.64/10, our TUN's 198.18/15,
+  multicast and our own resolvers (`DOH_IPS`, `PROBE_RU`) stay readable. Domains stay: what was
+  visited is the point of the access log, recorded only with verbose on.
   Never included: `profile.json`, `profile-xray.json`, `xray.json`, `config.yaml`, `pins`.
 
 ## Consequences
 
 - The upgrade to 0.18.0 rebuilds the Xray config (`ks _regen`): it differs (api, stats), so the
   core restarts once (about a second, pf blocks meanwhile). mihomo's config does not change.
-- Port 47891 on loopback must be free; Xray does not start if it is taken.
-- An address a server had before a rotation can stay in `core.log` unredacted (it is in no list
-  any more); `events.log` lines of a rotation are covered.
+  `_regen` puts the new config in place only after `xray run -test` (refused: the running one
+  stays, no restart, logged); if Xray ran and does not run and listen on its fetch inbound under
+  a new pid within about 5 s, the previous config and its files come back and Xray is restarted
+  with them («rolled back» in `events.log`). The gap is the restart itself, about 1 s (worst case
+  about 6–7 s with a rollback); install.sh restarts the core once more when the Xray binary or
+  its plist changed, and that second restart has no rollback (the old binary is gone).
+- Port 47891 on loopback taken by another program: Xray runs without the counters (above).
 - Step 2 (upload) can summarise `metrics-*.jsonl` without parsing free text.
