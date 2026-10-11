@@ -31,7 +31,7 @@ the Keychain on purpose.
   beta updates) and the root ones as Settings shows them: the way of connecting, the switches
   (`lan`, `dns`, `tailscale`, `wifiguard`, `direct`, `adblock`, `diag`; since 0.20 `blockadult`, `blocksocial`,
   `blockbetting`), «Адреса без VPN», «Адреса серверов для других VPN-программ», «Программы без VPN»,
-  «Свой сервер DNS-over-HTTPS» (`doh`, ADR 0031). Wi-Fi names are in it: the
+  «Свой сервер DNS-over-HTTPS» (`doh`, ADR 0031), «Свои адреса сайтов» (`hosts`, ADR 0033). Wi-Fi names are in it: the
   person exports their own file, and the screen says what is and is not inside.
 - **Import checks the whole file first** (format, version — a newer one is refused with «обнови
   программу», types, the same ranges and validators as Settings and the daemon: `Batch.address`,

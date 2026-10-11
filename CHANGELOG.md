@@ -18,6 +18,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   AdGuard DNS…), always through the VPN; when it does not answer, from the usual resolvers, also
   through the VPN, never the provider's. Only `https://` addresses of public servers, without a
   login, `?` or `#` (`ks set doh <url>`, `""` clears). Both new settings travel with «Перенос настроек».
+- «Свои адреса сайтов» (#28, ADR 0033): up to 50 «name → IPv4» pairs that the VPN's DNS answers
+  with your address (a home server, a DoH server's address). Only the answer changes: where the
+  connection goes is still up to the subscription's rules, and the protection lets nothing new
+  out. Exact names only; not IPv6, 127.x, the VPN's servers, the subscription link or the hosts the
+  app needs for updates and checks (`ks set hosts <name=ip,…>`, `""` clears). Travels with
+  «Перенос настроек».
 
 ## [0.19.0] - 2026-10-11
 
