@@ -74,6 +74,19 @@ touch "$CORE_DIR/api-off"; hosts; gen
   ok "stats port taken (api-off): no api, the probes still run" || bad "api-off: $(j '$c->{api}')"
 rm -f "$CORE_DIR/api-off"
 
+# --- the import approves every host's DIRECT (KS-10): one host that cannot be built does not
+# drop the hosts after it, and is logged
+hosts '$a->[1]{outbounds} = [ grep { $_->{protocol} !~ /vless/ } @{ $a->[1]{outbounds} } ];
+  unshift @{ $a->[2]{routing}{rules} }, { domain => ["domain:example.org"], outboundTag => "direct" }'
+sha() { shasum -a 256 < "$1" | cut -d' ' -f1; }
+put_setting xrayserver "🇩🇪Германия"; gen; de=$(sha "$T/c.direct")
+put_setting xrayserver ""; gen; lt=$(sha "$T/c.direct")
+: > "$EVENTS"
+KS_APPROVE_ALL=1 gen || bad "approve all: $(cat "$T/err")"
+[ "$lt" != "$de" ] && [ "$(sort "$T/c.approved" | paste -sd, -)" = "$(printf '%s\n%s\n' "$lt" "$de" | sort | paste -sd, -)" ] &&
+  ok "approval: a host with no server skipped, the hosts after it still approved" || bad "approved: $(cat "$T/c.approved") lt $lt de $de"
+grep -q 'approval skipped.*🇱🇹Литва 2' "$EVENTS" && ok "  the skipped host logged" || bad "  events: $(cat "$EVENTS")"
+
 # --- the observatory's answer (gRPC GetOutboundStatus), decoded
 grpc_frame() {  # the reply the API sends: alive ks-ping-0 at 87 ms, ks-ping-1 dead, someone else's LT_1
   /usr/bin/perl -e 'sub vi { my $v = shift; my $o = ""; while ($v >= 128) { $o .= chr(($v & 127) | 128); $v >>= 7 } $o . chr($v) }

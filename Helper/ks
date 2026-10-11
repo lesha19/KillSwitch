@@ -1451,14 +1451,12 @@ core_generate_xray() (
   : > "$w/approved"
   if [ -n "${KS_APPROVE_ALL:-}" ]; then
     mkdir "$w/e" && ln "$w/in.json" "$w/pins" "$w/e/" || exit 1
-    /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); print "$_->{name}\n" for @{ $r->{servers} || [] }' \
-      < "$w/report.json" > "$w/names" || exit 1
-    while IFS= read -r n; do
-      W=$w/e PROTOS=$XRAY_PROTOCOLS PICK=$n ADBLOCK=$(setting adblock 0) GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) \
-        APPS=$(setting splitapps "") TUN_GW=10.0.0.1/30 FETCH_PORT=$FETCH_PORT API_PORT="" ACCESS="" \
-        /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' build()' || exit 1
-      shasum -a 256 < "$w/e/direct" | cut -d' ' -f1
-    done < "$w/names" | sort -u > "$w/approved"
+    W=$w/e PROTOS=$XRAY_PROTOCOLS ADBLOCK=$(setting adblock 0) GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) \
+      APPS=$(setting splitapps "") TUN_GW=10.0.0.1/30 FETCH_PORT=$FETCH_PORT API_PORT="" ACCESS="" \
+      /usr/bin/perl -MJSON::PP -MStorable -MDigest::SHA -e "$KS_XRAY_PL"' approve()' > "$w/approved.all" || exit 1
+    sort -u "$w/approved.all" > "$w/approved"
+    # a host that cannot be built is not approved for a switch (one to it fails the same way)
+    [ ! -s "$w/e/skipped" ] || log_event "server switch approval skipped (cannot be built): $(head -c 2000 "$w/e/skipped" | paste -sd, -)"
   fi
   rm -f "$out" "$srv_out" "$out.pins" "$out.direct" "$out.egress" "$out.report" "$out.approved"   # a leftover would keep its mode
   cp "$w/config.json" "$out" && cp "$w/servers" "$srv_out" && cp "$w/pins" "$out.pins" && cp "$w/direct" "$out.direct" &&
@@ -1474,7 +1472,9 @@ KS_XRAY_PL='
   sub wr { open my $f, ">", $_[0] or die; print $f JSON::PP->new->canonical->encode($_[1]); close $f or die }
   sub ipv4 { $_[0] =~ /\A\d{1,3}(\.\d{1,3}){3}\z/ }
   sub host { $_[0] =~ /\A[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\z/ }
+  my $LOADED;   # parsed and checked once per run; later loads (approve) get copies, build edits its own
   sub load {
+    return Storable::dclone($LOADED) if $LOADED;
     my $a = eval { local $/; open my $f, "<", "$W/in.json" or die; JSON::PP->new->decode(<$f>) };
     die "Подписка не в формате Xray (нужен JSON-список конфигов Xray)\n"
       unless ref $a eq "ARRAY" && @$a && !grep { ref $_ ne "HASH" || ref $_->{outbounds} ne "ARRAY" } @$a;
@@ -1484,6 +1484,7 @@ KS_XRAY_PL='
       elsif (ref $x eq "ARRAY") { $walk->($_) for @$x }
       elsif (defined $x && !ref $x && $x =~ /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/) { die "Управляющие символы в подписке\n" } };
     $walk->($a);
+    $LOADED = $a;
     $a
   }
   # the server addresses of a proxy outbound, as references to edit in place
@@ -1686,18 +1687,34 @@ KS_XRAY_PL='
       { tag => "ks-dns", protocol => "dokodemo-door", listen => "127.0.0.1", port => 53,
         settings => { address => "1.1.1.1", port => 53, network => "tcp,udp" } },
       { tag => "ks-fetch", protocol => "http", listen => "127.0.0.1", port => $ENV{FETCH_PORT} + 0 } ];
-    wr("$W/config.json", \%cfg);
+    wr("$W/config.json", \%cfg) unless $ENV{DIRECT_ONLY};
     open my $f, ">", "$W/servers" or die; print $f "$_\n" for sort keys %srv; close $f;
     open $f, ">", "$W/direct" or die; print $f "$_\n" for @direct; close $f;
     open $f, ">", "$W/egress" or die; print $f "$_\n" for grep { $egress{$_} } qw(rules dns splitapps); close $f;
     my @dnss = map { ref $_ eq "HASH" ? $_->{address} // "?" : $_ } @{ ref $cfg{dns} eq "HASH" && ref $cfg{dns}{servers} eq "ARRAY" ? $cfg{dns}{servers} : [] };
     s{\A([a-z0-9+]+://[^/]+)/.+}{$1/...}i for @dnss;
+    return if $ENV{DIRECT_ONLY};
     wr("$W/report.json", { version => 1, core => "xray", rules => \@report, dropped => \@dropped, providers => [],
       groups => [ map { { name => $_, type => "balancer", proxies => $bal{$_}, from => "subscription" } } sort keys %bal ],
       proxies => [ map { { name => $_->{tag}, type => $_->{protocol} } } grep { ($_->{tag} // "") !~ /\Aks-ping-/ && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ } @$outs ],
       added => \@added, sniffer => { from => ($tpl ? "subscription" : "killswitch"), value => $sniff },
       dns => { servers => \@dnss, taken => {} }, egress => [ grep { $egress{$_} } qw(rules dns splitapps) ],
       servers => \@servers, selected => name_of($c, $ci) });
+  }
+  # the sha256 of the DIRECT signature of every host, one per line, from one parse of the profile; a
+  # host that cannot be built is named in skipped and left out, the others still come
+  sub approve {
+    my $a = load(); my %seen;
+    local $ENV{DIRECT_ONLY} = 1;
+    for my $i (0 .. $#$a) {
+      my $n = name_of($a->[$i], $i);
+      next if $seen{$n}++;   # a pick by name takes the first host of that name
+      local $ENV{PICK} = $n;
+      if (eval { build(); 1 }) {
+        open my $f, "<:raw", "$W/direct" or die; local $/; my $d = <$f>; close $f;
+        print Digest::SHA::sha256_hex($d), "\n";
+      } else { open my $s, ">>", "$W/skipped" or die; print $s "$n\n"; close $s }
+    }
   }
 '
 
