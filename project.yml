@@ -33,9 +33,17 @@ targets:
     sources:
       - App
       - Shared
+      # Contents/Resources/Helper: ks, install.sh and what it installs. A group, not a folder
+      # reference (which cannot exclude): the shell tests and fixtures and the maintainer's fetch
+      # scripts stay out of the app (#36). fetch-geodata.sh ships: install.sh reads its pins.
+      # The cores and geodata (Helper/fetch-*.sh) are picked up by `xcodegen generate`.
       - path: Helper
-        type: folder
-        buildPhase: resources
+        type: group
+        excludes: [tests, fetch-mihomo.sh, fetch-xray.sh, update-tsrelays.sh, "*.md"]
+        buildPhase:
+          copyFiles:
+            destination: resources
+            subpath: Helper
       # the privileged daemon's launchd plist (ADR 0010), registered with SMAppService.daemon
       - path: HelperDaemon/LaunchDaemons/com.lesha19.KillSwitch.helper.plist
         buildPhase:

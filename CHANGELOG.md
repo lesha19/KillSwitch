@@ -26,6 +26,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   if Xray does not come up with it within about 5 s the previous config is restored.
 - «О программе → Лицензии»: the licences of Xray-core, mihomo, the geodata, Sparkle and Yams with
   links to their source code; the project's own `LICENSE` (#36).
+- «Бета-версии» in «О программе»: updates from Sparkle's beta channel (#16);
+  `KS_CHANNEL=beta scripts/release.sh --publish` publishes one.
+- Each release carries the source of the bundled mihomo (GPL-3.0) and Xray-core tags, sha256-pinned,
+  and the app no longer ships `Helper/tests` and other dev-only scripts (#36).
 
 ### Fixed
 - NetBird works with protection on: its daemon binds WireGuard, STUN, relay and management
@@ -39,6 +43,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   it); a restart that fails is tried again (30 s, doubling) and logged.
   Known limit: pf lets out everything NetBird's daemon sends, its DNS forwarder and netstack proxy
   included, not only WireGuard, STUN, relay and management traffic.
+- «Установить и перезапустить» did nothing while a sheet was open (e.g. «Начало работы»); a build
+  installed but not relaunched is now relaunched or offered with «Перезапустить» (#35).
 
 ## [0.17.0] - 2026-10-11
 

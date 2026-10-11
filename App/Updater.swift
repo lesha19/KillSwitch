@@ -13,7 +13,13 @@ final class Updater {
     @ObservationIgnored private let installer = QuietInstaller()
     @ObservationIgnored private let controller: SPUStandardUpdaterController
     private(set) var canCheck = false
+    /// #35: another build is in place of this one (Sparkle installed it but the app was not
+    /// relaunched): «Перезапустить» on the main screen, and on its own once the app is in the background.
+    private(set) var relaunchPending = false
     @ObservationIgnored private var observation: NSKeyValueObservation?
+    @ObservationIgnored private let runningBuild = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
+    /// Waits for this process to end, then opens the new build (one, however often it is asked).
+    @ObservationIgnored private var opener: Process?
 
     init() {
         controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: installer, userDriverDelegate: nil)
@@ -30,6 +36,34 @@ final class Updater {
         NotificationCenter.default.addObserver(forName: UpdateRetry.vpnConnected, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.retryAfterNetworkFailure() }
         }
+        _ = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkInstalledBuild() }
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkInstalledBuild() }
+        }
+    }
+
+    private func checkInstalledBuild() {
+        relaunchPending = UpdateRelaunch.isPending(running: runningBuild, onDisk: UpdateRelaunch.buildOnDisk(Bundle.main.bundleURL))
+        // in the background and nothing half-done in a sheet: as QuietInstaller would have done
+        if relaunchPending, !NSApp.isActive, !NSApp.windows.contains(where: { $0.attachedSheet != nil }) {
+            relaunch()
+        }
+    }
+
+    /// Opens the bundle again once this process has ended (the VPN lives in the root daemons).
+    func relaunch() {
+        if opener?.isRunning != true {
+            let opener = Process()
+            opener.executableURL = URL(fileURLWithPath: "/bin/sh")
+            opener.arguments = UpdateRelaunch.relaunchArguments(pid: ProcessInfo.processInfo.processIdentifier,
+                                                                bundlePath: Bundle.main.bundlePath)
+            do { try opener.run() } catch { return }
+            self.opener = opener
+        }
+        UpdateRelaunch.closeSheets(NSApp.windows)
+        NSApp.terminate(nil)
     }
 
     private func retryAfterNetworkFailure() {
@@ -48,6 +82,15 @@ final class Updater {
             }
         }
     }
+
+    /// «Бета-версии» (#16), kept in the user defaults; QuietInstaller gives Sparkle the channels.
+    var betaUpdates = UpdateChannel.isBeta() {
+        didSet {
+            UserDefaults.standard.set(betaUpdates, forKey: UpdateChannel.betaKey)
+            // Sparkle: after a change of the allowed channels, so the next check uses them
+            controller.updater.resetUpdateCycleAfterShortDelay()
+        }
+    }
 }
 
 /// A downloaded automatic update is installed (and the app relaunched) as soon as KillSwitch is
@@ -60,7 +103,18 @@ final class QuietInstaller: NSObject, SPUUpdaterDelegate {
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: (any Error)?) {
         MainActor.assumeIsolated { lastCheckFailed = UpdateRetry.isNetworkFailure(error) }
     }
+
+    func allowedChannels(for updater: SPUUpdater) -> Set<String> {
+        UpdateChannel.allowed(beta: UpdateChannel.isBeta())
+    }
     @MainActor private var timer: Timer?
+
+    /// #35: Sparkle's agent asks the app to quit right after this; AppKit refuses that while a
+    /// window has a sheet («Начало работы» opens by itself without the helper), so they are closed.
+    /// Called on the main thread once per install that relaunches: the button and the quiet one.
+    func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
+        MainActor.assumeIsolated { _ = UpdateRelaunch.closeSheets(NSApp.windows) }
+    }
 
     func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem,
                  immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
@@ -81,6 +135,20 @@ final class QuietInstaller: NSObject, SPUUpdaterDelegate {
         timer?.invalidate()
         timer = nil
         install()
+    }
+}
+
+/// #35: shown while another build waits in place of this one.
+struct RelaunchBanner: View {
+    @Environment(Updater.self) private var updater
+
+    var body: some View {
+        if updater.relaunchPending {
+            Banner(icon: "arrow.clockwise.circle.fill", tint: .blue, title: String(localized: "Обновление установлено"),
+                   message: String(localized: "Перезапусти KillSwitch, чтобы работала новая версия. VPN не прервётся.")) {
+                Button("Перезапустить") { updater.relaunch() }
+            }
+        }
     }
 }
 

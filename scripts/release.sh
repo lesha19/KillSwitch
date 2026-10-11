@@ -7,7 +7,14 @@
 #   scripts/release.sh --sign-only   build and sign build/release/KillSwitch.app, no notarization
 #   scripts/release.sh --publish     full release, then `gh release create v<version>` in
 #                                    lesha19/KillSwitch-releases with the .dmg, appcast.xml,
-#                                    geosite.dat and geoip.metadb (+ .sha256), and SHA256SUMS of them all
+#                                    geosite.dat and geoip.metadb (+ .sha256), the source tarballs of the
+#                                    pinned mihomo (GPL-3.0) and Xray-core tags, and SHA256SUMS of them all
+#   KS_CHANNEL=beta scripts/release.sh --publish
+#                                    a beta (#16): its appcast item is in Sparkle's "beta" channel, the
+#                                    GitHub release is a pre-release (never "latest"), and the item is
+#                                    added to the latest stable release's appcast.xml (+ its SHA256SUMS),
+#                                    the one feed every app reads; only «Бета-версии» installs it.
+#                                    The next stable release's appcast has no beta item again.
 #
 # What it needs (found automatically, nothing secret is printed):
 #   - certificate + private key "Developer ID Application: … (YR58655PJ7)" in the login keychain
@@ -43,6 +50,27 @@ geodata_pinned() {
   [ -n "$pin" ] && [ -f "$1/$2" ] && [ "$(shasum -a 256 < "$1/$2" | cut -d' ' -f1)" = "$pin" ]
 }
 
+# core_source <fetch script> <owner/repo> <dir>: downloads the source tarball of the tag pinned in
+# <fetch script> (VERSION) into <dir>/<repo>-<tag>-source.tar.gz and prints that name. It must have
+# the sha256 pinned there as SOURCE_SHA256, otherwise nothing is left in <dir>. mihomo is GPL-3.0:
+# the binary in the app is published with its source (§6); Xray-core (MPL-2.0) the same way.
+# KS_SOURCE_BASE replaces https://github.com (tests).
+core_source() {
+  local tag pin name
+  tag=$(sed -nE 's/^VERSION=([^ ]+).*/\1/p' "$1")
+  pin=$(sed -nE 's/^SOURCE_SHA256=([0-9a-f]{64})( .*)?$/\1/p' "$1")
+  name="${2#*/}-$tag-source.tar.gz"
+  [ -n "$tag" ] && [ -n "$pin" ] || { echo "$1: нет VERSION или SOURCE_SHA256" >&2; return 1; }
+  if curl -q --max-time 300 -fsSL -o "$3/$name" "${KS_SOURCE_BASE:-https://github.com}/$2/archive/refs/tags/$tag.tar.gz" &&
+     [ "$(shasum -a 256 < "$3/$name" | cut -d' ' -f1)" = "$pin" ]; then
+    echo "$name"
+  else
+    rm -f "$3/$name"
+    echo "Исходники $2 $tag: не скачались или sha256 не $pin ($1)" >&2
+    return 1
+  fi
+}
+
 # write_sums <dir> <file>...: <dir>/SHA256SUMS for files in <dir>, by bare name, in the format
 # `shasum -a 256 -c SHA256SUMS` checks (README, «Проверка загрузки»). Fails if one is missing.
 write_sums() {
@@ -50,6 +78,36 @@ write_sums() {
   shift
   (cd "$dir" && shasum -a 256 "$@" > SHA256SUMS.tmp) && mv "$dir/SHA256SUMS.tmp" "$dir/SHA256SUMS" ||
     { rm -f "$dir/SHA256SUMS.tmp"; return 1; }
+}
+
+# appcast_with_beta <stable appcast> <beta appcast>: the stable appcast with its old beta items
+# replaced by the items of the beta appcast (generate_appcast --channel beta), put first (#16).
+# Fails if the beta appcast has no beta item.
+appcast_with_beta() {
+  grep -q '<sparkle:channel>beta</sparkle:channel>' "$2" || return 1
+  awk '
+    FNR == NR { if ($0 ~ /<item>/) on = 1; if (on) beta = beta $0 "\n"; if ($0 ~ /<\/item>/) on = 0; next }
+    /<item>/ { item = $0 "\n"; on = 1; next }
+    on {
+      item = item $0 "\n"
+      if ($0 ~ /<\/item>/) {
+        on = 0
+        if (!done) { printf "%s", beta; done = 1 }
+        if (item !~ /<sparkle:channel>beta<\/sparkle:channel>/) printf "%s", item
+      }
+      next
+    }
+    /<\/channel>/ && !done { printf "%s", beta; done = 1 }
+    { print }' "$2" "$1"
+}
+
+# sums_replace <SHA256SUMS> <name> <file>: the line of <name> gets the sha256 of <file> (the stable
+# release's appcast.xml after a beta went into it). Fails if <name> is not listed.
+sums_replace() {
+  local hash
+  awk -v n="$2" '$2 == n { found = 1 } END { exit !found }' "$1" || return 1
+  hash=$(shasum -a 256 < "$3" | cut -d' ' -f1)
+  awk -v n="$2" -v h="$hash" '$2 == n { $0 = h "  " n } { print }' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
 }
 
 [ "${BASH_SOURCE[0]}" = "$0" ] || return 0   # sourced by Helper/tests
@@ -69,6 +127,7 @@ OUT=build/release
 SPM=build/spm   # SwiftPM checkouts + Sparkle's binary tools (generate_appcast), kept between releases
 RELEASES_REPO=lesha19/KillSwitch-releases
 MODE=${1:-}
+CHANNEL=${KS_CHANNEL:-}
 
 problems=()
 problem() { problems+=("$1"); }
@@ -152,6 +211,12 @@ security find-generic-password -s https://sparkle-project.org -a ed25519 >/dev/n
     Создать один раз: <SourcePackages>/artifacts/sparkle/Sparkle/bin/generate_keys,
     затем открытый ключ (generate_keys -p) — в project.yml, SUPublicEDKey."
 
+case "$CHANNEL" in
+  "") ;;
+  beta) [ "$MODE" = --publish ] || [ "$MODE" = --check ] || problem "KS_CHANNEL=beta выпускается только с --publish." ;;
+  *) problem "KS_CHANNEL: только beta (или не задан), а не «$CHANNEL»." ;;
+esac
+
 NOTES=${KS_RELEASE_NOTES:-}
 if [ "$MODE" = --publish ]; then
   command -v gh >/dev/null || problem "Нет gh в PATH (brew install gh)."
@@ -182,6 +247,11 @@ echo "Проверка пройдена: сертификат, профиль н
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
+# Before the long build, so a broken pin stops the release early.
+if [ "$MODE" != --sign-only ]; then
+  MIHOMO_SRC=$(core_source Helper/fetch-mihomo.sh MetaCubeX/mihomo "$OUT")
+  XRAY_SRC=$(core_source Helper/fetch-xray.sh XTLS/Xray-core "$OUT")
+fi
 xcodegen generate --quiet
 # Built unsigned; everything is signed below, inside out, with Developer ID entitlements.
 xcodebuild archive -project KillSwitch.xcodeproj -scheme KillSwitch -configuration Release \
@@ -198,6 +268,7 @@ VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/C
 for f in mihomo xray geosite.dat geoip.metadb geoip.dat; do
   cmp -s "Helper/$f" "$APP/Contents/Resources/Helper/$f" || { echo "В приложении нет Helper/$f" >&2; exit 1; }
 done
+[ ! -e "$APP/Contents/Resources/Helper/tests" ] || { echo "В приложение попали Helper/tests (project.yml)" >&2; exit 1; }
 
 # Entitlements as in the repo, with the Developer ID NetworkExtension value and the identifiers
 # from the profile (AMFI matches them against the embedded profile at launch).
@@ -287,7 +358,7 @@ cp "$DMG" "$OUT/appcast/"
 "$SPM/artifacts/sparkle/Sparkle/bin/generate_appcast" \
   --download-url-prefix "https://github.com/$RELEASES_REPO/releases/download/v$VERSION/" \
   --full-release-notes-url "https://github.com/$RELEASES_REPO/releases/tag/v$VERSION" \
-  -o "$OUT/appcast.xml" "$OUT/appcast"
+  ${CHANNEL:+--channel "$CHANNEL"} -o "$OUT/appcast.xml" "$OUT/appcast"
 rm -rf "$OUT/appcast"
 grep -q 'sparkle:edSignature=' "$OUT/appcast.xml" || { echo "appcast.xml без подписи EdDSA" >&2; exit 1; }
 
@@ -298,14 +369,27 @@ for f in geosite.dat geoip.metadb geoip.dat; do
 done
 
 # Checksums of what is published, for people who verify the download (README).
-write_sums "$OUT" "$(basename "$DMG")" appcast.xml geosite.dat geoip.metadb geoip.dat
+write_sums "$OUT" "$(basename "$DMG")" appcast.xml geosite.dat geoip.metadb geoip.dat "$MIHOMO_SRC" "$XRAY_SRC"
 
 echo "Готово: $DMG, $OUT/appcast.xml, $OUT/SHA256SUMS"
 cat "$OUT/SHA256SUMS"
 
 if [ "$MODE" = --publish ]; then
-  gh release create "v$VERSION" --repo "$RELEASES_REPO" --title "KillSwitch $VERSION" \
+  gh release create "v$VERSION" --repo "$RELEASES_REPO" --title "KillSwitch $VERSION" ${CHANNEL:+--prerelease} \
     --notes-file "$NOTES" "$DMG" "$OUT/appcast.xml" "$OUT/geosite.dat" "$OUT/geosite.dat.sha256" \
-    "$OUT/geoip.metadb" "$OUT/geoip.metadb.sha256" "$OUT/geoip.dat" "$OUT/geoip.dat.sha256" "$OUT/SHA256SUMS"
+    "$OUT/geoip.metadb" "$OUT/geoip.metadb.sha256" "$OUT/geoip.dat" "$OUT/geoip.dat.sha256" \
+    "$OUT/$MIHOMO_SRC" "$OUT/$XRAY_SRC" "$OUT/SHA256SUMS"
+  if [ "$CHANNEL" = beta ]; then
+    # The app reads releases/latest/download/appcast.xml and a pre-release is never "latest": the
+    # beta item goes into the latest stable release's appcast; its SHA256SUMS follows.
+    STABLE_TAG=$(gh release view --repo "$RELEASES_REPO" --json tagName --jq .tagName)
+    mkdir "$OUT/stable"
+    gh release download "$STABLE_TAG" --repo "$RELEASES_REPO" --dir "$OUT/stable" --pattern appcast.xml --pattern SHA256SUMS
+    appcast_with_beta "$OUT/stable/appcast.xml" "$OUT/appcast.xml" > "$OUT/stable/appcast.new"
+    mv "$OUT/stable/appcast.new" "$OUT/stable/appcast.xml"
+    sums_replace "$OUT/stable/SHA256SUMS" appcast.xml "$OUT/stable/appcast.xml"
+    gh release upload "$STABLE_TAG" --repo "$RELEASES_REPO" --clobber "$OUT/stable/appcast.xml" "$OUT/stable/SHA256SUMS"
+    echo "Бета добавлена в appcast.xml выпуска $STABLE_TAG."
+  fi
   echo "Опубликовано: https://github.com/$RELEASES_REPO/releases/tag/v$VERSION"
 fi

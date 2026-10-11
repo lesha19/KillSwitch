@@ -218,3 +218,34 @@ HUP were left out.
   `.upgrade`, not `.current`; the downgrade check is unchanged.
 - A helper from before 0.15.2 has no marker and its `ks` differs anyway: upgraded as before.
 
+
+## Addendum (#35): a sheet kept 0.16.0 running after «Установить и перезапустить»
+
+Measured on the owner's Mac, 2026-10-11 (unified log; Sparkle 2.10.0 source in `build/spm`):
+
+- 00:36:00 the 0.17.0 .dmg was downloaded, Autoupdate and Sparkle's agent (`Updater`) started,
+  00:36:05 «EdDSA signature is correct». Sparkle replaces the app only after it has quit
+  (`AppInstaller.finishInstallationAfterHostTermination` asserts `_targetTerminated`).
+- 00:39:23 the click: the agent sent `aevt,quit` to KillSwitch; KillSwitch logged «Handling Quit
+  AppleEvent», «Checking whether app should terminate», then **«App termination blocked by modal
+  sheet»**. The same at 02:33:22 (shutdown). The installer waited; 0.17.0 went in when the process
+  was finally gone (inferred: the shutdown at 02:34). `/Applications/KillSwitch.app` shows
+  00:36:05 because the extracted bundle keeps its own date when it is moved into place
+  (inferred), not because it was replaced then.
+- The sheet: without `/Library/KillSwitch` (the helper had been removed) the app opens «Начало
+  работы» by itself (StatusItem, `.notInstalled`); any sheet or window alert does the same.
+- A throwaway AppKit app with a sheet (scratch, its own bundle id): `NSRunningApplication.terminate`
+  is refused and `applicationShouldTerminate` is **not** called, so the delegate cannot fix it;
+  with the sheets ended first the app quits at once.
+
+Decision:
+
+- `QuietInstaller.updaterWillRelaunchApplication`: Sparkle calls it on the main thread before it
+  tells the installer to go on (both the button and the quiet install); every sheet is ended
+  (`UpdateRelaunch.closeSheets`), so the quit that follows is accepted and Sparkle relaunches.
+- Safety net: every minute and when the app goes to the background `Updater` compares its own
+  `CFBundleVersion` with the one in the bundle's Info.plist on disk (read from the file). Another
+  build there: «Обновление установлено» with «Перезапустить» on the main screen; in the background
+  and with no sheet open it relaunches by itself (`/bin/sh` waits for this process to end, then
+  `open`s the bundle).
+- Not done: a sheet still blocks logout and shutdown (AppKit's own rule, unrelated to updates).
