@@ -86,13 +86,16 @@ enum ProtectionLog {
     private static func failover(_ message: String) -> String? {
         let name = { (s: Substring) in ServerName.display(String(s)) }
         // ks refused a server switch that would change what goes past the VPN (KS-10)
-        if message.hasPrefix("server switch to "), let refused = message.range(of: " refused: ") {
-            let server = name(message[message.index(message.startIndex, offsetBy: "server switch to ".count)..<refused.lowerBound])
+        // the separators are searched after the prefix: a name may begin with one (it would trap)
+        let switchTo = message.dropFirst("server switch to ".count)
+        if message.hasPrefix("server switch to "), let refused = switchTo.range(of: " refused: ") {
+            let server = name(switchTo[..<refused.lowerBound])
             return String(localized: "Не переключились на «\(server)»: он пускает мимо VPN не то, что было подтверждено. Возьми подписку заново с паролем")
         }
-        if message.hasPrefix("failover failed: "), let arrow = message.range(of: " -> ") {
-            let from = message[message.index(message.startIndex, offsetBy: "failover failed: ".count)..<arrow.lowerBound]
-            var to = message[arrow.upperBound...]
+        let failed = message.dropFirst("failover failed: ".count)
+        if message.hasPrefix("failover failed: "), let arrow = failed.range(of: " -> ") {
+            let from = failed[..<arrow.lowerBound]
+            var to = failed[arrow.upperBound...]
             if let kept = to.range(of: ", ", options: .backwards) { to = to[..<kept.lowerBound] }
             return String(localized: "Не получилось переключиться с «\(name(from))» на «\(name(to))»")
         }

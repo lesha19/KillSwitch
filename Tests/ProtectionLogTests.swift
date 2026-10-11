@@ -68,6 +68,17 @@ final class ProtectionLogTests: XCTestCase {
         XCTAssertEqual(text("2026-10-11 14:03:22 automatic server switch: off"), "Автопереключение сервера выключено")
     }
 
+    /// A server name that begins with the separator once made the line trap, and it stays in
+    /// events.log, so Журнал защиты crashed every time it opened.
+    func testServerNamesThatBeginWithTheSeparator() {
+        XCTAssertEqual(text("2026-10-11 14:03:22 server switch to refused: A refused: it sends other traffic past the VPN than approved"),
+                       "Не переключились на «refused: A»: он пускает мимо VPN не то, что было подтверждено. Возьми подписку заново с паролем")
+        XCTAssertEqual(text("2026-10-11 14:03:22 failover failed: -> A -> B, -> A kept"),
+                       "Не получилось переключиться с «-> A» на «B»")
+        XCTAssertNotNil(text("2026-10-11 14:03:22 server switch to  refused: x"))
+        XCTAssertNotNil(text("2026-10-11 14:03:22 failover failed:  -> x"))
+    }
+
     func testUnknownLineStaysAsIs() {
         XCTAssertEqual(text("2026-10-10 14:03:22 something new"), "something new")
         XCTAssertNil(ProtectionLog.entry(""))
