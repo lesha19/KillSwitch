@@ -15,7 +15,8 @@ enum Diagnostics {
         (#"[A-Za-z0-9+/_\-]{20,}={0,2}"#, "<ключ>", true),
         (#"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])"#, "<ip>", false),
         (#"(?<![\w:])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![\w:])"#, "<ip>", false),
-        (#"(?<![\w.\-])(?:[A-Za-z0-9\-]+\.)+[A-Za-z]{2,}(?![\w\-])"#, "<хост>", false),
+        // with its port and path: a link without its scheme still carries the subscription token (#26)
+        (#"(?<![\w.\-])(?:[A-Za-z0-9\-]+\.)+[A-Za-z]{2,}(?![\w\-])(?::\d{1,5})?(?:/\S*)?"#, "<хост>", false),
     ]
 
     static func scrub(_ text: String) -> String {
