@@ -13,7 +13,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   «Как в подписке» (default). Their rules go before the subscription's and are marked «профиль» in
   «Трафик» › «Правила». A profile that sends anything past the VPN needs the admin's password, as
   a subscription's DIRECT does; one that only blocks or sends through the VPN does not. The
-  format's own DNS, geodata links and «everything else direct» are not taken.
+  format's own DNS, geodata links and «everything else direct» are not taken. A profile that goes
+  direct is approved whole, its block and through-the-VPN exceptions and their order included;
+  turning it off, or switching to one that only blocks or sends through the VPN, needs no
+  password. A change that waits for the password names the profile and says the old rules work
+  until then. Profile links are kept in the keychain; a subscription cannot bring a profile of
+  its own; a geosite or geoip code the shipped geodata lacks is left out (shown in «Трафик») rather
+  than refusing every update.
 - Xray: transport escalation (#20, ADR 0030). When the running server stops answering, before
   another server KillSwitch tries the same one another way, only what the subscription offers and
   only when Xray's own probe of that way answers: another TLS fingerprint, then another transport
@@ -66,6 +72,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   но не применена» instead of nothing.
 
 ### Fixed
+- Xray: with only split apps (or a routing profile) going direct, the subscription's freedom
+  outbound they use was not in the DIRECT signature, so a passwordless refresh could change where
+  that traffic goes (a `redirect`). It is now, at the same place as before, so such a setup asks
+  for the admin's password once after the update; other signatures stay byte-identical (#30
+  review).
 - The shortcut «Отключить VPN» stopped the VPN while it was stuck on a server that does not answer;
   it used to say «VPN и так не подключён» and leave the core running (#23).
 
