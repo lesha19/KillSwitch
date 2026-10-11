@@ -40,6 +40,21 @@ check "CDPATH and GLOBIGNORE unset" "$(line 13)" "unsetunset"
 check "IFS back to space, tab, newline" "$(line 14)" "20090a"
 [ -e "$tmp/ran" ] && check "the fake curl never ran" ran "not run" || check "the fake curl never ran" "not run" "not run"
 
+# --- the test hooks and the core lock's marker (#50): KS_NOW (a clock for the tests),
+# KS_APPROVE_ALL (an import's approval) and KS_LOCKED (the core lock is held) never come from the
+# caller. The lock's own re-exec still counts: its marker is the pid of the lockf that ks became,
+# and only that lockf's child believes it.
+out=$(env -i PATH=/usr/bin:/bin KS_NOW=1 KS_APPROVE_ALL=1 KS_LOCKED=1 KS_LOCK_HELD=1 \
+  /bin/bash -c '. "$1"; printf "%s|%s|%s|%s\n" "${KS_NOW-unset}" "${KS_APPROVE_ALL-unset}" "${KS_LOCKED-unset}" "$KS_LOCK_HELD"' _ "$KS")
+check "KS_NOW, KS_APPROVE_ALL, KS_LOCKED unset; the lock not taken as held" "$out" "unset|unset|unset|0"
+out=$(env -i PATH=/usr/bin:/bin /bin/bash -c 'KS_LOCKED=$PPID exec /bin/bash -c ". \"\$1\"; echo \$KS_LOCK_HELD" _ "$1"' _ "$KS")
+check "a marker naming the parent, which is no lockf: not held" "$out" 0
+out=$(env -i PATH=/usr/bin:/bin /bin/bash -c 'KS_LOCKED=$$ exec /usr/bin/lockf -k -t 5 "$2" /bin/bash -c ". \"\$1\"; echo \$KS_LOCK_HELD" _ "$1"' _ "$KS" "$tmp/core.lock")
+check "the lock's own re-exec (KS_LOCKED=\$\$ exec lockf … ks): held" "$out" 1
+out=$(env -i PATH=/usr/bin:/bin /bin/bash -c 'KS_LOCKED=1 exec /usr/bin/lockf -k -t 5 "$2" /bin/bash -c ". \"\$1\"; echo \$KS_LOCK_HELD" _ "$1"' _ "$KS" "$tmp/core.lock")
+check "under some lockf with a marker not its pid: not held" "$out" 0
+check "the core lock re-execs with its pid as the marker" "$(grep -c 'KS_LOCK_HELD" = 0 \] && \[ -d "\$CORE_DIR" \]; then KS_LOCKED=\$\$ exec lockf' "$KS")" 1
+
 # --- BASH_ENV runs before the first line of a script; "bash -p" ignores it (and ENV, SHELLOPTS,
 # exported functions). sudoers drops it too, but ks must not rely on that alone.
 check "first line of ks is #!/bin/bash -p" "$(head -1 "$KS")" "#!/bin/bash -p"

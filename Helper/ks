@@ -42,7 +42,13 @@ ks_clean_env() {
   PATH=/usr/bin:/bin:/usr/sbin:/sbin; export PATH
   HOME=/var/root; LC_ALL=C; TMPDIR=/private/tmp; export HOME LC_ALL TMPDIR
   IFS=$' \t\n'
-  unset CURL_HOME BASH_ENV ENV CDPATH GLOBIGNORE PS4 KS_PINS KS_STRICT_DNS
+  # The core lock's re-exec (below) marks its child with the pid of the lockf that ks became:
+  # believed only from that lockf, never from a caller (#50).
+  unset KS_LOCK_HELD; KS_LOCK_HELD=0
+  if [ -n "${KS_LOCKED:-}" ] && [ "$KS_LOCKED" = "$PPID" ]; then
+    case $(/bin/ps -o comm= -p "$PPID" 2>/dev/null) in lockf|*/lockf) KS_LOCK_HELD=1 ;; esac
+  fi
+  unset CURL_HOME BASH_ENV ENV CDPATH GLOBIGNORE PS4 KS_PINS KS_STRICT_DNS KS_NOW KS_APPROVE_ALL KS_LOCKED
   for v in $(compgen -e); do
     case "$v" in
       LANG|LC_ALL) ;;
@@ -3274,7 +3280,7 @@ core_lock_exec() { lockf -k -t "$1" "$CORE_DIR/core.lock" "${@:2}"; }   # core_l
 passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,32p' "$0" >&2; exit 1; }
 
 # The core lock (core_lock_wanted, above).
-if core_lock_wanted "$@" && [ -z "${KS_LOCKED:-}" ] && [ -d "$CORE_DIR" ]; then KS_LOCKED=1 exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@"; fi
+if core_lock_wanted "$@" && [ "$KS_LOCK_HELD" = 0 ] && [ -d "$CORE_DIR" ]; then KS_LOCKED=$$ exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@"; fi
 
 case "${1:-status}" in
   apply) guard ;;
