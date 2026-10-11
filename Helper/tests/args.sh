@@ -70,6 +70,10 @@ for c in "core import /f" "core refresh /f" "set splitapps x" "set multihop off"
   core_lock_wanted $c && ok "under the core lock: ks $c" || bad "not under the core lock: ks $c"
 done
 core_lock_wanted core state && bad "ks core state waits for the core lock" || ok "not under the core lock: ks core state"
+# the usage shown for bad arguments: the whole command list at the top of ks, however long it grows
+u=$(ks_usage 2>&1)
+[ "$(head -1 <<<"$u")" = "# Kill switch control." ] && grep -q '^#   ks set mtu ' <<<"$u" && [ "$(tail -1 <<<"$u" | cut -c1-12)" = "#   ks watch" ] &&
+  ok "usage: every command, ks watch last" || bad "usage: $(tail -1 <<<"$u")"
 
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
