@@ -81,6 +81,8 @@ DOH_IPS="1.1.1.1, 8.8.8.8"   # DoH resolvers the core group may reach directly (
 PROBE_RU="77.88.8.8, 77.88.8.1" # Yandex DNS: open in the mobile «white lists» (ks probe, rules)
 KS_DNS="KS-DNS"          # our group for DNS and rule downloads: the profile's proxies, never DIRECT
 FETCH_PORT=47890         # 127.0.0.1: the app's subscription fetch through the VPN (#11), always to KS-DNS
+CORE_API_PORT=47891      # 127.0.0.1: Xray's stats API, counters only (ADR 0021)
+DIAG="$DIR/diag"         # root-only: the diagnostics journal (ADR 0021), metrics, events, access log
 DNS_STATE="$CORE_DIR/dns-state" # system DNS keys pointed at the core, with their originals
 DNS_OURS="127.0.0.1"
 CORE_PROFILE="$CORE_DIR/profile.json"       # last accepted profile, root-only: rebuilds start from it
@@ -115,6 +117,7 @@ settings_lines_ok() {
       multihop=*) [ "${line#*=}" = off ] || valid_name "${line#*=}" || return 1 ;;
       core=xray|core=mihomo) ;;   # ADR 0020
       xrayserver=*) valid_name "${line#*=}" || return 1 ;;
+      diag=[01]) ;;   # «Подробная диагностика», ADR 0021
       *) return 1 ;;
     esac
   done < "$1" 2>/dev/null
@@ -1241,7 +1244,8 @@ core_generate_xray() (
   # pass 2: the config and what goes with it
   W=$w PROTOS=$XRAY_PROTOCOLS PICK=$(setting xrayserver "") ADBLOCK=$(setting adblock 0) \
     GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) APPS=$(setting splitapps "") \
-    TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT \
+    TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT API_PORT=$CORE_API_PORT \
+    ACCESS=$([ "$(setting diag 0)" = 1 ] && [ -d "$DIAG" ] && echo "$DIAG/access.log") \
     /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' build()' || exit 1
   rm -f "$out" "$srv_out" "$out.pins" "$out.direct" "$out.egress" "$out.report"   # a leftover would keep its mode
   cp "$w/config.json" "$out" && cp "$w/servers" "$srv_out" && cp "$w/pins" "$out.pins" && cp "$w/direct" "$out.direct" &&
@@ -1420,7 +1424,15 @@ KS_XRAY_PL='
     my @pins = map { { host => $_, address => $pin{$_} } } sort keys %pin;
     unshift @added, { kind => "pinning", items => \@pins } if @pins;
     $cfg{routing} = \%rt;
-    $cfg{log} = { loglevel => "warning", access => "none", dnsLog => JSON::PP::false };
+    # every connection only with «Подробная диагностика» (ADR 0021); Xray does not start when
+    # the folder is missing, so the caller passes the path only when it exists
+    $cfg{log} = { loglevel => "warning", access => length $ENV{ACCESS} ? $ENV{ACCESS} : "none", dnsLog => JSON::PP::false };
+    # the counters for the diagnostics and «ks core traffic»: StatsService alone, on loopback
+    $cfg{api} = { tag => "ks-api", listen => "127.0.0.1:$ENV{API_PORT}", services => ["StatsService"] };
+    $cfg{stats} = {};
+    $cfg{policy} = {} unless ref $cfg{policy} eq "HASH";
+    $cfg{policy}{system} = {} unless ref $cfg{policy}{system} eq "HASH";
+    $cfg{policy}{system}{$_} = JSON::PP::true for qw(statsInboundUplink statsInboundDownlink statsOutboundUplink statsOutboundDownlink);
     $cfg{inbounds} = [
       { tag => "ks-tun", protocol => "tun", sniffing => $sniff,
         settings => { mtu => 1500, gateway => [ $ENV{TUN_GW} ], autoSystemRoutingTable => ["0.0.0.0/0"], autoOutboundsInterface => "auto" } },
