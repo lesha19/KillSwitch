@@ -88,12 +88,23 @@ final class AdminScriptTests: XCTestCase {
         XCTAssertEqual(AdminScript.staged(["/bin/bash", "-p", app + "/Contents/Resources/Helper/uninstall.sh"]),
                        ["/bin/bash", "-p", "-c", AdminScript.stagingScript, "killswitch-staged", app, HelperIdentity.appRequirement,
                         "uninstall.sh"])
-        for command in [["/Library/KillSwitch/ks", "core", "import", "/tmp/p.json"],
-                        ["/bin/bash", "-p", "/elsewhere/install.sh", "alex"],
+        XCTAssertEqual(AdminScript.staged(["/Library/KillSwitch/ks", "core", "import", "/tmp/p.json"]),
+                       ["/Library/KillSwitch/ks", "core", "import", "/tmp/p.json"])
+        // a script in any other shape would run in place, unverified: refused instead
+        for command in [["/bin/bash", "-p", "/elsewhere/install.sh", "alex"],
                         ["/bin/bash", "-p", app + "/Contents/Resources/Helper/fetch-xray.sh"],
-                        ["/bin/bash", app + "/Contents/Resources/Helper/install.sh", "alex"]] {
-            XCTAssertEqual(AdminScript.staged(command), command)
+                        ["/bin/bash", app + "/Contents/Resources/Helper/install.sh", "alex"],
+                        ["/bin/bash", "-p", "Rel.app/Contents/Resources/Helper/install.sh"],
+                        ["/bin/bash"]] {
+            XCTAssertEqual(AdminScript.staged(command), AdminScript.refusal, "\(command)")
         }
+        let refused = Process()
+        refused.executableURL = URL(fileURLWithPath: AdminScript.refusal[0])
+        refused.arguments = Array(AdminScript.refusal.dropFirst())
+        refused.standardError = FileHandle.nullDevice
+        XCTAssertNoThrow(try refused.run())
+        refused.waitUntilExit()
+        XCTAssertEqual(refused.terminationStatus, 64)
         // what osascript gets: every command staged, every argument quoted
         let source = AdminScript.source([AdminScript.bundled(app + "/Contents/Resources/Helper/install.sh", ["alex"]),
                                          ["/Library/KillSwitch/ks", "core", "on"]].map { AdminScript.staged($0) })

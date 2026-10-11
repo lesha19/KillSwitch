@@ -57,15 +57,21 @@ enum AdminScript {
     /// copies the whole app into a fresh folder of its own, checks the copy's signature against
     /// `requirement` and runs the script of the copy, so nothing swapped in the bundle after the
     /// app's own check (BundleSignature) can run. The daemon does the same with its verified copy
-    /// (ADR 0012, Runner) and the same requirement. Every other command is returned unchanged.
+    /// (ADR 0012, Runner) and the same requirement. Commands of `ks` are returned unchanged; a
+    /// `/bin/bash` command of any other shape would run a script in place, unverified, and becomes
+    /// `refusal`.
     static func staged(_ command: [String], requirement: String = HelperIdentity.appRequirement) -> [String] {
+        guard command.first == "/bin/bash" else { return command }
         let marker = "/Contents/Resources/Helper/"
-        guard command.count >= 3, command[0] == "/bin/bash", command[1] == "-p",
-              let range = command[2].range(of: marker, options: .backwards) else { return command }
+        guard command.count >= 3, command[1] == "-p",
+              let range = command[2].range(of: marker, options: .backwards) else { return refusal }
         let app = String(command[2][..<range.lowerBound]), script = String(command[2][range.upperBound...])
-        guard app.hasPrefix("/"), app.hasSuffix(".app"), stagedScripts.contains(script) else { return command }
+        guard app.hasPrefix("/"), app.hasSuffix(".app"), stagedScripts.contains(script) else { return refusal }
         return ["/bin/bash", "-p", "-c", stagingScript, "killswitch-staged", app, requirement, script] + command.dropFirst(3)
     }
+
+    /// What runs instead of a script `staged` cannot verify: it fails, and the batch stops there.
+    static let refusal = ["/bin/sh", "-c", "echo 'KillSwitch: this script does not run as root' >&2; exit 64"]
 
     /// `bash -p -c` text of `staged`: <app> <requirement> <script> <its arguments…>. Fixed text of
     /// the app, every value an argument. mktemp makes a 0700 folder in root's own temporary
