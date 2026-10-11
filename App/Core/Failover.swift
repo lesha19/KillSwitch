@@ -71,16 +71,27 @@ enum Failover {
         case countryDown(country: String)
     }
 
-    /// `chosen`: the server the person picked last (or the last good one after a switch).
-    static func state(chosen: String?, proxies: CoreProxies) -> State {
+    /// A list read this soon after a pick may still show the host before it.
+    static let pickSettles: TimeInterval = 60
+
+    /// `chosen`: the server the person picked last (or the last good one after a switch), at
+    /// `pickedAt` (nil: long ago).
+    static func state(chosen: String?, proxies: CoreProxies, pickedAt: Date? = nil, now: Date = Date()) -> State {
         guard let chosen, proxies.groups.first(where: { $0.name == chosen }) == nil,
               let current = ServerPicker.selected(proxies) else { return .fine }
-        let members = group(of: chosen, in: proxies)?.all ?? xrayCountry(of: chosen, in: proxies) ?? [chosen]
+        let xray = xrayCountry(of: chosen, in: proxies)
+        let members = group(of: chosen, in: proxies)?.all ?? xray ?? [chosen]
         guard members.contains(current) else { return .fine }   // the person picked something else since
         if members.allSatisfy({ proxies.alive($0) == false }) {
             return .countryDown(country: ServerName(chosen).country ?? ServerName.display(chosen))
         }
-        if current != chosen, proxies.alive(chosen) == false { return .switched(from: chosen, to: current) }
+        // mihomo's fallback group moves only off a dead server; the helper also moves off an Xray
+        // host that answers three times slower (ADR 0023), so there another host of the country
+        // in the selector is its switch even while the chosen one is alive (once the pick settled)
+        let settled = pickedAt.map { now.timeIntervalSince($0) >= pickSettles } ?? true
+        if current != chosen, (xray != nil && settled) || proxies.alive(chosen) == false {
+            return .switched(from: chosen, to: current)
+        }
         return .fine
     }
 

@@ -390,8 +390,12 @@ final class KillSwitchControl {
         return lastSwitch
     }
 
+    /// When `chosenServer` last changed in this run: a list read right after may show the old host.
+    private var chosenAt: Date?
+
     private func setChosen(_ name: String?) {
         chosenServer = name
+        chosenAt = Date()
         UserDefaults.standard.set(name, forKey: Self.chosenKey)
     }
 
@@ -414,7 +418,7 @@ final class KillSwitchControl {
             }
             return
         }
-        switch Failover.state(chosen: chosenServer, proxies: proxies) {
+        switch Failover.state(chosen: chosenServer, proxies: proxies, pickedAt: chosenAt) {
         case .fine:
             serversDown = nil
         case .switched(let from, let to):
@@ -744,7 +748,7 @@ final class KillSwitchControl {
     }
 
     /// Group names in profile order, written by VPNClient on import (mihomo's JSON has no order).
-    static let groupOrderKey = "coreGroupOrder"
+    static let groupOrderKey = CoreProxies.groupOrderKey
 
     private static func sudoWantsPassword(_ output: String) -> Bool {
         RefreshOutcome.sudoWantsPassword(output)
