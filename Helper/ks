@@ -1286,7 +1286,8 @@ core_generate_mihomo() (
   fi
 
   # What would go outside the tunnel, for "ks core refresh" to compare with the last import.
-  { direct_sig "$G" "$R" "$RP" && cat "$w/dns-sig"; } > "$w/direct" || fail "Не удалось разобрать правила"
+  { KS_PROFILE_RULES=$(/usr/bin/perl -MJSON::PP -e 'local $/; my $p = JSON::PP->new->decode(<STDIN>); print ref $p eq "HASH" ? scalar @{ $p->{rules} } : 0' < "$w/profile-rules.json") \
+      direct_sig "$G" "$R" "$RP" && cat "$w/dns-sig"; } > "$w/direct" || fail "Не удалось разобрать правила"
 
   # Double VPN: every other proxy is dialed through the entry, so the core only has to reach
   # the entry's server; the exits are reached through it and stay out of pf.
@@ -1849,6 +1850,9 @@ KS_XRAY_PL='
         push @prof, $rule;
         if ($act eq "direct") { $egress{rules} = 1; push @direct, "rule\t" . $J->encode($rule) }
       }
+      # its block and proxy rules sit in front of the direct ones and shadow them: with anything
+      # of it going direct, the whole profile in order is approved (review B1)
+      push @direct, "profile\t" . $J->encode(\@prof) if grep { $_->{outboundTag} eq $direct } @prof;
       push @added, { kind => "routing-profile", items => [$pname] };
     }
     unshift @report, (map { { rule => rule_text($_), from => "killswitch", xray => $_ } } @ours),
@@ -2145,6 +2149,9 @@ json_edit() {
 # definition of every rule provider such a rule uses (its url or payload is the real list of
 # what goes direct), then every provider whose download proxy the profile set or that an http
 # provider lacks, which means a direct download (KS-DNS, our default, is not printed).
+# KS_PROFILE_RULES=n: the first n rules are the person's routing profile (ADR 0034); when one of
+# them can go direct, all n in order are printed too ("profile"), since its block and proxy rules
+# shadow its direct ones (review B1).
 direct_sig() {
   KS_DNS=$KS_DNS /usr/bin/perl -MJSON::PP -e '
     sub rd { local $/; open my $f, "<", $_[0] or die; JSON::PP->new->decode(<$f>) }
@@ -2167,12 +2174,17 @@ direct_sig() {
         qw(name type proxies filter exclude-filter exclude-type include-all include-all-proxies include-all-providers) }), "\n";
     }
     my %used;
-    for my $rule (@$r) {
+    my $np = $ENV{KS_PROFILE_RULES} || 0;
+    my $pdirect;
+    for my $i (0 .. $#$r) {
+      my $rule = $r->[$i];
       my $t = ref $rule ? $c->encode($rule) : $rule;
       next unless grep { $d{$_} || $d{uc $_} } map { s/^[\s(]+|[\s)]+$//gr } split /,/, $t;
       print "rule\t$t\n";
+      $pdirect = 1 if $i < $np;
       $used{$1} = 1 while $t =~ /RULE-SET\s*,\s*([^,()\s]+)/gi;
     }
+    print "profile\t", $c->encode([ @$r[0 .. $np - 1] ]), "\n" if $pdirect;
     for my $n (sort keys %used) {
       my %x = ref $p->{$n} eq "HASH" ? %{ $p->{$n} } : (missing => JSON::PP::true);
       delete $x{proxy} if defined $x{proxy} && $x{proxy} eq $ENV{KS_DNS};   # ours, see provider-proxy

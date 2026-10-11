@@ -52,8 +52,10 @@ gm "$T/full.json" m-full || bad "profile refused: $(cat "$T/err")"
   [ "$(j 'join ",", map { $_->{profile} // "" } @{ $c->{rules} }[1 .. 7]' "$T/m-full.report")" = "RU напрямую,RU напрямую,RU напрямую,RU напрямую,RU напрямую,RU напрямую,RU напрямую" ] &&
   ok "  report: each rule from the profile, named" || bad "  report: $(j '[ @{ $c->{rules} }[0 .. 8] ]' "$T/m-full.report")"
 grep -q $'^rule\tDOMAIN-SUFFIX,ru,DIRECT$' "$T/m-full.direct" && grep -q $'^rule\tGEOIP,RU,DIRECT$' "$T/m-full.direct" &&
-  ! grep -q 'REJECT\|example.org' "$T/m-full.direct" &&
+  ! grep -v '^profile' "$T/m-full.direct" | grep -q 'REJECT\|example.org' &&
   ok "  its DIRECT rules in the DIRECT signature (an import or refresh with them needs the admin)" || bad "  direct: $(cat "$T/m-full.direct")"
+[ "$(grep '^profile' "$T/m-full.direct")" = "profile	$(j 'JSON::PP->new->canonical->encode([ @{ $c->{rules} }[1 .. 7] ])' "$T/m-full")" ] &&
+  ok "  and the whole profile in order, block and proxy rules too (they shadow the direct ones)" || bad "  profile line: $(grep '^profile' "$T/m-full.direct")"
 grep -qx rules "$T/m-full.egress" && ok "  egress: rules" || bad "  egress: $(cat "$T/m-full.egress")"
 cmp -s "$T/m-full.srv" "$T/m-none.srv" && ok "  the servers for pf unchanged" || bad "  servers"
 if [ -x "$MIHOMO" ]; then out=$("$MIHOMO" -t -d "$T/home" -f "$T/m-full" 2>&1) && ok "  mihomo -t" || bad "  mihomo -t: $(tail -2 <<<"$out")"
@@ -106,8 +108,10 @@ gx "$T/xfull.json" x-full || bad "xray profile refused: $(cat "$T/err")"
 [ "$(j 'join ",", map { $_->{from} . ":" . ($_->{profile} // "") } @{ $c->{rules} }[2 .. 6]' "$T/x-full.report")" = \
   "profile:RU напрямую,profile:RU напрямую,profile:RU напрямую,profile:RU напрямую,profile:RU напрямую" ] &&
   ok "  report: from the profile, named" || bad "  report: $(j '$c->{rules}' "$T/x-full.report")"
-grep -q 'domain:ru' "$T/x-full.direct" && grep -q 'geoip:ru' "$T/x-full.direct" && ! grep -q 'ads.example\|youtube' "$T/x-full.direct" &&
-  ok "  its DIRECT rules in the signature, nothing else of it" || bad "  direct: $(cat "$T/x-full.direct")"
+grep -q 'domain:ru' "$T/x-full.direct" && grep -q 'geoip:ru' "$T/x-full.direct" && ! grep -v '^profile' "$T/x-full.direct" | grep -q 'ads.example\|youtube' &&
+  ok "  its DIRECT rules in the signature" || bad "  direct: $(cat "$T/x-full.direct")"
+[ "$(grep '^profile' "$T/x-full.direct")" = "profile	$(j 'JSON::PP->new->canonical->encode([ @{ $c->{routing}{rules} }[2 .. 6] ])' "$T/x-full")" ] &&
+  ok "  and the whole profile in order (block and proxy rules shadow the direct ones)" || bad "  profile line: $(grep '^profile' "$T/x-full.direct")"
 cmp -s "$T/x-full.srv" "$T/x-none.srv" && ok "  the servers for pf unchanged" || bad "  servers"
 if [ -x "$XRAY" ]; then out=$(XRAY_LOCATION_ASSET=$CORE_DIR "$XRAY" run -test -format json -c "$T/x-full" 2>&1) && ok "  xray run -test" || bad "  xray run -test: $(tail -2 <<<"$out")"
 else echo "skip  xray run -test (no $XRAY)"; fi
@@ -118,5 +122,29 @@ KS_APPROVE_ALL=1 gx "$T/x2.json" x-two || bad "two hosts: $(cat "$T/err")"
   ok "  every host gets the profile (the hint of the first config), each host's approved DIRECT includes it" || bad "  hosts: $(cat "$T/x-two.approved")"
 with_routing "$fx/xray-panel.json" "$T/xsafe.json" '$h = { name => "x", block => { sites => ["domain:ads.example.com"] } }' 1
 gx "$T/xsafe.json" x-safe && cmp -s "$T/x-safe.direct" "$T/x-none.direct" && ok "  a block-only profile: DIRECT as without it" || bad "  xsafe: $(diff "$T/x-none.direct" "$T/x-safe.direct")"
+
+
+# --- the approval is bound to the whole profile (review B1): rules that do not go direct sit in
+# front of the direct ones and shadow them, so with anything of the profile going direct, all its
+# rules in order are in the signature. An exception through the VPN or a block taken away, or the
+# order changed, needs the admin; the direct rules alone being the same is not enough
+# b1 <core> <gen> <base> [xray]: approved A, then each change against it
+b1() {
+  local core=$1 gen=$2 base=$3 x=${4:-} p
+  printf 'core=%s\n' "$core" > "$SETTINGS"
+  with_routing "$base" "$T/b1-A.json" '$h = { name => "A", block => { sites => ["domain:ads.example.com"] }, proxy => { sites => ["domain:a.example.com"] }, direct => { sites => ["domain:example.com"] } }' "$x"
+  with_routing "$base" "$T/b1-noproxy.json" '$h = { name => "A", block => { sites => ["domain:ads.example.com"] }, direct => { sites => ["domain:example.com"] } }' "$x"
+  with_routing "$base" "$T/b1-noblock.json" '$h = { name => "A", proxy => { sites => ["domain:a.example.com"] }, direct => { sites => ["domain:example.com"] } }' "$x"
+  with_routing "$base" "$T/b1-order.json" '$h = { name => "A", order => ["direct", "proxy", "block"], block => { sites => ["domain:ads.example.com"] }, proxy => { sites => ["domain:a.example.com"] }, direct => { sites => ["domain:example.com"] } }' "$x"
+  for p in A noproxy noblock order; do "$gen" "$T/b1-$p.json" "b1-$core-$p" || bad "$core b1 $p: $(cat "$T/err")"; done
+  SERVERS="$T/b1-$core-A.srv"; APPROVED_HOSTS="$T/none"; APPROVED_DIRECT="$T/b1-$core-A.direct"; : > "$T/pins"
+  refresh_check "$T/b1-$core-A.srv" "$T/pins" "$T/b1-$core-A.direct" 2>/dev/null && ok "$core: the approved profile again: no password" || bad "$core: the same profile needs the admin"
+  for p in noproxy noblock order; do
+    refresh_check "$T/b1-$core-$p.srv" "$T/pins" "$T/b1-$core-$p.direct" 2>/dev/null; rc=$?
+    [ "$rc" = 3 ] && ok "$core: the same direct rules, $p: exit 3 (the admin)" || bad "$core: $p passed without the admin (rc $rc)"
+  done
+}
+b1 mihomo gm "$T/base.json"
+b1 xray gx "$fx/xray-panel.json" 1
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
