@@ -57,7 +57,7 @@ regen() {  # regen <same|different>: prints what was called
   (
     # shellcheck source=../ks
     . "$here/../ks"
-    DIR="$d"; CORE_DIR="$d/core"; EVENTS="$d/events.log"; CORE_PROFILE="$d/core/profile.json"; PINS="$d/core/pins"
+    DIR="$d"; CORE_DIR="$d/core"; EVENTS="$d/events.log"; SETTINGS="$d/settings"; CORE_PROFILE="$d/core/profile.json"; PINS="$d/core/pins"
     SERVERS_CORE="$d/servers-core"; SERVERS_MANUAL="$d/servers-manual"; CORE_EGRESS="$d/core/egress"; REPORT="$d/core/routing.json"
     echo '{}' > "$CORE_PROFILE"; : > "$PINS"; echo old > "$CORE_DIR/config.yaml"; echo rules > "$CORE_EGRESS"
     mode=$1
