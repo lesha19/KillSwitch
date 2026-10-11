@@ -35,6 +35,11 @@ enum ProtectionLog {
         }
         if let failover = failover(message) { return failover }
         if let doubleVPN = doubleVPN(message) { return doubleVPN }
+        if message.hasPrefix("tunnel MTU: ") {
+            let value = String(message.dropFirst("tunnel MTU: ".count))
+            let mtu = TunnelMTU.title(value == HelperCommand.mtuAuto ? nil : Int(value))
+            return String(localized: "Размер пакетов VPN (MTU): \(mtu), VPN перезапущен")
+        }
         if message.hasPrefix("double VPN: ") {
             let value = message.dropFirst("double VPN: ".count)
             return value == "off" ? String(localized: "Двойной VPN выключен") : String(localized: "Двойной VPN: вход через «\(ServerName.display(String(value)))»")
