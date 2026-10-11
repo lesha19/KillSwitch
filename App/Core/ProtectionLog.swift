@@ -33,6 +33,7 @@ enum ProtectionLog {
         if message.hasPrefix("core: "), let arrow = message.range(of: " -> ") {
             return String(localized: "Выбран сервер «\(ServerName.display(String(message[arrow.upperBound...])))»")
         }
+        if let failover = failover(message) { return failover }
         if message.hasPrefix("double VPN: ") {
             let value = message.dropFirst("double VPN: ".count)
             return value == "off" ? String(localized: "Двойной VPN выключен") : String(localized: "Двойной VPN: вход через «\(ServerName.display(String(value)))»")
@@ -53,6 +54,8 @@ enum ProtectionLog {
             ("network turned back on", String(localized: "Сеть включена вручную")),
             ("detailed diagnostics: on", String(localized: "Подробная диагностика включена")),
             ("detailed diagnostics: off", String(localized: "Подробная диагностика выключена, записанные соединения удалены")),
+            ("automatic server switch: on", String(localized: "Автопереключение сервера включено")),
+            ("automatic server switch: off", String(localized: "Автопереключение сервера выключено")),
             ("core on", String(localized: "VPN подключён")),
             ("core off", String(localized: "VPN отключён")),
             ("core config imported", String(localized: "Серверы подписки загружены")),
@@ -76,5 +79,29 @@ enum ProtectionLog {
             ("DNS set by an older version", String(localized: "Настройки DNS восстановлены")),
         ]
         return known.first { message.hasPrefix($0.0) }?.1 ?? message
+    }
+
+    /// The helper's automatic server switch with Xray (ADR 0023): `failover (no answer|slow): A -> B`,
+    /// `failover (…): A, no live|faster server of its country`, `failover failed: A -> B, A kept`.
+    private static func failover(_ message: String) -> String? {
+        let name = { (s: Substring) in ServerName.display(String(s)) }
+        if message.hasPrefix("failover failed: "), let arrow = message.range(of: " -> ") {
+            let from = message[message.index(message.startIndex, offsetBy: "failover failed: ".count)..<arrow.lowerBound]
+            var to = message[arrow.upperBound...]
+            if let kept = to.range(of: ", ", options: .backwards) { to = to[..<kept.lowerBound] }
+            return String(localized: "Не получилось переключиться с «\(name(from))» на «\(name(to))»")
+        }
+        let slow = message.hasPrefix("failover (slow): ")
+        guard slow || message.hasPrefix("failover (no answer): ") else { return nil }
+        let rest = message.drop { $0 != ":" }.dropFirst(2)
+        if let arrow = rest.range(of: " -> ") {
+            let from = name(rest[..<arrow.lowerBound]), to = name(rest[arrow.upperBound...])
+            return slow ? String(localized: "«\(from)» стал отвечать слишком медленно — переключились на «\(to)»")
+                : String(localized: "«\(from)» не отвечал — переключились на «\(to)»")
+        }
+        guard let comma = rest.range(of: ", no ", options: .backwards) else { return nil }
+        let server = name(rest[..<comma.lowerBound])
+        return slow ? String(localized: "«\(server)» отвечает медленно, а быстрее в этой стране нет")
+            : String(localized: "«\(server)» не отвечает, а других работающих серверов этой страны нет")
     }
 }

@@ -51,6 +51,21 @@ final class ProtectionLogTests: XCTestCase {
                        "NetBird не подключился после перезапуска — подключите его заново")
     }
 
+    func testXrayFailover() {
+        XCTAssertEqual(text("2026-10-11 14:03:22 failover (no answer): 🇱🇹Литва -> 🇱🇹Литва 2"),
+                       "«🇱🇹 Литва» не отвечал — переключились на «🇱🇹 Литва 2»")
+        XCTAssertEqual(text("2026-10-11 14:03:22 failover (slow): 🇱🇹Литва -> 🇱🇹Литва 2"),
+                       "«🇱🇹 Литва» стал отвечать слишком медленно — переключились на «🇱🇹 Литва 2»")
+        XCTAssertEqual(text("2026-10-11 14:03:22 failover (no answer): 🇱🇹Литва, no live server of its country"),
+                       "«🇱🇹 Литва» не отвечает, а других работающих серверов этой страны нет")
+        XCTAssertEqual(text("2026-10-11 14:03:22 failover (slow): 🇱🇹Литва, no faster server of its country"),
+                       "«🇱🇹 Литва» отвечает медленно, а быстрее в этой стране нет")
+        XCTAssertEqual(text("2026-10-11 14:03:22 failover failed: 🇱🇹Литва -> 🇱🇹Литва 2, 🇱🇹Литва kept"),
+                       "Не получилось переключиться с «🇱🇹 Литва» на «🇱🇹 Литва 2»")
+        XCTAssertEqual(text("2026-10-11 14:03:22 automatic server switch: on"), "Автопереключение сервера включено")
+        XCTAssertEqual(text("2026-10-11 14:03:22 automatic server switch: off"), "Автопереключение сервера выключено")
+    }
+
     func testUnknownLineStaysAsIs() {
         XCTAssertEqual(text("2026-10-10 14:03:22 something new"), "something new")
         XCTAssertNil(ProtectionLog.entry(""))

@@ -75,13 +75,21 @@ enum Failover {
     static func state(chosen: String?, proxies: CoreProxies) -> State {
         guard let chosen, proxies.groups.first(where: { $0.name == chosen }) == nil,
               let current = ServerPicker.selected(proxies) else { return .fine }
-        let members = group(of: chosen, in: proxies)?.all ?? [chosen]
+        let members = group(of: chosen, in: proxies)?.all ?? xrayCountry(of: chosen, in: proxies) ?? [chosen]
         guard members.contains(current) else { return .fine }   // the person picked something else since
         if members.allSatisfy({ proxies.alive($0) == false }) {
             return .countryDown(country: ServerName(chosen).country ?? ServerName.display(chosen))
         }
         if current != chosen, proxies.alive(chosen) == false { return .switched(from: chosen, to: current) }
         return .fine
+    }
+
+    /// With Xray the helper moves between the subscription's hosts of one country by itself (ADR 0023):
+    /// the hosts with the chosen one's flag are its group.
+    static func xrayCountry(of server: String, in proxies: CoreProxies) -> [String]? {
+        guard let main = proxies.mainGroup, main.name == CoreProxies.xrayGroup, main.all.contains(server),
+              let flag = ServerName(server).flag else { return nil }
+        return main.all.filter { ServerName($0).flag == flag }
     }
 
     /// A switch the status line mentions for an hour.

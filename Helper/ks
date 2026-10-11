@@ -7,7 +7,7 @@
 #   ks off                  disable until "ks on"
 #   ks pause [min]          disable for N minutes (default 5), e.g. for a captive Wi-Fi portal
 #   ks netrestore           network services turned off at shutdown back on (if the watchdog is gone)
-#   ks set <key> <0|1>      lan, tailscale, dns, direct (see rules() below), wifiguard, adblock
+#   ks set <key> <0|1>      lan, tailscale, dns, direct (see rules() below), wifiguard, adblock, failover
 #   ks set splitapps <a,b>  apps outside the VPN; "" clears
 #   ks set multihop <proxy>|off  double VPN: every other proxy is reached through this one
 #   ks set core xray|mihomo the core that runs (ADR 0020); the subscription is imported again for it
@@ -127,6 +127,7 @@ settings_lines_ok() {
       core=xray|core=mihomo) ;;   # ADR 0020
       xrayserver=*) valid_name "${line#*=}" || return 1 ;;
       diag=[01]) ;;   # «Подробная диагностика», ADR 0021
+      failover=[01]) ;;   # automatic server switch with Xray, ADR 0023
       *) return 1 ;;
     esac
   done < "$1" 2>/dev/null
@@ -418,6 +419,8 @@ watch_pass() {
   publish_state
   diag_tick
   [ $(($1 % 10)) = 5 ] && diag_bg
+  # Xray: the running host still answers? (ADR 0023)
+  [ $(($1 % 20)) = 15 ] && [ "$CORE_STATE" = on ] && [ "$PROT" = on ] && [ "${STANDBY:-0}" != 1 ] && failover_bg
 }
 
 # NetBird binds its sockets (WireGuard, STUN, relays, management) to the physical interface, past
@@ -1454,6 +1457,15 @@ KS_XRAY_PL='
     }
     my ($ci) = grep { length $ENV{PICK} && name_of($a->[$_], $_) eq $ENV{PICK} } 0 .. $#$a;
     $ci //= 0;
+    # ping (ADR 0023): every host'"'"'s server (its first proxy outbound, unless it is reached through
+    # another outbound) once more as ks-ping-<n>, for the observatory only; no rule leads there
+    my @pings;
+    for my $i (0 .. $#$a) {
+      my ($o) = grep { ref $_ eq "HASH" && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && length($_->{tag} // "") } @{ $a->[$i]{outbounds} };
+      next if !$o || $o->{proxySettings} || (ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" && exists $o->{streamSettings}{sockopt}{dialerProxy});
+      $o = $J->decode($J->encode($o)); $o->{tag} = "ks-ping-$i";
+      push @pings, $o; $servers[$i]{ping} = $o->{tag};
+    }
     my $c = $a->[$ci];
     my (@dropped, @added, %unbound);
     my %keep = map { $_ => 1 } qw(dns routing outbounds policy observatory burstObservatory);
@@ -1461,18 +1473,11 @@ KS_XRAY_PL='
     for (sort keys %$c) { next if $keep{$_}; push @dropped, { section => "profile", item => $_, reason => $managed{$_} ? "managed" : "not-allowed" } }
     my %cfg = map { exists $c->{$_} ? ($_ => $c->{$_}) : () } keys %keep;
     my $outs = $cfg{outbounds};
-    my (%tag, %freedom, $dnsout, $block, $direct, $proxy);
-    for my $o (@$outs) {
-      my $t = $o->{tag} // ""; $tag{$t} = $o if length $t;
-      my $p = $o->{protocol};
-      $freedom{$t} = 1 if $p eq "freedom";
-      $direct //= $t if $p eq "freedom" && length $t;
-      $dnsout //= $t if $p eq "dns" && length $t;
-      $block //= $t if $p eq "blackhole" && length $t;
-      $proxy //= $t if $p =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && length $t;
-      if (exists $o->{sendThrough}) { delete $o->{sendThrough}; $unbound{$t} = 1 }
+    # bound to no interface (pf lets the core out by its group), server names pinned (ADR 0020)
+    my $tame = sub { my ($o, $t) = @_;
+      if (exists $o->{sendThrough}) { delete $o->{sendThrough}; $unbound{$t} = 1 if defined $t }
       my $so = ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" ? $o->{streamSettings}{sockopt} : undef;
-      for my $k (qw(interface mark)) { if ($so && exists $so->{$k}) { delete $so->{$k}; $unbound{$t} = 1 } }
+      for my $k (qw(interface mark)) { if ($so && exists $so->{$k}) { delete $so->{$k}; $unbound{$t} = 1 if defined $t } }
       for my $r (addrs($o)) {
         next if ipv4($$r);
         my $h = $$r; $$r = $pin{$h};
@@ -1483,7 +1488,19 @@ KS_XRAY_PL='
           $ss->{$k}{serverName} = $h unless defined $ss->{$k}{serverName} && length $ss->{$k}{serverName};
         }
       }
+    };
+    my (%tag, %freedom, $dnsout, $block, $direct, $proxy);
+    for my $o (@$outs) {
+      my $t = $o->{tag} // ""; $tag{$t} = $o if length $t;
+      my $p = $o->{protocol};
+      $freedom{$t} = 1 if $p eq "freedom";
+      $direct //= $t if $p eq "freedom" && length $t;
+      $dnsout //= $t if $p eq "dns" && length $t;
+      $block //= $t if $p eq "blackhole" && length $t;
+      $proxy //= $t if $p =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && length $t;
+      $tame->($o, $t);
     }
+    $tame->($_, undef) for @pings;   # their changes are those of the hosts
     die "В конфиге «" . name_of($c, $ci) . "» нет ни одного сервера\n" unless defined $proxy;
     unless (defined $dnsout) { $dnsout = "ks-dns-out"; push @$outs, { tag => $dnsout, protocol => "dns" }; push @added, { kind => "dns-out", items => [$dnsout] } }
     my $r = ref $cfg{routing} eq "HASH" ? $cfg{routing} : {};
@@ -1559,11 +1576,25 @@ KS_XRAY_PL='
     # the counters for the diagnostics and «ks core traffic»: StatsService alone, on loopback;
     # none while another program holds the port (xray_api_check), or Xray would not start
     if (length $ENV{API_PORT}) {
-      $cfg{api} = { tag => "ks-api", listen => "127.0.0.1:$ENV{API_PORT}", services => ["StatsService"] };
+      $cfg{api} = { tag => "ks-api", listen => "127.0.0.1:$ENV{API_PORT}", services => ["StatsService", "ObservatoryService"] };
       $cfg{stats} = {};
       $cfg{policy} = {} unless ref $cfg{policy} eq "HASH";
       $cfg{policy}{system} = {} unless ref $cfg{policy}{system} eq "HASH";
       $cfg{policy}{system}{$_} = JSON::PP::true for qw(statsInboundUplink statsInboundDownlink statsOutboundUplink statsOutboundDownlink);
+    }
+    # the probes (ADR 0023): Xray answers for one observatory, so the subscription own (either kind)
+    # also watches ours; without one, ours on the URL the mihomo failover groups check
+    if (@pings) {
+      my @obs = grep { ref $cfg{$_} eq "HASH" } qw(burstObservatory observatory);
+      for my $obs (@obs) {
+        my $s = $cfg{$obs}{subjectSelector} = [ grep { !ref } @{ ref $cfg{$obs}{subjectSelector} eq "ARRAY" ? $cfg{$obs}{subjectSelector} : [] } ];
+        push @$s, "ks-ping-" unless grep { $_ eq "ks-ping-" } @$s;
+      }
+      unless (@obs) {
+        $cfg{observatory} = { subjectSelector => ["ks-ping-"], probeUrl => "https://cp.cloudflare.com/generate_204", probeInterval => "1m", enableConcurrency => JSON::PP::true };
+      }
+      push @$outs, @pings;
+      push @added, { kind => "ping", items => [ map { $_->{tag} } @pings ] };
     }
     $cfg{inbounds} = [
       { tag => "ks-tun", protocol => "tun", sniffing => $sniff,
@@ -1579,7 +1610,7 @@ KS_XRAY_PL='
     s{\A([a-z0-9+]+://[^/]+)/.+}{$1/...}i for @dnss;
     wr("$W/report.json", { version => 1, core => "xray", rules => \@report, dropped => \@dropped, providers => [],
       groups => [ map { { name => $_, type => "balancer", proxies => $bal{$_}, from => "subscription" } } sort keys %bal ],
-      proxies => [ map { { name => $_->{tag}, type => $_->{protocol} } } grep { $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ } @$outs ],
+      proxies => [ map { { name => $_->{tag}, type => $_->{protocol} } } grep { ($_->{tag} // "") !~ /\Aks-ping-/ && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ } @$outs ],
       added => \@added, sniffer => { from => ($tpl ? "subscription" : "killswitch"), value => $sniff },
       dns => { servers => \@dnss, taken => {} }, egress => [ grep { $egress{$_} } qw(rules dns splitapps) ],
       servers => \@servers, selected => name_of($c, $ci) });
@@ -2346,17 +2377,20 @@ core_api() {  # core_api <method> <path> [json-body-file]: prints the reply, fai
 }
 # With Xray the servers to choose from are the subscription's hosts (its configs, by remarks):
 # one selector named $XRAY_GROUP, in the shape of mihomo's /proxies, from the report. Xray's API
-# is its stats service alone (ADR 0021): traffic comes from it; no latency or connections (ADR
-# 0020), the app hides what needs them.
+# reads counters (ADR 0021) and the observatory (ADR 0023): traffic and latency come from them; no
+# connections (ADR 0020), the app hides that list.
 XRAY_GROUP="Сервер"
 xray_only_mihomo() { [ "$(core_kind)" = xray ] && { echo "С ядром Xray это недоступно" >&2; return 0; }; return 1; }
 core_proxies() {
   [ "$(core_kind)" = xray ] || { core_api GET /proxies; return; }
   [ -s "$REPORT" ] || { echo "Нет конфига ядра" >&2; return 1; }
-  G=$XRAY_GROUP /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>);
+  # the observatory's last probe as mihomo's health check (alive, history), when the API answers
+  P=$(xray_pings 2>/dev/null) G=$XRAY_GROUP /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>);
     my @n = map { $_->{name} } @{ $r->{servers} || [] };
+    my %p = map { my @f = split /\t/; ($f[0] => { alive => $f[1] ? JSON::PP::true : JSON::PP::false, history => [ { delay => $f[1] ? $f[2] + 0 : 0 } ] }) }
+      split /\n/, $ENV{P} // "";
     print JSON::PP->new->canonical->encode({ proxies => { $ENV{G} => { type => "Selector", now => $r->{selected}, all => \@n },
-      map { ($_ => { type => "Xray" }) } @n } }), "\n"' < "$REPORT"
+      map { ($_ => { type => "Xray", %{ $p{$_} || {} } }) } @n } }), "\n"' < "$REPORT"
 }
 # xray_select <host>: run that host of the subscription (approved at import, so no password)
 xray_select() {
@@ -2368,11 +2402,91 @@ xray_select() {
   core_rebuild "$PINS" || { put_setting xrayserver "$old"; return 1; }
   reload_if_on; core_reload
 }
+# Automatic failover with Xray (ADR 0023; the default decision of #43). Every 20 s the watchdog
+# starts "ks _failover" under the core lock: a request through the fetch inbound, which always goes
+# to the running host (ADR 0016). 3 failures in a row, or 2 minutes at more than 3× its usual
+# latency (the median of its last 30 answers, at least 5), and the live host of the same country
+# (the flag its name starts with) with the lowest latency in the observatory takes over, for a slow
+# one only if it answers in less than half the time. Never another country, never twice in 3
+# minutes, nothing while the setting failover=0. A server picked by hand (core select) is left only
+# when dead, never for being slow, and kept at least 3 minutes after the pick. The switch is the one the person makes
+# (xray_select: new config, Xray restarted, pf blocks meanwhile, the protection stays on).
+# State in $CORE_DIR/failover.
+# shellcheck disable=SC2016 # perl, not shell
+KS_FAILOVER_PL='
+  use strict; use warnings;
+  local $/; my $r = JSON::PP->new->decode(<STDIN>);
+  my @names = map { $_->{name} } @{ $r->{servers} || [] };
+  my $cur = $r->{selected} // $names[0] // exit 0;
+  my %s;
+  if (open my $f, "<", $ENV{ST}) { for (split /\n/, <$f>) { my ($k, $v) = split /=/, $_, 2; $s{$k} = $v if defined $v } }
+  # the pick by hand: the last one ks core select made, else (no state yet) xrayserver=
+  my $manual = exists $s{manual} ? $s{manual} : $ENV{PICK};
+  %s = (server => $cur, last => $s{last} // 0) if ($s{server} // "") ne $cur;
+  $s{manual} = $manual;
+  my @h = grep { /\A[0-9]+\z/ } split /,/, $s{hist} // "";
+  my @sorted = sort { $a <=> $b } @h;
+  my $usual = @h >= 5 ? $sorted[$#sorted / 2] : 0;
+  my ($ms, $now) = ($ENV{PROBE_MS} + 0, $ENV{NOW} + 0);
+  if ($ENV{PROBE_OK}) {
+    $s{fails} = 0;
+    if ($usual && $ms > 3 * $usual) { $s{high} ||= $now }
+    else { $s{high} = 0; push @h, $ms; shift @h while @h > 30 }
+  } else { $s{fails} = ($s{fails} // 0) + 1 }
+  # slow moves only off a host failover chose (or the default one), never off a pick by hand
+  my $why = $s{fails} >= 3 ? "no-answer" : $s{high} && $now - $s{high} >= 120 && $manual ne $cur ? "slow" : "";
+  my $out = "";
+  my $flag = sub { my $n = shift; utf8::decode($n); $n =~ /\A([\x{1F1E6}-\x{1F1FF}]{2})/ ? $1 : "" };
+  if (!$why) { $s{told} = 0 }
+  elsif ($now - $s{last} >= 180) {
+    my %p = map { my @f = split /\t/; ($f[0] => [ $f[1], $f[2] ]) } split /\n/, $ENV{P} // "";
+    my $country = $flag->($cur);
+    my ($best) = sort { $p{$a}[1] <=> $p{$b}[1] }
+      grep { $_ ne $cur && length $country && $flag->($_) eq $country && $p{$_} && $p{$_}[0] && ($why ne "slow" || $p{$_}[1] * 2 < $ms) } @names;
+    if (defined $best) { $out = join "\t", "switch", $cur, $best, $why, $ms, $usual; %s = (server => $best, last => $now, manual => "") }
+    elsif (!$s{told}) { $out = join "\t", "stay", $cur, "-", $why, $ms, $usual; $s{told} = 1 }
+  }
+  $s{hist} = join ",", @h if ($s{server} eq $cur);
+  open my $f, ">", "$ENV{ST}.tmp" or die; print $f map { "$_=" . ($s{$_} // "") . "\n" } sort keys %s; close $f or die;
+  rename "$ENV{ST}.tmp", $ENV{ST} or die;
+  print "$out\n" if length $out;
+'
+failover_pass() {  # failover_pass [epoch]
+  local now=${1:-$(date +%s)} probe ok out act from to why ms usual text
+  [ "$(core_kind)" = xray ] && [ "$(setting failover 1)" = 1 ] && [ -s "$REPORT" ] || return 0
+  core_job
+  [ "$CORE_RUN" = 1 ] || return 0
+  read -r probe ok <<<"$(diag_probe)"
+  out=$(PROBE_MS=$probe PROBE_OK=$ok NOW=$now PICK=$(setting xrayserver "") P=$(xray_pings 2>/dev/null) ST="$CORE_DIR/failover" \
+    /usr/bin/perl -MJSON::PP -e "$KS_FAILOVER_PL" < "$REPORT") || return 0
+  [ -n "$out" ] || return 0
+  IFS=$'\t' read -r act from to why ms usual <<<"$out"
+  if [ "$why" = slow ]; then text=slow; else text="no answer"; fi
+  if [ "$act" = switch ]; then
+    if xray_select "$to" 2>/dev/null; then
+      log_event "failover ($text): $from -> $to"
+      if [ "$why" = slow ]; then diag_event failover from="$from" to="$to" reason="$why" ms="$ms" usual="$usual"
+      else diag_event failover from="$from" to="$to" reason="$why"; fi
+    else
+      log_event "failover failed: $from -> $to, $from kept"
+      diag_event failover-failed from="$from" to="$to" reason="$why"
+    fi
+  elif [ "$why" = slow ]; then
+    log_event "failover ($text): $from, no faster server of its country"
+  else
+    log_event "failover ($text): $from, no live server of its country"
+  fi
+}
+failover_bg() { [ -d "$CORE_DIR" ] && core_lock_exec 0 "$0" _failover >/dev/null 2>&1 & }
 core_select() {  # core_select <group> <proxy>: switch a select group, e.g. to another server
   local body rc
   if [ "$(core_kind)" = xray ]; then
     [ "$1" = "$XRAY_GROUP" ] || { echo "С ядром Xray выбирается только сервер" >&2; return 1; }
-    xray_select "$2"; return
+    xray_select "$2" || return 1
+    # a pick by hand starts the failover over and is kept for its cooldown at least (ADR 0023)
+    printf 'server=%s\nlast=%s\nfails=0\nmanual=%s\n' "$2" "${KS_NOW:-$(date +%s)}" "$2" > "$CORE_DIR/failover.tmp" &&
+      mv "$CORE_DIR/failover.tmp" "$CORE_DIR/failover"
+    return
   fi
   body=$(mktemp) || return 1
   echo '{"name":""}' > "$body"
@@ -2381,11 +2495,64 @@ core_select() {  # core_select <group> <proxy>: switch a select group, e.g. to a
 }
 core_delay() {  # core_delay <group|proxy>: latency test through it, JSON
   local name q info
-  xray_only_mihomo && return 1
+  if [ "$(core_kind)" = xray ]; then xray_delay "$1"; return; fi
   name=$(urlencode "$1"); q="url=$(urlencode http://cp.cloudflare.com/generate_204)&timeout=3000"
   info=$(core_api GET "/proxies/$name") || return 1
   if grep -q '"all":' <<<"$info"; then core_api GET "/group/$name/delay?$q"
   else core_api GET "/proxies/$name/delay?$q"; fi
+}
+# The observatory's last probe of each host's ks-ping-<n> outbound (ADR 0023), through the API's
+# read-only ObservatoryService: gRPC over cleartext HTTP/2, which curl speaks. observe_decode
+# takes the reply (a 5-byte gRPC frame header, then GetOutboundStatusResponse { ObservationResult
+# status = 1 { repeated OutboundStatus status = 1 { bool alive = 1; int64 delay = 2; string
+# outbound_tag = 4 } } }) and prints "<tag>\t<1|0>\t<ms>" for our outbounds only; the error text
+# (it may name a server's address) is never read.
+observe_decode() {
+  /usr/bin/perl -e 'local $/; binmode STDIN; my $b = <STDIN> // "";
+    exit 1 if length $b < 5 || substr($b, 0, 1) ne "\0";
+    my $m = substr($b, 5, unpack("N", substr($b, 1, 4)));
+    sub vi { my ($s, $p) = @_; my ($v, $k) = (0, 0); while (1) { die "short\n" if $$p >= length $$s; my $c = ord substr($$s, $$p++, 1); $v += ($c & 127) * 2 ** $k; $k += 7; last unless $c & 128 } $v }
+    sub fields { my $s = shift; my ($p, @f) = (0);
+      while ($p < length $s) { my $key = vi(\$s, \$p); my ($n, $t) = (int($key / 8), $key % 8);
+        if ($t == 0) { push @f, [$n, vi(\$s, \$p)] } elsif ($t == 2) { my $l = vi(\$s, \$p); push @f, [$n, substr($s, $p, $l)]; $p += $l }
+        elsif ($t == 1) { $p += 8 } elsif ($t == 5) { $p += 4 } else { die "wire type $t\n" } }
+      @f }
+    my @out;
+    eval { for my $r (map { $_->[1] } grep { $_->[0] == 1 } fields($m)) {
+      for my $st (map { $_->[1] } grep { $_->[0] == 1 } fields($r)) {
+        my %h = map { $_->[0] => $_->[1] } grep { $_->[0] =~ /\A[124]\z/ } fields($st);
+        next unless defined $h{4} && $h{4} =~ /\Aks-ping-[0-9]{1,3}\z/;
+        my $alive = $h{1} ? 1 : 0;
+        push @out, "$h{4}\t$alive\t" . ($alive && ($h{2} // 0) < 100000 ? $h{2} // 0 : 0);
+      } } 1 } or exit 1;
+    exit 1 unless @out;
+    print "$_\n" for @out'
+}
+xray_observe() {
+  printf '\0\0\0\0\0' | curl -q -s --max-time 3 --http2-prior-knowledge -H 'Content-Type: application/grpc' -H 'TE: trailers' --data-binary @- \
+    "http://127.0.0.1:$CORE_API_PORT/xray.core.app.observatory.command.ObservatoryService/GetOutboundStatus" 2>/dev/null | observe_decode
+}
+# xray_pings: "<host>\t<1|0>\t<ms>" for every host the observatory has probed (names from the report)
+xray_pings() {
+  local o
+  o=$(xray_observe) || return 1
+  O=$o /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>);
+    my %o = map { my @f = split /\t/; ($f[0] => [@f[1, 2]]) } split /\n/, $ENV{O};
+    for (@{ $r->{servers} || [] }) { my $x = defined $_->{ping} ? $o{ $_->{ping} } : undef; print "$_->{name}\t$x->[0]\t$x->[1]\n" if $x }' < "$REPORT"
+}
+# xray_delay <group|host>: mihomo's answers from the observatory's last probes: the selector gives
+# {"<host>": ms} of the live hosts, a host {"delay": ms} (0 when dead)
+xray_delay() {
+  local p
+  [ -s "$REPORT" ] || { echo "Нет конфига ядра" >&2; return 1; }
+  if [ "$1" != "$XRAY_GROUP" ]; then
+    grep -qxF -- "$1" <(/usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); print "$_->{name}\n" for @{ $r->{servers} || [] }' < "$REPORT") ||
+      { echo "В подписке нет сервера «$1»" >&2; return 1; }
+  fi
+  p=$(xray_pings) || { echo "Ядро не сказало, как отвечают серверы" >&2; return 1; }
+  P=$p N=$1 G=$XRAY_GROUP /usr/bin/perl -MJSON::PP -e 'my %d;
+    for (split /\n/, $ENV{P}) { my ($n, $a, $ms) = split /\t/; $d{$n} = $a ? $ms + 0 : 0 }
+    print JSON::PP->new->canonical->encode($ENV{N} eq $ENV{G} ? { map { $d{$_} ? ($_ => $d{$_}) : () } keys %d } : { delay => $d{ $ENV{N} } // 0 }), "\n"'
 }
 # xray_stats: "up=<bytes> down=<bytes>" of all of Xray's inbounds (its stats API on loopback)
 xray_stats() {
@@ -2876,18 +3043,25 @@ passwordless_args_ok() {
   esac
 }
 
+# Everything that writes the core's config or restarts it runs under one lock: the person's server
+# pick (core select) included, so it never overlaps the failover pass (ADR 0023), which never waits
+# (core_lock_exec 0); the watchdog's rotation skips its turn while it is held.
+core_lock_wanted() {
+  case "${1:-}:${2:-}" in
+    core:import|core:refresh|core:select|set:splitapps|set:multihop|set:adblock|set:diag|_regen:|repair:) return 0 ;;
+  esac
+  return 1
+}
+core_lock_exec() { lockf -k -t "$1" "$CORE_DIR/core.lock" "${@:2}"; }   # core_lock_exec <seconds to wait> <command…>
+
 [ "${BASH_SOURCE[0]}" = "$0" ] || return 0   # sourced by Helper/tests
 # reads nothing but this file: no root needed
 [ "${1:-}" = version ] && { ks_version "$0"; exit 0; }
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
 passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,32p' "$0" >&2; exit 1; }
 
-# Everything that writes the core's config runs under one lock (the watchdog's rotation skips
-# its turn while it is held).
-case "${1:-}:${2:-}" in
-  core:import|core:refresh|set:splitapps|set:multihop|set:adblock|set:diag|_regen:|repair:)
-    [ -n "${KS_LOCKED:-}" ] || [ ! -d "$CORE_DIR" ] || KS_LOCKED=1 exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@" ;;
-esac
+# The core lock (core_lock_wanted, above).
+if core_lock_wanted "$@" && [ -z "${KS_LOCKED:-}" ] && [ -d "$CORE_DIR" ]; then KS_LOCKED=1 exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@"; fi
 
 case "${1:-status}" in
   apply) guard ;;
@@ -2895,6 +3069,7 @@ case "${1:-status}" in
   _rotate) core_rotate ;;  # internal, under the lock, started by the watchdog
   _regen) core_regen ;;    # internal, under the lock, run by install.sh after an upgrade
   _diag) diag_pass ;;      # internal, under the journal's lock, started by the watchdog (ADR 0021)
+  _failover) failover_pass ;;  # internal, under the core lock, started by the watchdog (ADR 0023)
   _netbird) netbird_sync ;; # internal, under its lock, started by the watchdog
   _dns)  # internal, under the lock of dns_locked
     case "${2:-}" in apply) dns_apply ;; restore) dns_restore ;; *) exit 1 ;; esac ;;
@@ -2926,11 +3101,12 @@ case "${1:-status}" in
     esac
     # coredirect (until 0.14, «Российские сайты напрямую») is gone: what goes direct is the
     # subscription's alone (ADR 0013); install.sh drops the old line
-    [[ "$key" =~ ^(lan|tailscale|dns|direct|wifiguard|adblock)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns|direct|wifiguard|adblock 0|1" >&2; exit 1; }
+    [[ "$key" =~ ^(lan|tailscale|dns|direct|wifiguard|adblock|failover)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns|direct|wifiguard|adblock|failover 0|1" >&2; exit 1; }
     { grep -vE "^$key=" "$SETTINGS" 2>/dev/null; echo "$key=$val"; } > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
     reload_if_on
     # the generator adds the ad block with adblock=1
     if [ "$key" = adblock ]; then core_apply_settings || exit 1; fi
+    if [ "$key" = failover ]; then log_event "automatic server switch: $([ "$val" = 1 ] && echo on || echo off)"; fi
     ;;
   allow)
     addr=${2:-}

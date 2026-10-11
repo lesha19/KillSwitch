@@ -29,6 +29,7 @@ loaded() { return 1; }
 LOADED=0
 launchctl() { echo "launchctl $*" >> "$tmp/launchd"; case "$1" in print) [ "$LOADED" = 1 ] && echo 'state = running' ;; esac; [ "$1" != print ] || [ "$LOADED" = 1 ]; }
 resolve_host() { case "$1" in de.example.com) echo 203.0.113.20 ;; *) return 1 ;; esac; }
+xray_observe() { return 1; }   # never the real core's API on this Mac
 : > "$SERVERS_MANUAL"
 fails=0
 ok()  { echo "ok    $*"; }
@@ -108,8 +109,9 @@ core_select "$XRAY_GROUP" DE 2>"$tmp/err" && [ "$(setting xrayserver "")" = DE ]
 [ "$(j '$c->{proxies}{$ENV{G}}{now}' <(core_proxies))" = DE ] && ok "  proxies says DE now" || bad "  now: $(core_proxies)"
 core_select "$XRAY_GROUP" Nowhere 2>/dev/null && bad "unknown host selected" || ok "select of a host not in the subscription: refused"
 core_select Other DE 2>/dev/null && bad "another group accepted" || ok "select of another group: refused"
-core_delay DE 2>/dev/null && bad "delay answered" || ok "delay, traffic, connections: not with Xray (refused, the app hides them)"
-core_connections 2>/dev/null && bad "connections answered" || :
+xray_observe() { printf 'ks-ping-0\t1\t80\nks-ping-1\t0\t0\n'; }   # the API is in core-xray-ping.sh
+[ "$(core_delay DE)" = '{"delay":0}' ] && [ "$(core_delay "$XRAY_GROUP")" = '{"🇱🇹Литва":80}' ] && ok "delay with Xray: the observatory's last probes (ADR 0023)" || bad "delay: $(core_delay DE 2>&1)"
+core_connections 2>/dev/null && bad "connections answered" || ok "connections: not with Xray (the app hides them)"
 
 # --- the launchd job follows the choice
 echo old > "$CORE_PLIST"; : > "$tmp/launchd"

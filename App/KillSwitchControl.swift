@@ -77,6 +77,8 @@ final class KillSwitchControl {
     private(set) var adBlock = false
     /// «Подробная диагностика» (diag, ADR 0021): Xray records every connection in the local journal.
     private(set) var diagVerbose = false
+    /// Xray: the helper moves to another host of the country when this one stops answering (ADR 0023).
+    private(set) var autoSwitch = true
     /// «Собрать отчёт» is running, and why the last one failed (nil after a good one).
     private(set) var reportBusy = false
     private(set) var reportError: String?
@@ -660,8 +662,8 @@ final class KillSwitchControl {
     private enum DelayOutcome { case done, failed, refused }
 
     private func runDelay(group: CoreProxies.Group) async -> DelayOutcome {
-        // no latency test with Xray yet (ADR 0020)
-        guard coreRunning, coreChoice == .mihomo, !testing.contains(group.name) else { return .failed }
+        // with Xray the observatory's last probes (ADR 0023)
+        guard coreRunning, !testing.contains(group.name) else { return .failed }
         testing.insert(group.name)
         defer { testing.remove(group.name) }
         switch await callHelper(["core", "delay", group.name], interactive: true, separateStderr: true) {
@@ -1129,6 +1131,7 @@ final class KillSwitchControl {
         allowDirect = (values["direct"] ?? "0") == "1"
         adBlock = (values["adblock"] ?? "0") == "1"
         diagVerbose = (values["diag"] ?? "0") == "1"
+        autoSwitch = (values["failover"] ?? "1") == "1"
         splitApps = SplitApps.parse(setting: values["splitapps"])
         multihopEntry = Multihop.entry(setting: values["multihop"])
         exceptions = Self.readLines("/Library/KillSwitch/allow")
@@ -1321,7 +1324,6 @@ final class KillSwitchControl {
     /// Asks the core once a second, only while the setting is on and our VPN is connected.
     func syncSpeed() {
         let wanted = UserDefaults.standard.bool(forKey: Self.speedKey) && connection == .connected && !speedUnavailable
-            && coreChoice == .mihomo   // no traffic counters with Xray yet (ADR 0020)
         if wanted, speedTimer == nil {
             speedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.readSpeed() }

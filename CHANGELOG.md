@@ -16,6 +16,24 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   `pause <min>`, `server list [--json]`, `server select <name>`. It talks to the same daemon with the
   same rules as the app: turning protection off or pausing it asks for an administrator. Not put on
   PATH; README shows the link to make.
+- Xray: ping per server, «Проверить пинг всех серверов» (⇧⌘P) and the menu bar speed work with the
+  main way of connecting (#32, ADR 0023). Every host of the subscription is probed in the
+  background by Xray's observatory (the subscription's own, or ours once a minute); the ping is
+  its last result.
+- Xray: automatic server switch (#32, ADR 0023). When the running server does not answer 3 times
+  in a row (a probe every 20 s) or answers more than 3× slower than usual for 2 minutes, KillSwitch
+  moves to the fastest working server of the same country, never to another country and not more
+  than once in 3 minutes. A server picked by hand is left only when it stops answering, never for
+  being slow, and is kept at least 3 minutes after the pick. The protection stays on during the switch (about a second of restart,
+  pf blocks). Logged in Журнал защиты and the diagnostics journal; a notification and the status
+  line as with the fallback way. Settings › Способ подключения «Переключать сервер, если он
+  перестал отвечать», on by default (`ks set failover 0|1`).
+
+### Changed
+- The generated Xray config gets a probe-only outbound per host, the probes in its observatory and
+  the read-only `ObservatoryService` in the stats API (127.0.0.1:47891). The upgrade rebuilds the
+  config, so **Xray restarts once on upgrade** (about a second, pf blocks meanwhile; the previous
+  config comes back if it does not start, as in 0.18.0). mihomo's config does not change.
 
 ### Fixed
 - Accessibility (#41): no more orange or red text in the light theme, where it read at 1.9–3.6:1.
