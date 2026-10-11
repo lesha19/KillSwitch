@@ -123,6 +123,20 @@ final class RoutingProfileTests: XCTestCase {
         XCTAssertNil(updated.error)
     }
 
+    /// Review S4: a fetch takes up to 30 s, the list can change meanwhile (a profile deleted or
+    /// added); its result goes back by id, never by the position it had.
+    func testFetchResultGoesBackById() throws {
+        let a = try RoutingProfile.parse("{\"Name\":\"A\",\"BlockSites\":[\"domain:a.example\"]}")
+        let b = try RoutingProfile.parse("{\"Name\":\"B\",\"BlockSites\":[\"domain:b.example\"]}")
+        let c = try RoutingProfile.parse("{\"Name\":\"C\",\"BlockSites\":[\"domain:c.example\"]}")
+        // fetched B while it was second; A was deleted meanwhile
+        let list = RoutingProfiles.changing(b.id, in: [b, c]) { $0.name = "B2" }
+        XCTAssertEqual(list.map(\.name), ["B2", "C"])
+        XCTAssertEqual(list.map(\.id), [b.id, c.id])
+        // B itself was deleted meanwhile: nothing comes back, nothing else is touched
+        XCTAssertEqual(RoutingProfiles.changing(b.id, in: [a, c]) { $0.name = "B2" }, [a, c])
+    }
+
     func testDueForUpdate() throws {
         var p = try RoutingProfile.parse(incy)
         let now = Date(timeIntervalSince1970: 1_000_000)

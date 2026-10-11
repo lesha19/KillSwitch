@@ -286,36 +286,48 @@ final class VPNClient {
     /// one that changes what goes past the VPN waits for «Подтвердить» with the admin's password,
     /// as a subscription's DIRECT change does (needsConfirmation, routingChanged).
     func useRoutingProfile(_ id: UUID?) async {
+        guard !updating else { return }   // the picker waits for it too
         activeRoutingProfile = id
         UserDefaults.standard.set(id?.uuidString, forKey: RoutingProfiles.activeKey)
         await applyRouting()
     }
 
     func removeRoutingProfile(_ id: UUID) async {
+        guard !updating else { return }   // a fetch puts its result back by id; the button waits too
         routingProfiles.removeAll { $0.id == id }
         RoutingProfiles.save(routingProfiles)
         if activeRoutingProfile == id { await useRoutingProfile(nil) }
     }
 
     /// The profiles with a link, once a day (or all now, `force`); the one in use is handed over
-    /// again when it changed.
+    /// again when it changed. One run at a time, as `updating` (the picker and «Удалить профиль»
+    /// wait for it); each result goes back by id, since the list may change during a fetch.
     func updateRoutingProfiles(force: Bool = false) async {
+        guard !updating else { return }
+        updating = true
         var changedActive = false
-        for (i, profile) in routingProfiles.enumerated() where profile.url != nil && (force || profile.due(now: Date())) {
+        let due = routingProfiles.filter { $0.url != nil && (force || $0.due(now: Date())) }
+        for profile in due {
             guard let url = profile.url.flatMap(RoutingProfile.sourceURL) else { continue }
-            do {
-                let new = profile.updated(with: try RoutingProfile.parse(try await Self.fetchRoutingProfile(url)), at: Date())
-                if new.hint as NSDictionary != profile.hint as NSDictionary, profile.id == activeRoutingProfile { changedActive = true }
-                routingProfiles[i] = new
-            } catch let problem as RoutingProfile.Problem {
-                routingProfiles[i].error = problem.message
-                routingProfiles[i].fetched = Date()
-            } catch {
-                routingProfiles[i].error = String(localized: "Не удалось скачать профиль: \(Self.describe(error))")
-                routingProfiles[i].fetched = Date()
+            let fetched: Result<RoutingProfile, Error>
+            do { fetched = .success(try RoutingProfile.parse(try await Self.fetchRoutingProfile(url))) } catch { fetched = .failure(error) }
+            routingProfiles = RoutingProfiles.changing(profile.id, in: routingProfiles) { current in
+                switch fetched {
+                case .success(let body):
+                    let new = current.updated(with: body, at: Date())
+                    if new.hint as NSDictionary != current.hint as NSDictionary, current.id == activeRoutingProfile { changedActive = true }
+                    current = new
+                case .failure(let problem as RoutingProfile.Problem):
+                    current.error = problem.message
+                    current.fetched = Date()
+                case .failure(let error):
+                    current.error = String(localized: "Не удалось скачать профиль: \(Self.describe(error))")
+                    current.fetched = Date()
+                }
             }
         }
         RoutingProfiles.save(routingProfiles)
+        updating = false
         if changedActive { await applyRouting() }
     }
 
@@ -343,9 +355,15 @@ final class VPNClient {
     // MARK: updating
 
     func updateIfDue() {
-        if !updating, routingProfiles.contains(where: { $0.due(now: Date()) }) { Task { await updateRoutingProfiles() } }
-        guard hasURL, !updating, schedule.isDue(interval: effectiveInterval, now: Date()) else { return }
-        Task { await update(interactive: false) }
+        guard !updating else { return }
+        let profilesDue = routingProfiles.contains { $0.due(now: Date()) }
+        let subscriptionDue = hasURL && schedule.isDue(interval: effectiveInterval, now: Date())
+        guard profilesDue || subscriptionDue else { return }
+        // one after the other: both take `updating`, so side by side one would be skipped
+        Task {
+            if profilesDue { await updateRoutingProfiles() }
+            if subscriptionDue { await update(interactive: false) }
+        }
     }
 
     /// Fetches the subscription and applies it. On any failure the core keeps its old config.

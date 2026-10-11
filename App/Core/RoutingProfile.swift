@@ -176,6 +176,17 @@ enum RoutingProfiles {
 
     static let hintKey = "x-ks-routing"
 
+    /// The list with the profile of this id changed; unchanged when it is no longer there (a
+    /// fetch's result after the wait: the list may have changed meanwhile).
+    static func changing(_ id: UUID, in list: [RoutingProfile], _ change: (inout RoutingProfile) -> Void) -> [RoutingProfile] {
+        list.map { p in
+            guard p.id == id else { return p }
+            var p = p
+            change(&p)
+            return p
+        }
+    }
+
     /// mihomo: the profile for the helper with "x-ks-routing" (nil: none). One the subscription
     /// brought itself is always taken out: only the person picks a profile.
     static func adding(_ routing: RoutingProfile?, to profile: Profile) -> Profile {
