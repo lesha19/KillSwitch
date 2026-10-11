@@ -143,14 +143,30 @@ put hosts "a.example.com=203.0.113.53"
 /usr/bin/perl -MJSON::PP -e 'local $/; my $a = JSON::PP->new->decode(<STDIN>); $a->[0]{dns}{hosts} = { "domain:Example.com" => "198.51.100.1",
   "keyword:exam" => "198.51.100.2", "regexp:^a\\." => "198.51.100.3", "full:A.example.com" => "198.51.100.4", "A.Example.com" => "198.51.100.5",
   "domain:other.example" => "198.51.100.6", "keyword:zzz" => "198.51.100.7", "regexp:^b" => "198.51.100.8", "dotless:" => "198.51.100.9",
-  "geosite:private" => "198.51.100.10" }; print JSON::PP->new->encode($a)' < "$fx/xray-panel.json" > "$tmp/p.json"
+  "geosite:private" => "198.51.100.10", "domain:.example.com" => "198.51.100.11", "regexp:" => "198.51.100.12" };
+  print JSON::PP->new->encode($a)' < "$fx/xray-panel.json" > "$tmp/p.json"
 genx "$tmp/p.json" || bad "xray overlapping hosts refused: $(cat "$tmp/err")"
-[ "$(j '$c->{dns}{hosts}')" = '{"domain:other.example":"198.51.100.6","dotless:":"198.51.100.9","full:a.example.com":"203.0.113.53","geosite:private":"198.51.100.10","keyword:zzz":"198.51.100.7","regexp:^b":"198.51.100.8"}' ] &&
-  ok "xray: the template's entries that match the person's name go, the others stay" || bad "xray overlapping hosts: $(j '$c->{dns}{hosts}')"
+[ "$(j '$c->{dns}{hosts}')" = '{"domain:other.example":"198.51.100.6","dotless:":"198.51.100.9","full:a.example.com":"203.0.113.53","geosite:private":"198.51.100.10","keyword:zzz":"198.51.100.7"}' ] &&
+  ok "xray: the template's entries that match the person's name go (a leading dot too), every regexp: too, the others stay" ||
+  bad "xray overlapping hosts: $(j '$c->{dns}{hosts}')"
 [ "$(q 'join ",", sort map { "$_->{item}:$_->{reason}" } grep { $_->{section} eq "dns" } @{ $c->{dropped} }')" = \
-  "A.Example.com:own-hosts,domain:Example.com:own-hosts,full:A.example.com:own-hosts,keyword:exam:own-hosts,regexp:^a\\.:own-hosts" ] &&
+  "A.Example.com:own-hosts,domain:.example.com:own-hosts,domain:Example.com:own-hosts,full:A.example.com:own-hosts,keyword:exam:own-hosts,regexp::own-hosts,regexp:^a\\.:own-hosts,regexp:^b:own-hosts" ] &&
   ok "xray report: the template's entries replaced by the person's named" || bad "xray overlapping dropped: $(q '$c->{dropped}')"
 xtest "xray: overlapping hosts" "$tmp/c"
+# a subscription's regexp is never run here (Perl backtracks, Xray uses RE2): this one kept the
+# generator, and the core lock, busy for minutes (review of #28); every regexp: goes once there is an own name
+put hosts "nas.home.arpa=192.168.1.10"
+/usr/bin/perl -MJSON::PP -e 'local $/; my $a = JSON::PP->new->decode(<STDIN>); $a->[0]{dns}{hosts} = { "regexp:^(?:[a-z.]*?[a-z.]*?){12}[0-9]\$" => "0.0.0.0" };
+  print JSON::PP->new->encode($a)' < "$fx/xray-panel.json" > "$tmp/p.json"
+start=$SECONDS
+( genx "$tmp/p.json" ) & gpid=$!
+for _ in $(seq 20); do kill -0 "$gpid" 2>/dev/null || break; sleep 0.5; done
+kill_tree() { local p; for p in $(pgrep -P "$1"); do kill_tree "$p"; done; kill "$1" 2>/dev/null; }
+if kill -0 "$gpid" 2>/dev/null; then kill_tree "$gpid"; bad "xray slow regexp: still running after 10 s"
+else wait "$gpid" || bad "xray slow regexp refused: $(cat "$tmp/err")"
+  [ "$(j '$c->{dns}{hosts}')" = '{"full:nas.home.arpa":"192.168.1.10"}' ] && ok "xray: a template regexp is left out, never run ($((SECONDS - start)) s)" ||
+    bad "xray slow regexp: $(j '$c->{dns}{hosts}')"
+fi
 /usr/bin/perl -MJSON::PP -e 'local $/; my $a = JSON::PP->new->decode(<STDIN>); $a->[0]{outbounds}[0]{settings}{vnext}[0]{address} = "lt.example.com";
   print JSON::PP->new->encode($a)' < "$fx/xray-panel.json" > "$tmp/p.json"
 resolve_host() { case "$1" in lt.example.com) echo 203.0.113.40 ;; *) return 1 ;; esac; }

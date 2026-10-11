@@ -1805,16 +1805,19 @@ KS_XRAY_PL='
       $cfg{dns} = {} unless ref $cfg{dns} eq "HASH";
       my $h = ref $cfg{dns}{hosts} eq "HASH" ? $cfg{dns}{hosts} : {};
       # Xray answers with every matching entry at once (measured, 26.9.30), so a template entry that
-      # also matches one of these names goes: full, plain, domain, keyword (lower-cased like Xray)
-      # and regexp keys; geosite and ext are not looked into, dotless never matches a name with dots
+      # also matches one of these names goes: full, plain, domain (a leading dot as Xray ignores it),
+      # keyword (lower-cased like Xray); every regexp key goes, never run here: Perl backtracks where
+      # Xray'"'"'s RE2 does not (a crafted one held the core lock for minutes) and the two dialects
+      # differ. geosite and ext are not looked into, dotless never matches a name with dots.
       my %own = map { $_->[0] => 1 } @hosts;
       for my $k (sort keys %$h) {
         my ($p, $v) = $k =~ /\A(full|domain|keyword|regexp):(.*)\z/s ? ($1, $2) : ($k =~ /\A(?:dotless|geosite|ext):/ ? ("", "") : ("full", $k));
         next unless length $p;
         my $lv = lc $v;
-        my $hit = grep { my $n = $_;
+        $lv =~ s/\A\.// if $p eq "domain";
+        my $hit = $p eq "regexp" || grep { my $n = $_;
           $p eq "full" ? $n eq $lv : $p eq "domain" ? ($n eq $lv || substr($n, -length($lv) - 1) eq ".$lv") :
-          $p eq "keyword" ? index($n, $lv) >= 0 : (eval { $n =~ /$v/ } // 0) } keys %own;
+          index($n, $lv) >= 0 } keys %own;
         next unless $hit;
         delete $h->{$k};
         push @dropped, { section => "dns", item => $k, reason => "own-hosts" };
