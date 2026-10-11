@@ -1269,7 +1269,7 @@ core_generate_mihomo() (
   echo '[]' > "$w/profile-rules.json"
   if has x-ks-routing "$in"; then
     plutil -extract x-ks-routing json -o "$w/rt.json" "$in" >/dev/null 2>&1 || fail "x-ks-routing: не разобрать"
-    RT="$w/rt.json" GEO=$geo G="$G" KS_DNS=$KS_DNS W="$w" json_edit "$R" "$KS_RULES_PL$KS_ROUTING_PL"'
+    RT="$w/rt.json" GEO=$geo G="$G" KS_DNS=$KS_DNS W="$w" KS_GEOSITE_DAT="$CORE_DIR/geosite.dat" json_edit "$R" "$KS_RULES_PL$KS_ROUTING_PL"'
       my %geo = map { ($_ => 1) } split " ", $ENV{GEO};
       my ($name, $rules, $dropped) = routing_hint(rd($ENV{RT}), $geo{site}, $geo{ip});
       my $groups = rd($ENV{G});
@@ -1472,6 +1472,7 @@ core_generate_xray() (
   # pass 2: the config and what goes with it
   W=$w PROTOS=$XRAY_PROTOCOLS PICK=$(setting xrayserver "") ADBLOCK=$(setting adblock 0) \
     GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) GEOIP=$([ -s "$CORE_DIR/geoip.dat" ] && echo 1) \
+    KS_GEOSITE_DAT="$CORE_DIR/geosite.dat" KS_GEOIP_DAT="$CORE_DIR/geoip.dat" \
     APPS=$(setting splitapps "") MULTIHOP=$(setting multihop off) \
     ESC=$(setting escalate 1) ESC_FILE="${KS_ESC_FILE:-$CORE_DIR/escalation}" \
     TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT API_PORT=$([ -f "$CORE_DIR/api-off" ] || echo "$CORE_API_PORT") \
@@ -1498,7 +1499,7 @@ core_generate_xray() (
   if [ -n "${KS_APPROVE_ALL:-}" ]; then
     mkdir "$w/e" && ln "$w/in.json" "$w/pins" "$w/e/" || exit 1
     W=$w/e PROTOS=$XRAY_PROTOCOLS ADBLOCK=$(setting adblock 0) GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) \
-      GEOIP=$([ -s "$CORE_DIR/geoip.dat" ] && echo 1) APPS=$(setting splitapps "") TUN_GW=10.0.0.1/30 FETCH_PORT=$FETCH_PORT API_PORT="" ACCESS="" \
+      GEOIP=$([ -s "$CORE_DIR/geoip.dat" ] && echo 1) KS_GEOSITE_DAT="$CORE_DIR/geosite.dat" KS_GEOIP_DAT="$CORE_DIR/geoip.dat" APPS=$(setting splitapps "") TUN_GW=10.0.0.1/30 FETCH_PORT=$FETCH_PORT API_PORT="" ACCESS="" \
       /usr/bin/perl -MJSON::PP -MStorable -MDigest::SHA -e "$KS_XRAY_PL$KS_ROUTING_PL"' approve()' > "$w/approved.all" || exit 1
     sort -u "$w/approved.all" > "$w/approved"
     # a host that cannot be built is not approved for a switch (one to it fails the same way)
@@ -1954,7 +1955,8 @@ KS_XRAY_PL='
 # geoip:private. routing_hint gives the entries in the profile's order as [action, site|ip, type,
 # value] and what it leaves out ({section, item, reason}: regexp:, ext:, negations and anything
 # else unsupported, a bad value, GEOSITE/GEOIP without the shipped geodata, which is never
-# downloaded); a malformed hint dies (the whole import is refused, as with any malformed profile).
+# downloaded, or a code the shipped KS_GEOSITE_DAT/KS_GEOIP_DAT lacks); a malformed hint dies
+# (the whole import is refused, as with any malformed profile).
 # shellcheck disable=SC2016 # perl, not shell
 KS_ROUTING_PL='
   use Socket ();
@@ -1976,6 +1978,23 @@ KS_ROUTING_PL='
       return ("cidr6", lc($1) . "/" . ($2 // 128));
     }
     (undef, undef, "bad-value") }
+  # the codes (lists) of a v2ray geodata file (geosite.dat, geoip.dat): protobuf, a list of
+  # entries (field 1) whose own field 1 is the code. Read once per run; {} when unreadable
+  my %DAT;
+  sub dat_codes { my $f = shift;
+    return $DAT{$f} //= do { my %c;
+      if (open my $fh, "<:raw", $f) { local $/; my $d = <$fh>; close $fh;
+        my ($p, $n) = (0, length $d);
+        my $vi = sub { my ($v, $s) = (0, 0); while ($p < $n) { my $b = ord substr($d, $p++, 1); $v |= ($b & 0x7f) << $s; return $v unless $b & 0x80; $s += 7 } -1 };
+        while ($p < $n) {
+          my $tag = $vi->(); my $len = $vi->();
+          last unless $tag == 0x0a && $len >= 0 && $p + $len <= $n;
+          my $end = $p + $len;
+          if ($vi->() == 0x0a) { my $l = $vi->(); $c{ lc substr($d, $p, $l) } = 1 if $l > 0 && $p + $l <= $end }
+          $p = $end;
+        }
+      }
+      \%c } }
   sub routing_hint { my ($h, $gs, $gi) = @_;
     die "x-ks-routing: не объект\n" unless ref $h eq "HASH";
     for (sort keys %$h) { die "x-ks-routing: незнакомый ключ «$_»\n" unless /\A(name|order|block|proxy|direct)\z/ }
@@ -2005,6 +2024,9 @@ KS_ROUTING_PL='
           my ($t, $v, $why) = $kind eq "sites" ? rt_site($e) : rt_ip($e);
           $why //= "geodata:geosite" if $t && $t eq "geosite" && !$gs;
           $why //= "geodata:geoip" if $t && $t eq "geoip" && !$gi;
+          # a code the shipped file lacks: the core would refuse the whole config (review S3)
+          $why //= "geodata-code:geosite" if $t && $t eq "geosite" && $ENV{KS_GEOSITE_DAT} && !dat_codes($ENV{KS_GEOSITE_DAT})->{$v};
+          $why //= "geodata-code:geoip" if $t && $t eq "geoip" && $ENV{KS_GEOIP_DAT} && !dat_codes($ENV{KS_GEOIP_DAT})->{$v};
           if ($why) { push @dropped, { section => "routing-profile", item => substr($e =~ s/[\x00-\x1f\x7f]/?/gr, 0, 256), reason => $why }; next }
           push @out, [ $act, $kind eq "sites" ? "site" : "ip", $t, $v ];
         }

@@ -242,6 +242,9 @@ extension RoutingReport.Dropped {
             case "geosite": return String(localized: "Нет базы категорий сайтов (geosite)")
             default: return String(localized: "Нет базы стран (geoip)")
             }
+        case "geodata-code":
+            return detail == "geosite" ? String(localized: "Такой категории сайтов нет в базе (geosite)")
+                : String(localized: "Такой страны нет в базе стран (geoip)")
         case "managed": return String(localized: "Это KillSwitch задаёт сам")
         case "not-allowed": return String(localized: "Этого KillSwitch из подписки не берёт")
         case "bad-value": return String(localized: "Значение не прошло проверку")

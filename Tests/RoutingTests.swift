@@ -98,6 +98,9 @@ final class RoutingReportTests: XCTestCase {
             "Значение не прошло проверку",
         ])
         XCTAssertEqual(RoutingReport.Dropped.reasonText("something-new"), "something-new")
+        // a routing profile's code the shipped geodata lacks (ADR 0034)
+        XCTAssertEqual(RoutingReport.Dropped.reasonText("geodata-code:geosite"), "Такой категории сайтов нет в базе (geosite)")
+        XCTAssertEqual(RoutingReport.Dropped.reasonText("geodata-code:geoip"), "Такой страны нет в базе стран (geoip)")
     }
 
     func testTakenDNSAndEgressAsText() throws {

@@ -181,4 +181,25 @@ printf 'core=xray\n' > "$SETTINGS"
 s2name "$fx/xray-panel.json" 64 1 > "$T/s2x.json"; gx "$T/s2x.json" s2-x && ok "Xray: a name of 64 Cyrillic letters" || bad "xray 64 letters: $(cat "$T/err")"
 s2name "$fx/xray-panel.json" 65 1 > "$T/s2x.json"; if gx "$T/s2x.json" s2-x65; then bad "xray: 65 letters taken"; else ok "  65: refused"; fi
 
+# --- a geosite or geoip code the shipped geodata does not have is left out with the reason, like
+# any entry the core cannot take (review S3): the core refused the whole config, so an active
+# profile with one refused every import and refresh
+if [ -s "$here/../geosite.dat" ] && [ -s "$here/../geoip.dat" ]; then
+  S3='$h = { name => "x", direct => { sites => ["geosite:nonexistent-zzz", "geosite:YouTube"], ips => ["geoip:zz", "geoip:ru"] } }'
+  printf 'core=mihomo\n' > "$SETTINGS"
+  with_routing "$T/base.json" "$T/s3.json" "$S3"
+  gm "$T/s3.json" s3-m || bad "mihomo unknown codes: $(cat "$T/err")"
+  [ "$(j 'join " | ", grep { /\AGEO/ } @{ $c->{rules} }' "$T/s3-m")" = "GEOSITE,youtube,DIRECT | GEOIP,ZZ,DIRECT | GEOIP,RU,DIRECT" ] &&
+    [ "$(j 'join ",", map { "$_->{item}=$_->{reason}" } grep { $_->{section} eq "routing-profile" } @{ $c->{dropped} }' "$T/s3-m.report")" = "geosite:nonexistent-zzz=geodata-code:geosite" ] &&
+    ok "mihomo: an unknown geosite code left out with the reason (GEOIP of an unknown country only never matches)" || bad "mihomo s3: $(j '$c->{rules}' "$T/s3-m") $(j '$c->{dropped}' "$T/s3-m.report")"
+  if [ -x "$MIHOMO" ]; then out=$("$MIHOMO" -t -d "$T/home" -f "$T/s3-m" 2>&1) && ok "  mihomo -t" || bad "  mihomo -t: $(tail -2 <<<"$out")"; fi
+  printf 'core=xray\n' > "$SETTINGS"
+  with_routing "$fx/xray-panel.json" "$T/s3x.json" "$S3" 1
+  gx "$T/s3x.json" s3-x || bad "xray unknown codes: $(cat "$T/err")"
+  [ "$(j 'JSON::PP->new->canonical->encode([ map { $_->{domain} // $_->{ip} } @{ $c->{routing}{rules} }[2, 3] ])' "$T/s3-x")" = '[["geosite:youtube"],["geoip:ru"]]' ] &&
+    [ "$(j 'join ",", map { "$_->{item}=$_->{reason}" } grep { $_->{section} eq "routing-profile" } @{ $c->{dropped} }' "$T/s3-x.report")" = "geosite:nonexistent-zzz=geodata-code:geosite,geoip:zz=geodata-code:geoip" ] &&
+    ok "Xray: unknown geosite and geoip codes left out with the reason" || bad "xray s3: $(j '$c->{routing}{rules}' "$T/s3-x") $(j '$c->{dropped}' "$T/s3-x.report")"
+  if [ -x "$XRAY" ]; then out=$(XRAY_LOCATION_ASSET=$CORE_DIR "$XRAY" run -test -format json -c "$T/s3-x" 2>&1) && ok "  xray run -test" || bad "  xray run -test: $(tail -2 <<<"$out")"; fi
+else echo "skip  unknown geodata codes (no Helper/geosite.dat, geoip.dat: Helper/fetch-geodata.sh)"; fi
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
