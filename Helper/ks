@@ -1323,7 +1323,7 @@ core_generate_xray() (
   # pass 2: the config and what goes with it
   W=$w PROTOS=$XRAY_PROTOCOLS PICK=$(setting xrayserver "") ADBLOCK=$(setting adblock 0) \
     GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) APPS=$(setting splitapps "") \
-    TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT API_PORT=$CORE_API_PORT \
+    TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT API_PORT=$([ -f "$CORE_DIR/api-off" ] || echo "$CORE_API_PORT") \
     ACCESS=$([ "$(setting diag 0)" = 1 ] && [ -d "$DIAG" ] && echo "$DIAG/access.log") \
     /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' build()' || exit 1
   rm -f "$out" "$srv_out" "$out.pins" "$out.direct" "$out.egress" "$out.report"   # a leftover would keep its mode
@@ -1506,12 +1506,15 @@ KS_XRAY_PL='
     # every connection only with «Подробная диагностика» (ADR 0021); Xray does not start when
     # the folder is missing, so the caller passes the path only when it exists
     $cfg{log} = { loglevel => "warning", access => length $ENV{ACCESS} ? $ENV{ACCESS} : "none", dnsLog => JSON::PP::false };
-    # the counters for the diagnostics and «ks core traffic»: StatsService alone, on loopback
-    $cfg{api} = { tag => "ks-api", listen => "127.0.0.1:$ENV{API_PORT}", services => ["StatsService"] };
-    $cfg{stats} = {};
-    $cfg{policy} = {} unless ref $cfg{policy} eq "HASH";
-    $cfg{policy}{system} = {} unless ref $cfg{policy}{system} eq "HASH";
-    $cfg{policy}{system}{$_} = JSON::PP::true for qw(statsInboundUplink statsInboundDownlink statsOutboundUplink statsOutboundDownlink);
+    # the counters for the diagnostics and «ks core traffic»: StatsService alone, on loopback;
+    # none while another program holds the port (xray_api_check), or Xray would not start
+    if (length $ENV{API_PORT}) {
+      $cfg{api} = { tag => "ks-api", listen => "127.0.0.1:$ENV{API_PORT}", services => ["StatsService"] };
+      $cfg{stats} = {};
+      $cfg{policy} = {} unless ref $cfg{policy} eq "HASH";
+      $cfg{policy}{system} = {} unless ref $cfg{policy}{system} eq "HASH";
+      $cfg{policy}{system}{$_} = JSON::PP::true for qw(statsInboundUplink statsInboundDownlink statsOutboundUplink statsOutboundDownlink);
+    }
     $cfg{inbounds} = [
       { tag => "ks-tun", protocol => "tun", sniffing => $sniff,
         settings => { mtu => 1500, gateway => [ $ENV{TUN_GW} ], autoSystemRoutingTable => ["0.0.0.0/0"], autoOutboundsInterface => "auto" } },
@@ -1831,10 +1834,14 @@ core_apply_settings() {
 }
 
 # "ks _regen" (install.sh, after an upgrade, under the core lock): the config again from the kept
-# profile and pins, so a new generator applies at once. Put in place only if it differs; then pf
-# is reloaded (atomic, never flushed) and the core rereads it through its API, without a restart.
+# profile and pins, so a new generator applies at once. Put in place only if it differs and the
+# core's own check takes it (core_commit; otherwise the running one stays, nothing restarts); then
+# pf is reloaded (atomic, never flushed) and the core rereads it through its API. Xray has to be
+# restarted for it (about a second, pf keeps blocking): if it ran and does not come up again within
+# about 5 s (core_up), the previous config and its files go back and Xray is restarted with them.
 core_regen() {
-  local prof conf tmp srv="$SERVERS_CORE.tmp"
+  local prof conf tmp srv="$SERVERS_CORE.tmp" was=0 pid f files
+  [ "$(core_kind)" = xray ] && xray_api_check
   prof=$(core_profile); conf=$(core_conf); tmp="$conf.tmp"
   [ -f "$prof" ] && [ -f "$PINS" ] && [ -f "$conf" ] || { echo "core config: none"; return 0; }
   KS_PINS=$PINS core_generate "$prof" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; return 1; }
@@ -1843,10 +1850,63 @@ core_regen() {
     if core_publish "$tmp"; then reload_if_on; fi
     core_clean "$tmp" "$srv"; echo "core config: kept"; return 0
   fi
-  core_commit "$tmp" "$srv" || return 1
+  files=("$conf" "$SERVERS" "$SERVERS_CORE" "$PINS" "$CORE_EGRESS" "$REPORT")
+  if [ "$(core_kind)" = xray ]; then
+    core_job
+    [ "$CORE_RUN" = 1 ] && was=1 && pid=$CORE_PID
+    for f in "${files[@]}"; do [ -f "$f" ] && cp -p "$f" "$f.prev"; done
+  fi
+  if ! core_commit "$tmp" "$srv" 2>"$conf.err"; then
+    log_event "core config: the new one refused by the core, the running one kept: $(grep -v '^$' "$conf.err" | tail -1 | cut -c1-200)"
+    cat "$conf.err" >&2; rm -f "$conf.err"
+    for f in "${files[@]}"; do rm -f "$f.prev"; done
+    return 1
+  fi
+  rm -f "$conf.err"
   reload_if_on; core_reload
+  if [ "$was" = 1 ] && ! core_up "$pid"; then
+    for f in "${files[@]}"; do [ -f "$f.prev" ] && mv "$f.prev" "$f"; done
+    reload_if_on; launchctl kickstart -k "$CORE_JOB"
+    log_event "core config rolled back: Xray did not come up with the new one"
+    echo "core config: rolled back" >&2
+    return 1
+  fi
+  for f in "${files[@]}"; do rm -f "$f.prev"; done
   log_event "core config rebuilt by the new helper"
   echo "core config: reloaded"
+}
+
+# core_up <pid before the restart>: the restarted Xray runs (another pid) and listens on its
+# inbounds, within CORE_UP_TRIES half-seconds.
+CORE_UP_TRIES=10
+core_up() {
+  local i
+  for ((i = 0; i < CORE_UP_TRIES; i++)); do
+    core_job
+    if [ "$CORE_RUN" = 1 ] && [ -n "$CORE_PID" ] && [ "$CORE_PID" != "${1:-}" ] &&
+       [ -n "$(lsof -nP -t -a -p "$CORE_PID" -iTCP:"$FETCH_PORT" -sTCP:LISTEN 2>/dev/null)" ]; then return 0; fi
+    sleep 0.5
+  done
+  return 1
+}
+
+# Xray does not start when its stats port is taken (ADR 0021): then the config goes without the
+# api (no counters for the speed and the journal) until "core on" or an upgrade finds the port free
+# again. Our own running core holding it is not someone else. Fails when nothing changed.
+xray_api_check() {
+  local p busy=0
+  [ "$(core_kind)" = xray ] || return 1
+  core_job
+  for p in $(lsof -nP -t -iTCP:"$CORE_API_PORT" -sTCP:LISTEN 2>/dev/null); do [ "$p" = "$CORE_PID" ] || busy=1; done
+  if [ "$busy" = 1 ] && [ ! -f "$CORE_DIR/api-off" ]; then
+    : > "$CORE_DIR/api-off"
+    log_event "xray stats port 127.0.0.1:$CORE_API_PORT is taken by another program: VPN without traffic counters"
+  elif [ "$busy" = 0 ] && [ -f "$CORE_DIR/api-off" ]; then
+    rm -f "$CORE_DIR/api-off"
+    log_event "xray stats port free again: traffic counters back"
+  else
+    return 1
+  fi
 }
 
 # The core rereads config.yaml (selections survive); restarted if that fails.
@@ -2863,6 +2923,8 @@ case "${1:-status}" in
         fi
         core_log_tidy
         diag_dir   # a config with the access log names it (ADR 0021)
+        # the stats port taken by another program (or free again): the config follows first
+        if ! core_running && xray_api_check; then "$0" _regen >/dev/null 2>&1 || true; fi
         launchctl enable "$CORE_JOB"
         # the job of the chosen core (ADR 0020); a loaded job of the other one goes first
         if core_plist_sync 2>/dev/null; then launchctl bootout "$CORE_JOB" 2>/dev/null; fi
