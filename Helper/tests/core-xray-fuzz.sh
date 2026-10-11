@@ -41,6 +41,22 @@ accepted() {  # accepted <name> <perl edit>: generated and passes xray run -test
   if gen; then xtest "$1"; return 0; fi
   bad "$1: refused: $(head -c 300 "$tmp/err")"; return 1
 }
+# perhost <name> <perl edit of $b, a host>: with that host alone the subscription is refused; next to
+# the fixture's good host only it is left out, named in the report, nothing of it reaches pf
+perhost() {
+  edit 'my $b = $c; '"$2"
+  if gen; then bad "$1: alone: accepted"
+  elif ! grep -qF "ни одного годного" "$tmp/err"; then bad "$1: alone: refused, but: $(head -c 300 "$tmp/err")"
+  else ok "$1: alone: refused"; fi
+  edit 'my $b = JSON::PP->new->decode(JSON::PP->new->encode($c)); $b->{remarks} = "Плохой"; '"$2"'; push @$a, $b'
+  if gen; then
+    xtest "$1"
+    [ "$(j 'join "|", map { $_->{name} } @{ $c->{servers} }' "$tmp/c.report")" = "🇱🇹Литва" ] &&
+      [ "$(j 'join "|", map { "$_->{section}:$_->{item}" } grep { $_->{section} eq "servers" } @{ $c->{dropped} }' "$tmp/c.report")" = "servers:Плохой" ] &&
+      [ "$(paste -sd' ' "$tmp/s")" = 203.0.113.10 ] && ok "$1: next to a good host: only it dropped, in the report" ||
+      bad "$1: next to a good host: servers $(j '$c->{servers}' "$tmp/c.report") dropped $(j '$c->{dropped}' "$tmp/c.report") pf $(paste -sd' ' "$tmp/s")"
+  else bad "$1: next to a good host: refused: $(head -c 300 "$tmp/err")"; fi
+}
 raw() {  # raw <name> <file content>: never accepted
   printf '%s' "$2" > "$tmp/p.json"
   if gen; then bad "raw $1: accepted"; else ok "raw $1: refused"; fi
@@ -71,13 +87,17 @@ refused "protocol as a list" '$c->{outbounds}[0]{protocol} = ["vless"]' "нез�
 refused "protocol missing" 'delete $c->{outbounds}[0]{protocol}' "незнакомый тип сервера"
 refused "an outbound that is a string" 'push @{$c->{outbounds}}, "freedom"' "не объект"
 refused "two outbounds with one tag" 'push @{$c->{outbounds}}, { tag => "LT_1", protocol => "freedom" }' "два outbound"
-refused "no server at all" '@{$c->{outbounds}} = grep { $_->{protocol} !~ /vless/ } @{$c->{outbounds}}' "нет ни одного сервера"
+refused "no server at all" '@{$c->{outbounds}} = grep { $_->{protocol} !~ /vless/ } @{$c->{outbounds}}; delete $c->{routing}{balancers}' "нет ни одного сервера"
 
 # --- server addresses: IPv4 or a host name we pin, nothing else
 for h in "a b.example.com" "a.example.com;id" 'a.example.com$(id)' "a.example.com/x" "-a.example.com" "a..b" "2001:db8::1" "::ffff:1.2.3.4" \
-         "[2001:db8::1]" "localhost" "0177.0.0.1" "2130706433" "999.1.1.1" "1.2.3.256" "01.2.3.4" "1.2.3" "0.0.0.0" "127.0.0.1" "224.0.0.1" \
-         "255.255.255.255" "é.example.com"; do
+         "[2001:db8::1]" "localhost" "é.example.com" "١.٢.٣.٤" "1.2.3.٤"; do
   refused "server address «$h»" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = "'"$h"'"'
+done
+# panels put placeholder hosts at 0.0.0.0 or 127.0.0.1 («подписка истекла», days left): such a
+# host is dropped and named in the report, the others stay; refused only when none is left
+for h in 0.0.0.0 127.0.0.1 224.0.0.1 255.255.255.255 999.1.1.1 1.2.3.256 01.2.3.4 0177.0.0.1 1.2.3 2130706433; do
+  perhost "server address «$h»" '$b->{outbounds}[0]{settings}{vnext}[0]{address} = "'"$h"'"'
 done
 refused "server address with a newline" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = "a.example.com\nb"'
 refused "server address a number" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = 16909060'
@@ -115,6 +135,24 @@ if accepted "XHTTP downloadSettings inside extra" '$c->{outbounds}[0]{streamSett
 fi
 refused "XHTTP download address not a server address" '$c->{outbounds}[0]{streamSettings} = { network => "xhttp",
       xhttpSettings => { downloadSettings => { address => "a.example.com;id", port => 443 } } }' "не похоже на адрес"
+# the older name of XHTTP (splithttp, still read by Xray) the same way
+if accepted "SplitHTTP downloadSettings" '$c->{outbounds}[0]{streamSettings} = { network => "splithttp", security => "tls",
+      splithttpSettings => { path => "/x", downloadSettings => { address => "sh.example.com", port => 443, network => "splithttp", security => "tls",
+      splithttpSettings => { path => "/y" } } } }'; then
+  [ "$(j '$c->{outbounds}[0]{streamSettings}{splithttpSettings}{downloadSettings}{address}')" = 203.0.113.40 ] && grep -qx 203.0.113.40 "$tmp/s" &&
+    grep -q '^sh.example.com	' "$tmp/c.pins" && ok "  pinned and approved" || bad "  splithttp: $(j '$c->{outbounds}[0]{streamSettings}')"
+fi
+if accepted "SplitHTTP downloadSettings inside extra" '$c->{outbounds}[0]{streamSettings} = { network => "splithttp",
+      splithttpSettings => { extra => { downloadSettings => { address => "198.51.100.6", port => 443 } } } }'; then
+  grep -qx 198.51.100.6 "$tmp/s" && ok "  its address is a server for pf too" || bad "  servers: $(paste -sd' ' "$tmp/s")"
+fi
+# a download inside the download, or an address anywhere else in the stream settings: nothing
+# would pin it, the host is dropped
+perhost "downloadSettings inside downloadSettings" '$b->{outbounds}[0]{streamSettings} = { network => "xhttp", xhttpSettings => { downloadSettings => {
+      address => "198.51.100.8", port => 443, xhttpSettings => { downloadSettings => { address => "evil.example.com", port => 443 } } } } }'
+perhost "downloadSettings inside extra inside downloadSettings" '$b->{outbounds}[0]{streamSettings} = { network => "xhttp", xhttpSettings => { downloadSettings => {
+      address => "198.51.100.8", port => 443, xhttpSettings => { extra => { downloadSettings => { address => "evil.example.com", port => 443 } } } } } }'
+perhost "an address elsewhere in the stream settings" '$b->{outbounds}[0]{streamSettings}{wsSettings} = { future => { address => "evil.example.com" } }'
 refused "XHTTP download through a missing outbound" '$c->{outbounds}[0]{streamSettings} = { network => "xhttp",
       xhttpSettings => { downloadSettings => { address => "198.51.100.8", port => 443, sockopt => { dialerProxy => "nope" } } } }' "несуществующий"
 
@@ -132,13 +170,24 @@ fi
 # that would pick them (a prefix of "ks-") neither: «Программы без VPN» adds a freedom ks-direct
 # that no direct signature counts
 for t in ks-dns-out ks-block ks-direct ks-ping-0 ks-fetch ks-api ks-x; do
-  refused "outbound tag $t" 'push @{$c->{outbounds}}, { tag => "'"$t"'", protocol => "blackhole" }' "ks-"
+  perhost "outbound tag $t" 'push @{$b->{outbounds}}, { tag => "'"$t"'", protocol => "blackhole" }'
 done
 for s in "" k ks ks- ks-d; do
-  refused "balancer selector «$s»" '$c->{routing}{balancers}[0]{selector} = ["LT_", "'"$s"'"]' "ks-"
-  refused "burstObservatory selector «$s»" '$c->{burstObservatory}{subjectSelector} = ["'"$s"'"]' "ks-"
+  perhost "balancer selector «$s»" '$b->{routing}{balancers}[0]{selector} = ["LT_", "'"$s"'"]'
+  perhost "burstObservatory selector «$s»" '$b->{burstObservatory}{subjectSelector} = ["'"$s"'"]'
 done
-refused "observatory selector «»" '$c->{observatory} = { subjectSelector => [""] }' "ks-"
+perhost "observatory selector «»" '$b->{observatory} = { subjectSelector => [""] }'
+# a balancer falls back to fallbackTag when every member is down: never KillSwitch's, only an
+# outbound of the same host, and a freedom one counts in the direct signature
+for f in ks-direct ks-block nope; do
+  perhost "balancer fallbackTag «$f»" '$b->{routing}{balancers}[0]{fallbackTag} = "'"$f"'"'
+done
+perhost "balancer fallbackTag a list" '$b->{routing}{balancers}[0]{fallbackTag} = ["LT_1"]'
+if accepted "balancer fallbackTag to the subscription's freedom" '$c->{routing}{balancers}[0]{fallbackTag} = "direct";
+      @{$c->{routing}{rules}} = grep { ($_->{outboundTag} // "") ne "direct" } @{$c->{routing}{rules}}'; then
+  grep -q '^balancer	.*"direct"' "$tmp/c.direct" && grep -qx rules "$tmp/c.egress" && ok "  in the direct signature, the core may leave the tunnel for it" ||
+    bad "  direct: $(cat "$tmp/c.direct") egress: $(cat "$tmp/c.egress")"
+fi
 echo 'splitapps=/Applications/Foo.app' > "$SETTINGS"
 if accepted "a balancer of the subscription with «Программы без VPN» on" ''; then
   [ "$(j 'join ",", map { @{ $_->{selector} } } @{ $c->{routing}{balancers} }')" = LT_ ] && ok "  its selector cannot reach ks-direct" || bad "  balancers: $(j '$c->{routing}{balancers}')"
