@@ -34,7 +34,7 @@ struct RoutingProfile: Codable, Equatable, Identifiable, Sendable {
     static let updateInterval: TimeInterval = 24 * 3600
 
     enum Problem: Error, Equatable {
-        case notProfile, empty, tooMany, badEntry
+        case notProfile, empty, tooMany, badEntry, insecureLink
 
         var message: String {
             switch self {
@@ -42,6 +42,7 @@ struct RoutingProfile: Codable, Equatable, Identifiable, Sendable {
             case .empty: String(localized: "В профиле нет ни одного правила.")
             case .tooMany: String(localized: "В профиле больше 10 000 записей.")
             case .badEntry: String(localized: "В профиле есть запись с недопустимыми символами.")
+            case .insecureLink: String(localized: "Нужна ссылка https: профиль по http по дороге может подменить кто угодно.")
             }
         }
     }
@@ -52,6 +53,7 @@ struct RoutingProfile: Codable, Equatable, Identifiable, Sendable {
     /// JSON, base64 of it, or a happ:// / incy:// routing link with it.
     static func parse(_ text: String) throws -> RoutingProfile {
         var body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if body.lowercased().hasPrefix("http://") { throw Problem.insecureLink }
         if let range = body.range(of: #"^(happ|incy)://routing/(on)?add/"#, options: [.regularExpression, .caseInsensitive]) {
             body = String(body[range.upperBound...])
         }

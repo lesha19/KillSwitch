@@ -195,6 +195,10 @@ final class RoutingProfileTests: XCTestCase {
         XCTAssertNil(RoutingProfile.sourceURL("http://example.com/r.json"))
         XCTAssertNil(RoutingProfile.sourceURL("file:///etc/passwd"))
         XCTAssertNil(RoutingProfile.sourceURL("happ://routing/add/xyz"))
+        // review N5: an http link pasted is told apart from text that is no profile at all
+        XCTAssertThrowsError(try RoutingProfile.parse(" HTTP://example.com/r.json")) { XCTAssertEqual($0 as? RoutingProfile.Problem, .insecureLink) }
+        XCTAssertTrue(RoutingProfile.Problem.insecureLink.message.contains("https"))
+        XCTAssertThrowsError(try RoutingProfile.parse("ftp://example.com/r.json")) { XCTAssertEqual($0 as? RoutingProfile.Problem, .notProfile) }
     }
 
     func testReportNamesTheProfile() throws {
