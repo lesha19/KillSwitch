@@ -202,6 +202,7 @@ private struct VPNSettings: View {
                             revealed = revealed == nil ? client.revealURL() : nil
                         }.hiddenByProvider(client.urlHidden)
                         Button("Изменить…") { editing = true; revealed = nil }
+                        SubscriptionQRButton()
                         Spacer()
                         Button("Удалить…", role: .destructive) { confirmRemove = true }
                     }
@@ -211,6 +212,7 @@ private struct VPNSettings: View {
                         TextField("https://…", text: $newURL).onSubmit(saveURL)
                             .accessibilityLabel("Ссылка на подписку")
                         Button("Сохранить", action: saveURL).disabled(newURL.isEmpty)
+                        QRScanButton()
                         if editing { Button("Отмена") { editing = false; newURL = "" } }
                     }
                 }
@@ -231,7 +233,7 @@ private struct VPNSettings: View {
                         Button("Убрать") { Task { await client.removeManual(server) } }
                     }
                 }
-                Button("Добавить сервер…") { addingServer = true }
+                HStack { Button("Добавить сервер…") { addingServer = true }; QRScanButton() }
                 if !client.hasURL, let error = client.lastError {
                     InlineError(error: error)
                 }

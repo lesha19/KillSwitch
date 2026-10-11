@@ -20,6 +20,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   turns protection off for a network. Location access is asked for on the first «Добавить текущую
   сеть», after an explanation; the names stay on this Mac. Auto-connect now also applies a server
   picked while disconnected.
+- QR codes (#24, ADR 0022): «Сканировать QR…» in Settings › VPN adds a subscription or servers
+  from a QR code in a clipboard picture (⌃⇧⌘4), an image file or a dropped one, through the same
+  checks as a typed link; no Screen Recording permission. «QR-код…» shows the subscription link as
+  a QR code for a phone after a warning; not offered when the subscription sends `hide-url`.
 
 ### Fixed
 - Diagnostics also drop the port and path of a link without its scheme (`host/token`) (#26).

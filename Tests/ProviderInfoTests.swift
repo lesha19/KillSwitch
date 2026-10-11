@@ -72,12 +72,13 @@ final class ProviderInfoTests: XCTestCase {
     }
 
     func testHideURL() {
-        for value in ["1", "true", "TRUE", " yes "] {
+        for value in ["1", "true", "TRUE", " yes ", " True "] {
             XCTAssertTrue(ProviderInfo(headers: ["hide-url": value]).hidesURL, value)
         }
-        for value in ["0", "false", "", "maybe"] {
+        for value in ["0", "false", "", "maybe", "no"] {
             XCTAssertFalse(ProviderInfo(headers: ["hide-url": value]).hidesURL, value)
         }
+        XCTAssertFalse(ProviderInfo(headers: [:]).hidesURL)
     }
 
     func testAnnouncementShownOncePerText() {
