@@ -140,6 +140,21 @@ rc=0; core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>/dev/null || rc=$?
   bad "  default install: rc $rc, settings $(paste -sd'|' "$SETTINGS"), bad: $(root_files_bad)"
 printf 'core=xray\nxrayserver=\n' > "$tmp/set"
 settings_lines_ok "$tmp/set" && ok "  an empty xrayserver= (left by an older ks) means no pick, not damage" || bad "  empty xrayserver= refused"
+# the pick is written only after the gate: a ks killed while the candidate is built leaves no
+# unapproved pick behind for the next ungated rebuild (rotation, a setting, _regen) to commit
+eval "$(declare -f core_rebuild | sed '1s/core_rebuild/real_core_rebuild/')"
+core_rebuild() { grep '^xrayserver=' "$DIR/settings" > "$tmp/seen"; real_core_rebuild "$@"; }
+core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>/dev/null
+! grep -q 'Литва 2' "$tmp/seen" && ok "  while the candidate is built and gated, the settings still name the running pick" ||
+  bad "  pick written before the gate: $(cat "$tmp/seen")"
+eval "$(declare -f real_core_rebuild | sed '1s/real_core_rebuild/core_rebuild/')"
+# KS-10 / fail closed: a host name the settings would call damaged is never written (failover
+# takes names from the subscription without the passwordless filter)
+cp "$SETTINGS" "$tmp/set-before"; cp "$REPORT" "$tmp/report-before"
+/usr/bin/perl -MJSON::PP -i -0pe '$r = JSON::PP->new->decode($_); push @{ $r->{servers} }, { name => "DE\tX" }; $_ = JSON::PP->new->encode($r)' "$REPORT"
+rc=0; xray_select $'DE\tX' 2>/dev/null || rc=$?
+cp "$tmp/report-before" "$REPORT"
+[ "$rc" != 0 ] && cmp -s "$SETTINGS" "$tmp/set-before" && ok "  a host name with a control character: refused, settings untouched" || bad "  bad name: rc $rc $(cat "$SETTINGS")"
 core_select "$XRAY_GROUP" DE 2>"$tmp/err" && [ "$(setting xrayserver "")" = DE ] && ok "  a host approved at import still switches" || bad "  DE: $(cat "$tmp/err")"
 run "$tmp/three.json" import
 core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>"$tmp/err" && [ "$(setting xrayserver "")" = "🇱🇹Литва 2" ] && [ "$(paste -sd, - < "$CORE_EGRESS")" = rules,dns ] &&

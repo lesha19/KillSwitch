@@ -1912,10 +1912,6 @@ put_setting() {  # put_setting <key> <value> [settings-file]
   local f=${3:-$SETTINGS}
   { grep -vE "^$1=" "$f" 2>/dev/null; echo "$1=$2"; } > "$f.tmp" && chmod 644 "$f.tmp" && mv "$f.tmp" "$f"
 }
-drop_setting() {  # drop_setting <key>: back to its default
-  [ -f "$SETTINGS" ] || return 0
-  { grep -vE "^$1=" "$SETTINGS"; :; } > "$SETTINGS.tmp" && chmod 644 "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
-}
 
 core_import() {  # core_import <profile.json> [import|refresh]
   local src=${1:-} prof conf in tmp srv="$SERVERS_CORE.tmp" rc
@@ -2585,17 +2581,24 @@ core_proxies() {
 xray_select() {
   grep -qxF -- "$1" <(/usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); print "$_->{name}\n" for @{ $r->{servers} || [] }' < "$REPORT" 2>/dev/null) ||
     { echo "В подписке нет сервера «$1»" >&2; return 1; }
-  local old
-  old=$(setting xrayserver "")
-  local rc=0
-  put_setting xrayserver "$1" || return 1
-  core_rebuild "$PINS" switch || rc=$?
+  # a name the settings would call damaged (control characters, too long) would block everything;
+  # failover takes names from the subscription, not through passwordless_args_ok
+  valid_name "$1" || { echo "Плохое имя сервера" >&2; return 1; }
+  # Built and gated with the pick in a copy of the settings; the pick itself is written only after
+  # the gate and the commit passed. A ks killed in between leaves the pick that the running config
+  # was approved for, never one the gate refused, for the next rebuild without a gate (rotation,
+  # a setting, _regen) to commit: those rebuild the pick the settings name.
+  local d rc=0
+  d=$(mktemp -d) || return 1   # a directory: put_setting also writes <file>.tmp
+  cp "$SETTINGS" "$d/settings" 2>/dev/null
+  put_setting xrayserver "$1" "$d/settings"
+  SETTINGS=$d/settings core_rebuild "$PINS" switch || rc=$?
+  rm -rf "$d"
   if [ "$rc" != 0 ]; then
-    # none before (the first host): no line, an empty one is no valid server name
-    if [ -n "$old" ]; then put_setting xrayserver "$old"; else drop_setting xrayserver; fi
     [ "$rc" = 3 ] && log_event "server switch to $1 refused: it sends other traffic past the VPN than approved"
     return "$rc"
   fi
+  put_setting xrayserver "$1" || return 1
   reload_if_on; core_reload
 }
 # Automatic failover with Xray (ADR 0023; the default decision of #43). Every 20 s the watchdog
@@ -2638,7 +2641,7 @@ KS_FAILOVER_PL='
     my %p = map { my @f = split /\t/; ($f[0] => [ $f[1], $f[2] ]) } split /\n/, $ENV{P} // "";
     my $country = $flag->($cur);
     my ($best) = sort { $p{$a}[1] <=> $p{$b}[1] }
-      grep { $_ ne $cur && length $country && $flag->($_) eq $country && $p{$_} && $p{$_}[0] && ($why ne "slow" || $p{$_}[1] * 2 < $ms) } @names;
+      grep { $_ ne $cur && length $_ <= 256 && !/[\x00-\x1f\x7f]/ && length $country && $flag->($_) eq $country && $p{$_} && $p{$_}[0] && ($why ne "slow" || $p{$_}[1] * 2 < $ms) } @names;
     if (defined $best) { $out = join "\t", "switch", $cur, $best, $why, $ms, $usual; %s = (server => $best, last => $now, manual => "") }
     elsif (!$s{told}) { $out = join "\t", "stay", $cur, "-", $why, $ms, $usual; $s{told} = 1 }
   }

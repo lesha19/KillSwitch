@@ -240,6 +240,16 @@ both select failover
 [ "$(paste -sd, - < "$T/order")" = "start 🇩🇪Германия,end 🇩🇪Германия" ] && [ "$(setting xrayserver "")" = "🇩🇪Германия" ] &&
   ok "a pick by hand switching, then the failover pass: skipped, the pick stays" || bad "order: $(cat "$T/order")"
 
+# --- a host whose name the settings would call damaged (over 256 bytes, control characters) is
+# never a failover target: writing it would make the watchdog block everything
+OBS=$'ks-ping-0\t0\t0\nks-ping-1\t1\t120\nks-ping-2\t1\t30'
+reset_fo; PROBE="0 0"
+long="🇱🇹$(printf 'x%.0s' $(seq 1 300))"
+L=$long /usr/bin/perl -MJSON::PP -i -0pe '$r = JSON::PP->new->decode($_); $r->{servers}[1]{name} = $ENV{L}; $_ = JSON::PP->new->encode($r)' "$REPORT"
+pass; pass; pass
+[ ! -e "$T/selected" ] && grep -q 'no live server of its country' "$EVENTS" && ok "a same-country host with a name over 256 bytes: not a failover target" ||
+  bad "long name: $(cat "$T/selected" 2>&1) $(cat "$EVENTS")"
+
 # --- the Mac without a network (no primary interface): the probe fails for that reason, not the
 # server's; nothing counted, so a local outage does not abandon a server picked by hand
 OBS=$'ks-ping-0\t0\t0\nks-ping-1\t1\t120\nks-ping-2\t1\t30'
