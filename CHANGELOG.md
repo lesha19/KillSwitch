@@ -84,6 +84,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 - Settings changed at the same moment (a «ks set» and the automatic server switch) no longer
   lose one another; the protection log and the pause are written whole (#50).
 - Subscriptions whose rule providers send request headers (`header`) are taken (#37).
+- Xray servers given by name and reached over plain HTTP (WebSocket, HTTPUpgrade, XHTTP without
+  TLS) keep sending that name as the HTTP Host after it is pinned to an address. Empty values a
+  panel writes for «none» (a balancer fallback, a dialer chain, an XHTTP download address) no
+  longer refuse a host (0.19.1).
 
 ### Security
 - The daemon accepts one more client, `com.lesha19.KillSwitch.cli`, signed by the same team; the

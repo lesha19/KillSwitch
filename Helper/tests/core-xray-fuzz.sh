@@ -156,6 +156,50 @@ perhost "an address elsewhere in the stream settings" '$b->{outbounds}[0]{stream
 refused "XHTTP download through a missing outbound" '$c->{outbounds}[0]{streamSettings} = { network => "xhttp",
       xhttpSettings => { downloadSettings => { address => "198.51.100.8", port => 443, sockopt => { dialerProxy => "nope" } } } }' "несуществующий"
 
+# --- what Xray reads as unset is not a server or a chain (0.19.1 review): an empty fallbackTag
+# (no fallback), an empty dialerProxy (no chain), a download address null or "" (the outbound's own)
+if accepted "balancer fallbackTag empty (no fallback)" '$c->{routing}{balancers}[0]{fallbackTag} = ""'; then
+  [ "$(j 'join "|", map { $_->{name} } @{ $c->{servers} }' "$tmp/c.report")" = "🇱🇹Литва" ] && ok "  the host kept" || bad "  servers: $(j '$c->{servers}' "$tmp/c.report")"
+fi
+accepted "download dialerProxy empty (no chain)" '$c->{outbounds}[0]{streamSettings} = { network => "xhttp", xhttpSettings => { path => "/x",
+      downloadSettings => { address => "198.51.100.8", port => 443, network => "xhttp", sockopt => { dialerProxy => "" }, xhttpSettings => { path => "/y" } } } }' &&
+  ok "  accepted"
+for v in undef '""'; do
+  if accepted "download address $v (the outbound's own)" '$c->{outbounds}[0]{streamSettings} = { network => "xhttp", xhttpSettings => { path => "/x",
+        downloadSettings => { address => '"$v"', port => 443, network => "xhttp", xhttpSettings => { path => "/y" } } } }'; then
+    [ "$(paste -sd' ' "$tmp/s")" = 203.0.113.10 ] && ok "  no server of its own for pf" || bad "  servers: $(paste -sd' ' "$tmp/s")"
+  fi
+done
+
+# --- a name pinned to an address keeps the HTTP Host it gave (0.19.1 review): without TLS the
+# transports send the address as Host, and a reverse proxy routing by name would get the IP
+if accepted "plaintext XHTTP download by name" '$c->{outbounds}[0]{streamSettings} = { network => "xhttp", xhttpSettings => { path => "/x",
+      downloadSettings => { address => "dl.example.com", port => 80, network => "xhttp", xhttpSettings => { path => "/y" } } } }'; then
+  [ "$(j '$c->{outbounds}[0]{streamSettings}{xhttpSettings}{downloadSettings}{xhttpSettings}{host}')" = dl.example.com ] &&
+    ok "  its xhttpSettings.host is the name" || bad "  download: $(j '$c->{outbounds}[0]{streamSettings}{xhttpSettings}{downloadSettings}')"
+fi
+for n in ws:wsSettings httpupgrade:httpupgradeSettings xhttp:xhttpSettings splithttp:splithttpSettings; do
+  if accepted "plaintext ${n%%:*} by name" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = "a.example.com";
+        $c->{outbounds}[0]{streamSettings} = { network => "'"${n%%:*}"'", security => "none", '"${n#*:}"' => { path => "/p" } }'; then
+    [ "$(j '$c->{outbounds}[0]{settings}{vnext}[0]{address}')" = 203.0.113.40 ] && [ "$(j '$c->{outbounds}[0]{streamSettings}{'"${n#*:}"'}{host}')" = a.example.com ] &&
+      ok "  pinned, ${n#*:}.host the name" || bad "  stream: $(j '$c->{outbounds}[0]{streamSettings}')"
+  fi
+done
+if accepted "a Host of its own is kept" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = "a.example.com";
+      $c->{outbounds}[0]{streamSettings} = { network => "ws", wsSettings => { path => "/p", host => "cdn.example.net" } }'; then
+  [ "$(j '$c->{outbounds}[0]{streamSettings}{wsSettings}{host}')" = cdn.example.net ] && ok "  unchanged" || bad "  ws: $(j '$c->{outbounds}[0]{streamSettings}')"
+fi
+if accepted "a ws Host header of its own is kept" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = "a.example.com";
+      $c->{outbounds}[0]{streamSettings} = { network => "ws", wsSettings => { path => "/p", headers => { Host => "cdn.example.net" } } }'; then
+  [ "$(j 'exists $c->{outbounds}[0]{streamSettings}{wsSettings}{host} ? "added" : "none"')" = none ] && ok "  no host added next to it" || bad "  ws: $(j '$c->{outbounds}[0]{streamSettings}')"
+fi
+
+# reading the transports adds nothing to them
+if accepted "a ws stream read as it is" '$c->{outbounds}[0]{streamSettings} = { network => "ws", security => "tls", wsSettings => { path => "/p" } }'; then
+  [ "$(j 'join ",", sort keys %{ $c->{outbounds}[0]{streamSettings} }')" = network,security,wsSettings ] && ok "  no xhttpSettings or splithttpSettings added" ||
+    bad "  stream: $(j '$c->{outbounds}[0]{streamSettings}')"
+fi
+
 # --- sockets bound past pf's view: interface, mark and raw socket options removed
 if accepted "sockopt interface, mark, customSockopt, sendThrough" '$c->{outbounds}[0]{streamSettings}{sockopt}{interface} = "en0";
       $c->{outbounds}[0]{streamSettings}{sockopt}{mark} = 255; $c->{outbounds}[0]{sendThrough} = "192.168.1.5";
