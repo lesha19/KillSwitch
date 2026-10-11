@@ -160,6 +160,7 @@ final class HelperClient {
             case .setSplitApps(let names): helper.setSplitApps(names: names, authorization: form, reply: reply)
             case .setMultihop(let entry): helper.setMultihop(entry: entry, authorization: form, reply: reply)
             case .setCore(let core): helper.setCore(name: core.rawValue, authorization: form, reply: reply)
+            case .setMTU(let mtu): helper.setMTU(value: mtu ?? 0, authorization: form, reply: reply)
             case .allow(let address): helper.allow(address: address, authorization: form, reply: reply)
             case .unallow(let address): helper.unallow(address: address, authorization: form, reply: reply)
             case .serverAdd(let address): helper.serverAdd(address: address, authorization: form, reply: reply)

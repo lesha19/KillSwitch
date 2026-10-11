@@ -660,6 +660,15 @@ private struct AdvancedSettings: View {
 
             TransportSection()
 
+            Section("Размер пакетов VPN") {
+                Picker("MTU", selection: Binding(get: { control.tunnelMTU }, set: { control.setMTU($0) })) {
+                    ForEach(TunnelMTU.choices(current: control.tunnelMTU), id: \.self) { Text(TunnelMTU.title($0)).tag($0) }
+                }
+                .disabled(control.busy || control.state == .notInstalled)
+                Footnote(text: String(localized: "Меняй, только если сайты грузятся не до конца или видеозвонки обрываются. Смена спросит пароль и на секунду перезапустит VPN."),
+                         more: String(localized: "MTU — самый большой пакет, который VPN отправляет за раз. «Авто» — как было: 1500 у основного способа, своё значение у запасного. Если по пути пакеты такого размера не проходят, помогает меньшее: 1380 или 1280. На то, что идёт мимо VPN, это не влияет."))
+            }
+
             Section("Диагностика") {
                 Toggle(isOn: Binding(get: { control.diagVerbose }, set: { control.set("diag", $0) })) {
                     Text("Подробная диагностика (все соединения)")

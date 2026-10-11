@@ -31,6 +31,8 @@ enum HelperCommand: Equatable, Sendable {
     case setMultihop(String?)
     /// The way of connecting (ADR 0020); the subscription is imported again for it.
     case setCore(CoreChoice)
+    /// The TUN's MTU, nil = «Авто» (ADR 0032).
+    case setMTU(Int?)
     case allow(String), unallow(String)
     case serverAdd(String), serverRemove(String)
     case coreImport(profile: String)
@@ -115,6 +117,7 @@ enum HelperCommand: Equatable, Sendable {
         case .setSplitApps(let names): ["set", "splitapps", names.joined(separator: ",")]
         case .setMultihop(let entry): ["set", "multihop", entry ?? Self.multihopOff]
         case .setCore(let core): ["set", "core", core.rawValue]
+        case .setMTU(let mtu): ["set", "mtu", mtu.map(String.init) ?? Self.mtuAuto]
         case .allow(let address): ["allow", address]
         case .unallow(let address): ["unallow", address]
         case .serverAdd(let address): ["server-add", address]
@@ -142,6 +145,7 @@ enum HelperCommand: Equatable, Sendable {
             names.count <= Self.maxSplitApps && Set(names).count == names.count && names.allSatisfy(Self.isSplitApp)
         case .setMultihop(let entry): entry.map { Self.isName($0) && $0 != Self.multihopOff } ?? true
         case .setCore: true
+        case .setMTU(let mtu): mtu.map { Self.mtuRange.contains($0) } ?? true
         case .allow(let address), .serverAdd(let address): Self.isAddress(address)
         case .unallow(let address), .serverRemove(let address): Self.isListedAddress(address)
         case .install(let user, let servers):
@@ -205,6 +209,14 @@ enum HelperCommand: Equatable, Sendable {
                 case "core":
                     guard let core = CoreChoice(rawValue: arguments[2]) else { return nil }
                     command = .setCore(core)
+                case "mtu":
+                    if arguments[2] == Self.mtuAuto {
+                        command = .setMTU(nil)
+                    } else {
+                        // ks mtu_ok: four ASCII digits, no sign or leading zero
+                        guard arguments[2].wholeMatch(of: /[1-9][0-9]{3}/) != nil, let mtu = Int(arguments[2]) else { return nil }
+                        command = .setMTU(mtu)
+                    }
                 default:
                     guard ["0", "1"].contains(arguments[2]) else { return nil }
                     command = .setSwitch(arguments[1], arguments[2] == "1")
@@ -238,6 +250,9 @@ enum HelperCommand: Equatable, Sendable {
     // MARK: checks
 
     static let multihopOff = "off"
+    /// `ks set mtu auto|1280…1500` (ks mtu_ok): 1280 is IPv6's minimum.
+    static let mtuAuto = "auto"
+    static let mtuRange = 1280...1500
     /// `ks set <key> 0|1`; all behind the right, «Блокировать рекламу» (adblock) too: it changes
     /// what the core refuses, and only an admin turns that on or off, as with the password before.
     /// «Подробная диагностика» (diag, ADR 0021) too: it changes what the core records.

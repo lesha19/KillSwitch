@@ -57,6 +57,8 @@ enum HelperIdentity {
     func setSplitApps(names: [String], authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func setMultihop(entry: String?, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func setCore(name: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
+    /// 0: «Авто».
+    func setMTU(value: Int, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func allow(address: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func unallow(address: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func serverAdd(address: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)

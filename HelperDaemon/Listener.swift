@@ -83,6 +83,9 @@ final class Endpoint: NSObject, HelperProtocol, Sendable {
         }
         Executor.perform(.setCore(core), authorization: authorization, caller: uid, reply: reply)
     }
+    func setMTU(value: Int, authorization: Data, reply: @escaping Reply) {
+        Executor.perform(.setMTU(value == 0 ? nil : value), authorization: authorization, caller: uid, reply: reply)
+    }
     func allow(address: String, authorization: Data, reply: @escaping Reply) {
         Executor.perform(.allow(address), authorization: authorization, caller: uid, reply: reply)
     }

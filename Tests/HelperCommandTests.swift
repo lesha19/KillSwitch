@@ -23,6 +23,7 @@ final class HelperCommandTests: XCTestCase {
              ["set", "splitapps", "/Applications/Telegram.app,zoom.us"]),
             (.setSplitApps([]), ["set", "splitapps", ""]),
             (.setMultihop("🇩🇪 de-1"), ["set", "multihop", "🇩🇪 de-1"]), (.setMultihop(nil), ["set", "multihop", "off"]),
+            (.setMTU(1380), ["set", "mtu", "1380"]), (.setMTU(nil), ["set", "mtu", "auto"]),
             (.setCore(.xray), ["set", "core", "xray"]), (.setCore(.mihomo), ["set", "core", "mihomo"]),
             (.allow("10.0.0.0/8"), ["allow", "10.0.0.0/8"]), (.unallow("10.0.0.0/8"), ["unallow", "10.0.0.0/8"]),
             (.serverAdd("2001:db8::1"), ["server-add", "2001:db8::1"]),
@@ -109,7 +110,7 @@ final class HelperCommandTests: XCTestCase {
             .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic, .coreConnections,
             .coreSelect(group: "g", proxy: "p"), .coreDelay("g"), .coreRefresh(profile: "/tmp/p.json"),
             .protectionOff, .pause(minutes: 5), .setSwitch("lan", true), .setSwitch("adblock", true), .setSplitApps([]),
-            .setMultihop(nil), .setCore(.xray),
+            .setMultihop(nil), .setCore(.xray), .setMTU(1400),
             .allow("192.0.2.1"), .unallow("192.0.2.1"), .serverAdd("192.0.2.1"), .serverRemove("192.0.2.1"),
             .coreImport(profile: "/tmp/p.json"), .install(user: "alex", servers: []), .uninstall, .repair,
             .setSwitch("diag", true), .diagReport(directory: "/Users/me/Desktop"),
@@ -220,6 +221,18 @@ final class HelperCommandTests: XCTestCase {
         XCTAssertFalse(HelperCommand.coreDelay("a\u{7}b").isValid)
         XCTAssertNil(HelperCommand(ks: ["set", "core", "sing-box"]))
         XCTAssertFalse(HelperCommand.setMultihop("").isValid)
+        // the TUN's MTU (ADR 0032): auto or 1280…1500, as ks mtu_ok
+        XCTAssertTrue(HelperCommand.setMTU(1280).isValid)
+        XCTAssertTrue(HelperCommand.setMTU(1500).isValid)
+        XCTAssertTrue(HelperCommand.setMTU(nil).isValid)
+        XCTAssertFalse(HelperCommand.setMTU(1279).isValid)
+        XCTAssertFalse(HelperCommand.setMTU(1501).isValid)
+        XCTAssertFalse(HelperCommand.setMTU(9000).isValid)
+        XCTAssertEqual(HelperCommand(ks: ["set", "mtu", "auto"]), .setMTU(nil))
+        XCTAssertEqual(HelperCommand(ks: ["set", "mtu", "1380"]), .setMTU(1380))
+        for bad in ["", "01380", "1380.0", "+1380", "١٣٨٠", "1000", "auto "] {
+            XCTAssertNil(HelperCommand(ks: ["set", "mtu", bad]), bad)
+        }
         XCTAssertFalse(HelperCommand.setMultihop("off").isValid)   // would mean «выключен»
         XCTAssertFalse(HelperCommand.setMultihop("a\tb").isValid)
     }

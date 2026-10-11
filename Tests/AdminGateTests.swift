@@ -54,7 +54,7 @@ final class AdminGateTests: XCTestCase {
         "interactive: true", "userInitiated: true", "runAsAdmin(", "adminRun(", "runBundled(", "AdminScript.",
         "authorization.obtain", "turnOn(", "turnOff(", "pause(minutes", "coreOn()", "restartCore(", "install()", "setUp(",
         "coreImport(", "select(group", "runDelay(", "testDelay(", "testAllDelays(", "selectBest(", "setSwitches(",
-        "setExceptions(", "setSplitApps(", "setMultihop(", "setManualServers(", "uninstall(", "restoreNetwork(",
+        "setExceptions(", "setSplitApps(", "setMultihop(", "setMTU(", "setManualServers(", "uninstall(", "restoreNetwork(",
         "prepareHelper(", "confirmNewServers(", "setCore(", "switchCore(", "applySettings(",
     ]
 
