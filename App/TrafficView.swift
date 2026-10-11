@@ -20,9 +20,9 @@ struct TrafficView: View {
     @Environment(KillSwitchControl.self) private var control
     @AppStorage("trafficTab") private var tab: Tab = .rules
 
-    /// The main way of connecting (Xray, ADR 0020) lists no live connections, and its rules are
-    /// not the kind «Проверить адрес» can walk: only «Правила» then.
-    static func tabs(_ core: CoreChoice) -> [Tab] { core.hasConnections ? Tab.allCases : [.rules] }
+    /// The main way of connecting (Xray, ADR 0020) lists no live connections; its rules are walked
+    /// by «Проверить адрес» since ADR 0027.
+    static func tabs(_ core: CoreChoice) -> [Tab] { core.hasConnections ? Tab.allCases : [.rules, .check] }
 
     var body: some View {
         let tabs = Self.tabs(control.coreChoice)
@@ -697,6 +697,8 @@ private struct CheckAddressTab: View {
     @State private var query = ""
     @State private var result: (target: String, result: AddressCheck.Result)?
     @State private var invalid = false
+    /// The helper wrote the Xray report before ADR 0027: no rules to walk.
+    @State private var outdated = false
 
     var body: some View {
         if let report = control.routing {
@@ -712,6 +714,10 @@ private struct CheckAddressTab: View {
                     }
                     if invalid {
                         StatusLabel("Это не похоже на сайт или IP-адрес", systemImage: "exclamationmark.triangle", tint: .orange)
+                    }
+                    if outdated {
+                        StatusLabel("Ответа нет: служба KillSwitch старой версии не сохраняет правила для проверки. Обнови службу.",
+                                    systemImage: "questionmark.circle", tint: .orange)
                     }
                 } footer: {
                     Text("Проверка проходит правила так же, как ядро, для обычного открытия сайта: TCP, порт 443. Ничего не отправляется в сеть.")
@@ -735,7 +741,10 @@ private struct CheckAddressTab: View {
         let context = AddressCheck.Context(providers: report.providers,
                                            geosite: { geo.site($0, contains: $1) },
                                            geoip: { geo.ip($0, inCountry: $1) })
-        result = (target.host ?? target.ip ?? query, AddressCheck.check(target, rules: report.rules.map(\.rule), context: context))
+        let answer = report.isXray ? AddressCheck.check(target, report: report, context: context)
+                                   : AddressCheck.check(target, rules: report.rules.map(\.rule), context: context)
+        outdated = answer == nil
+        result = answer.map { (target.host ?? target.ip ?? query, $0) }
     }
 
     @ViewBuilder
@@ -754,7 +763,10 @@ private struct CheckAddressTab: View {
                     RouteBadge(route: result.route)
                 }
                 if let rule = result.rule, let position = result.position {
-                    Text(String(localized: "Сработает \(number(position)): \(Self.describe(rule))"))
+                    Text(String(localized: "Сработает \(number(position)): \(describe(rule))"))
+                        .font(.callout).fixedSize(horizontal: false, vertical: true)
+                } else if control.routing?.isXray == true {
+                    Text("Ни одно правило не подходит: ядро отправит соединение так, как подписка велит по умолчанию.")
                         .font(.callout).fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text("Ни одно правило не подходит: ядро отправит соединение напрямую, как делает mihomo по умолчанию.")
@@ -768,7 +780,7 @@ private struct CheckAddressTab: View {
             Section {
                 ForEach(result.caveats, id: \.position) { caveat in
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(String(localized: "\(number(caveat.position).capitalizedFirst): \(Self.describe(caveat.rule))")).font(.callout).lineLimit(2)
+                        Text(String(localized: "\(number(caveat.position).capitalizedFirst): \(describe(caveat.rule))")).font(.callout).lineLimit(2)
                         Text(caveat.reason).font(.callout).foregroundStyle(.secondary)
                     }
                     .accessibilityElement(children: .combine)
@@ -776,8 +788,13 @@ private struct CheckAddressTab: View {
             } header: {
                 Label("Ответ приблизительный", systemImage: "questionmark.circle")
             } footer: {
-                Text("Эти правила стоят выше и могут сработать раньше, но здесь их не проверить. Точный ответ — во вкладке «Соединения», когда сайт открыт при подключённом VPN.")
-                    .foregroundStyle(.secondary)
+                if control.routing?.isXray == true {
+                    Text("Эти правила стоят выше и могут сработать раньше, но здесь их не проверить.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Эти правила стоят выше и могут сработать раньше, но здесь их не проверить. Точный ответ — во вкладке «Соединения», когда сайт открыт при подключённом VPN.")
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -789,6 +806,9 @@ private struct CheckAddressTab: View {
         guard let rule = report?.rules[safe: position] else { return String(localized: "правило \(position + 1)") }
         return rule.index.map { String(localized: "правило \($0 + 1)") } ?? String(localized: "твоё правило")
     }
+
+    /// Xray's rules are shown as the report writes them («domain=geosite:youtube → …»).
+    private func describe(_ text: String) -> String { control.routing?.isXray == true ? text : Self.describe(text) }
 
     /// «Категория сайтов category-ru → Напрямую».
     static func describe(_ text: String) -> String {

@@ -48,6 +48,8 @@ struct RoutingReport: Decodable, Equatable, Sendable {
         var from: Origin
         /// Position in the subscription's list (nil for KillSwitch's).
         var index: Int?
+        /// With Xray: the rule object as the core has it, for «Проверить адрес» (ADR 0027).
+        var xray: [String: JSONValue]?
     }
 
     struct Dropped: Decodable, Equatable, Sendable {
@@ -134,6 +136,24 @@ struct RoutingReport: Decodable, Equatable, Sendable {
     var sniffer: Sniffer
     var dns: DNS
     var egress: [String]
+    /// "xray" for the main way of connecting (ADR 0020); absent in mihomo's report.
+    var core: String?
+    /// With Xray: each outbound tag's kind (vpn, direct, block, dns) and the tag that takes what no
+    /// rule does (Xray's first outbound), for «Проверить адрес» (ADR 0027).
+    var targets: [String: String]?
+    var fallback: String?
+
+    var isXray: Bool { core == "xray" }
+
+    /// Where an Xray outbound or balancer tag leads: freedom is direct, blackhole a block, the rest
+    /// (servers, balancers) the VPN.
+    func xrayRoute(_ tag: String) -> TrafficRoute {
+        switch targets?[tag] {
+        case "direct": .direct
+        case "block": .block
+        default: .vpn(tag)
+        }
+    }
 
     init(data: Data) throws {
         self = try JSONDecoder().decode(Self.self, from: data)

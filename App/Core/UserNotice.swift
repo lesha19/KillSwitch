@@ -9,6 +9,8 @@ enum UserNotice: Equatable {
     case serverSwitched(from: String, to: String)
     /// No server of the chosen country answers; another country is the person's choice.
     case serversDown(country: String)
+    /// The helper turned «Двойной VPN» off by itself: its entry no longer fits (ADR 0027).
+    case doubleVPNOff(entry: String)
     case autoConnectNeedsPassword
     /// Auto-connect found another program's VPN up and left it alone (ADR 0009).
     case otherVPN(name: String?)
@@ -55,6 +57,7 @@ enum UserNotice: Equatable {
         case .reconnected: "reconnected"
         case .serverSwitched: "serverSwitched"
         case .serversDown: "serversDown"
+        case .doubleVPNOff: "doubleVPNOff"
         case .autoConnectNeedsPassword: "autoConnect"
         case .otherVPN: "otherVPN"
         case .subscriptionEnding(let days, _, _): "ending\(days)"
@@ -70,7 +73,7 @@ enum UserNotice: Equatable {
 
     var setting: Setting? {
         switch self {
-        case .vpnDropped, .reconnected, .autoConnectNeedsPassword, .serverSwitched, .serversDown, .otherVPN: .connection
+        case .vpnDropped, .reconnected, .autoConnectNeedsPassword, .serverSwitched, .serversDown, .otherVPN, .doubleVPNOff: .connection
         case .subscriptionEnding, .trafficLow, .newServers, .routingChanged: .subscription
         case .pauseEnded: .pause
         case .serviceOff: .service
@@ -81,7 +84,7 @@ enum UserNotice: Equatable {
     var action: Action? {
         switch self {
         case .vpnDropped: .connect
-        case .autoConnectNeedsPassword, .serversDown, .otherVPN: .openApp
+        case .autoConnectNeedsPassword, .serversDown, .otherVPN, .doubleVPNOff: .openApp
         case .subscriptionEnding: .renew
         case .newServers, .routingChanged: .approve
         case .serviceOff: .openLoginItems
@@ -96,6 +99,7 @@ enum UserNotice: Equatable {
         case .reconnected: String(localized: "VPN снова работает")
         case .serverSwitched: String(localized: "VPN переключился на другой сервер")
         case .serversDown(let country): String(localized: "Серверы «\(country)» не отвечают")
+        case .doubleVPNOff: String(localized: "Двойной VPN выключен")
         case .autoConnectNeedsPassword: String(localized: "VPN не подключился сам")
         case .otherVPN(let name): OtherVPN.title(name: name)
         case .subscriptionEnding(let days, _, _): String(localized: "Подписка кончается через ") + Russian.plural(days, String(localized: "день"), String(localized: "дня"), String(localized: "дней"))
@@ -119,6 +123,7 @@ enum UserNotice: Equatable {
         case .reconnected(let server): server ?? String(localized: "Интернет снова идёт через VPN.")
         case .serverSwitched(let from, let to): String(localized: "«\(from)» не отвечал. Теперь — «\(to)».")
         case .serversDown: String(localized: "Выбери другую страну или «Самый быстрый».")
+        case .doubleVPNOff(let entry): String(localized: "Сервер входа «\(entry)» больше не подходит. VPN работает через один сервер.")
         case .autoConnectNeedsPassword: String(localized: "Службу нужно обновить.")
         case .otherVPN: String(localized: "KillSwitch не подключился сам, чтобы не выключать его без спроса. Переключиться можно в KillSwitch.")
         case .subscriptionEnding(_, let title, let expire):

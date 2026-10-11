@@ -199,10 +199,14 @@ struct ServersScreen: View {
             .tag(tag ?? entry.id)
     }
 
-    /// The exit list is the whole picker; the entry list has servers only, never the exit.
+    /// The exit list is the whole picker but the entry (ADR 0027); the entry list has servers only,
+    /// never the exit.
     private func entries(_ proxies: CoreProxies) -> [ServerPicker.Entry] {
         let all = ServerPicker.entries(proxies)
-        guard choosingEntry else { return all }
+        guard choosingEntry else {
+            let exits = Set(Multihop.exits(all.map(\.name), entry: control.multihopEntry))
+            return all.filter { exits.contains($0.name) }
+        }
         let candidates = Set(Multihop.candidates(all.filter { !$0.isFastest }.map(\.name), exit: control.currentServer))
         return all.filter { candidates.contains($0.name) }
     }

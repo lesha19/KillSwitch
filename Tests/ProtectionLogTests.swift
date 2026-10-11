@@ -27,6 +27,19 @@ final class ProtectionLogTests: XCTestCase {
     func testVPNEvents() {
         XCTAssertEqual(text("2026-10-10 14:03:22 core: 🚀 Выбор сервера -> 🇱🇹 Литва"), "Выбран сервер «🇱🇹 Литва»")
         XCTAssertEqual(text("2026-10-10 14:03:22 double VPN: off"), "Двойной VPN выключен")
+        // ADR 0027: turned off by the helper, in words
+        XCTAssertEqual(text("2026-10-10 14:03:22 double VPN off: its entry «🇩🇪Германия»: not a server of the subscription"),
+                       "Двойной VPN выключен: сервера входа «🇩🇪 Германия» больше нет в подписке")
+        XCTAssertEqual(text("2026-10-10 14:03:22 double VPN off: its entry «🇩🇪Германия»: it is the running server"),
+                       "Двойной VPN выключен: «🇩🇪 Германия» сейчас и вход, и выход")
+        XCTAssertEqual(text("2026-10-10 14:03:22 double VPN off: its entry «🇩🇪Германия»: it connects through another server itself"),
+                       "Двойной VPN выключен: сервер входа «🇩🇪 Германия» больше не подходит")
+        XCTAssertEqual(text("2026-10-10 14:03:22 double VPN off: no answer through «🇩🇪Германия»"),
+                       "Двойной VPN выключен: через «🇩🇪 Германия» соединение не установилось")
+        XCTAssertEqual(text("2026-10-10 14:03:22 double VPN off: «NL reality» was set for the other way of connecting"),
+                       "Двойной VPN выключен: он был настроен для другого способа подключения")
+        XCTAssertEqual(text("2026-10-10 14:03:22 double VPN back: «🇳🇱Нидерланды», no answer through «🇩🇪Германия»"),
+                       "Через «🇩🇪 Германия» соединение не установилось — вход снова «🇳🇱 Нидерланды»")
         XCTAssertEqual(text("2026-10-10 14:03:22 apps outside the VPN: none"), "Программы без VPN: нет")
         XCTAssertEqual(text("2026-10-10 14:03:22 another VPN tunnel next to the core: utun6"), "Рядом работает другой VPN")
         XCTAssertEqual(text("2026-10-10 14:03:22 shutdown: network off (en0)"), "Mac выключается — сеть отключена")

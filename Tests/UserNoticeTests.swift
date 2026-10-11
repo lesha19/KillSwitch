@@ -71,4 +71,17 @@ final class UserNoticeTests: XCTestCase {
         XCTAssertTrue(throttle.allow(drop.key, now: start.addingTimeInterval(10 * 60)))
         XCTAssertEqual(UserNotice.vpnDropped(protected: false).key, drop.key)
     }
+
+    func testDoubleVPNTurnedOffByItself() {
+        // ADR 0027: the helper turned it off (the entry left the subscription…): loud, not silent
+        let notice = UserNotice.doubleVPNOff(entry: "🇩🇪 Германия")
+        XCTAssertEqual(notice.title, "Двойной VPN выключен")
+        XCTAssertEqual(notice.body, "Сервер входа «🇩🇪 Германия» больше не подходит. VPN работает через один сервер.")
+        XCTAssertEqual(notice.action, .openApp)
+        XCTAssertEqual(notice.setting, .connection)
+        XCTAssertTrue(Multihop.turnedOffByItself(was: "🇩🇪 Германия", now: nil, asked: false))
+        XCTAssertFalse(Multihop.turnedOffByItself(was: "🇩🇪 Германия", now: nil, asked: true), "the person turned it off")
+        XCTAssertFalse(Multihop.turnedOffByItself(was: nil, now: nil, asked: false))
+        XCTAssertFalse(Multihop.turnedOffByItself(was: "A", now: "B", asked: false))
+    }
 }

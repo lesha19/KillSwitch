@@ -86,6 +86,9 @@ final class KillSwitchControl {
     private(set) var splitApps: [String] = []
     /// «Двойной VPN»: the entry server; the exit is the selected one. Nil = off.
     private(set) var multihopEntry: String?
+    /// When the person last changed «Двойной VPN» or the way of connecting: an off within two
+    /// minutes of it is theirs, any other is the helper's and is told (ADR 0027).
+    private var multihopAskedAt: Date?
     /// Set while another VPN's TUN is up next to our core (see `foreignVPNFile`).
     private(set) var foreignVPN: String?
     /// Protection stands by while another VPN is up and ours is not (ADR 0018, the watchdog's file).
@@ -276,9 +279,13 @@ final class KillSwitchControl {
     /// Always a click: the list decides what goes around the VPN.
     func setSplitApps(_ names: [String]) { runAsAdmin([helper, "set", "splitapps", SplitApps.argument(names)]) }
     /// `entry` nil turns «Двойной VPN» off. Always a click.
-    func setMultihop(entry: String?) { runAsAdmin([helper, "set", "multihop", entry ?? Multihop.off]) }
+    func setMultihop(entry: String?) {
+        multihopAskedAt = Date()
+        runAsAdmin([helper, "set", "multihop", entry ?? Multihop.off])
+    }
     /// `ks set core` (one password); `then` imports the subscription for it (VPNClient.switchCore).
     func setCore(_ choice: CoreChoice, then done: @escaping @MainActor () async -> Void) {
+        multihopAskedAt = Date()
         runAsAdmin(batch: [[helper, "set", "core", choice.rawValue]]) { [self] in
             coreChoice = choice
             await done()
@@ -1137,7 +1144,12 @@ final class KillSwitchControl {
         diagVerbose = (values["diag"] ?? "0") == "1"
         autoSwitch = (values["failover"] ?? "1") == "1"
         splitApps = SplitApps.parse(setting: values["splitapps"])
-        multihopEntry = Multihop.entry(setting: values["multihop"])
+        let entry = Multihop.entry(setting: values["multihop"])
+        let asked = multihopAskedAt.map { Date().timeIntervalSince($0) < 120 } ?? false
+        if Multihop.turnedOffByItself(was: multihopEntry, now: entry, asked: asked), let was = multihopEntry {
+            notify(.doubleVPNOff(entry: ServerName.display(was)))
+        }
+        multihopEntry = entry
         exceptions = Self.readLines("/Library/KillSwitch/allow")
         servers = Self.readLines("/Library/KillSwitch/servers")
         manualServers = Self.readLines("/Library/KillSwitch/servers-manual")

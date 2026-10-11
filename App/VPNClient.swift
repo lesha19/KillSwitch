@@ -173,7 +173,7 @@ final class VPNClient {
         status = Status()
         saveStatus()
         lastError = nil
-        if !manual.isEmpty { await apply(subscription: nil, interactive: true) }
+        if !manual.isEmpty { await applyManualOnly(interactive: true) }
     }
 
     // MARK: manual servers
@@ -252,7 +252,7 @@ final class VPNClient {
     /// «Обновлено» moves only when the profile reached the core; otherwise again in an hour.
     func update(interactive: Bool) async {
         guard let url = Self.storedURL().flatMap(URL.init(string:)) else {
-            if !manual.isEmpty { await apply(subscription: nil, interactive: interactive) }
+            if !manual.isEmpty { await applyManualOnly(interactive: interactive) }
             return
         }
         guard !updating else { return }
@@ -332,11 +332,11 @@ final class VPNClient {
         return profile
     }
 
-    /// The panel's config to the helper (refresh, or import with the password on a click). Own
-    /// servers added by link are not part of it: they are profiles of the other way.
+    /// The panel's config to the helper (refresh, or import with the password on a click), with the
+    /// own servers the main way can use as hosts of their own (XrayManual, ADR 0027).
     @discardableResult
-    private func applyXray(_ data: Data?, interactive: Bool) async -> Bool {
-        guard let data else {
+    private func applyXray(_ subscription: Data?, interactive: Bool) async -> Bool {
+        guard let data = XrayManual.merge(subscription: subscription, manual: manualProxies)?.data else {
             lastError = nil
             return true
         }
@@ -359,6 +359,23 @@ final class VPNClient {
         lastError = nil
         needsPassword = false
         needsConfirmation = false; routingChanged = false
+    }
+
+    /// No subscription: the own servers alone, in the format of the way the helper runs.
+    private func applyManualOnly(interactive: Bool) async {
+        if usesXray { await applyXray(nil, interactive: interactive) } else { await apply(subscription: nil, interactive: interactive) }
+    }
+
+    /// Own servers by name with their entries, as ProxyLink reads them.
+    private var manualProxies: [(name: String, proxy: [String: Any])] {
+        manual.compactMap { server in (try? ProxyLink.parse(server.link)).map { (server.name, $0) } }
+    }
+
+    /// Why the main way cannot use this own server (it then works only with the other way); nil
+    /// when it can, or when the helper runs the other way.
+    func mainWayCannotUse(_ server: ManualServer) -> String? {
+        guard usesXray, let proxy = try? ProxyLink.parse(server.link) else { return nil }
+        return XrayManual.unsupported(proxy)
     }
 
     /// The cached subscription of the way the helper runs, to the helper again.
@@ -451,6 +468,8 @@ final class VPNClient {
         guard let added = parse(links, name: nil) else { return nil }
         manual += added
         saveManual()
+        // ADR 0027: own servers the main way cannot use at all are set up with the other way
+        setupCore = usesXray && !hasURL && !control.coreConfigured && manual.allSatisfy({ mainWayCannotUse($0) != nil }) ? .mihomo : nil
         reloadProfileProxies()
         return Onboarding.Found(title: nil, servers: manual.count, expire: nil, ownServers: true)
     }
@@ -473,7 +492,7 @@ final class VPNClient {
 
     func prepareImport() -> Prepared? {
         if (setupCore ?? control.coreChoice) == .xray {
-            guard let data = Self.cachedXray() else { return nil }
+            guard let data = XrayManual.merge(subscription: Self.cachedXray(), manual: manualProxies)?.data else { return nil }
             let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-xray-\(UUID().uuidString).json")
             do {
                 try data.write(to: file, options: .atomic)
@@ -588,7 +607,7 @@ final class VPNClient {
 
     private func reloadProfileProxies() {
         if usesXray {
-            profileProxies = Self.cachedXray().flatMap { try? XrayProfile(body: String(decoding: $0, as: UTF8.self)) }
+            profileProxies = XrayManual.merge(subscription: Self.cachedXray(), manual: manualProxies)
                 .map { CoreProxies(xrayServers: $0.servers) }
             transportServers = []
             serverKeys = [:]

@@ -4,6 +4,32 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Added
+- Xray: «Двойной VPN» works with the main way of connecting (#33, ADR 0027). The entry is another
+  server of the subscription; the running server and the other servers' ping probes are reached
+  through it, so no exit sees the Mac's address. Nothing new goes past the VPN. Turning it on
+  refuses an entry that does not answer or that could only give one hop (with the reason), and,
+  with the VPN on, goes back to the previous entry — or one hop — if the new chain does not answer
+  after the restart (logged). An entry that later disappears from the subscription or stops
+  fitting turns double VPN off: it never blocks the config, and it is said in Журнал защиты and by
+  a notification «Двойной VPN выключен». The entry is never
+  the exit (not offered, refused by the helper, never picked by failover; failover waits while the
+  entry is dead). Changing the way of connecting, and an upgrade that finds a setting left from the
+  fallback way, turn it off.
+- Xray: own servers added by link work with the main way (#33, ADR 0027): each is a server of its
+  own in the list, «<имя> (свой)», everything and DNS through it; never a failover target. Those
+  the main way cannot use (hysteria2, TUIC, WireGuard, a Shadowsocks plugin, IPv6, a server name
+  with odd characters, a skipped certificate check…) say so in Settings, keep working with the
+  fallback way and never block the import of the others. Names lose control characters and are
+  cut to 200 bytes; the helper refuses host names with control characters or over 256 bytes.
+- Xray: «Трафик» › «Проверить адрес» (#33, ADR 0027) walks Xray's rules from the routing report;
+  what cannot be told here (a program, the address a name gets, a rule too big for the report) is
+  listed as approximate. With a service of an older version it asks to update it instead of
+  answering. «Private» addresses also cover 0/8, 192.0.0/24, 198.18/15 and the documentation
+  networks.
+
 ## [0.19.0] - 2026-10-11
 
 ### Added

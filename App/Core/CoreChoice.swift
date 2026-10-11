@@ -21,7 +21,4 @@ enum CoreChoice: String, Equatable, Sendable, CaseIterable {
     var config: String { self == .xray ? "/Library/KillSwitch/core/xray.json" : "/Library/KillSwitch/core/config.yaml" }
     /// Only mihomo lists live connections («Трафик» › «Соединения»); Xray has no API for it here.
     var hasConnections: Bool { self == .mihomo }
-    /// «Двойной VPN» is built in mihomo's config only; `ks set multihop` refuses an entry with Xray
-    /// (turning it off always works).
-    var canTurnOnMultihop: Bool { self == .mihomo }
 }

@@ -77,4 +77,17 @@ final class MultihopTests: XCTestCase {
         // the exit itself cannot be the entry; names the helper would refuse are left out
         XCTAssertEqual(Multihop.candidates(["🇩🇪 DE", "🇱🇹 LT", "off", "a\u{7}b"], exit: "🇱🇹 LT"), ["🇩🇪 DE"])
     }
+
+    func testTurningOnPrefersAnEntryThatAnswers() {
+        // ADR 0027: a dead entry would drop the VPN at once
+        let alive: [String: Bool] = ["🇩🇪 DE": false, "🇳🇱 NL": true]
+        XCTAssertEqual(Multihop.preferred(["🇩🇪 DE", "🇳🇱 NL"], alive: { alive[$0] }), "🇳🇱 NL")
+        XCTAssertEqual(Multihop.preferred(["🇩🇪 DE", "🇵🇱 PL"], alive: { alive[$0] }), "🇵🇱 PL", "not checked yet is not dead")
+        XCTAssertNil(Multihop.preferred(["🇩🇪 DE"], alive: { alive[$0] }), "only dead ones: none")
+    }
+
+    func testTheEntryIsNoExit() {
+        XCTAssertEqual(Multihop.exits(["🇩🇪 DE", "🇱🇹 LT"], entry: "🇩🇪 DE"), ["🇱🇹 LT"], "one hop while showing two")
+        XCTAssertEqual(Multihop.exits(["🇩🇪 DE", "🇱🇹 LT"], entry: nil), ["🇩🇪 DE", "🇱🇹 LT"])
+    }
 }
