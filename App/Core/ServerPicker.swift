@@ -85,6 +85,8 @@ enum ServerPicker {
 
     struct Sections: Equatable {
         var fastest: Entry?
+        /// The last chosen servers (ServerRecents), also listed in their own section.
+        var recents: [Entry] = []
         var favourites: [Entry]
         var all: [Entry]
     }
@@ -102,7 +104,7 @@ enum ServerPicker {
         }
     }
 
-    static func sections(_ entries: [Entry], favourites: Set<String>, query: String, sort: Sort,
+    static func sections(_ entries: [Entry], favourites: Set<String>, recents: [String] = [], query: String, sort: Sort,
                          delays: [String: Int]) -> Sections {
         let found = search(entries, query)
         var servers = found.filter { !$0.isFastest }
@@ -120,7 +122,9 @@ enum ServerPicker {
                 return order == .orderedSame ? a.offset < b.offset : order == .orderedAscending
             }.map(\.element)
         }
+        let byName = Dictionary(servers.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
         return Sections(fastest: found.first(where: \.isFastest),
+                        recents: query.trimmingCharacters(in: .whitespaces).isEmpty ? recents.compactMap { byName[$0] } : [],
                         favourites: servers.filter { favourites.contains($0.name) },
                         all: servers.filter { !favourites.contains($0.name) })
     }

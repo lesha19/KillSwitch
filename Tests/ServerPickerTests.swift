@@ -101,6 +101,20 @@ final class ServerPickerTests: XCTestCase {
                        ["🇵🇱 Варшава", "🇩🇪 Германия", "🇱🇹 Литва", "🇱🇹 Литва 2", "🇱🇹 Литва 10", "LT-Vilnius"])
     }
 
+    /// «Недавние»: in the order used, servers of the list only, not «Самый быстрый», not while searching.
+    func testRecents() throws {
+        let entries = ServerPicker.entries(try proxies())
+        let recents = ["Дом", "⚡ Авто", "gone", "🇩🇪 Германия"]
+        let sections = ServerPicker.sections(entries, favourites: ["🇩🇪 Германия"], recents: recents, query: "",
+                                             sort: .name, delays: [:])
+        XCTAssertEqual(sections.recents.map(\.name), ["Дом", "🇩🇪 Германия"])
+        // still in their own sections too
+        XCTAssertEqual(sections.favourites.map(\.name), ["🇩🇪 Германия"])
+        XCTAssertTrue(sections.all.map(\.name).contains("Дом"))
+        XCTAssertEqual(ServerPicker.sections(entries, favourites: [], recents: recents, query: "дом", sort: .name, delays: [:]).recents, [])
+        XCTAssertEqual(ServerPicker.sections(entries, favourites: [], query: "", sort: .name, delays: [:]).recents, [])
+    }
+
     func testSortBySubscriptionKeepsItsOrder() throws {
         let entries = ServerPicker.entries(try proxies())
         let delays = ["🇩🇪 Германия": 30, "🇱🇹 Литва": 90]

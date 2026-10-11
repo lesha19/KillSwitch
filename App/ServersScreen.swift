@@ -14,6 +14,7 @@ struct ServersScreen: View {
         UserDefaults.standard.bool(forKey: "sortByLatency") ? .ping : .subscription
     @AppStorage("showProfileGroups") private var showProfileGroups = false
     @AppStorage(VPNClient.favouritesKey) private var favouritesText = ""
+    @AppStorage(ServerRecents.key) private var recentsText = ""
     @State private var query = ""
     @State private var highlighted: String?
     @State private var choosingEntry = false
@@ -93,7 +94,7 @@ struct ServersScreen: View {
     @ViewBuilder private var list: some View {
         if let proxies {
             let all = entries(proxies)
-            let sections = ServerPicker.sections(all, favourites: favourites, query: query, sort: sort,
+            let sections = ServerPicker.sections(all, favourites: favourites, recents: recents, query: query, sort: sort,
                                                  delays: delays(all))
             let current = choosingEntry ? control.multihopEntry : currentName(proxies)
             if sections.fastest == nil && sections.favourites.isEmpty && sections.all.isEmpty {
@@ -103,6 +104,9 @@ struct ServersScreen: View {
                     if let fastest = sections.fastest {
                         row(fastest, current: current)
                     }
+                    if !sections.recents.isEmpty && !choosingEntry {
+                        Section("Недавние") { ForEach(sections.recents) { row($0, current: current, tag: Self.recentTag + $0.id) } }
+                    }
                     if !sections.favourites.isEmpty {
                         Section("Избранные") { ForEach(sections.favourites) { row($0, current: current) } }
                     }
@@ -111,11 +115,11 @@ struct ServersScreen: View {
                 .listStyle(.inset)
                 .frame(minHeight: 280, maxHeight: back == nil ? .infinity : 420)
                 .contextMenu(forSelectionType: String.self) { ids in
-                    if let id = ids.first {
+                    if let id = ids.first.map(Self.name(fromTag:)) {
                         Button(favourites.contains(id) ? String(localized: "Убрать из избранного") : String(localized: "Добавить в избранное")) { toggleFavourite(id) }
                     }
                 } primaryAction: { ids in
-                    if let id = ids.first, let entry = all.first(where: { $0.id == id }) { choose(entry) }
+                    if let id = ids.first.map(Self.name(fromTag:)), let entry = all.first(where: { $0.id == id }) { choose(entry) }
                 }
             }
             if let error = control.coreError { InlineError(error: error) }
@@ -137,11 +141,18 @@ struct ServersScreen: View {
         Text(text).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 120)
     }
 
-    private func row(_ entry: ServerPicker.Entry, current: String?) -> some View {
+    /// A server is in «Недавние» and again below: its row there has a tag of its own.
+    private static let recentTag = "\u{1}recent:"
+
+    private static func name(fromTag tag: String) -> String {
+        tag.hasPrefix(recentTag) ? String(tag.dropFirst(recentTag.count)) : tag
+    }
+
+    private func row(_ entry: ServerPicker.Entry, current: String?, tag: String? = nil) -> some View {
         ServerPickerRow(entry: entry, current: entry.name == current, favourite: favourites.contains(entry.name),
                         ping: ping(entry), leaf: entry.isFastest ? proxies?.leaf(of: entry.name) : nil,
                         choose: { choose(entry) }, toggleFavourite: { toggleFavourite(entry.name) })
-            .tag(entry.id)
+            .tag(tag ?? entry.id)
     }
 
     /// The exit list is the whole picker; the entry list has servers only, never the exit.
@@ -162,6 +173,10 @@ struct ServersScreen: View {
             control.setMultihop(entry: entry.name)
         } else {
             control.choose(entry)
+            if !entry.isFastest {
+                recentsText = ServerRecents.text(ServerRecents.adding(name: entry.name, keys: client.serverKeys,
+                                                                      to: ServerRecents.list(recentsText)))
+            }
             back?()
         }
     }
@@ -181,6 +196,10 @@ struct ServersScreen: View {
     /// Names of the favourites now: they are kept by server identity, so a rename keeps them.
     private var favourites: Set<String> {
         ServerIdentity.names(favouritesText.split(separator: "\n").map(String.init), keys: client.serverKeys)
+    }
+
+    private var recents: [String] {
+        ServerRecents.names(ServerRecents.list(recentsText), keys: client.serverKeys)
     }
 
     private func toggleFavourite(_ name: String) {
