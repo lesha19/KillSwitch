@@ -51,7 +51,7 @@ struct RoutingReport: Decodable, Equatable, Sendable {
     }
 
     struct Dropped: Decodable, Equatable, Sendable {
-        /// profile, rules, sniffer, dns (and «app» for what the app itself left out)
+        /// profile, rules, sniffer, dns, servers (an Xray host left out; and «app» for what the app itself left out)
         var section: String
         var item: String
         var reason: String
@@ -196,6 +196,7 @@ extension RoutingReport.Dropped {
         case "rules": String(localized: "Правило")
         case "sniffer": String(localized: "Распознавание сайтов")
         case "dns": "DNS"
+        case "servers": String(localized: "Сервер")
         case "app": String(localized: "Раздел подписки")
         default: String(localized: "Раздел подписки")
         }
@@ -222,6 +223,13 @@ extension RoutingReport.Dropped {
         case "not-allowed": return String(localized: "Этого KillSwitch из подписки не берёт")
         case "bad-value": return String(localized: "Значение не прошло проверку")
         case "parse": return String(localized: "Не удалось разобрать правило")
+        // a host of an Xray subscription left out (section "servers")
+        case "address": return String(localized: "Адрес сервера не годится (например, 0.0.0.0 — заглушка панели)")
+        case "tag": return String(localized: "Тег ks-… занят KillSwitch")
+        case "selector": return String(localized: "Балансировщик или проверка выбирают служебный или прямой выход")
+        case "fallback": return String(localized: "Запасной выход балансировщика не из этого сервера")
+        case "download": return String(localized: "Адрес в настройках транспорта, который KillSwitch не закрепляет")
+        case "case": return String(localized: "Ключ в другом регистре: Xray его прочтёт, проверка — нет")
         default: return reason
         }
     }

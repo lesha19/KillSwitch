@@ -100,6 +100,19 @@ final class RoutingReportTests: XCTestCase {
         XCTAssertEqual(RoutingReport.Dropped.reasonText("something-new"), "something-new")
     }
 
+    /// Hosts of an Xray subscription the helper left out (section "servers", 0.19.1).
+    func testLeftOutHostsInWords() {
+        XCTAssertEqual(["address", "tag", "selector", "fallback", "download", "case"].map(RoutingReport.Dropped.reasonText), [
+            "Адрес сервера не годится (например, 0.0.0.0 — заглушка панели)",
+            "Тег ks-… занят KillSwitch",
+            "Балансировщик или проверка выбирают служебный или прямой выход",
+            "Запасной выход балансировщика не из этого сервера",
+            "Адрес в настройках транспорта, который KillSwitch не закрепляет",
+            "Ключ в другом регистре: Xray его прочтёт, проверка — нет",
+        ])
+        XCTAssertEqual(RoutingReport.Dropped(section: "servers", item: "Плохой", reason: "address").sectionTitle, "Сервер")
+    }
+
     func testTakenDNSAndEgressAsText() throws {
         let report = try RoutingReport(data: Self.sample)
         XCTAssertEqual(report.dnsRows.map(\.key), ["direct-nameserver", "nameserver-policy", "respect-rules"])
