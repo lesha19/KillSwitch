@@ -132,6 +132,20 @@ cmp -s "$tmp/c.direct" "$tmp/x.direct" && cmp -s "$tmp/c.egress" "$tmp/x.egress"
 [ "$(q 'join ",", map { @{ $_->{items} } } grep { $_->{kind} eq "hosts" } @{ $c->{added} }')" = "nas.lan → 192.168.1.10,dns.example.com → 203.0.113.53" ] &&
   ok "xray report: the entries named" || bad "xray report: $(q '$c->{added}')"
 xtest "xray: hosts" "$tmp/c"
+# Xray gives every matching entry's address at once (measured, 26.9.30): a template entry that also
+# matches one of the person's names (any key form, any case) goes, so their address is the only one
+put hosts "a.example.com=203.0.113.53"
+/usr/bin/perl -MJSON::PP -e 'local $/; my $a = JSON::PP->new->decode(<STDIN>); $a->[0]{dns}{hosts} = { "domain:Example.com" => "198.51.100.1",
+  "keyword:exam" => "198.51.100.2", "regexp:^a\\." => "198.51.100.3", "full:A.example.com" => "198.51.100.4", "A.Example.com" => "198.51.100.5",
+  "domain:other.example" => "198.51.100.6", "keyword:zzz" => "198.51.100.7", "regexp:^b" => "198.51.100.8", "dotless:" => "198.51.100.9",
+  "geosite:private" => "198.51.100.10" }; print JSON::PP->new->encode($a)' < "$fx/xray-panel.json" > "$tmp/p.json"
+genx "$tmp/p.json" || bad "xray overlapping hosts refused: $(cat "$tmp/err")"
+[ "$(j '$c->{dns}{hosts}')" = '{"domain:other.example":"198.51.100.6","dotless:":"198.51.100.9","full:a.example.com":"203.0.113.53","geosite:private":"198.51.100.10","keyword:zzz":"198.51.100.7","regexp:^b":"198.51.100.8"}' ] &&
+  ok "xray: the template's entries that match the person's name go, the others stay" || bad "xray overlapping hosts: $(j '$c->{dns}{hosts}')"
+[ "$(q 'join ",", sort map { "$_->{item}:$_->{reason}" } grep { $_->{section} eq "dns" } @{ $c->{dropped} }')" = \
+  "A.Example.com:own-hosts,domain:Example.com:own-hosts,full:A.example.com:own-hosts,keyword:exam:own-hosts,regexp:^a\\.:own-hosts" ] &&
+  ok "xray report: the template's entries replaced by the person's named" || bad "xray overlapping dropped: $(q '$c->{dropped}')"
+xtest "xray: overlapping hosts" "$tmp/c"
 /usr/bin/perl -MJSON::PP -e 'local $/; my $a = JSON::PP->new->decode(<STDIN>); $a->[0]{outbounds}[0]{settings}{vnext}[0]{address} = "lt.example.com";
   print JSON::PP->new->encode($a)' < "$fx/xray-panel.json" > "$tmp/p.json"
 resolve_host() { case "$1" in lt.example.com) echo 203.0.113.40 ;; *) return 1 ;; esac; }
