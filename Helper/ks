@@ -2515,17 +2515,46 @@ set_diag() {
   return 0
 }
 
-# "ks diag report <dir>" («Собрать отчёт», passwordless): the journal, the logs and the state in
-# one .tar.gz, every file redacted (diag_redact). Never the profiles, configs or pins. Through sudo
-# the archive is written as the user who ran it (root never opens a user's path); otherwise (the
-# daemon) only into a folder of ours that nobody else can write.
-diag_crash_dirs() {  # the system's crash reports and the console user's
-  local uid home
-  echo /Library/Logs/DiagnosticReports
-  uid=${SUDO_UID:-$(stat -f %u /dev/console 2>/dev/null)}
+# "ks diag report <dir> [uid]" («Собрать отчёт», passwordless): the journal, the logs and the state
+# in one .tar.gz, every file redacted (diag_redact). Never the profiles, configs or pins. Through
+# sudo the archive is written as the user who ran it (root never opens a user's path); otherwise
+# (the daemon, which names the uid that asked) only into a folder of ours that nobody else can write.
+# Crash reports: the system's (root's own files) and those of the user who asked, read as that user.
+diag_crash_dirs() {  # diag_crash_dirs [uid]: "<owner uid> <folder>", the caller's or the console user's
+  local uid=${1:-} home
+  echo "0 /Library/Logs/DiagnosticReports"
+  [ -n "$uid" ] || uid=$(stat -f %u /dev/console 2>/dev/null)
   [[ "$uid" =~ ^[0-9]+$ ]] && [ "$uid" -ge 500 ] || return 0
   home=$(dscacheutil -q user -a uid "$uid" 2>/dev/null | awk '$1 == "dir:" { print $2; exit }')
-  [ -n "$home" ] && echo "$home/Library/Logs/DiagnosticReports"
+  [ -n "$home" ] && echo "$uid $home/Library/Logs/DiagnosticReports"
+}
+as_uid() {  # as_uid <uid> <command…>: with that user's rights, never root's for a user's files
+  local u=$1; shift
+  if [ "$u" = "$EUID" ]; then "$@"; else sudo -n -u "#$u" -- "$@"; fi
+}
+# diag_crash_read <owner uid> <file>: its bytes, read with the owner's rights and only for a
+# regular file of that owner with no other name (a hard link to a root-only file is refused),
+# opened without following a symlink and read from that descriptor: nothing can be swapped in
+# between the listing and the read.
+diag_crash_read() {
+  # shellcheck disable=SC2016 # perl, not shell
+  as_uid "$1" /usr/bin/perl -MFcntl -e '
+    sysopen(my $f, $ARGV[1], O_RDONLY | O_NOFOLLOW | O_NONBLOCK) or exit 1;
+    my @s = stat $f or exit 1;
+    -f _ && $s[3] == 1 && $s[4] == $ARGV[0] && $s[7] <= 5_000_000 or exit 1;
+    binmode STDOUT; my $b; print $b while sysread $f, $b, 65536;' -- "$1" "$2"
+}
+diag_crashes() {  # diag_crashes <dir> [uid]: our programs' crash reports of the last 7 days
+  local d=$1 uid dir f n
+  diag_crash_dirs "${2:-}" | while read -r uid dir; do
+    [ -n "$dir" ] || continue
+    as_uid "$uid" /usr/bin/find "$dir" -maxdepth 1 -type f -mtime -7 -size -5000k \( -name '*KillSwitch*' -o -name 'xray*' -o -name 'mihomo*' \) 2>/dev/null |
+      head -30 | while IFS= read -r f; do
+        n=${f##*/}
+        [[ "$n" =~ ^[A-Za-z0-9._-]+$ ]] || continue
+        diag_crash_read "$uid" "$f" > "$d/$n" 2>/dev/null || rm -f "$d/$n"
+      done
+  done
 }
 diag_status() {
   local job
@@ -2559,8 +2588,8 @@ diag_network() {
   echo "--- routes (IPv4)"; netstat -rn -f inet 2>/dev/null | head -80
   echo "--- routes (IPv6)"; netstat -rn -f inet6 2>/dev/null | head -40
 }
-diag_collect() {  # diag_collect <dir>
-  local d=$1 f dir
+diag_collect() {  # diag_collect <dir> [uid]
+  local d=$1 f
   mkdir -p "$d/diag" "$d/crash" || return 1
   for f in "$DIAG"/*.jsonl "$DIAG"/access*.log; do [ -f "$f" ] && cp -p "$f" "$d/diag/"; done
   for f in "$EVENTS" "$STATEF" "$SETTINGS" "$DIR/installed" "$INVALIDF" "$CORE_DIR/core.log" "$CORE_DIR/core.log.1" "$REPORT"; do
@@ -2569,10 +2598,7 @@ diag_collect() {  # diag_collect <dir>
   diag_status > "$d/status.txt" 2>/dev/null
   diag_versions > "$d/versions.txt" 2>/dev/null
   diag_network > "$d/network.txt" 2>/dev/null
-  diag_crash_dirs | while IFS= read -r dir; do
-    [ -d "$dir" ] || continue
-    find "$dir" -maxdepth 1 -type f -mtime -7 -size -5000k \( -name '*KillSwitch*' -o -name 'xray*' -o -name 'mihomo*' \) 2>/dev/null
-  done | head -30 | while IFS= read -r f; do cp "$f" "$d/crash/"; done
+  diag_crashes "$d/crash" "${2:-}"
 }
 # diag_redact <dir>: the servers (addresses and names from the lists, the pins and the profiles'
 # outbounds) become server-1, server-2… (a pinned name and its address the same one); then links,
@@ -2614,9 +2640,14 @@ diag_redact() {
       open my $o, ">", $file or die "$file\n"; print $o $s; close $o or die "$file\n";
     }'
 }
-diag_report() {  # diag_report <dir>: prints the archive's path
-  local dest=${1:-} w name out m as=() rc
+diag_report() {  # diag_report <dir> [uid of the user who asked]: prints the archive's path
+  local dest=${1:-} uid=${2:-} w name out m as=() rc
   [[ "$dest" == /* ]] && [ -d "$dest" ] && [ ! -L "$dest" ] || { echo "Нет такой папки: $dest" >&2; return 1; }
+  # through sudo the user is who sudo says, whatever the arguments name
+  if [ -n "${SUDO_UID:-}" ]; then
+    [ -z "$uid" ] || [ "$uid" = "$SUDO_UID" ] || { echo "Отчёт собирается только для себя" >&2; return 1; }
+    uid=$SUDO_UID
+  fi
   if [ -n "${SUDO_UID:-}" ] && [ "$SUDO_UID" != 0 ]; then
     as=(sudo -n -u "#$SUDO_UID")
   else
@@ -2626,7 +2657,7 @@ diag_report() {  # diag_report <dir>: prints the archive's path
   w=$(mktemp -d) || return 1
   name="KillSwitch-report-$(date +%Y-%m-%d-%H%M)"
   out="$dest/$name.tar.gz"
-  ( umask 077; diag_collect "$w/$name" ) && diag_redact "$w/$name" && tar -czf "$w/$name.tar.gz" -C "$w" "$name" &&
+  ( umask 077; diag_collect "$w/$name" "$uid" ) && diag_redact "$w/$name" && tar -czf "$w/$name.tar.gz" -C "$w" "$name" &&
     if [ ${#as[@]} -gt 0 ]; then "${as[@]}" /usr/bin/tee "$out" < "$w/$name.tar.gz" > /dev/null
     else rm -f "$out" && cp "$w/$name.tar.gz" "$out"; fi
   rc=$?
@@ -2687,7 +2718,9 @@ passwordless_args_ok() {
         *) return 0 ;;
       esac ;;
     # «Собрать отчёт»: the folder the archive goes to (written as the caller, diag_report)
-    diag) [ $# -eq 3 ] && [ "$2" = report ] && [[ "$3" == /* && "${#3}" -le 1024 && "$3" != *[[:cntrl:]]* ]] ;;
+    # and, from the daemon, the uid of the user who asked (crash reports of that user only)
+    diag) [ $# -eq 3 ] || { [ $# -eq 4 ] && [[ "$4" =~ ^[0-9]{1,10}$ ]]; } || return 1
+          [ "$2" = report ] && [[ "$3" == /* && "${#3}" -le 1024 && "$3" != *[[:cntrl:]]* ]] ;;
     *) return 0 ;;
   esac
 }
@@ -2834,7 +2867,7 @@ case "${1:-status}" in
     esac
     ;;
   probe) net_probe ;;
-  diag) diag_report "$3" || exit 1 ;;   # "diag report <dir>", checked by passwordless_args_ok
+  diag) diag_report "$3" "${4:-}" || exit 1 ;;   # "diag report <dir> [uid]", checked by passwordless_args_ok
   state)
     if loaded; then echo on
     elif [ -f "$FLAG" ] && [ "$(cat "$FLAG")" != 0 ]; then echo "paused:$(cat "$FLAG")"

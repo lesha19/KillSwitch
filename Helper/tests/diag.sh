@@ -214,7 +214,29 @@ echo '{"procName":"xray"}' > "$tmp/crash/xray-2026-10-10-120000.ips"
 echo '{"procName":"KillSwitch"}' > "$tmp/crash/KillSwitch-2026-10-10-120000.ips"
 echo '{"procName":"Safari"}' > "$tmp/crash/Safari-2026-10-10-120000.ips"
 echo '{"procName":"mihomo"}' > "$tmp/crash/mihomo-2026-09-01-120000.ips"; touch -t "$(date -r $(($(date +%s) - 10 * 86400)) +%Y%m%d%H%M)" "$tmp/crash/mihomo-2026-09-01-120000.ips"
-diag_crash_dirs() { echo "$tmp/crash"; echo "$tmp/no-such-dir"; }
+# planted by the user to make root copy a root-only file into the archive (core/ is 711)
+echo 'root only secret' > "$tmp/secret"; chmod 600 "$tmp/secret"
+ln "$tmp/secret" "$tmp/crash/xray-2026-10-10-130000.ips"
+ln -s "$tmp/secret" "$tmp/crash/KillSwitch-2026-10-10-130000.ips"
+mkfifo "$tmp/crash/mihomo-2026-10-10-130000.ips"
+# the real list: the system's folder (root's files), then the caller's own (read as the caller)
+crash_list=$(diag_crash_dirs "$EUID")
+[ "$(head -1 <<<"$crash_list")" = "0 /Library/Logs/DiagnosticReports" ] && ok "crash folders: the system's, read as root's files" ||
+  bad "crash dirs: $crash_list"
+if [ "$EUID" -ge 500 ]; then
+  [[ "$(sed -n 2p <<<"$crash_list")" == "$EUID /"*/Library/Logs/DiagnosticReports ]] && ok "crash folders: the caller's own, under its uid" ||
+    bad "crash dirs (caller): $crash_list"
+fi
+[ "$(diag_crash_dirs 0 | wc -l | tr -d ' ')" = 1 ] && ok "crash folders: no user's folder for root" || bad "root crash dirs: $(diag_crash_dirs 0)"
+diag_crash_read "$EUID" "$tmp/crash/xray-2026-10-10-120000.ips" | grep -q procName && ok "crash read: a regular file of its owner" ||
+  bad "crash read refused a plain file"
+diag_crash_read "$EUID" "$tmp/crash/xray-2026-10-10-130000.ips" >/dev/null 2>&1 && bad "crash read: hard link read" ||
+  ok "crash read: refuses a hard link (another name of someone's file)"
+diag_crash_read "$EUID" "$tmp/crash/KillSwitch-2026-10-10-130000.ips" >/dev/null 2>&1 && bad "crash read: symlink followed" ||
+  ok "crash read: refuses a symlink (swapped in after the listing)"
+diag_crash_read 0 "$tmp/crash/xray-2026-10-10-120000.ips" >/dev/null 2>&1 && bad "crash read: file of another owner" ||
+  ok "crash read: refuses a file of another owner"
+diag_crash_dirs() { echo "$EUID $tmp/crash"; echo "$EUID $tmp/no-such-dir"; }
 launchctl() { return 1; }; pfctl() { return 1; }
 core_job() { CORE_RUN=0; CORE_PID=""; }
 mkdir -m 755 "$tmp/out"
@@ -239,9 +261,13 @@ grep -rq 'server-1' "$r/events.log" && grep -q 'server-1' "$r/routing.json" && [
   ok "report: masked as stable placeholders (server-N)" || bad "placeholders: $(cat "$r/events.log")"
 grep -rqE 'sub\.example\.org|00000000-0000-4000|Z84J2Iel' "$r" && bad "report holds a link, uuid or key: $(grep -rE 'sub\.example|00000000|Z84J' "$r" | head -3)" ||
   ok "report: links, uuids and keys masked"
+grep -rq 'root only secret' "$r" && bad "report holds a file planted by link: $names" || ok "report: no hard-linked or symlinked crash file"
+[ "$(cat "$r/crash/xray-2026-10-10-120000.ips")" = '{"procName":"xray"}' ] && ok "report: crash report copied whole" || bad "crash copy: $(cat "$r/crash/xray-2026-10-10-120000.ips")"
 grep -q 'www.youtube.com' "$r/diag/access.log" && ok "report: visited domains kept (only recorded with diag=1)" || bad "access log: $(cat "$r/diag/access.log")"
 grep -q '🇱🇹Литва' "$r/settings" && ok "report: server names (not addresses) kept" || bad "settings: $(cat "$r/settings")"
 grep -q "$KS_VERSION" "$r/versions.txt" && ok "report: versions" || bad "versions: $(cat "$r/versions.txt")"
+SUDO_UID=$EUID diag_report "$tmp/out" 0 >/dev/null 2>&1 && bad "report through sudo for another uid" ||
+  ok "report: through sudo, crash reports only of the user who ran it"
 chmod 777 "$tmp/out"
 diag_report "$tmp/out" >/dev/null 2>&1 && bad "report into a folder others can write" || ok "report: refuses a folder others can write (root would write there)"
 diag_report relative >/dev/null 2>&1 && bad "report into a relative path" || ok "report: absolute folders only"
@@ -251,6 +277,8 @@ rm -f "$SETTINGS"
 passwordless_args_ok diag report /Users/me/Desktop && ok "args: diag report <dir>" || bad "args: diag report refused"
 passwordless_args_ok diag report relative && bad "args: relative dir" || ok "args: refuses a relative dir"
 passwordless_args_ok diag report /a /b && bad "args: two dirs" || ok "args: refuses extra arguments"
+passwordless_args_ok diag report /a 501 && ok "args: diag report <dir> <uid> (the daemon's caller)" || bad "args: uid refused"
+passwordless_args_ok diag report /a 5x1 && bad "args: uid not a number" || ok "args: refuses a uid that is not a number"
 passwordless_args_ok diag report $'/a\nb' && bad "args: newline" || ok "args: refuses control characters"
 passwordless_args_ok diag && bad "args: diag alone" || ok "args: refuses diag without report"
 
