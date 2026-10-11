@@ -522,7 +522,7 @@ private struct AccessSheet: View {
                 toggle("lan", String(localized: "Доступ к домашней сети"), String(localized: "Роутер, NAS, принтер, AirPlay — без VPN. AirDrop работает и без этого."))
                 toggle("dns", String(localized: "Адреса сайтов через роутер"), String(localized: "Пока VPN выключен, роутер видит, какие сайты открывает Mac."))
                     .disabled(draft["lan"] == false)
-                toggle("tailscale", "Tailscale", String(localized: "Связь между своими устройствами без VPN."))
+                toggle("tailscale", "Tailscale, NetBird", String(localized: "Связь между своими устройствами без VPN."))
                 toggle("wifiguard", String(localized: "Отключать сеть при выключении Mac"), String(localized: "Wi-Fi и кабель включаются после загрузки, когда защита уже стоит."))
             }
             .formStyle(.grouped)

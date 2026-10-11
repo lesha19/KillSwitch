@@ -21,6 +21,8 @@ enum NetworkHints {
                 String(localized: "Safari и часть запросов системы идут через серверы Apple, а не через VPN. При включённой защите они могут не открываться, а без защиты — обходят VPN. Лучше выключить его в настройках iCloud.")
             case .overlay("Tailscale"):
                 String(localized: "Сеть Tailscale (100.64.0.0/10) идёт мимо VPN — так задумано (Защита › Что можно без VPN). Выходной узел Tailscale защита не пропускает.")
+            case .overlay("NetBird"):
+                String(localized: "Сеть NetBird идёт мимо VPN — так задумано (Защита › Что можно без VPN). Мимо VPN выходит только сама служба NetBird.")
             case .overlay(let name):
                 String(localized: "Сеть \(name) идёт мимо VPN, только если её адреса разрешены в «Адреса без VPN» (Дополнительно) или это домашняя сеть. Остальное идёт только через VPN.")
             }

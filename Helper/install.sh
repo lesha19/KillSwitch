@@ -249,6 +249,14 @@ main() {
     dscl . -create /Groups/_ksvpn PrimaryGroupID "$gid"
     dscl . -create /Groups/_ksvpn RealName "KillSwitch VPN core"
   fi
+  # NetBird's daemon gets it (ks netbird_sync) so pf can let NetBird past the VPN
+  if ! dscl . -read /Groups/_ksnetbird >/dev/null 2>&1; then
+    for gid in $(seq 450 499); do
+      dscl . -list /Groups PrimaryGroupID | awk '{print $2}' | grep -qx "$gid" || break
+    done
+    dscl . -create /Groups/_ksnetbird PrimaryGroupID "$gid"
+    dscl . -create /Groups/_ksnetbird RealName "KillSwitch: NetBird past the VPN"
+  fi
   # 711: the app checks files in it by name; the core's log in it is root-only (ks core_log_tidy)
   install -d -o root -g wheel -m 711 "$DIR/core"
   [ -f "$DIR/core/core.log" ] || install -o root -g wheel -m 600 /dev/null "$DIR/core/core.log"
