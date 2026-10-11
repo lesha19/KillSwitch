@@ -7,6 +7,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 ## [Unreleased]
 
 ### Added
+- Settings › «Маршрутизация»: named routing profiles (#30, ADR 0034) in the Happ/INCY format —
+  sites and addresses to block, to send through the VPN or direct — added by an https link
+  (updated once a day) or pasted (JSON, base64, happ:// or incy:// routing links). One in use or
+  «Как в подписке» (default). Their rules go before the subscription's and are marked «профиль» in
+  «Трафик» › «Правила». A profile that sends anything past the VPN needs the admin's password, as
+  a subscription's DIRECT does; one that only blocks or sends through the VPN does not. The
+  format's own DNS, geodata links and «everything else direct» are not taken.
 - Xray: transport escalation (#20, ADR 0030). When the running server stops answering, before
   another server KillSwitch tries the same one another way, only what the subscription offers and
   only when Xray's own probe of that way answers: another TLS fingerprint, then another transport
