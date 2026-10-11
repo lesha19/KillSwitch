@@ -28,6 +28,8 @@ enum SettingsBackup {
         var doh: String?
         /// Own addresses of sites (ADR 0033), "name=IPv4" each.
         var hosts: [String]?
+        /// The TUN's MTU, 0 = «Авто» (ADR 0032); nil: not named.
+        var mtu: Int?
     }
 
     struct Settings: Equatable, Sendable {
@@ -62,7 +64,7 @@ enum SettingsBackup {
     /// lists emptied. The way of connecting stays (changing it imports the subscription again).
     static var reset: Settings {
         Settings(app: Dictionary(uniqueKeysWithValues: fields.map { ($0.key, $0.fallback) }),
-                 root: Root(core: nil, switches: defaultSwitches, exceptions: [], manualServers: [], splitApps: [], doh: "", hosts: []))
+                 root: Root(core: nil, switches: defaultSwitches, exceptions: [], manualServers: [], splitApps: [], doh: "", hosts: [], mtu: 0))
     }
 
     // MARK: app settings
@@ -190,6 +192,7 @@ enum SettingsBackup {
             if let apps = root.splitApps { part["splitApps"] = apps }
             if let doh = root.doh { part["doh"] = doh }
             if let hosts = root.hosts { part["hosts"] = hosts }
+            if let mtu = root.mtu { part["mtu"] = mtu == 0 ? HelperCommand.mtuAuto as Any : mtu as Any }
             object["root"] = part
         }
         return (try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])) ?? Data()
@@ -250,6 +253,15 @@ enum SettingsBackup {
         if let raw = part["hosts"] {
             guard let list = raw as? [String], HelperCommand.setHosts(list).isValid else { throw Problem.damaged(hostsTitle) }
             root.hosts = list
+        }
+        if let raw = part["mtu"] {
+            if raw as? String == HelperCommand.mtuAuto {
+                root.mtu = 0
+            } else if !(raw is String), let mtu = number(raw), HelperCommand.setMTU(mtu).isValid {
+                root.mtu = mtu
+            } else {
+                throw Problem.damaged(mtuTitle)
+            }
         }
         return root
     }
@@ -410,6 +422,9 @@ enum SettingsBackup {
             guard let on = root.switches?[key], on != (now.switches?[key] ?? defaultSwitches[key]) else { continue }
             result.append(Change(key: key, title: switchTitle(key), old: onOff(!on), new: onOff(on), root: true))
         }
+        if let mtu = root.mtu, mtu != (now.mtu ?? 0) {
+            result.append(Change(key: "mtu", title: mtuTitle, old: mtuText(now.mtu ?? 0), new: mtuText(mtu), root: true))
+        }
         let lists: [(String, String, [String]?, [String]?, Bool)] = [
             ("exceptions", String(localized: "Адреса без VPN"), now.exceptions, root.exceptions, true),
             ("manualServers", String(localized: "Адреса серверов для других VPN-программ"), now.manualServers, root.manualServers, true),
@@ -454,6 +469,9 @@ enum SettingsBackup {
         if let hosts = new.hosts, Set(hosts) != Set(current.hosts ?? []) {
             commands.append([helper, "set", "hosts", hosts.joined(separator: ",")])
         }
+        if let mtu = new.mtu, mtu != (current.mtu ?? 0) {
+            commands.append([helper] + HelperCommand.setMTU(mtu == 0 ? nil : mtu).arguments)
+        }
         return commands
     }
 
@@ -470,6 +488,8 @@ enum SettingsBackup {
     private static var hostsTitle: String { String(localized: "Свои адреса сайтов") }
     private static var dohTitle: String { String(localized: "Свой сервер DNS-over-HTTPS") }
     private static func dohText(_ url: String) -> String { url.isEmpty ? String(localized: "нет") : url }
+    static let mtuTitle = String(localized: "Размер пакетов VPN (MTU)")
+    private static func mtuText(_ mtu: Int) -> String { mtu == 0 ? String(localized: "Авто") : String(mtu) }
 
     private static func onOff(_ on: Bool) -> String { on ? String(localized: "вкл") : String(localized: "выкл") }
 

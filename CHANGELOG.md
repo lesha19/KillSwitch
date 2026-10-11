@@ -21,6 +21,18 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   Способ подключения «Пробовать другой отпечаток и транспорт, если сервер не отвечает», on by
   default (`ks set escalate 0|1`). A server switch the protection refuses (KS-10) is not tried
   again for 30 minutes and leaves a server picked by hand picked by hand.
+- Settings › Дополнительно «Размер пакетов VPN (MTU)» (#18, ADR 0032), a troubleshooting setting:
+  «Авто» (as before: 1500 with the main way, 9000 with the fallback way) or 1500…1280, for both ways
+  of connecting. A smaller value may help calls or games that freeze through the VPN; it mostly
+  sizes UDP, since both cores carry TCP to the server on their own connection, so pages that load
+  half-way are unlikely to change (needs a live check). Changing it asks for the password and, with
+  the VPN on, restarts it once for about a second (the protection keeps blocking); if the VPN does
+  not come up with the new value, the previous one comes back. Only the tunnel's packet size
+  changes, nothing about what goes past the VPN. Carried by the settings file and named in
+  «Скопировать диагностику». `ks set mtu auto|1280…1500`. The inverse split tunnel («only these programs through the
+  VPN») is not built: on macOS it cannot keep the listed programs' traffic in the VPN when the core
+  cannot tell which program a connection belongs to (Safari's pages come from WebKit's own
+  process, for one), see ADR 0032.
 - Xray: «Двойной VPN» works with the main way of connecting (#33, ADR 0027). The entry is another
   server of the subscription; the running server and the other servers' ping probes are reached
   through it, so no exit sees the Mac's address. Nothing new goes past the VPN. Turning it on

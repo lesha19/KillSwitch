@@ -700,6 +700,15 @@ private struct AdvancedSettings: View {
 
             TransportSection()
 
+            Section("Размер пакетов VPN") {
+                Picker("MTU", selection: Binding(get: { control.tunnelMTU }, set: { control.setMTU($0) })) {
+                    ForEach(TunnelMTU.choices(current: control.tunnelMTU), id: \.self) { Text(TunnelMTU.title($0)).tag($0) }
+                }
+                .disabled(control.busy || control.state == .notInstalled)
+                Footnote(text: String(localized: "Для поиска неполадок: может помочь, если через VPN обрываются видеозвонки или игры. Смена спросит пароль; включённый VPN перезапустится на секунду."),
+                         more: String(localized: "MTU — самый большой пакет, который программы этого Mac отдают в VPN за раз. «Авто» — как было: 1500 у основного способа, 9000 у запасного. Меньшее значение, 1380 или 1280, может помочь видеозвонкам, играм и голосовым чатам; на загрузку сайтов оно обычно не влияет. Не помогло — верни «Авто». На то, что идёт мимо VPN, это тоже не влияет."))
+            }
+
             Section("Диагностика") {
                 Toggle(isOn: Binding(get: { control.diagVerbose }, set: { control.set("diag", $0) })) {
                     Text("Подробная диагностика (все соединения)")

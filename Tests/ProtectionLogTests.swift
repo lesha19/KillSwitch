@@ -64,6 +64,17 @@ final class ProtectionLogTests: XCTestCase {
                        "NetBird не подключился после перезапуска — подключите его заново")
     }
 
+    /// «Размер пакетов VPN» (ADR 0032)
+    func testTunnelMTU() {
+        XCTAssertEqual(text("2026-10-12 14:03:22 tunnel MTU: 1380, VPN restarted"), "Размер пакетов VPN (MTU): 1380, VPN перезапущен")
+        XCTAssertEqual(text("2026-10-12 14:03:22 tunnel MTU: auto, VPN restarted"), "Размер пакетов VPN (MTU): Авто, VPN перезапущен")
+        // the VPN off or no subscription yet: nothing was restarted
+        XCTAssertEqual(text("2026-10-12 14:03:22 tunnel MTU: 1380"), "Размер пакетов VPN (MTU): 1380")
+        XCTAssertEqual(text("2026-10-12 14:03:22 tunnel MTU: 1280 refused, back to auto: the VPN did not start with it"),
+                       "VPN не запустился с размером пакетов 1280 — вернули прежний: Авто")
+        XCTAssertEqual(text("2026-10-12 14:03:22 MTU change cut short: undone"), "Прерванная смена размера пакетов VPN отменена")
+    }
+
     func testXrayFailover() {
         XCTAssertEqual(text("2026-10-11 14:03:22 failover (no answer): 🇱🇹Литва -> 🇱🇹Литва 2"),
                        "«🇱🇹 Литва» не отвечал — переключились на «🇱🇹 Литва 2»")

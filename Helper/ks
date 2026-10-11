@@ -16,6 +16,7 @@
 #   ks set multihop <proxy>|off  double VPN: every other proxy (Xray: the running host) is reached through this one
 #   ks set core xray|mihomo the core that runs (ADR 0020); the subscription is imported again for it
 #   ks set diag 0|1         «Подробная диагностика»: Xray's access log in the journal (ADR 0021)
+#   ks set mtu auto|<n>     the TUN's MTU for both cores, 1280…1500 (ADR 0032); restarts the core
 #   ks allow <addr[/n]>     always let this address or network out without VPN
 #   ks unallow <addr[/n]>
 #   ks server-add <addr>    VPN server: reachable by any process (needed by Happ)
@@ -236,6 +237,7 @@ settings_lines_ok() {
       xrayserver=) ;;   # no pick (an older ks wrote it after a refused switch): the first host
       xrayserver=*) valid_name "${line#*=}" || return 1 ;;
       diag=[01]) ;;   # «Подробная диагностика», ADR 0021
+      mtu=*) mtu_ok "${line#*=}" || return 1 ;;   # the TUN's MTU, ADR 0032
       failover=[01]) ;;   # automatic server switch with Xray, ADR 0023
       escalate=[01]) ;;   # another fingerprint or transport of the same server first, ADR 0030
       *) return 1 ;;
@@ -1520,6 +1522,8 @@ core_generate_mihomo() (
     # which it already has through the TUN.
     printf '"listeners":[{"name":"ks-fetch","type":"http","listen":"127.0.0.1","port":%s,"proxy":"%s"}],' "$FETCH_PORT" "$KS_DNS"
     printf '"tun":{"enable":true,"stack":"gvisor","auto-route":true,"auto-detect-interface":true,'
+    # the person's MTU (ADR 0032); none: mihomo's own, as before
+    [ -z "$(tun_mtu)" ] || printf '"mtu":%s,' "$(tun_mtu)"
     printf '"dns-hijack":["any:53"],"route-exclude-address":[%s]},' "$excl"
     # answers the system's DNS on 127.0.0.1:53; our resolvers are reached through the tunnel,
     # the subscription's DNS policy on top (see above)
@@ -1574,7 +1578,7 @@ core_generate_xray() (
   # pass 2: the config and what goes with it
   W=$w PROTOS=$XRAY_PROTOCOLS PICK=$(setting xrayserver "") BLOCK="$(block_geosites | paste -sd" " -)" DOH=$(doh_url) \
     HOSTS="$(hosts_entries /dev/null | paste -sd, -)" APPS=$(setting splitapps "") MULTIHOP=$(setting multihop off) \
-    ESC=$(setting escalate 1) ESC_FILE="${KS_ESC_FILE:-$CORE_DIR/escalation}" \
+    ESC=$(setting escalate 1) ESC_FILE="${KS_ESC_FILE:-$CORE_DIR/escalation}" MTU=$(tun_mtu) \
     TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT API_PORT=$([ -f "$CORE_DIR/api-off" ] || echo "$CORE_API_PORT") \
     ACCESS=$([ "$(setting diag 0)" = 1 ] && [ -d "$DIAG" ] && echo "$DIAG/access.log") \
     /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' build()' || exit 1
@@ -2024,7 +2028,7 @@ KS_XRAY_PL='
     push @$outs, $entry if $entry;
     $cfg{inbounds} = [
       { tag => "ks-tun", protocol => "tun", sniffing => $sniff,
-        settings => { mtu => 1500, gateway => [ $ENV{TUN_GW} ], autoSystemRoutingTable => ["0.0.0.0/0"], autoOutboundsInterface => "auto" } },
+        settings => { mtu => ($ENV{MTU} // "") =~ /\A[0-9]{4}\z/ ? $ENV{MTU} + 0 : 1500, gateway => [ $ENV{TUN_GW} ], autoSystemRoutingTable => ["0.0.0.0/0"], autoOutboundsInterface => "auto" } },
       { tag => "ks-dns", protocol => "dokodemo-door", listen => "127.0.0.1", port => 53,
         settings => { address => "1.1.1.1", port => 53, network => "tcp,udp" } },
       { tag => "ks-fetch", protocol => "http", listen => "127.0.0.1", port => $ENV{FETCH_PORT} + 0 } ];
@@ -2497,8 +2501,8 @@ mtime_older() {
   awk -v a="$a" -v b="$b" 'BEGIN { exit !(a + 0 < b + 0) }'
 }
 
-# core_up <pid before the restart>: the restarted Xray runs (another pid) and listens on its
-# inbounds, within CORE_UP_TRIES half-seconds.
+# core_up <pid before the restart>: the restarted core (Xray; mihomo too for set_mtu) runs (another
+# pid) and listens on its fetch inbound, within CORE_UP_TRIES half-seconds.
 CORE_UP_TRIES=10
 core_up() {
   local i
@@ -2694,6 +2698,67 @@ core_on() {
   core_running || { echo "Ядро не запустилось" >&2; return 1; }
   dns_locked apply >/dev/null
   log_event "core on"
+}
+
+# The TUN's MTU (ADR 0032, #18): 1280 (IPv6's minimum) to 1500, a plain number; none = «Авто», each
+# core's own (Xray 1500, mihomo its default). tun_mtu: the setting if it is one, else nothing.
+mtu_ok() { [[ "$1" =~ ^1[2-5][0-9][0-9]$ ]] && [ "$1" -ge 1280 ] && [ "$1" -le 1500 ]; }
+tun_mtu() { local v; v=$(setting mtu ""); if mtu_ok "$v"; then echo "$v"; fi; }
+core_restart() { if launchctl print "$CORE_JOB" >/dev/null 2>&1; then launchctl kickstart -k "$CORE_JOB"; fi; }
+# "ks set mtu auto|<n>": the config is built with it on a copy of the settings first, and that copy
+# (with whatever the build changed in it: a double VPN it cannot use goes off, ADR 0027) becomes the
+# settings only if that works. The TUN is made anew only by a restart (Xray has no reload, mihomo's
+# API reload keeps the old TUN), so either core is restarted once (about a second, pf keeps
+# blocking), unless the new config is byte for byte the old one (Xray's auto and 1500). A core that
+# ran must come up again (core_up); if it does not, or the restart fails, the previous settings,
+# config and its files go back and the core is restarted with them. The same value again changes
+# nothing, except after a change that was cut short (its copies still there): that one is undone
+# and done again. The journal says «restarted» only when a running core was restarted and came up.
+set_mtu() {
+  local prev s pid="" job=0 f files again=0
+  [ "$1" = auto ] || mtu_ok "$1" || { echo "MTU — число от 1280 до 1500 или auto" >&2; return 1; }
+  if [ ! -f "$(core_profile)" ] || [ ! -f "$PINS" ]; then   # no subscription yet: its import builds with it
+    [ "$1" != "$(tun_mtu)" ] || { echo "MTU already $1"; return 0; }
+    mtu_store "$1" || return 1
+    log_event "tunnel MTU: $1"; return 0
+  fi
+  files=("$SETTINGS" "$(core_conf)" "$SERVERS" "$SERVERS_CORE" "$PINS" "$CORE_EGRESS" "$REPORT" "$CORE_DIR/direct")
+  for f in "${files[@]}"; do [ ! -f "$f.prev" ] || again=1; done
+  if [ "$again" = 1 ]; then mtu_back; log_event "MTU change cut short: undone"; fi
+  prev=$(tun_mtu); prev=${prev:-auto}
+  [ "$again" = 1 ] || [ "$1" != "$prev" ] || { echo "MTU already $1"; return 0; }
+  launchctl print "$CORE_JOB" >/dev/null 2>&1 && job=1
+  core_job; [ "$CORE_RUN" = 1 ] && pid=$CORE_PID
+  s="$SETTINGS.mtu"; rm -f "$s" "$s.tmp"
+  cp "$SETTINGS" "$s" 2>/dev/null || : > "$s"
+  for f in "${files[@]}"; do rm -f "$f.prev"; [ ! -f "$f" ] || cp -p "$f" "$f.prev"; done
+  if ! SETTINGS=$s mtu_store "$1" || ! SETTINGS=$s core_rebuild "$PINS" || ! { chmod 644 "$s" && mv "$s" "$SETTINGS"; }; then
+    rm -f "$s" "$s.tmp"; mtu_back; return 1
+  fi
+  reload_if_on
+  if [ "$job" = 0 ] || { [ "$again" = 0 ] && cmp -s "$(core_conf).prev" "$(core_conf)"; }; then
+    for f in "${files[@]}"; do rm -f "$f.prev"; done
+    log_event "tunnel MTU: $1"; return 0
+  fi
+  if core_restart && { [ -z "$pid" ] || core_up "$pid"; }; then
+    for f in "${files[@]}"; do rm -f "$f.prev"; done
+    if [ -n "$pid" ]; then log_event "tunnel MTU: $1, VPN restarted"; else log_event "tunnel MTU: $1"; fi
+    return 0
+  fi
+  mtu_back; reload_if_on; core_restart
+  log_event "tunnel MTU: $1 refused, back to $prev: the VPN did not start with it"
+  echo "VPN не запустился с MTU ${1/auto/Авто}: вернули прежнее значение (${prev/auto/Авто})" >&2
+  return 1
+}
+# the copies set_mtu made go back in place (a file that was not there goes); uses its $files
+mtu_back() {
+  local f
+  for f in "${files[@]}"; do if [ -f "$f.prev" ]; then mv "$f.prev" "$f"; else rm -f "$f"; fi; done
+}
+mtu_store() {  # mtu_store auto|<n>
+  if [ "$1" = auto ]; then
+    { grep -vE '^mtu=' "$SETTINGS" 2>/dev/null || :; } > "$SETTINGS.tmp" && chmod 644 "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+  else put_setting mtu "$1"; fi
 }
 
 # "ks set splitapps <list>": apps outside the VPN, "" clears. The rebuilt config lets the core out
@@ -3881,17 +3946,20 @@ passwordless_args_ok() {
 # (core_lock_exec 0); the watchdog's rotation skips its turn while it is held.
 core_lock_wanted() {
   case "${1:-}:${2:-}" in
-    core:import|core:refresh|core:select|set:splitapps|set:multihop|set:adblock|set:blockadult|set:blocksocial|set:blockbetting|set:doh|set:hosts|set:diag|set:escalate|_regen:|repair:) return 0 ;;
+    core:import|core:refresh|core:select|set:splitapps|set:multihop|set:adblock|set:blockadult|set:blocksocial|set:blockbetting|set:doh|set:hosts|set:diag|set:escalate|set:mtu|_regen:|repair:) return 0 ;;
   esac
   return 1
 }
 core_lock_exec() { lockf -k -t "$1" "$CORE_DIR/core.lock" "${@:2}"; }   # core_lock_exec <seconds to wait> <command…>
 
+# the command list at the top of this file, up to its first empty line
+ks_usage() { sed -n '2,/^$/{/./p;}' "${BASH_SOURCE[0]}"; }
+
 [ "${BASH_SOURCE[0]}" = "$0" ] || return 0   # sourced by Helper/tests
 # reads nothing but this file: no root needed
 [ "${1:-}" = version ] && { ks_version "$0"; exit 0; }
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
-passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,35p' "$0" >&2; exit 1; }
+passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; ks_usage >&2; exit 1; }
 
 # The core lock (core_lock_wanted, above).
 if core_lock_wanted "$@" && [ -z "${KS_LOCKED:-}" ] && [ -d "$CORE_DIR" ]; then KS_LOCKED=1 exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@"; fi
@@ -3927,6 +3995,9 @@ case "${1:-status}" in
         [ $# -eq 3 ] || { echo "usage: ks set diag 0|1" >&2; exit 1; }
         set_diag "$val" || exit 1
         log_event "detailed diagnostics: $([ "$val" = 1 ] && echo on || echo off)"; exit 0 ;;
+      mtu)
+        [ $# -eq 3 ] || { echo "usage: ks set mtu auto|1280…1500" >&2; exit 1; }
+        set_mtu "$val" || exit 1; exit 0 ;;
       multihop)
         [ $# -eq 3 ] || { echo "usage: ks set multihop <entry proxy>|off" >&2; exit 1; }
         set_multihop "$val" || exit 1
@@ -4037,5 +4108,5 @@ case "${1:-status}" in
     [ -f "$FLAG" ] && { u=$(cat "$FLAG"); [ "$u" = 0 ] && echo "disabled by hand" || echo "back on at $(date -r "$u" +%H:%M)"; }
     pfctl -a "$ANCHOR" -s rules 2>/dev/null
     ;;
-  *) sed -n '2,35p' "$0"; exit 1 ;;
+  *) ks_usage; exit 1 ;;
 esac

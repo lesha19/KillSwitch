@@ -162,6 +162,7 @@ final class HelperClient {
             case .setDoH(let url): helper.setDoH(url: url, authorization: form, reply: reply)
             case .setHosts(let entries): helper.setHosts(entries: entries, authorization: form, reply: reply)
             case .setCore(let core): helper.setCore(name: core.rawValue, authorization: form, reply: reply)
+            case .setMTU(let mtu): helper.setMTU(value: mtu ?? 0, authorization: form, reply: reply)
             case .allow(let address): helper.allow(address: address, authorization: form, reply: reply)
             case .unallow(let address): helper.unallow(address: address, authorization: form, reply: reply)
             case .serverAdd(let address): helper.serverAdd(address: address, authorization: form, reply: reply)

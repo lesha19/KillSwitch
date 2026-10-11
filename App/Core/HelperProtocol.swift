@@ -61,6 +61,8 @@ enum HelperIdentity {
     /// ADR 0033: own addresses of sites, "name=IPv4" each; [] clears them (HelperCommand.setHosts).
     func setHosts(entries: [String], authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func setCore(name: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
+    /// 0: «Авто».
+    func setMTU(value: Int, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func allow(address: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func unallow(address: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func serverAdd(address: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)

@@ -348,6 +348,29 @@ final class SettingsBackupTests: XCTestCase {
         XCTAssertEqual(SettingsBackup.reset.root?.switches?["escalate"], true, "on by default, as in ks (ADR 0030)")
     }
 
+    /// The TUN's MTU (ADR 0032): saved, loaded, «Авто» after a reset; a value ks refuses is damage.
+    func testMTUTravels() throws {
+        var current = root
+        current.mtu = 0
+        var new = root
+        new.mtu = 1380
+        let read = try SettingsBackup.read(file(root: ["mtu": 1380]))
+        XCTAssertEqual(read.root?.mtu, 1380)
+        XCTAssertEqual(try SettingsBackup.read(file(root: ["mtu": "auto"])).root?.mtu, 0)
+        XCTAssertThrowsError(try SettingsBackup.read(file(root: ["mtu": 1000])))
+        XCTAssertThrowsError(try SettingsBackup.read(file(root: ["mtu": "1380"])))
+        let changes = SettingsBackup.changes(from: .init(app: [:], root: current), to: .init(app: [:], root: new))
+        XCTAssertEqual(changes.map(\.key), ["mtu"])
+        XCTAssertEqual(changes.first?.title, "Размер пакетов VPN (MTU)")
+        XCTAssertEqual(changes.first?.old, "Авто")
+        XCTAssertEqual(changes.first?.new, "1380")
+        XCTAssertEqual(SettingsBackup.rootCommands(helper: helper, current: current, new: new), [[helper, "set", "mtu", "1380"]])
+        XCTAssertEqual(SettingsBackup.rootCommands(helper: helper, current: new, new: current), [[helper, "set", "mtu", "auto"]])
+        XCTAssertEqual(SettingsBackup.reset.root?.mtu, 0, "«Авто» after a reset")
+        let data = SettingsBackup.export(.init(app: [:], root: new), appVersion: "0.20.0", date: Date())
+        XCTAssertEqual(try SettingsBackup.read(data).root?.mtu, 1380)
+    }
+
     func testResetIsTheDefaults() throws {
         defaults.set(9, forKey: "pauseShort")
         defaults.set(false, forKey: "notifyVPNDropped")

@@ -45,7 +45,8 @@ Rules are loaded at boot, before login.
   never prompting (a notification instead), with trusted Wi-Fi networks (the name needs Location access
   on macOS 14+; without it every network is untrusted); «Запускать при входе» (SMAppService);
   «Программы без VPN» (apps by CFBundleExecutable → `ks set splitapps <list>`);
-  «Двойной VPN» (`ks set multihop <entry>|off`, chain shown in the window).
+  «Двойной VPN» (`ks set multihop <entry>|off`, chain shown in the window); «Размер пакетов VPN (MTU)»
+  for troubleshooting (`ks set mtu auto|1280…1500`, ADR 0032).
 - `App/Core/` — pure parsers (no AppKit), unit-tested by the `KillSwitchTests` target:
   `xcodegen generate && xcodebuild -scheme KillSwitch test CODE_SIGNING_ALLOWED=NO`.
 - `CLI/` — `killswitch`, the command line over the daemon (ADR 0025), shipped at
@@ -71,7 +72,7 @@ the app target's `.stringsdata` files from DerivedData. Check before a release:
 and code may match. Technical names stay in «Скопировать диагностику» (for support).
 
 Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, wifiguard, adblock, blockadult, blocksocial, blockbetting, doh, hosts, splitapps, multihop, core, xrayserver, diag, failover,
-escalate; `ks set <key> 0|1` for the switches),
+escalate, mtu; `ks set <key> 0|1` for the switches, `ks set mtu <n>|auto`),
 `allow` (addresses reachable by any process), `servers-manual` (VPN server IPs added by `server-add`
 and install.sh, reachable by any process), `servers-core` (proxy addresses of the imported core
 profile, rewritten on every import, reachable only by our core), `servers` (both merged),
@@ -153,7 +154,10 @@ what transport escalation remembered per server, ADR 0030).
   route, bytes; no source addresses) for its «Соединения» tab. Double VPN: `ks set multihop <proxy>|off`
   (`multihop=` in `settings`) sets `dialer-proxy: <proxy>` on every other proxy, so pf lets the core
   reach only the entry server; the entry must be a proxy of the profile without its own dialer-proxy.
-  Both need the admin password (not in sudoers: splitapps widens direct egress). The app switches servers without the API being exposed: `ks core proxies` (JSON of
+  Both need the admin password (not in sudoers: splitapps widens direct egress). The TUN's MTU:
+  `ks set mtu auto|1280…1500` (`mtu=` in `settings`, admin, both cores; «auto» = Xray 1500, mihomo
+  9000) rebuilds the config, restarts the core once and puts the previous value back if it does not
+  come up (ADR 0032). The app switches servers without the API being exposed: `ks core proxies` (JSON of
   groups and proxies), `ks core select <group> <proxy>`, `ks core delay <group|proxy>` talk to the
   controller socket; names are length- and control-character-checked and fully percent-encoded.
   `Helper/tests/core-config.sh` runs the generator against fixture profiles, attack ones included,

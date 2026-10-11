@@ -97,6 +97,8 @@ final class KillSwitchControl {
     private(set) var splitApps: [String] = []
     /// «Двойной VPN»: the entry server; the exit is the selected one. Nil = off.
     private(set) var multihopEntry: String?
+    /// «Размер пакетов VPN» (ADR 0032): nil = «Авто».
+    private(set) var tunnelMTU: Int?
     /// When the person last changed «Двойной VPN» or the way of connecting: an off within two
     /// minutes of it is theirs, any other is the helper's and is told (ADR 0027).
     private var multihopAskedAt: Date?
@@ -298,6 +300,8 @@ final class KillSwitchControl {
         multihopAskedAt = Date()
         runAsAdmin([helper, "set", "multihop", entry ?? Multihop.off])
     }
+    /// `ks set mtu`: the config rebuilt and the VPN restarted (about a second, the protection blocks).
+    func setMTU(_ mtu: Int?) { runAsAdmin([helper] + HelperCommand.setMTU(mtu).arguments) }
     /// `ks set core` (one password); `then` imports the subscription for it (VPNClient.switchCore).
     func setCore(_ choice: CoreChoice, then done: @escaping @MainActor () async -> Void) {
         multihopAskedAt = Date()
@@ -319,7 +323,7 @@ final class KillSwitchControl {
         .init(core: coreChoice, switches: switches.merging(["direct": allowDirect, "adblock": adBlock, "diag": diagVerbose, "failover": autoSwitch,
                                                       "escalate": escalate, "blockadult": blockAdult, "blocksocial": blockSocial,
                                                       "blockbetting": blockBetting]) { $1 },
-              exceptions: exceptions, manualServers: manualServers, splitApps: splitApps, doh: ownDoH ?? "", hosts: ownHosts)
+              exceptions: exceptions, manualServers: manualServers, splitApps: splitApps, doh: ownDoH ?? "", hosts: ownHosts, mtu: tunnelMTU ?? 0)
     }
     /// A loaded or reset set of root settings: the commands of their own screens, one password;
     /// `done` after they went through (nothing to run: at once).
@@ -1167,6 +1171,7 @@ final class KillSwitchControl {
         autoSwitch = (values["failover"] ?? "1") == "1"
         escalate = (values["escalate"] ?? "1") == "1"
         splitApps = SplitApps.parse(setting: values["splitapps"])
+        tunnelMTU = TunnelMTU.value(setting: values["mtu"])
         let entry = Multihop.entry(setting: values["multihop"])
         let asked = multihopAskedAt.map { Date().timeIntervalSince($0) < 120 } ?? false
         if Multihop.turnedOffByItself(was: multihopEntry, now: entry, asked: asked), let was = multihopEntry {
