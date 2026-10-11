@@ -23,6 +23,8 @@ final class VPNClient {
         var accountURL: URL?
         /// Which link and way the last fetched profile came from (#11); nil before 0.16.
         var source: SubscriptionSource?
+        /// `hide-url`: the provider asks not to show the link, so no QR code of it (#24).
+        var hidesURL: Bool?
     }
 
     private(set) var hasURL = false
@@ -393,6 +395,7 @@ final class VPNClient {
         status.serverInterval = SubscriptionHeaders.updateInterval(headers["profile-update-interval"])
         status.accountURL = [headers["profile-web-page-url"], headers["support-url"]].lazy
             .compactMap { $0.flatMap(URL.init(string:)) }.first { $0.scheme == "https" }
+        status.hidesURL = SubscriptionHeaders.hidesURL(headers["hide-url"])
         saveStatus()
         reloadProfileProxies()
         noticeLimits()

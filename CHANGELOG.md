@@ -4,6 +4,14 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Added
+- QR codes (#24, ADR 0021): «Сканировать QR…» in Settings › VPN adds a subscription or servers
+  from a QR code in a clipboard picture (⌃⇧⌘4), an image file or a dropped one, through the same
+  checks as a typed link; no Screen Recording permission. «QR-код…» shows the subscription link as
+  a QR code for a phone after a warning; not offered when the subscription sends `hide-url`.
+
 ## [0.17.0] - 2026-10-11
 
 ### Added
