@@ -28,6 +28,15 @@ final class ProviderInfoTests: XCTestCase {
         XCTAssertEqual(info.announcement, "Hithere\nline two end")
     }
 
+    /// Emoji sequences are joined by U+200D (a format character too): kept, while the bidi and
+    /// other invisible format characters go.
+    func testAnnouncementKeepsEmojiSequences() {
+        let family = "👨\u{200D}👩\u{200D}👧", rainbow = "🏳\u{FE0F}\u{200D}🌈"
+        let info = ProviderInfo(headers: ["announce": base64("\(family) \u{200E}\u{200F}\u{202A}\u{202B}\u{202C}\u{202D}\u{2066}\u{2067}\u{2068}\u{2069}\u{FEFF}\u{200B}ok \(rainbow)")])
+        XCTAssertEqual(info.announcement, "\(family) ok \(rainbow)")
+        XCTAssertEqual(SubscriptionHeaders.title("Stork \(rainbow)"), "Stork \(rainbow)")
+    }
+
     func testAnnouncementIsCapped() throws {
         let long = String(repeating: "а", count: 1000)
         let text = try XCTUnwrap(ProviderInfo(headers: ["announce": base64(long)]).announcement)

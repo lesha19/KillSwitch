@@ -42,6 +42,8 @@ struct ProviderInfo: Codable, Equatable {
         let lines = text.replacingOccurrences(of: "\r\n", with: "\n").split(whereSeparator: \.isNewline).map { line in
             String(String.UnicodeScalarView(line.unicodeScalars.compactMap { scalar -> Unicode.Scalar? in
                 if scalar == "\t" { return " " }
+                // the zero-width joiner holds emoji sequences together (👨‍👩‍👧); it cannot reorder text
+                if scalar == "\u{200D}" { return scalar }
                 switch scalar.properties.generalCategory {
                 case .control, .format, .lineSeparator, .paragraphSeparator, .surrogate, .privateUse, .unassigned: return nil
                 default: return scalar
