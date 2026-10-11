@@ -32,16 +32,27 @@ path must fail closed.
   narrowed to the entry's address: `refresh_check` measures servers against the import's, and a
   narrower list would flag the subscription's IP-literal servers on the next refresh; the core may
   reach every approved server as before, and no outbound but the entry's and its probe dials one.
-- `ks set multihop <host>` (admin) refuses a host not in the subscription, the running exit, or one
-  the observatory finds dead. With Xray running, the chain must answer (the diagnostics probe through
-  the fetch inbound) after the restart; otherwise double VPN goes off again, logged — fail closed
-  (pf blocks throughout) but recoverable, never a VPN left on a dead entry.
+- `ks set multihop <host>` (admin) is **strict** (review round 3): it refuses a host not in the
+  subscription, the running exit, one the generator could only make one hop of (its server chained
+  itself, no server, a subscription tag `ks-entry`, a server of the exit chained through a
+  non-server outbound) — `KS_MULTIHOP_STRICT` makes the build fail with the reason instead of
+  storing «on» over a one-hop config — and, while double VPN is off, one the observatory finds dead.
+  With an entry set, the other hosts' probes go through it, so their «dead» says nothing of them:
+  switching from a dead entry A to B is not refused for it; the chain is checked after the restart.
+- With Xray running, the chain must answer (the diagnostics probe through the fetch inbound) after
+  the restart. Otherwise the previous entry comes back, checked the same way (`double VPN back:` in
+  `events.log`), and only if that does not answer either, one hop (`double VPN off: no answer
+  through`). Fail closed (pf blocks throughout) but recoverable: never a VPN left on a dead entry,
+  and a failed change of entry does not lose a chain that worked.
 - An entry the build cannot use later (gone from a refreshed subscription, chained itself, a
-  subscription tag `ks-entry`) turns double VPN **off** with a line in `events.log`, and the config
-  is built one hop: refusing the build (round 1) would have refused every refresh and rebuild until
-  the person found the setting. The app reads the setting, so the switch shows off. The entry being
-  the running host itself is one hop, as with mihomo; `ks core select` refuses the entry as the exit
-  and the app does not offer it, so the screen never says «A → A».
+  subscription tag `ks-entry`, an exit server chained through freedom, or the entry being the
+  running host — an older pick, or a stale `xrayserver=` falling back to the first host)
+  turns double VPN **off** with a line in `events.log`, and the config is built one hop: refusing
+  the build (round 1) would have refused every refresh and rebuild until the person found the
+  setting. It is loud: Журнал защиты tells the line in Russian, and the app posts «Двойной VPN
+  выключен» when the entry goes unset without the person having changed double VPN or the way of
+  connecting in the last two minutes. `ks core select` refuses the entry as the exit and the app
+  does not offer it, so the screen never says «A → A».
 - Failover (ADR 0023) never picks the entry host as the new exit, does nothing while the entry's own
   probe is dead (every exit is unreachable through it; moving the exit would only churn), and never
   picks an own server («(свой)», whose routing differs).

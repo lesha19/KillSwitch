@@ -10,9 +10,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 - Xray: «Двойной VPN» works with the main way of connecting (#33, ADR 0027). The entry is another
   server of the subscription; the running server and the other servers' ping probes are reached
   through it, so no exit sees the Mac's address. Nothing new goes past the VPN. Turning it on
-  refuses an entry that does not answer and, with the VPN on, turns itself off again (logged) if
-  the chain does not answer after the restart. An entry that later disappears from the
-  subscription turns double VPN off with a log line, it never blocks the config. The entry is never
+  refuses an entry that does not answer or that could only give one hop (with the reason), and,
+  with the VPN on, goes back to the previous entry — or one hop — if the new chain does not answer
+  after the restart (logged). An entry that later disappears from the subscription or stops
+  fitting turns double VPN off: it never blocks the config, and it is said in Журнал защиты and by
+  a notification «Двойной VPN выключен». The entry is never
   the exit (not offered, refused by the helper, never picked by failover; failover waits while the
   entry is dead). Changing the way of connecting, and an upgrade that finds a setting left from the
   fallback way, turn it off.
