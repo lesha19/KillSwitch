@@ -98,4 +98,19 @@ unset -f codesign
 printf 'not code\n' > "$tmp/tool"
 check "not signed at all: refused" "$(runtime)" no
 
+# Sparkle offers only a greater build: --publish compares CURRENT_PROJECT_VERSION with the highest
+# sparkle:version of the latest release's appcast (betas are in it); KS_VERSION is the app's version.
+feed "$(item 23)" "$(item 25 beta)" > "$tmp/published.xml"
+check "the highest build, beta items too" "$(appcast_max_build "$tmp/published.xml")" 25
+printf '<enclosure url="https://x/9.dmg" sparkle:version="9"/>\n' > "$tmp/attribute.xml"
+check "the attribute form is read" "$(appcast_max_build "$tmp/attribute.xml")" 9
+check "an appcast without items gives nothing" "$(appcast_max_build "$tmp/empty.xml")" ""
+check "a greater build: taken" "$(build_problem 26 25)" ""
+check "nothing published yet: taken" "$(build_problem 1 '')" ""
+check "the same build: refused" "$(build_problem 25 25 | grep -c 'Поставь 26')" 1
+check "not a number: refused" "$(build_problem 2x 25 | grep -c 'не целое число')" 1
+printf 'KS_VERSION="0.19.0" # the app'"'"'s version\n' > "$tmp/ks"
+check "KS_VERSION equal to the app's: taken" "$(ks_version_problem "$tmp/ks" 0.19.0)" ""
+check "KS_VERSION different: refused" "$(ks_version_problem "$tmp/ks" 0.19.1 | grep -c 'KS_VERSION «0.19.0»')" 1
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
