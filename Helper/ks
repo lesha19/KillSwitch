@@ -508,10 +508,13 @@ nb_user() { local u; u=$(stat -f %u /dev/console 2>/dev/null) && [[ "$u" =~ ^[0-
 # makes launchd run the new file as root at NetBird's next start whatever KillSwitch does, so a
 # refusal would protect nothing and only cut NetBird off: it is logged instead (decided by the
 # agent, docs/security/hardening-0.20.md).
-nb_trusted() {
-  perl -e 'my ($o, $p) = @ARGV; $p =~ m{\A/} or exit 1;
+nb_trusted() { trusted_path "$NB_OWNER" 1 "$1"; }
+# trusted_path <owner uid> <admin group may write folders: 0|1> <path>: nb_trusted's walk, for
+# any owner besides root (the tests' own files) and with or without the admin group's folders.
+trusted_path() {
+  perl -e 'my ($o, $admin, $p) = @ARGV; $p =~ m{\A/} or exit 1;
     sub dir_ok { my @s = stat $_[0] or return 0; -d _ && ($s[4] == 0 || $s[4] == $o) && !($s[2] & 02) &&
-      (!($s[2] & 020) || $s[5] == 80 || $s[5] == 0) }
+      (!($s[2] & 020) || ($admin && ($s[5] == 80 || $s[5] == 0))) }
     my ($cur, $hops, %bad) = ("", 0);
     my @rest = grep { length } split m{/}, $p;
     while (@rest) {
@@ -529,7 +532,7 @@ nb_trusted() {
     }
     my @s = stat $cur or exit 1; -f _ && ($s[4] == 0 || $s[4] == $o) && !($s[2] & 022) or exit 1;
     for (my $d = $cur; $d ne "/";) { $d =~ s{/[^/]*\z}{}; $d = "/" if $d eq ""; exit 1 if $bad{$d} }
-    print "$cur\n"; exit(%bad ? 2 : 0)' "$NB_OWNER" "$1"
+    print "$cur\n"; exit(%bad ? 2 : 0)' "$1" "$2" "$3"
 }
 nb_target() {  # nb_target <path>: nb_trusted's real path, a link's own folder aside (its exit 2)
   local r rc
@@ -1969,6 +1972,8 @@ drop_setting() {  # drop_setting <key>: back to its default
   locked_rewrite "$SETTINGS" '@L = grep { !/\A\Q$ARGV[0]\E=/ } @L' "$1"
 }
 
+# src_owner <file>: the owner's uid of a regular file with one name, not a link
+src_owner() { perl -e 'my @s = lstat $ARGV[0] or exit 1; -f _ && $s[3] == 1 or exit 1; print "$s[4]\n"' -- "$1"; }
 core_import() {  # core_import <profile.json> [import|refresh]
   local src=${1:-} prof conf in tmp srv="$SERVERS_CORE.tmp" rc
   prof=$(core_profile); conf=$(core_conf); in="$prof.new"; tmp="$conf.tmp"
@@ -1977,8 +1982,17 @@ core_import() {  # core_import <profile.json> [import|refresh]
   # Read once, with the caller's rights (root must not open files for the user), into our
   # directory; everything after works on that copy, which is kept for rebuilds.
   [ -n "$src" ] || { echo "usage: ks core import <json>" >&2; return 1; }
-  local as=()
-  [ -n "${SUDO_UID:-}" ] && [ "$SUDO_UID" != 0 ] && as=(sudo -n -u "#$SUDO_UID")
+  local as=() o
+  if [ -n "${SUDO_UID:-}" ]; then
+    [ "$SUDO_UID" = 0 ] || as=(sudo -n -u "#$SUDO_UID")
+  else
+    # the admin password prompt and the daemon set no SUDO_UID (#37): the file's owner reads it
+    # (the app's temporary file); root's own file (the daemon's copy) only from folders only
+    # root can change, by its real path. Never a link, never a file with a second name.
+    o=$(src_owner "$src") || { echo "Не удалось прочитать $src" >&2; return 1; }
+    if [ "$o" != "$EUID" ]; then as=(sudo -n -u "#$o")
+    else src=$(trusted_path "$EUID" 0 "$src") || { echo "Не удалось прочитать $src" >&2; return 1; }; fi
+  fi
   # It holds the servers' passwords: root-only from the first byte (core/ is 711, so a file of a
   # known name there would be readable by anyone), and a leftover file would keep its old mode.
   rm -f "$in"
