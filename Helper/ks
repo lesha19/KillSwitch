@@ -391,7 +391,7 @@ guard() {
     LOAD_RETRY=1
     if load "$TSIG"; then PROT=on; else PROT=off; log_event "reload failed"; fi
     LOAD_RETRY=0
-    [ -f "$INVALIDF" ] || log_event "rules pf refused before loaded on a retry"
+    [ -f "$INVALIDF" ] || log_event "rules loaded again after pf had refused them"
     return 0
   fi
   log_event "$why: reloading"
@@ -401,7 +401,8 @@ guard() {
 rules_retry_due() {
   local t
   [ "$(cat "$INVALIDF" 2>/dev/null)" = rules ] && t=$(stat -f %m "$INVALIDF" 2>/dev/null) || return 1
-  [ $(($(date +%s) - t)) -ge "$PF_RETRY" ]
+  t=$(($(date +%s) - t))
+  [ "$t" -ge "$PF_RETRY" ] || [ "$t" -lt 0 ]   # negative: the clock stepped back
 }
 # Standby (ADR 0018) also depends on whether our core runs, which the tunnel list does not show:
 # our core's TUN can go a moment before launchd says the core stopped, and rules loaded then block
