@@ -1539,7 +1539,7 @@ KS_XRAY_PL='
   # and one of them must not refuse the whole subscription, or a stored one its rebuilds.
   %UNUSABLE = (address => "адрес сервера не годится", tag => "тег ks-… занят KillSwitch",
     selector => "выбирает outbound KillSwitch (ks-…) или прямой", case => "ключ в другом регистре", fallback => "запасной outbound не свой или ks-…",
-    download => "адрес в настройках транспорта, которого KillSwitch не закрепляет",
+    download => "адрес в настройках транспорта, которого KillSwitch не закрепляет", protocol => "тип сервера, который KillSwitch не берёт",
     transport => "транспорт ходит к адресам помимо сервера (ECH через DNS, realm, xdns, xicmp, udphop, xdrive)");
   # Xray reads JSON keys in any case (Go): «Selector», «Address» or «TAG» are the keys below to it,
   # but not to the checks here, which read the exact spelling. A key that folds to one of them
@@ -1590,9 +1590,13 @@ KS_XRAY_PL='
     my @outs = grep { ref $_ eq "HASH" } @{ $c->{outbounds} };
     for my $o (@outs) { my $t = $o->{tag}; $tags{$t} = 1 if defined $t && !ref $t; return "tag" if defined $t && !ref $t && $t =~ /\Aks-/ }
     for my $o (@outs) {
+      # a server type KillSwitch does not take (hysteria2, wireguard…), or no usable address:
+      # missing, IPv6 (pf lets the core out to IPv4 servers only), not a host name (NEW-5 of the
+      # 0.19.1 review: these refused the whole subscription)
+      return "protocol" unless ($o->{protocol} // "") =~ /\A($ENV{PROTOS})\z/;
       for my $r (addrs($o)) { my $h = $$r;
-        next if !defined $h || ref $h;
-        return "address" if ipv4($h) ? $h =~ /\A(0|127|22[4-9]|2[3-5][0-9])\./ : $h =~ /\A[0-9.]+\z/;   # good_server_ip
+        return "address" if !defined $h || ref $h || !length $h;
+        return "address" if ipv4($h) ? $h =~ /\A(0|127|22[4-9]|2[3-5][0-9])\./ : $h =~ /\A[0-9.]+\z/ || !host($h);   # good_server_ip
       }
       # every address in the stream settings must be one downloads() knows (and so pins)
       my $n = 0; my $count; $count = sub { my $x = shift;
