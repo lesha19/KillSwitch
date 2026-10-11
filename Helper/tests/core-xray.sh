@@ -78,6 +78,15 @@ gen "$fx/xray-panel.json"
 grep -qE '00000000-0000-4000|Z84J2Iel|0123abcd|fake-path' "$tmp/c.report" && bad "report holds a secret" || ok "report: no uuid, key, short id or path"
 [ "$(q 'join "|", map { $_->{from} . ":" . ($_->{index} // "") } @{ $r = $c->{rules} }[0..3]')" = "killswitch:|killswitch:|subscription:0|subscription:1" ] &&
   ok "report: our rules, then the subscription's with their index" || bad "report rules: $(q '[@{ $c->{rules} }[0..3]]')"
+# «Проверить адрес» with Xray (#33, ADR 0027): each rule as the core has it, and where each tag leads
+[ "$(q 'JSON::PP->new->canonical->encode($c->{rules}[0]{xray})')" = '{"inboundTag":["ks-dns"],"outboundTag":"dns-out"}' ] &&
+  [ "$(q 'JSON::PP->new->canonical->encode($c->{rules}[5]{xray})')" = '{"network":"udp","outboundTag":"block","port":"443","type":"field"}' ] &&
+  [ "$(q 'scalar grep { ref $_->{xray} ne "HASH" } @{ $c->{rules} }')" = 0 ] &&
+  ok "report: every rule also as the core's object (for «Проверить адрес»)" || bad "report xray rules: $(q '[@{ $c->{rules} }[0..5]]')"
+[ "$(q 'join ",", map { "$_:$c->{targets}{$_}" } sort keys %{ $c->{targets} }')" = "LT_1:vpn,LT_1_FB:vpn,block:block,direct:direct,dns-out:dns" ] &&
+  [ "$(q '$c->{fallback}')" = LT_1 ] &&
+  ok "report: where each outbound leads, and the one no rule takes (the first)" || bad "report targets: $(q '$c->{targets}') $(q '$c->{fallback}')"
+grep -qE '00000000-0000-4000|Z84J2Iel|0123abcd|fake-path' "$tmp/c.report" && bad "report holds a secret after the rule objects" || ok "  still no secret in the report"
 [ "$(q 'join ",", map { "$_->{name}:$_->{type}" } @{ $c->{proxies} }')" = "LT_1:vless,LT_1_FB:vless" ] &&
   [ "$(q 'join ",", map { "$_->{name}:" . join "+", @{ $_->{proxies} } } @{ $c->{groups} }')" = "country-lb:LT_1+LT_1_FB" ] &&
   ok "report: servers and the balancer with its members" || bad "report proxies/groups: $(q '$c->{proxies}') $(q '$c->{groups}')"

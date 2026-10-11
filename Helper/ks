@@ -1640,7 +1640,7 @@ KS_XRAY_PL='
       if (ref $x ne "HASH" || grep { !$RULE_KEYS{$_} } keys %$x) { push @dropped, { section => "rules", index => $i, item => $text, reason => "not-allowed" }; next }
       if (defined $x->{outboundTag} ? !$tag{ $x->{outboundTag} } : !(defined $x->{balancerTag} && $bal{ $x->{balancerTag} })) {
         push @dropped, { section => "rules", index => $i, item => $text, reason => "target:" . ($x->{outboundTag} // $x->{balancerTag} // "") }; next }
-      push @rules, $x; push @report, { rule => $text, from => "subscription", index => $i };
+      push @rules, $x; push @report, { rule => $text, from => "subscription", index => $i, xray => $x };
       if ($todirect->($x)) {
         my @k = grep { !/\A(outboundTag|balancerTag|type|ruleTag)\z/ } keys %$x;
         my $dnsonly = @k == 1 && $k[0] eq "inboundTag" && ref $x->{inboundTag} eq "ARRAY" && !grep { !$dnstags{$_} } @{ $x->{inboundTag} };
@@ -1668,7 +1668,7 @@ KS_XRAY_PL='
       push @ours, $rule; push @added, { kind => "splitapps", items => \@apps };
       $egress{splitapps} = 1; push @direct, "rule\t" . $J->encode($rule);
     }
-    unshift @report, map { { rule => rule_text($_), from => "killswitch" } } @ours;
+    unshift @report, map { { rule => rule_text($_), from => "killswitch", xray => $_ } } @ours;
     $rt{rules} = [ @ours, @rules ];
     # DNS: the system resolver is ourselves (127.0.0.1:53), fakedns would outlive the core
     if (ref $cfg{dns} eq "HASH" && ref $cfg{dns}{servers} eq "ARRAY") {
@@ -1721,6 +1721,7 @@ KS_XRAY_PL='
     open my $f, ">", "$W/servers" or die; print $f "$_\n" for sort keys %srv; close $f;
     open $f, ">", "$W/direct" or die; print $f "$_\n" for @direct; close $f;
     open $f, ">", "$W/egress" or die; print $f "$_\n" for grep { $egress{$_} } qw(rules dns splitapps); close $f;
+    my %kind = (freedom => "direct", blackhole => "block", dns => "dns", loopback => "loopback");
     my @dnss = map { ref $_ eq "HASH" ? $_->{address} // "?" : $_ } @{ ref $cfg{dns} eq "HASH" && ref $cfg{dns}{servers} eq "ARRAY" ? $cfg{dns}{servers} : [] };
     s{\A([a-z0-9+]+://[^/]+)/.+}{$1/...}i for @dnss;
     return if $ENV{DIRECT_ONLY};
@@ -1729,7 +1730,11 @@ KS_XRAY_PL='
       proxies => [ map { { name => $_->{tag}, type => $_->{protocol} } } grep { ($_->{tag} // "") !~ /\Aks-(ping-|entry\z)/ && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ } @$outs ],
       added => \@added, sniffer => { from => ($tpl ? "subscription" : "killswitch"), value => $sniff },
       dns => { servers => \@dnss, taken => {} }, egress => [ grep { $egress{$_} } qw(rules dns splitapps) ],
-      servers => \@servers, selected => name_of($c, $ci) });
+      servers => \@servers, selected => name_of($c, $ci),
+      # «Проверить адрес» (ADR 0027): the rules above as objects (xray), where each outbound leads,
+      # and the one that takes what no rule does; tags and kinds only
+      targets => { map { ($_->{tag} => $kind{ $_->{protocol} } // "vpn") } grep { length($_->{tag} // "") && $_->{tag} !~ /\Aks-(ping-|entry\z)/ } @$outs },
+      fallback => $outs->[0]{tag} // "" });
   }
   # the sha256 of the DIRECT signature of every host, one per line, from one parse of the profile; a
   # host that cannot be built is named in skipped and left out, the others still come
