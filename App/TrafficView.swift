@@ -293,6 +293,11 @@ private struct RuleRow: View {
                     .background(Capsule().fill(Color.accentColor.opacity(0.15)))
                     .help("Добавлено по твоему выбору в «Дополнительно», раньше правил подписки")
             }
+            if rule.from == .profile {
+                Text("профиль").font(.caption).padding(.horizontal, 6).padding(.vertical, 1)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+                    .help(String(localized: "Из профиля маршрутизации «\(rule.profile ?? "")», раньше правил подписки"))
+            }
             if let parsed, parsed.noResolve {
                 Text("без DNS").font(.caption).foregroundStyle(.secondary)
                     .help("Ядро не узнаёт адрес сайта ради этого правила: оно сработает, только если соединение уже идёт на адрес")

@@ -33,6 +33,9 @@ final class VPNClient {
     private(set) var needsConfirmation = false
     /// KS-12: what waits for the admin is a change of what goes past the VPN (DIRECT, DNS), not servers.
     private(set) var routingChanged = false
+    /// Settings › «Маршрутизация» (ADR 0034): the profiles added, the one in use (nil: «Как в подписке»).
+    private(set) var routingProfiles = RoutingProfiles.load()
+    private(set) var activeRoutingProfile = UserDefaults.standard.string(forKey: RoutingProfiles.activeKey).flatMap(UUID.init(uuidString:))
     /// Settings › «Дополнительно»: fingerprint and multiplexing per server (Transport, ADR 0007).
     private(set) var transportOverrides = Transport.decode(UserDefaults.standard.data(forKey: Transport.storeKey))
     /// Servers of the cached profile whose transport can be changed, with the subscription's values.
@@ -255,9 +258,92 @@ final class VPNClient {
         await applyCurrent(interactive: false)
     }
 
+    // MARK: routing profiles (ADR 0034)
+
+    /// A link (https, fetched without the device's headers) or the profile itself (JSON, base64, a
+    /// happ:// or incy:// routing link). The error to show, nil when added. Adding uses nothing yet.
+    func addRoutingProfile(_ text: String) async -> String? {
+        var profile: RoutingProfile
+        do {
+            if let url = RoutingProfile.sourceURL(text) {
+                profile = try RoutingProfile.parse(try await Self.fetchRoutingProfile(url))
+                profile.url = url.absoluteString
+                profile.fetched = Date()
+            } else {
+                profile = try RoutingProfile.parse(text)
+            }
+        } catch let problem as RoutingProfile.Problem {
+            return problem.message
+        } catch {
+            return String(localized: "Не удалось скачать профиль: \(Self.describe(error))")
+        }
+        routingProfiles.append(profile)
+        RoutingProfiles.save(routingProfiles)
+        return nil
+    }
+
+    /// Puts a profile to use (nil: «Как в подписке») and hands the config over without a password;
+    /// one that changes what goes past the VPN waits for «Подтвердить» with the admin's password,
+    /// as a subscription's DIRECT change does (needsConfirmation, routingChanged).
+    func useRoutingProfile(_ id: UUID?) async {
+        activeRoutingProfile = id
+        UserDefaults.standard.set(id?.uuidString, forKey: RoutingProfiles.activeKey)
+        await applyRouting()
+    }
+
+    func removeRoutingProfile(_ id: UUID) async {
+        routingProfiles.removeAll { $0.id == id }
+        RoutingProfiles.save(routingProfiles)
+        if activeRoutingProfile == id { await useRoutingProfile(nil) }
+    }
+
+    /// The profiles with a link, once a day (or all now, `force`); the one in use is handed over
+    /// again when it changed.
+    func updateRoutingProfiles(force: Bool = false) async {
+        var changedActive = false
+        for (i, profile) in routingProfiles.enumerated() where profile.url != nil && (force || profile.due(now: Date())) {
+            guard let url = profile.url.flatMap(RoutingProfile.sourceURL) else { continue }
+            do {
+                let new = profile.updated(with: try RoutingProfile.parse(try await Self.fetchRoutingProfile(url)), at: Date())
+                if new.hint as NSDictionary != profile.hint as NSDictionary, profile.id == activeRoutingProfile { changedActive = true }
+                routingProfiles[i] = new
+            } catch let problem as RoutingProfile.Problem {
+                routingProfiles[i].error = problem.message
+                routingProfiles[i].fetched = Date()
+            } catch {
+                routingProfiles[i].error = String(localized: "Не удалось скачать профиль: \(Self.describe(error))")
+                routingProfiles[i].fetched = Date()
+            }
+        }
+        RoutingProfiles.save(routingProfiles)
+        if changedActive { await applyRouting() }
+    }
+
+    private func applyRouting() async {
+        guard control.coreConfigured, !updating else { return }
+        updating = true
+        defer { updating = false }
+        await applyCurrent(interactive: false)
+    }
+
+    /// A routing profile's link: a plain GET, no device headers (the link is not the provider's),
+    /// no cookies or cache, the redirect and size limits of a subscription fetch.
+    private static func fetchRoutingProfile(_ url: URL) async throws -> String {
+        let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.finishTasksAndInvalidate() }
+        let (bytes, response) = try await session.bytes(for: request, delegate: SubscriptionFetch.RedirectGuard(original: url))
+        let data = try await SubscriptionFetch.collect(bytes)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw FetchError.status((response as? HTTPURLResponse)?.statusCode ?? 0, nil)
+        }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     // MARK: updating
 
     func updateIfDue() {
+        if !updating, routingProfiles.contains(where: { $0.due(now: Date()) }) { Task { await updateRoutingProfiles() } }
         guard hasURL, !updating, schedule.isDue(interval: effectiveInterval, now: Date()) else { return }
         Task { await update(interactive: false) }
     }
@@ -402,10 +488,11 @@ final class VPNClient {
     /// own servers the main way can use as hosts of their own (XrayManual, ADR 0027).
     @discardableResult
     private func applyXray(_ subscription: Data?, interactive: Bool) async -> Bool {
-        guard let data = XrayManual.merge(subscription: subscription, manual: manualProxies)?.data else {
+        guard let merged = XrayManual.merge(subscription: subscription, manual: manualProxies)?.data else {
             lastError = nil
             return true
         }
+        let data = RoutingProfiles.addingXray(RoutingProfiles.active(), to: merged)
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-xray-\(UUID().uuidString).json")
         do {
             try data.write(to: file, options: .atomic)
@@ -566,7 +653,8 @@ final class VPNClient {
 
     func prepareImport() -> Prepared? {
         if (setupCore ?? control.coreChoice) == .xray {
-            guard let data = XrayManual.merge(subscription: Self.cachedXray(), manual: manualProxies)?.data else { return nil }
+            guard let merged = XrayManual.merge(subscription: Self.cachedXray(), manual: manualProxies)?.data else { return nil }
+            let data = RoutingProfiles.addingXray(RoutingProfiles.active(), to: merged)
             let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-xray-\(UUID().uuidString).json")
             do {
                 try data.write(to: file, options: .atomic)
@@ -676,7 +764,7 @@ final class VPNClient {
     /// the helper turns into failover groups (Failover) and the transport overrides (Transport).
     private func forCore(_ subscription: Profile?) -> Profile? {
         ProfileMerger.merge(subscription: subscription, manual: manual.compactMap(Self.proxy))
-            .map { Transport.adding(transportOverrides, to: Failover.adding(to: $0)) }
+            .map { RoutingProfiles.adding(RoutingProfiles.active(), to: Transport.adding(transportOverrides, to: Failover.adding(to: $0))) }
     }
 
     private func reloadProfileProxies() {
