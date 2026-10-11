@@ -81,6 +81,16 @@ touch -t 203001010000 "$CORE_DIR/profile-xray.json"   # replaced by a refresh af
 core_regen >/dev/null 2>&1
 [ ! -e "$CORE_DIR/approved-switch" ] && grep -q 'refreshed since the last import' "$EVENTS" &&
   ok "  a profile refreshed since the import: nothing approved without the password, logged" || bad "  refreshed: $(ls "$CORE_DIR") $(cat "$EVENTS")"
+: > "$EVENTS"; touch -r "$APPROVED_DIRECT" "$CORE_DIR/profile-xray.json"   # the same instant: a refresh within the import's second
+core_regen >/dev/null 2>&1
+[ ! -e "$CORE_DIR/approved-switch" ] && grep -q 'refreshed since the last import' "$EVENTS" &&
+  ok "  a profile as new as the approval: not taken for the imported one" || bad "  same time: $(ls "$CORE_DIR") $(cat "$EVENTS")"
+eval "$(declare -f core_generate | sed '1s/core_generate/real_core_generate/')"
+core_generate() { [ -z "${KS_APPROVE_ALL:-}" ] || { echo "no luck" >&2; return 1; }; real_core_generate "$@"; }
+: > "$EVENTS"; touch -t 202601010000 "$CORE_DIR/profile-xray.json"; core_regen >/dev/null 2>&1
+[ ! -e "$CORE_DIR/approved-switch" ] && grep -q 'server switch approval failed: no luck' "$EVENTS" &&
+  ok "  a failed build of the approval: logged with the reason" || bad "  failed: $(cat "$EVENTS")"
+eval "$(declare -f real_core_generate | sed '1s/real_core_generate/core_generate/')"
 put_setting core mihomo; touch -t 202601010000 "$CORE_DIR/profile-xray.json"; core_regen >/dev/null 2>&1; put_setting core xray
 [ ! -e "$CORE_DIR/approved-switch" ] && ok "  mihomo: none (switches are Xray's)" || bad "  mihomo approval"
 touch -t 202601010000 "$CORE_DIR/profile-xray.json"; core_regen >/dev/null 2>&1

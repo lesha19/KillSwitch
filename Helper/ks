@@ -2097,14 +2097,26 @@ switch_approval_migrate() {
   [ "$(core_kind)" = xray ] && [ ! -e "$CORE_DIR/approved-switch" ] || return 0
   prof=$(core_profile)
   [ -f "$prof" ] && [ ! -L "$prof" ] && [ -f "$PINS" ] && [ -f "$APPROVED_DIRECT" ] || return 0
-  if [ "$prof" -nt "$APPROVED_DIRECT" ]; then
+  # strictly older (the import writes the profile, then the approval): the same instant may be a
+  # refresh right after the import. A clock stepped back can still make a refreshed profile look
+  # older; accepted: it needs a refresh with a new host and a clock change in one upgrade window.
+  if ! mtime_older "$prof" "$APPROVED_DIRECT"; then
     log_event "server switch approval: the subscription was refreshed since the last import, the next import with the password approves its hosts"
     return 0
   fi
-  if KS_APPROVE_ALL=1 KS_PINS=$PINS core_generate "$prof" "$out" "$srv" 2>/dev/null; then
+  if KS_APPROVE_ALL=1 KS_PINS=$PINS core_generate "$prof" "$out" "$srv" 2>"$out.err"; then
     chmod 600 "$out.approved" && mv "$out.approved" "$CORE_DIR/approved-switch" && log_event "server switch approval taken from the last import"
+  else
+    log_event "server switch approval failed: $(grep -v '^$' "$out.err" | tail -1 | cut -c1-200)"
   fi
+  rm -f "$out.err"
   core_clean "$out" "$srv"
+}
+# mtime_older <a> <b>: a was last written strictly before b (fractional seconds)
+mtime_older() {
+  local a b
+  a=$(stat -f %Fm "$1" 2>/dev/null) && b=$(stat -f %Fm "$2" 2>/dev/null) || return 1
+  awk -v a="$a" -v b="$b" 'BEGIN { exit !(a + 0 < b + 0) }'
 }
 
 # core_up <pid before the restart>: the restarted Xray runs (another pid) and listens on its
