@@ -19,25 +19,35 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   - give a server address such as 999.1.1.1, which pf refuses, so everything was blocked;
   - set raw socket options (`customSockopt`) on its connections;
   - put line breaks in a server's name, which turned one name into two in the server list;
-  - spell a key in another case (`Selector`, `Address`, `fallbacktag`) or give a balancer's
-    selector as one string: Xray reads both, the checks did not, so a whole subscription could
+  - spell a key in another case (`Selector`, `Address`, `fallbacktag`) or with look-alike
+    letters Xray reads as Latin (`ſelector`, `socKopt`), or give a balancer's selector as one
+    string or as `""`: Xray reads all of them, the checks did not, so a whole subscription could
     be sent past the VPN with the signature unchanged;
+  - make the connection itself talk to other addresses than the server: an ECH config fetched
+    from a DNS server of its choice, finalmask `realm`, `xdns`, `xicmp` or `udphop` to other
+    addresses, the `xdrive` transport; or bind the ECH lookup's socket to an interface, or have
+    the core write TLS keys to a file;
   - probe through its direct outbound (an observatory selector picking it), to an address of its
     choice outside the tunnel;
   - open a reverse portal through a server (VLESS `settings.reverse`), now removed.
 - A host of the subscription that cannot be used (for example a 0.0.0.0 or 127.0.0.1 placeholder
   for «подписка истекла») is left out and named in «Трафик»; the rest of the subscription is kept.
-  The subscription is refused only when no host is left. A host picked by hand that is left out
-  is noted in Журнал защиты; the first host runs instead.
-- After the update, a subscription whose XHTTP connection downloads from a server given by name
-  needs one import with the password (Settings › Обновить подписку): until then switching
-  servers and the automatic switch say the config cannot be built, and the running config stays.
+  So is a host of a type KillSwitch does not take (hysteria2, WireGuard…) or without a usable
+  address (missing, IPv6). The whole subscription is still refused when no host is left, when a
+  server name does not resolve, or when a config is broken (two outbounds with one tag, a chain
+  through a missing outbound). A host picked by hand that is left out is noted in Журнал защиты
+  with the reason; the first host runs instead.
+- After the update, a host whose XHTTP connection downloads from a server given by name is left
+  out (named in «Трафик») until the next import with the password (Settings › Обновить
+  подписку); the other hosts keep working, switching and settings included.
 
 ### Fixed
 - Xray servers given by name and reached over plain HTTP (WebSocket, HTTPUpgrade, XHTTP without
   TLS) keep sending that name as the HTTP Host after it is pinned to an address, so servers behind
   a proxy that routes by name keep working. Empty values a panel writes for «none» (a balancer
-  fallback, a dialer chain, an XHTTP download address) no longer refuse a host.
+  fallback, a dialer chain, an XHTTP download address) no longer refuse a host, and a host with
+  an empty dialer chain keeps its latency check. Keys spelled the way Xray documents them
+  (`probeURL`) no longer refuse a host.
 
 ## [0.19.0] - 2026-10-11
 
