@@ -166,6 +166,12 @@ fi
 accepted "download dialerProxy empty (no chain)" '$c->{outbounds}[0]{streamSettings} = { network => "xhttp", xhttpSettings => { path => "/x",
       downloadSettings => { address => "198.51.100.8", port => 443, network => "xhttp", sockopt => { dialerProxy => "" }, xhttpSettings => { path => "/y" } } } }' &&
   ok "  accepted"
+# an empty dialerProxy is no chain for the latency probe either: the host keeps its ks-ping
+for v in undef '""'; do
+  if accepted "dialerProxy $v on the server's own stream" '$c->{outbounds}[0]{streamSettings}{sockopt}{dialerProxy} = '"$v"; then
+    [ "$(j '$c->{servers}[0]{ping} // ""' "$tmp/c.report")" = ks-ping-0 ] && ok "  probed as ks-ping-0" || bad "  servers: $(j '$c->{servers}' "$tmp/c.report")"
+  fi
+done
 for v in undef '""'; do
   if accepted "download address $v (the outbound's own)" '$c->{outbounds}[0]{streamSettings} = { network => "xhttp", xhttpSettings => { path => "/x",
         downloadSettings => { address => '"$v"', port => 443, network => "xhttp", xhttpSettings => { path => "/y" } } } }'; then
