@@ -70,14 +70,17 @@ the app target's `.stringsdata` files from DerivedData. Check before a release:
 `rg -n 'ядр|pf |туннел|utun|mihomo|Clash|Remnawave|Обновить защиту' App/*.swift` — only comments
 and code may match. Technical names stay in «Скопировать диагностику» (for support).
 
-Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, wifiguard, adblock, splitapps, multihop, core, xrayserver, failover),
+Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, wifiguard, adblock, splitapps, multihop, core, xrayserver, diag, failover,
+escalate; `ks set <key> 0|1` for the switches),
 `allow` (addresses reachable by any process), `servers-manual` (VPN server IPs added by `server-add`
 and install.sh, reachable by any process), `servers-core` (proxy addresses of the imported core
 profile, rewritten on every import, reachable only by our core), `servers` (both merged),
 `rules.sha256`, `rules.files` and `tunnels` (state of the last load, for tamper checks), `invalid`
 (world-readable: damaged files that made the last load block everything, ADR 0015), `events.log`
 (world-readable, last 500 corrective actions), `core/geodata` (world-readable: whether install.sh put
-the bundled geodata in place or kept the old file because its sha256 was not the pinned one, #27).
+the bundled geodata in place or kept the old file because its sha256 was not the pinned one, #27),
+`core/failover` and `core/escalation` (root-only: the automatic server switch's state, ADR 0023, and
+what transport escalation remembered per server, ADR 0030).
 
 ## Security model
 
