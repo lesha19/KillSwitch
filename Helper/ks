@@ -2073,6 +2073,7 @@ core_regen() {
     [ "$CORE_RUN" = 1 ] && [ "$other" = 0 ] && was=1 && pid=$CORE_PID
     for f in "${files[@]}"; do [ -f "$f" ] && cp -p "$f" "$f.prev"; done
   fi
+  rm -f "$conf.err"; ( umask 077; : > "$conf.err" )   # the core's errors may name servers: root-only
   if ! core_commit "$tmp" "$srv" 2>"$conf.err"; then
     log_event "core config: the new one refused by the core, the running one kept: $(grep -v '^$' "$conf.err" | tail -1 | cut -c1-200)"
     cat "$conf.err" >&2; rm -f "$conf.err"
@@ -2110,6 +2111,7 @@ switch_approval_migrate() {
     log_event "server switch approval: the subscription was refreshed since the last import, the next import with the password approves its hosts"
     return 0
   fi
+  rm -f "$out.err"; ( umask 077; : > "$out.err" )   # the generator's errors name hosts: root-only
   if KS_APPROVE_ALL=1 KS_PINS=$PINS core_generate "$prof" "$out" "$srv" 2>"$out.err"; then
     chmod 600 "$out.approved" && mv "$out.approved" "$CORE_DIR/approved-switch" && log_event "server switch approval taken from the last import"
   else
