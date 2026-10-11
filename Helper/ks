@@ -1481,7 +1481,7 @@ core_generate_xray() (
   [ "$(wc -c < "$in")" -le 20000000 ] || fail "Профиль слишком большой"
   cp "$in" "$w/in.json" || exit 1
   # pass 1: checked; the server host names to pin, one per line
-  W=$w PROTOS=$XRAY_PROTOCOLS /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' check()' > "$w/hosts" || exit 1
+  W=$w PROTOS=$XRAY_PROTOCOLS PINS=${KS_PINS:-} /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' check()' > "$w/hosts" || exit 1
   : > "$w/pins"
   while IFS= read -r h; do
     [ -n "$h" ] || continue
@@ -1491,7 +1491,7 @@ core_generate_xray() (
     printf '%s\t%s\n' "$h" "$a" >> "$w/pins"
   done < "$w/hosts"
   # pass 2: the config and what goes with it
-  W=$w PROTOS=$XRAY_PROTOCOLS PICK=$(setting xrayserver "") ADBLOCK=$(setting adblock 0) \
+  W=$w PROTOS=$XRAY_PROTOCOLS PINS=${KS_PINS:-} PICK=$(setting xrayserver "") ADBLOCK=$(setting adblock 0) \
     GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) APPS=$(setting splitapps "") \
     TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT API_PORT=$([ -f "$CORE_DIR/api-off" ] || echo "$CORE_API_PORT") \
     ACCESS=$([ "$(setting diag 0)" = 1 ] && [ -d "$DIAG" ] && echo "$DIAG/access.log") \
@@ -1509,7 +1509,7 @@ core_generate_xray() (
   : > "$w/approved"
   if [ -n "${KS_APPROVE_ALL:-}" ]; then
     mkdir "$w/e" && ln "$w/in.json" "$w/pins" "$w/e/" || exit 1
-    W=$w/e PROTOS=$XRAY_PROTOCOLS ADBLOCK=$(setting adblock 0) GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) \
+    W=$w/e PROTOS=$XRAY_PROTOCOLS PINS=${KS_PINS:-} ADBLOCK=$(setting adblock 0) GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) \
       APPS=$(setting splitapps "") TUN_GW=10.0.0.1/30 FETCH_PORT=$FETCH_PORT API_PORT="" ACCESS="" \
       /usr/bin/perl -MJSON::PP -MStorable -MDigest::SHA -e "$KS_XRAY_PL"' approve()' > "$w/approved.all" || exit 1
     sort -u "$w/approved.all" > "$w/approved"
@@ -1534,6 +1534,8 @@ KS_XRAY_PL='
   sub ipv4 { my @p = $_[0] =~ /\A([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\z/ or return 0; !grep { $_ > 255 || /\A0[0-9]/ } @p }
   sub host { $_[0] =~ /\A[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\z/ }
   my $LOADED; our (@ORIG, @DROPPED, %UNUSABLE);  # parsed and checked once per run; later loads (approve) get copies, build edits its own
+  # with PINS (a rebuild): the names pinned before, the only addresses it may use
+  our %PINNED = length($ENV{PINS} // "") ? (map { chomp; my ($h, $a) = split /\t/; ($h => $a // "") } do { open my $f, "<", $ENV{PINS} or die "$ENV{PINS}\n"; <$f> }) : ();
   sub load {
     return Storable::dclone($LOADED) if $LOADED;
     my $a = eval { local $/; open my $f, "<", "$W/in.json" or die; JSON::PP->new->decode(<$f>) };
@@ -1625,6 +1627,9 @@ KS_XRAY_PL='
       $count->($o->{streamSettings});
       my @d = downloads($o);
       return "download" if $n > grep { set($_->{address}) } @d;
+      # a rebuild from the kept pins (no DNS): 0.19.0 did not pin download names, and one without
+      # a pin would fail every rebuild (rotation, settings, a switch) until the next import
+      return "download" if length($ENV{PINS} // "") && grep { my $h = $_->{address}; set($h) && !ref $h && !ipv4($h) && host($h) && !$PINNED{$h} } @d;
       return "download" if grep { downloads({ streamSettings => $_ }) } @d;
     }
     my $rt = ref $c->{routing} eq "HASH" ? $c->{routing} : {};
