@@ -1226,7 +1226,7 @@ core_generate_mihomo() (
   # taken goes into the report with the reason. Our own resolvers (DoH through KS-DNS) stay the
   # default for every other name. Without a sniffer of its own the subscription gets a routing-only
   # one: domain rules then also apply to programs that resolve names themselves (DoH in Firefox).
-  NAMES="$w/names" GEO=$geo PROV="$RP" IN="$in" W="$w" KS_DNS=$KS_DNS TUN_ADDR=$CORE_TUN_ADDR DOH=$(doh_url) HOSTS=$(hosts_entries "$w/pins" | head -1) \
+  NAMES="$w/names" GEO=$geo PROV="$RP" IN="$in" W="$w" KS_DNS=$KS_DNS TUN_ADDR=$CORE_TUN_ADDR DOH=$(doh_url) HOSTS=$(hosts_entries "$w/pins" | paste -sd, -) \
     /usr/bin/perl -MJSON::PP -e "$KS_RULES_PL"'
     my $in = rd($ENV{IN}); my $W = $ENV{W};
     open my $f, "<", $ENV{NAMES} or die; my %name = map { chomp; ($_ => 1) } <$f>; close $f;
@@ -1509,11 +1509,12 @@ core_generate_mihomo() (
     printf '{"mode":"rule","log-level":"warning","ipv6":false,"allow-lan":false,"geo-auto-update":false,'
     printf '"find-process-mode":"strict",'
     printf '"external-controller-unix":"ctl/mihomo.sock",'
+    # own addresses of sites (ADR 0033), answered by the DNS (use-hosts)
+    if [ -n "$hosts" ]; then printf '"hosts":{%s},' "$(sed 's/^\([^=]*\)=\(.*\)$/"\1":"\2"/' <<<"$hosts" | paste -sd, -)"; fi
     # #11: when the subscription's host does not answer directly (blocked, or the profile sends it
     # DIRECT), the app asks again through this proxy: on loopback only, every connection to KS-DNS,
     # so it never leaves outside the tunnel. Any local program could use it; it only gets the VPN,
     # which it already has through the TUN.
-    if [ -n "$hosts" ]; then printf '"hosts":{%s},' "$(sed 's/^\([^=]*\)=\(.*\)$/"\1":"\2"/' <<<"$hosts" | paste -sd, -)"; fi
     printf '"listeners":[{"name":"ks-fetch","type":"http","listen":"127.0.0.1","port":%s,"proxy":"%s"}],' "$FETCH_PORT" "$KS_DNS"
     printf '"tun":{"enable":true,"stack":"gvisor","auto-route":true,"auto-detect-interface":true,'
     printf '"dns-hijack":["any:53"],"route-exclude-address":[%s]},' "$excl"

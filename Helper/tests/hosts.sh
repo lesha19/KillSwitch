@@ -114,6 +114,11 @@ cmp -s "$tmp/c.direct" "$tmp/plain.direct" && cmp -s "$tmp/c.egress" "$tmp/plain
 [ "$(q 'join ",", map { @{ $_->{items} } } grep { $_->{kind} eq "hosts" } @{ $c->{added} }')" = "nas.lan → 192.168.1.10,dns.example.com → 203.0.113.53" ] &&
   ok "mihomo report: the entries named as the person's choice" || bad "mihomo report: $(q '$c->{added}')"
 mt "mihomo: hosts" "$tmp/c"
+# with SIGPIPE ignored (launchd jobs may run so) nothing may write into a closed pipe (review of #28)
+put hosts "$(for i in $(seq 50); do printf 'h%s.example.com=203.0.113.1,' "$i"; done | sed 's/,$//')"
+( trap '' PIPE; genm "$fx/ok-full.json" ) || bad "mihomo 50 hosts refused: $(cat "$tmp/err")"
+! grep -qi 'broken pipe\|write error' "$tmp/err" && [ "$(j 'scalar keys %{ $c->{hosts} }')" = 50 ] &&
+  ok "mihomo: 50 entries, no write into a closed pipe" || bad "mihomo 50 hosts: $(head -2 "$tmp/err") $(j 'scalar keys %{ $c->{hosts} }')"
 rm -f "$SETTINGS"
 genm "$fx/ok-minimal.json"
 [ -z "$(j '$c->{hosts}')" ] && ok "mihomo: no list, no hosts" || bad "mihomo none: $(j '$c->{hosts}')"
