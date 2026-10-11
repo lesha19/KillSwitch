@@ -55,7 +55,7 @@ enum Executor {
     /// gets a user's path), then only that archive is copied into the file the app opened.
     private static func report(_ command: HelperCommand, into output: FileHandle) -> HelperReply {
         defer { try? output.close() }
-        guard case .diagReport = command else {
+        guard case .diagReport(_, let uid) = command else {
             return HelperReply(status: HelperReply.refused, stdout: "", stderr: "Отчёт не к этой команде")
         }
         var info = stat()
@@ -63,7 +63,7 @@ enum Executor {
             return HelperReply(status: HelperReply.failedToRun, stdout: "", stderr: "Не удалось записать отчёт")
         }
         defer { PrivateDirectory.remove(dir) }
-        let reply = Runner.run(.diagReport(directory: dir.path))
+        let reply = Runner.run(.diagReport(directory: dir.path, uid: uid))
         guard reply.status == 0 else { return reply }
         guard let path = DiagReport.archive(printed: reply.stdout, in: dir.path),
               let input = FileHandle(forReadingAtPath: path) else {

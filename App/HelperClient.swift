@@ -109,7 +109,7 @@ final class HelperClient {
                 return HelperReply(status: HelperReply.failedToRun, stdout: "", stderr: "Не удалось открыть профиль")
             }
             profile = handle
-        case .diagReport(let directory):
+        case .diagReport(let directory, _):
             // the file is the user's, made here; the daemon only writes into the open handle
             let path = directory + "/" + DiagReport.fileName(for: Date())
             guard FileManager.default.createFile(atPath: path, contents: nil),

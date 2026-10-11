@@ -18,8 +18,9 @@ enum HelperCommand: Equatable, Sendable {
     /// Refused by ks (exit 3) if the profile brings new servers: the subscription auto-update.
     case coreRefresh(profile: String)
     /// «Собрать отчёт» (ADR 0021): the redacted archive into this folder. Through the daemon the
-    /// app opens the file and the daemon gives ks its own folder (`Executor`).
-    case diagReport(directory: String)
+    /// app opens the file and the daemon gives ks its own folder (`Executor`) and the uid of the
+    /// user who asked: ks takes only that user's crash reports.
+    case diagReport(directory: String, uid: UInt32? = nil)
 
     // Widen or edit what may leave the Mac without the VPN: behind the authorization right.
     case protectionOff
@@ -87,7 +88,7 @@ enum HelperCommand: Equatable, Sendable {
         case .coreSelect(let group, let proxy): ["core", "select", group, proxy]
         case .coreDelay(let name): ["core", "delay", name]
         case .coreRefresh(let profile): ["core", "refresh", profile]
-        case .diagReport(let directory): ["diag", "report", directory]
+        case .diagReport(let directory, let uid): ["diag", "report", directory] + (uid.map { [String($0)] } ?? [])
         case .protectionOff: ["off"]
         case .pause(let minutes): ["pause", String(minutes)]
         case .setSwitch(let key, let on): ["set", key, on ? "1" : "0"]
@@ -113,7 +114,8 @@ enum HelperCommand: Equatable, Sendable {
             true
         case .coreSelect(let group, let proxy): Self.isName(group) && Self.isName(proxy)
         case .coreDelay(let name): Self.isName(name)
-        case .coreRefresh(let profile), .coreImport(let profile), .diagReport(let profile): Self.isProfilePath(profile)
+        case .coreRefresh(let profile), .coreImport(let profile): Self.isProfilePath(profile)
+        case .diagReport(let directory, _): Self.isProfilePath(directory)
         case .pause(let minutes): (0...9999).contains(minutes)
         case .setSwitch(let key, _): Self.switchKeys.contains(key)
         case .setSplitApps(let names):

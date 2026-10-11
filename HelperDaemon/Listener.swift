@@ -49,7 +49,13 @@ final class Endpoint: NSObject, HelperProtocol, Sendable {
         Executor.perform(.coreRefresh(profile: Executor.profilePlaceholder), profile: profile, reply: reply)
     }
     func diagReport(output: FileHandle, reply: @escaping Reply) {
-        Executor.perform(.diagReport(directory: Executor.profilePlaceholder), output: output, reply: reply)
+        // the journal holds every user's connections: not for whoever else is logged in
+        guard DiagReport.mayCollect(caller: uid, console: DiagReport.consoleUser(), installer: DiagReport.installingUser()) else {
+            try? output.close()
+            reply(HelperReply.refused, "", "Отчёт может собрать только пользователь, который сейчас работает за этим Mac")
+            return
+        }
+        Executor.perform(.diagReport(directory: Executor.profilePlaceholder, uid: uid), output: output, reply: reply)
     }
 
     func repair(authorization: Data, reply: @escaping Reply) {
