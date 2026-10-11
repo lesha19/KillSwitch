@@ -4,7 +4,7 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
-## [0.19.1] - 2026-10-11
+## [0.19.1] - 2026-10-12
 
 ### Security
 - Xray subscriptions are checked harder before the helper builds the config (#37). Before, a
@@ -22,6 +22,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 - A host of the subscription that cannot be used (for example a 0.0.0.0 or 127.0.0.1 placeholder
   for «подписка истекла») is left out and named in «Трафик»; the rest of the subscription is kept.
   The subscription is refused only when no host is left.
+
+### Fixed
+- Xray servers given by name and reached over plain HTTP (WebSocket, HTTPUpgrade, XHTTP without
+  TLS) keep sending that name as the HTTP Host after it is pinned to an address, so servers behind
+  a proxy that routes by name keep working. Empty values a panel writes for «none» (a balancer
+  fallback, a dialer chain, an XHTTP download address) no longer refuse a host.
 
 ## [0.19.0] - 2026-10-11
 

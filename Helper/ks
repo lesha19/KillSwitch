@@ -1510,10 +1510,15 @@ KS_XRAY_PL='
   # XHTTP may download from another server: streamSettings.xhttpSettings.downloadSettings, or the
   # same inside xhttpSettings.extra; each one a stream setting of its own with address and port (#37)
   # (splithttpSettings: the older name, still read by Xray)
+  # (read with exists: a hash slice or element aliased by grep would add the missing keys as null)
   sub downloads { my $o = shift; my $ss = $o->{streamSettings}; return () unless ref $ss eq "HASH";
-    grep { ref $_ eq "HASH" } map { ($_->{downloadSettings}, ref $_->{extra} eq "HASH" ? $_->{extra}{downloadSettings} : undef) }
-      grep { ref $_ eq "HASH" } @$ss{qw(xhttpSettings splithttpSettings)} }
-  sub addrs { my $o = shift; (own_addrs($o), map { \$_->{address} } grep { exists $_->{address} } downloads($o)) }
+    my @x = map { exists $ss->{$_} && ref $ss->{$_} eq "HASH" ? ($ss->{$_}) : () } qw(xhttpSettings splithttpSettings);
+    my @d = map { ((exists $_->{downloadSettings} ? ($_->{downloadSettings}) : ()),
+                   (exists $_->{extra} && ref $_->{extra} eq "HASH" && exists $_->{extra}{downloadSettings} ? ($_->{extra}{downloadSettings}) : ())) } @x;
+    grep { ref $_ eq "HASH" } @d }
+  # a value Xray reads as unset: null or "" (no download address of its own, no chain, no fallback)
+  sub set { my $v = shift; defined $v && (ref $v || length $v) }
+  sub addrs { my $o = shift; (own_addrs($o), map { \$_->{address} } grep { set($_->{address}) } downloads($o)) }
   # a line break would make one name two in the lists ks core select reads (#37)
   # (the number is the host'"'"'s place in the subscription, before unusable hosts were left out)
   sub name_of { my ($c, $i) = @_; my $r = $c->{remarks}; defined $r && !ref $r && length $r ? $r =~ s/[\r\n\t]/ /gr : "#" . (($ORIG[$i] // $i) + 1) }
@@ -1535,17 +1540,17 @@ KS_XRAY_PL='
       }
       # every address in the stream settings must be one downloads() knows (and so pins)
       my $n = 0; my $count; $count = sub { my $x = shift;
-        if (ref $x eq "HASH") { for (keys %$x) { $n++ if $_ eq "address"; $count->($x->{$_}) } } elsif (ref $x eq "ARRAY") { $count->($_) for @$x } };
+        if (ref $x eq "HASH") { for (keys %$x) { $n++ if $_ eq "address" && set($x->{$_}); $count->($x->{$_}) } } elsif (ref $x eq "ARRAY") { $count->($_) for @$x } };
       $count->($o->{streamSettings});
       my @d = downloads($o);
-      return "download" if $n > grep { exists $_->{address} } @d;
+      return "download" if $n > grep { set($_->{address}) } @d;
       return "download" if grep { downloads({ streamSettings => $_ }) } @d;
     }
     my $rt = ref $c->{routing} eq "HASH" ? $c->{routing} : {};
     for my $b (grep { ref $_ eq "HASH" } @{ ref $rt->{balancers} eq "ARRAY" ? $rt->{balancers} : [] }) {
       return "selector" if grep { picks_ours($_) } @{ ref $b->{selector} eq "ARRAY" ? $b->{selector} : [] };
       my $f = $b->{fallbackTag};
-      return "fallback" if defined $f && (ref $f || !$tags{$f});
+      return "fallback" if set($f) && (ref $f || !$tags{$f});   # "": no fallback
     }
     for my $obs (qw(observatory burstObservatory)) {
       next unless ref $c->{$obs} eq "HASH" && ref $c->{$obs}{subjectSelector} eq "ARRAY";
@@ -1572,7 +1577,7 @@ KS_XRAY_PL='
         }
       }
       for my $o (@{ $c->{outbounds} }) {
-        my @to = grep { defined } ($o->{proxySettings} && ref $o->{proxySettings} eq "HASH" ? $o->{proxySettings}{tag} : undef,
+        my @to = grep { set($_) } ($o->{proxySettings} && ref $o->{proxySettings} eq "HASH" ? $o->{proxySettings}{tag} : undef,
                                    map { ref $_ eq "HASH" && ref $_->{sockopt} eq "HASH" ? $_->{sockopt}{dialerProxy} : undef } $o->{streamSettings}, downloads($o));
         for (@to) { die "$n: «" . ($o->{tag} // "?") . "» подключается через несуществующий «$_»\n" if ref $_ || !$tags{$_} }
       }
@@ -1620,13 +1625,24 @@ KS_XRAY_PL='
     # download stream, which is pinned like the outbound itself, #37)
     my $tame = sub { my ($o, $t) = @_;
       if (exists $o->{sendThrough}) { delete $o->{sendThrough}; $unbound{$t} = 1 if defined $t }
-      my $pinned = sub { my ($r, $ss) = @_;
+      # $net: the network when the stream names none (a download inherits its outbound'"'"'s)
+      my $pinned = sub { my ($r, $ss, $net) = @_;
         return if ipv4($$r);
         my $h = $$r; $$r = $pin{$h};
         my $sec = $ss ? $ss->{security} // "" : "";
         if ($sec eq "tls" || $sec eq "reality") {
           my $k = $sec . "Settings"; $ss->{$k} = {} unless ref $ss->{$k} eq "HASH";
           $ss->{$k}{serverName} = $h unless defined $ss->{$k}{serverName} && length $ss->{$k}{serverName};
+        } elsif ($ss) {
+          # without TLS the HTTP transports send the address as Host: the name, as before the pin,
+          # unless the subscription set a Host itself (0.19.1 review)
+          my $k = { ws => "wsSettings", httpupgrade => "httpupgradeSettings", xhttp => "xhttpSettings", splithttp => "splithttpSettings" }
+            ->{ exists $ss->{network} && !ref $ss->{network} ? $ss->{network} : $net // "" };
+          if ($k) {
+            $ss->{$k} = {} unless ref $ss->{$k} eq "HASH";
+            my $hs = $ss->{$k};
+            $hs->{host} = $h unless (exists $hs->{host} && set($hs->{host})) || (ref $hs->{headers} eq "HASH" && grep { lc eq "host" } keys %{ $hs->{headers} });
+          }
         }
       };
       my $ss = ref $o->{streamSettings} eq "HASH" ? $o->{streamSettings} : undef;
@@ -1635,7 +1651,7 @@ KS_XRAY_PL='
         for my $k (qw(interface mark customSockopt)) { if ($so && exists $so->{$k}) { delete $so->{$k}; $unbound{$t} = 1 if defined $t } }
       }
       $pinned->($_, $ss) for own_addrs($o);
-      for my $d (downloads($o)) { $pinned->(\$d->{address}, $d) if exists $d->{address} }
+      for my $d (downloads($o)) { $pinned->(\$d->{address}, $d, $ss && exists $ss->{network} ? $ss->{network} : undef) if set($d->{address}) }
     };
     my (%tag, %freedom, $dnsout, $block, $direct, $proxy);
     for my $o (@$outs) {
