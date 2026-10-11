@@ -83,7 +83,7 @@ vpn_ifaces() { :; }; ts_ifaces() { :; }; xray_observe() { return 1; }; sleep() {
 core_api() { echo api >> "$T/calls"; }
 launchctl() {
   case "$1" in
-    print) [ -e "$T/job" ] || return 1; printf 'state = running\npid = %s\n' "$(cat "$T/pid")" ;;
+    print) [ -e "$T/job" ] || return 1; if [ -e "$T/waiting" ]; then echo 'state = waiting'; else printf 'state = running\npid = %s\n' "$(cat "$T/pid")"; fi ;;
     kickstart) echo kickstart >> "$T/calls"; [ ! -e "$T/kickfail" ] || return 1; echo $(( $(cat "$T/pid") + 1 )) > "$T/pid" ;;
   esac
 }
@@ -130,6 +130,33 @@ for core in xray mihomo; do
     grep -qx '.*tunnel MTU: auto' "$EVENTS" && ok "  the VPN off: auto stored, the line gone, no restart, the journal says no restart" ||
     bad "  off: $(cat "$T/err") $(cat "$SETTINGS") $(kicks) $(cat "$EVENTS")"
 done
+# Xray: a setting the generator changes on the way (a double VPN entry it cannot use goes off,
+# ADR 0027) reaches the real settings, so the app tells it; a rollback puts it back with the rest
+printf 'core=xray\n' > "$SETTINGS"; rm -f "$T/waiting" "$T/kickfail" "$T/refuse"
+core_import "$fx/xray-panel.json" import >/dev/null 2>"$T/err" || bad "xray: import: $(cat "$T/err")"
+echo 100 > "$T/pid"; : > "$T/job"; : > "$T/up"; : > "$EVENTS"; put_setting multihop Ghost
+set_mtu 1380 2>"$T/err" && [ "$(setting multihop x)" = off ] && grep -q 'double VPN off: its entry «Ghost»' "$EVENTS" &&
+  [ "$(stat -f %Lp "$SETTINGS")" = 644 ] && ok "xray: double VPN the build turned off is off in the settings too, logged" ||
+  bad "multihop carried: $(cat "$T/err") $(paste -sd, - < "$SETTINGS") $(cat "$EVENTS")"
+put_setting multihop Ghost; rm -f "$T/up"
+if set_mtu 1280 2>/dev/null; then bad "a core that does not come up: success"; fi
+[ "$(setting multihop x)" = Ghost ] && [ "$(setting mtu auto)" = 1380 ] && ok "  a rollback puts the settings back as they were" ||
+  bad "  rollback settings: $(paste -sd, - < "$SETTINGS")"
+: > "$T/up"
+# killed after the config was put in place and before the restart: the same value again finishes it
+{ ( core_restart() { kill -9 "$BASHPID"; }; set_mtu 1420 ); } 2>/dev/null; : > "$T/calls"
+set_mtu 1420 2>"$T/err" && [ "$(setting mtu auto)" = 1420 ] && [ "$(conf_mtu)" = 1420 ] && [ "$(kicks)" = 1 ] &&
+  ! ls "$CORE_DIR" "$DIR" | grep -q '\.prev$' && ok "  an interrupted change: the same value again restarts the core, no copies left" ||
+  bad "  interrupted: $(cat "$T/err") $(setting mtu auto) $(kicks) $(ls "$CORE_DIR" "$DIR" | grep '\.prev$')"
+# auto and 1500 build the same Xray config: stored, nothing restarted
+set_mtu auto 2>/dev/null; : > "$T/calls"; : > "$EVENTS"
+set_mtu 1500 2>"$T/err" && [ "$(setting mtu auto)" = 1500 ] && [ "$(kicks)" = 0 ] && grep -qx '.* tunnel MTU: 1500' "$EVENTS" &&
+  ok "  auto -> 1500 with Xray: the same config, stored, no restart, the journal says no restart" || bad "  same config: $(kicks) $(cat "$EVENTS")"
+# the job loaded but the core not running: restarted, but nothing to wait for, so not «restarted»
+: > "$T/waiting"; : > "$T/calls"; : > "$EVENTS"
+set_mtu 1380 2>"$T/err" && [ "$(kicks)" = 1 ] && grep -qx '.* tunnel MTU: 1380' "$EVENTS" &&
+  ok "  the core was not running: started, the journal does not say restarted" || bad "  not running: $(kicks) $(cat "$EVENTS")"
+rm -f "$T/waiting"
 # no subscription yet: only stored (the import builds with it)
 rm -f "$CORE_DIR"/profile* "$PINS"; printf 'core=xray\n' > "$SETTINGS"; : > "$T/calls"; : > "$T/job"
 set_mtu 1420 2>/dev/null && [ "$(setting mtu auto)" = 1420 ] && [ "$(kicks)" = 0 ] && ok "no subscription: stored, nothing restarted" || bad "no profile: $(kicks)"

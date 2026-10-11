@@ -2413,41 +2413,47 @@ core_on() {
 mtu_ok() { [[ "$1" =~ ^1[2-5][0-9][0-9]$ ]] && [ "$1" -ge 1280 ] && [ "$1" -le 1500 ]; }
 tun_mtu() { local v; v=$(setting mtu ""); if mtu_ok "$v"; then echo "$v"; fi; }
 core_restart() { if launchctl print "$CORE_JOB" >/dev/null 2>&1; then launchctl kickstart -k "$CORE_JOB"; fi; }
-# "ks set mtu auto|<n>": the config is built with it on a copy of the settings first and the value
-# stored only if that works (as set_multihop). The TUN is made anew only by a restart (Xray has no
-# reload, mihomo's API reload keeps the old TUN), so either core is restarted once (about a second,
-# pf keeps blocking). A core that ran must come up again (core_up); if it does not, or the restart
-# fails, the previous value, config and its files go back and the core is restarted with them. The
-# same value again changes nothing; the journal says «restarted» only when the core was.
+# "ks set mtu auto|<n>": the config is built with it on a copy of the settings first, and that copy
+# (with whatever the build changed in it: a double VPN it cannot use goes off, ADR 0027) becomes the
+# settings only if that works. The TUN is made anew only by a restart (Xray has no reload, mihomo's
+# API reload keeps the old TUN), so either core is restarted once (about a second, pf keeps
+# blocking), unless the new config is byte for byte the old one (Xray's auto and 1500). A core that
+# ran must come up again (core_up); if it does not, or the restart fails, the previous settings,
+# config and its files go back and the core is restarted with them. The same value again changes
+# nothing, except after a change that was cut short (its copies still there): that one is undone
+# and done again. The journal says «restarted» only when a running core was restarted and came up.
 set_mtu() {
-  local prev s pid="" job=0 f files
+  local prev s pid="" job=0 f files again=0
   [ "$1" = auto ] || mtu_ok "$1" || { echo "MTU — число от 1280 до 1500 или auto" >&2; return 1; }
-  prev=$(tun_mtu); prev=${prev:-auto}
-  [ "$1" != "$prev" ] || { echo "MTU already $1"; return 0; }
   if [ ! -f "$(core_profile)" ] || [ ! -f "$PINS" ]; then   # no subscription yet: its import builds with it
+    [ "$1" != "$(tun_mtu)" ] || { echo "MTU already $1"; return 0; }
     mtu_store "$1" || return 1
     log_event "tunnel MTU: $1"; return 0
   fi
-  files=("$(core_conf)" "$SERVERS" "$SERVERS_CORE" "$PINS" "$CORE_EGRESS" "$REPORT" "$CORE_DIR/direct")
+  files=("$SETTINGS" "$(core_conf)" "$SERVERS" "$SERVERS_CORE" "$PINS" "$CORE_EGRESS" "$REPORT" "$CORE_DIR/direct")
+  for f in "${files[@]}"; do [ ! -f "$f.prev" ] || again=1; done
+  if [ "$again" = 1 ]; then mtu_back; log_event "MTU change cut short: undone"; fi
+  prev=$(tun_mtu); prev=${prev:-auto}
+  [ "$again" = 1 ] || [ "$1" != "$prev" ] || { echo "MTU already $1"; return 0; }
   launchctl print "$CORE_JOB" >/dev/null 2>&1 && job=1
   core_job; [ "$CORE_RUN" = 1 ] && pid=$CORE_PID
-  s=$(mktemp) || return 1
-  cp "$SETTINGS" "$s" 2>/dev/null
+  s="$SETTINGS.mtu"; rm -f "$s" "$s.tmp"
+  cp "$SETTINGS" "$s" 2>/dev/null || : > "$s"
   for f in "${files[@]}"; do rm -f "$f.prev"; [ ! -f "$f" ] || cp -p "$f" "$f.prev"; done
-  if ! SETTINGS=$s mtu_store "$1" || ! SETTINGS=$s core_rebuild "$PINS" || ! mtu_store "$1"; then
+  if ! SETTINGS=$s mtu_store "$1" || ! SETTINGS=$s core_rebuild "$PINS" || ! { chmod 644 "$s" && mv "$s" "$SETTINGS"; }; then
     rm -f "$s" "$s.tmp"; mtu_back; return 1
   fi
-  rm -f "$s"
   reload_if_on
-  if [ "$job" = 0 ]; then
+  if [ "$job" = 0 ] || { [ "$again" = 0 ] && cmp -s "$(core_conf).prev" "$(core_conf)"; }; then
     for f in "${files[@]}"; do rm -f "$f.prev"; done
     log_event "tunnel MTU: $1"; return 0
   fi
   if core_restart && { [ -z "$pid" ] || core_up "$pid"; }; then
     for f in "${files[@]}"; do rm -f "$f.prev"; done
-    log_event "tunnel MTU: $1, VPN restarted"; return 0
+    if [ -n "$pid" ]; then log_event "tunnel MTU: $1, VPN restarted"; else log_event "tunnel MTU: $1"; fi
+    return 0
   fi
-  mtu_back; mtu_store "$prev"; reload_if_on; core_restart
+  mtu_back; reload_if_on; core_restart
   log_event "tunnel MTU: $1 refused, back to $prev: the VPN did not start with it"
   echo "VPN не запустился с MTU ${1/auto/Авто}: вернули прежнее значение (${prev/auto/Авто})" >&2
   return 1
