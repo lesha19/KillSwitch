@@ -1539,7 +1539,8 @@ KS_XRAY_PL='
   # and one of them must not refuse the whole subscription, or a stored one its rebuilds.
   %UNUSABLE = (address => "адрес сервера не годится", tag => "тег ks-… занят KillSwitch",
     selector => "выбирает outbound KillSwitch (ks-…) или прямой", case => "ключ в другом регистре", fallback => "запасной outbound не свой или ks-…",
-    download => "адрес в настройках транспорта, которого KillSwitch не закрепляет");
+    download => "адрес в настройках транспорта, которого KillSwitch не закрепляет",
+    transport => "транспорт ходит к адресам помимо сервера (ECH через DNS, realm, xdns, xicmp, udphop, xdrive)");
   # Xray reads JSON keys in any case (Go): «Selector», «Address» or «TAG» are the keys below to it,
   # but not to the checks here, which read the exact spelling. A key that folds to one of them
   # without being it, or two keys of one object that fold alike, make the host unusable (0.19.1
@@ -1563,6 +1564,26 @@ KS_XRAY_PL='
       }
     } elsif (ref $x eq "ARRAY") { odd_case($_) and return 1 for @$x }
     0 }
+  # A transport that talks to other addresses than its (pinned) server, measured on Xray 26.9.30
+  # (0.19.1 review 2): an ECH config fetched from a DNS server (echConfigList with "://", dialled
+  # by the system, past routing), finalmask realm (STUN, a rendezvous server), xdns (resolvers),
+  # xicmp (raw ICMP to any address), udphop to other addresses (remoteIPs), xdrive (a storage
+  # service). Keys in any case and mask types lowercased, as Xray reads them.
+  sub far_transport { my $x = shift;
+    if (ref $x eq "HASH") {
+      for my $k (keys %$x) { my ($l, $v) = (lc $k, $x->{$k});
+        return 1 if $l eq "remoteips" && set($v);
+        return 1 if defined $v && !ref $v && (($l eq "echconfiglist" && $v =~ m{://}) || ($l =~ /\A(network|method)\z/ && lc $v eq "xdrive")
+          || ($l eq "type" && lc($v) =~ /\A(realm|xdns|xicmp)\z/));
+        return 1 if far_transport($v);
+      }
+    } elsif (ref $x eq "ARRAY") { far_transport($_) and return 1 for @$x }
+    0 }
+  # every socket setting in a stream (sockopt, the ECH lookup'"'"'s echSockopt, in downloads too)
+  sub sockopts { my $x = shift; my @r;
+    if (ref $x eq "HASH") { for (keys %$x) { push @r, $x->{$_} if /\A(sockopt|echSockopt)\z/i && ref $x->{$_} eq "HASH"; push @r, sockopts($x->{$_}) } }
+    elsif (ref $x eq "ARRAY") { push @r, sockopts($_) for @$x }
+    @r }
   sub unusable { my $c = shift; my %tags;
     return "case" if odd_case([ @$c{ grep { exists $c->{$_} } qw(outbounds routing dns policy observatory burstObservatory) },
       map { ref $_ eq "HASH" && exists $_->{sniffing} ? $_->{sniffing} : () } @{ ref $c->{inbounds} eq "ARRAY" ? $c->{inbounds} : [] } ]);
@@ -1577,6 +1598,7 @@ KS_XRAY_PL='
       my $n = 0; my $count; $count = sub { my $x = shift;
         if (ref $x eq "HASH") { for (keys %$x) { $n++ if $_ eq "address" && set($x->{$_}); $count->($x->{$_}) } } elsif (ref $x eq "ARRAY") { $count->($_) for @$x } };
       $count->($o->{streamSettings});
+      return "transport" if far_transport($o->{streamSettings});
       my @d = downloads($o);
       return "download" if $n > grep { set($_->{address}) } @d;
       # a rebuild from the kept pins (no DNS): 0.19.0 did not pin download names, and one without
@@ -1624,7 +1646,7 @@ KS_XRAY_PL='
       }
       for my $o (@{ $c->{outbounds} }) {
         my @to = grep { set($_) } ($o->{proxySettings} && ref $o->{proxySettings} eq "HASH" ? $o->{proxySettings}{tag} : undef,
-                                   map { ref $_ eq "HASH" && ref $_->{sockopt} eq "HASH" ? $_->{sockopt}{dialerProxy} : undef } $o->{streamSettings}, downloads($o));
+                                   map { $_->{dialerProxy} } sockopts($o->{streamSettings}));
         for (@to) { die "$n: «" . ($o->{tag} // "?") . "» подключается через несуществующий «$_»\n" if ref $_ || !$tags{$_} }
       }
     }
@@ -1696,10 +1718,14 @@ KS_XRAY_PL='
         }
       };
       my $ss = ref $o->{streamSettings} eq "HASH" ? $o->{streamSettings} : undef;
-      for my $s ($ss, downloads($o)) {
-        my $so = $s && ref $s->{sockopt} eq "HASH" ? $s->{sockopt} : undef;
-        for my $k (qw(interface mark customSockopt)) { if ($so && exists $so->{$k}) { delete $so->{$k}; $unbound{$t} = 1 if defined $t } }
+      for my $so (sockopts($ss)) {
+        for my $k (qw(interface mark customSockopt)) { if (exists $so->{$k}) { delete $so->{$k}; $unbound{$t} = 1 if defined $t } }
       }
+      # a TLS key log: a file the core would write wherever the subscription says
+      my $nolog; $nolog = sub { my $x = shift;
+        if (ref $x eq "HASH") { for (keys %$x) { if (/\AmasterKeyLog\z/i) { delete $x->{$_} } else { $nolog->($x->{$_}) } } }
+        elsif (ref $x eq "ARRAY") { $nolog->($_) for @$x } };
+      $nolog->($ss);
       $pinned->($_, $ss) for own_addrs($o);
       for my $d (downloads($o)) { $pinned->(\$d->{address}, $d, $ss && exists $ss->{network} ? $ss->{network} : undef) if set($d->{address}) }
     };

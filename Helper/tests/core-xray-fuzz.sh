@@ -325,6 +325,40 @@ if accepted "sockopt interface, mark, customSockopt, sendThrough" '$c->{outbound
     ok "  all removed (servers and freedom alike)" || bad "  left: $(j '[map { [$_->{sendThrough}, $_->{streamSettings}{sockopt}] } @{ $c->{outbounds} }]')"
 fi
 
+# --- the transport itself may talk to other addresses than the pinned server (0.19.1 review 2,
+# measured on Xray 26.9.30): ECH config fetched from a DNS server of the subscription's choice,
+# finalmask realm (STUN, a rendezvous server), xdns (resolvers), xicmp (raw ICMP to any address),
+# udphop to other addresses, xdrive (a storage service instead of the server). Such a host is left out
+for e in '"udp://9.9.9.9"' '"a.example.com+https://1.1.1.1/dns-query"' '"h2c://1.1.1.1/dns-query"'; do
+  perhost "ECH config from a DNS server $e" '$b->{outbounds}[0]{streamSettings}{security} = "tls"; $b->{outbounds}[0]{streamSettings}{tlsSettings} = { serverName => "a.example.com", echConfigList => '"$e"' }'
+done
+perhost "ECH config from DNS in an XHTTP download" '$b->{outbounds}[0]{streamSettings} = { network => "xhttp", xhttpSettings => { path => "/x",
+      downloadSettings => { address => "198.51.100.8", port => 443, security => "tls", tlsSettings => { echConfigList => "udp://9.9.9.9" } } } }'
+for m in realm REALM xdns xicmp; do
+  perhost "finalmask $m" '$b->{outbounds}[0]{streamSettings}{finalmask} = { udp => [{ type => "'"$m"'", settings => { ips => ["198.51.100.1"], stunServers => ["198.51.100.2:3478"] } }] }'
+done
+perhost "finalmask udphop to other addresses" '$b->{outbounds}[0]{streamSettings}{finalmask} = { udp => [{ type => "udphop", settings => { remoteIPs => ["198.51.100.0/24"] } }] }'
+perhost "finalmask xicmp on the freedom outbound" '$b->{outbounds}[2]{streamSettings}{finalmask} = { udp => [{ type => "xicmp" }] }'
+perhost "network xdrive" '$b->{outbounds}[0]{streamSettings}{network} = "xdrive"'
+perhost "method XDrive" '$b->{outbounds}[0]{streamSettings}{method} = "XDrive"'
+if accepted "ECH from a config of its own, finalmask noise" '$c->{outbounds}[0]{streamSettings}{security} = "tls";
+      $c->{outbounds}[0]{streamSettings}{tlsSettings} = { serverName => "a.example.com", echConfigList => "AEX+DQBBpQAgACB/RdTe" };
+      $c->{outbounds}[0]{streamSettings}{finalmask} = { udp => [{ type => "noise", settings => { noise => [{ rand => "10-20", delay => "10-16" }] } }] }'; then
+  ok "  taken"
+fi
+# the ECH lookup has a socket of its own (echSockopt): bound to nothing, like sockopt; a TLS key
+# log is a file written by the core wherever the subscription says
+if accepted "echSockopt interface, mark, customSockopt; masterKeyLog" '$c->{outbounds}[0]{streamSettings}{security} = "tls";
+      $c->{outbounds}[0]{streamSettings}{tlsSettings} = { serverName => "a.example.com", echConfigList => "AEX+DQBBpQAgACB/RdTe", masterKeyLog => "/tmp/k",
+        echSockopt => { interface => "en0", mark => 7, customSockopt => [{ opt => "25", value => "4" }] } };
+      $c->{outbounds}[0]{streamSettings}{xhttpSettings} = { downloadSettings => { address => "198.51.100.8", port => 443, security => "tls",
+        tlsSettings => { masterKeyLog => "/tmp/k2", echSockopt => { interface => "en0" } } } }'; then
+  [ "$(j 'join ",", map { keys %$_ } $c->{outbounds}[0]{streamSettings}{tlsSettings}{echSockopt}, $c->{outbounds}[0]{streamSettings}{xhttpSettings}{downloadSettings}{tlsSettings}{echSockopt}')" = "" ] &&
+    ! grep -q masterKeyLog "$tmp/c" && ok "  removed, in the download too" || bad "  tls: $(j '$c->{outbounds}[0]{streamSettings}')"
+fi
+refused "echSockopt dialerProxy to a missing outbound" '$c->{outbounds}[0]{streamSettings}{security} = "tls";
+      $c->{outbounds}[0]{streamSettings}{tlsSettings} = { echConfigList => "AEX+DQBBpQAgACB/RdTe", echSockopt => { dialerProxy => "nope" } }' "несуществующий"
+
 # --- tags: KillSwitch's own (ks-…) are not the subscription's to take, balancers and observers
 # that would pick them (a prefix of "ks-") neither: «Программы без VPN» adds a freedom ks-direct
 # that no direct signature counts
