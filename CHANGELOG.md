@@ -166,6 +166,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   nothing pins) is left out and named in «Трафик», the others stay; the subscription is refused
   only when no host is left. XHTTP's older name `splithttpSettings` is checked like
   `xhttpSettings` (#37, review).
+- Xray subscriptions (as 0.19.1): a key in another case (`Selector`, `Address`, `fallbacktag`),
+  which Xray reads, or a selector given as one string makes the host unusable; an observatory may
+  not probe through a freedom outbound; VLESS `settings.reverse` is removed; a host picked by hand
+  that is left out is noted in Журнал защиты. After the update a subscription whose XHTTP
+  connection downloads from a server given by name needs one import with the password.
 - Lock files of the service are root's alone (0600): a local user can no longer hold one and stall
   settings, the protection log and the watchdog; the log never waits more than 2 s (#50, review).
 - Password prompt: a script command in any other shape than the app's install.sh/uninstall.sh is
