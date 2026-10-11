@@ -107,6 +107,39 @@ final class FailoverTests: XCTestCase {
                        .fine)
     }
 
+    // MARK: Xray: the helper switches between the subscription's hosts (ADR 0023)
+
+    private func xray(now: String = "🇱🇹Литва 2", alive1: Bool = false, alive2: Bool = true) throws -> CoreProxies {
+        let json = """
+        {"proxies": {
+          "Сервер": {"type": "Selector", "now": "\(now)", "all": ["🇱🇹Литва", "🇱🇹Литва 2", "🇩🇪Германия"]},
+          "🇱🇹Литва": {"type": "Xray", "alive": \(alive1), "history": [{"delay": \(alive1 ? 90 : 0)}]},
+          "🇱🇹Литва 2": {"type": "Xray", "alive": \(alive2), "history": [{"delay": \(alive2 ? 120 : 0)}]},
+          "🇩🇪Германия": {"type": "Xray", "alive": true, "history": [{"delay": 30}]}
+        }}
+        """
+        return try CoreProxies(data: Data(json.utf8))
+    }
+
+    func testXrayHostsCarryTheObservatorysLatency() throws {
+        let proxies = try xray()
+        XCTAssertEqual(proxies.delay("🇱🇹Литва 2"), 120)
+        XCTAssertNil(proxies.delay("🇱🇹Литва"))
+        XCTAssertEqual(proxies.alive("🇱🇹Литва"), false)
+    }
+
+    func testXraySwitchByTheHelperIsNoticed() throws {
+        XCTAssertEqual(Failover.state(chosen: "🇱🇹Литва", proxies: try xray()), .switched(from: "🇱🇹Литва", to: "🇱🇹Литва 2"))
+        XCTAssertEqual(Failover.state(chosen: "🇱🇹Литва 2", proxies: try xray()), .fine)
+    }
+
+    /// The helper moves within the country by itself: the person is asked only when every host of it is silent.
+    func testXrayCountryDownOnlyWhenEveryHostOfItIsSilent() throws {
+        XCTAssertEqual(Failover.state(chosen: "🇱🇹Литва", proxies: try xray(now: "🇱🇹Литва")), .fine)
+        XCTAssertEqual(Failover.state(chosen: "🇱🇹Литва", proxies: try xray(now: "🇱🇹Литва", alive2: false)),
+                       .countryDown(country: "Литва"))
+    }
+
     func testSwitchIsShownForAnHour() {
         let at = Date(timeIntervalSince1970: 1_800_000_000)
         let change = Failover.Switch(from: "🇱🇹 Литва 1", to: "🇱🇹 Литва 2", at: at)

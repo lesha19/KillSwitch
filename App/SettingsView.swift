@@ -302,6 +302,13 @@ private struct CoreChoiceSection: View {
                       || !FileManager.default.fileExists(atPath: CoreChoice.xray.binary))
             Footnote(text: String(localized: "Если сайты открываются через раз, попробуй другой способ. Смена спросит пароль и заново возьмёт подписку."),
                      more: String(localized: "Основной способ работает так же, как Happ. Запасной умеет показывать соединения в окне «Трафик» и двойной VPN, но у некоторых сайты в нём открываются хуже."))
+            if control.coreChoice == .xray {
+                Toggle(isOn: Binding(get: { control.autoSwitch }, set: { control.set("failover", $0) })) {
+                    Text("Переключать сервер, если он перестал отвечать")
+                    Text("На самый быстрый работающий сервер той же страны. Другую страну KillSwitch сам не выбирает.")
+                }
+                .disabled(control.busy || control.state == .notInstalled)
+            }
         }
     }
 }

@@ -77,6 +77,8 @@ final class KillSwitchControl {
     private(set) var adBlock = false
     /// «Подробная диагностика» (diag, ADR 0021): Xray records every connection in the local journal.
     private(set) var diagVerbose = false
+    /// Xray: the helper moves to another host of the country when this one stops answering (ADR 0023).
+    private(set) var autoSwitch = true
     /// «Собрать отчёт» is running, and why the last one failed (nil after a good one).
     private(set) var reportBusy = false
     private(set) var reportError: String?
@@ -1117,6 +1119,7 @@ final class KillSwitchControl {
         allowDirect = (values["direct"] ?? "0") == "1"
         adBlock = (values["adblock"] ?? "0") == "1"
         diagVerbose = (values["diag"] ?? "0") == "1"
+        autoSwitch = (values["failover"] ?? "1") == "1"
         splitApps = SplitApps.parse(setting: values["splitapps"])
         multihopEntry = Multihop.entry(setting: values["multihop"])
         exceptions = Self.readLines("/Library/KillSwitch/allow")

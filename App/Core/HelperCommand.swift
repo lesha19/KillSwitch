@@ -221,7 +221,7 @@ enum HelperCommand: Equatable, Sendable {
     /// `ks set <key> 0|1`; all behind the right, «Блокировать рекламу» (adblock) too: it changes
     /// what the core refuses, and only an admin turns that on or off, as with the password before.
     /// «Подробная диагностика» (diag, ADR 0021) too: it changes what the core records.
-    static let switchKeys: Set<String> = ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag"]
+    static let switchKeys: Set<String> = ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag", "failover"]
     static let maxSplitApps = 50
     static let maxInstallServers = 512
 

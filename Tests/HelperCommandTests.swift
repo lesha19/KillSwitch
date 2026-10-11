@@ -162,7 +162,7 @@ final class HelperCommandTests: XCTestCase {
     }
 
     func testSwitchKeys() {
-        for key in ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag"] {
+        for key in ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag", "failover"] {
             XCTAssertTrue(HelperCommand.setSwitch(key, true).isValid, key)
         }
         // «Российские сайты напрямую» is gone (ADR 0013): ks refuses it, so the daemon does too
