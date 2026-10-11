@@ -1448,6 +1448,14 @@ core_generate_xray() (
     TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT API_PORT=$([ -f "$CORE_DIR/api-off" ] || echo "$CORE_API_PORT") \
     ACCESS=$([ "$(setting diag 0)" = 1 ] && [ -d "$DIAG" ] && echo "$DIAG/access.log") \
     /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' build()' || exit 1
+  # the host picked by hand left out as unusable: the first one runs, and the journal says why
+  pick=$(setting xrayserver "")
+  if [ -n "$pick" ]; then
+    left=$(PICK=$pick /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>);
+      my ($d) = grep { $_->{section} eq "servers" && $_->{item} eq $ENV{PICK} } @{ $r->{dropped} || [] };
+      print "$d->{reason}\t$r->{selected}" if $d && $r->{selected} ne $ENV{PICK}' < "$w/report.json" 2>/dev/null)
+    [ -z "$left" ] || log_event "xray: server «${pick}» left out of the subscription (${left%%	*}), «${left#*	}» runs"
+  fi
   # an import (KS_APPROVE_ALL): the DIRECT signature of every host, which the admin approves
   # with it, so a passwordless switch can be measured against it (KS-10)
   : > "$w/approved"
@@ -1528,9 +1536,32 @@ KS_XRAY_PL='
   # the others stay: panels add placeholder hosts at 0.0.0.0 or 127.0.0.1 («подписка истекла»),
   # and one of them must not refuse the whole subscription, or a stored one its rebuilds.
   %UNUSABLE = (address => "адрес сервера не годится", tag => "тег ks-… занят KillSwitch",
-    selector => "выбирает и outbound KillSwitch (ks-…)", fallback => "запасной outbound не свой или ks-…",
+    selector => "выбирает outbound KillSwitch (ks-…) или прямой", case => "ключ в другом регистре", fallback => "запасной outbound не свой или ks-…",
     download => "адрес в настройках транспорта, которого KillSwitch не закрепляет");
+  # Xray reads JSON keys in any case (Go): «Selector», «Address» or «TAG» are the keys below to it,
+  # but not to the checks here, which read the exact spelling. A key that folds to one of them
+  # without being it, or two keys of one object that fold alike, make the host unusable (0.19.1
+  # review). Names of HTTP headers, DNS hosts and attributes are data, not keys of Xray.
+  my %KEYS = map { (lc $_ => $_) } qw(remarks outbounds inbounds routing dns policy observatory burstObservatory api stats
+    reverse fakedns log transport meta tag protocol settings vnext servers address port users streamSettings sockopt
+    dialerProxy interface mark customSockopt sendThrough proxySettings network security tlsSettings realitySettings
+    serverName xhttpSettings splithttpSettings wsSettings httpupgradeSettings downloadSettings extra host headers
+    balancers selector fallbackTag strategy subjectSelector probeUrl rules outboundTag balancerTag inboundTag type domain
+    ip port process domainStrategy domainMatcher ruleTag sourcePort source sourceIP user protocol attrs localIP localPort
+    vlessRoute nonIPQuery queryStrategy sniffing hosts);
+  sub odd_case { my $x = shift;
+    if (ref $x eq "HASH") {
+      my %seen;
+      for my $k (keys %$x) {
+        my $f = lc $k;
+        return 1 if $seen{$f}++ || (exists $KEYS{$f} && $KEYS{$f} ne $k);
+        next if $k =~ /\A(headers|hosts|attrs)\z/;
+        return 1 if odd_case($x->{$k});
+      }
+    } elsif (ref $x eq "ARRAY") { odd_case($_) and return 1 for @$x }
+    0 }
   sub unusable { my $c = shift; my %tags;
+    return "case" if odd_case($c);
     my @outs = grep { ref $_ eq "HASH" } @{ $c->{outbounds} };
     for my $o (@outs) { my $t = $o->{tag}; $tags{$t} = 1 if defined $t && !ref $t; return "tag" if defined $t && !ref $t && $t =~ /\Aks-/ }
     for my $o (@outs) {
@@ -1547,14 +1578,21 @@ KS_XRAY_PL='
       return "download" if grep { downloads({ streamSettings => $_ }) } @d;
     }
     my $rt = ref $c->{routing} eq "HASH" ? $c->{routing} : {};
+    # (Xray also takes a selector as one string, which the checks here would not see)
     for my $b (grep { ref $_ eq "HASH" } @{ ref $rt->{balancers} eq "ARRAY" ? $rt->{balancers} : [] }) {
+      return "selector" if set($b->{selector}) && ref $b->{selector} ne "ARRAY";
       return "selector" if grep { picks_ours($_) } @{ ref $b->{selector} eq "ARRAY" ? $b->{selector} : [] };
       my $f = $b->{fallbackTag};
       return "fallback" if set($f) && (ref $f || !$tags{$f});   # "": no fallback
     }
+    # an observatory probing through a freedom outbound sends its probes, to a URL of the
+    # subscription, past the tunnel and outside the direct signature (0.19.1 review)
+    my @free = map { $_->{tag} } grep { ($_->{protocol} // "") eq "freedom" && set($_->{tag}) && !ref $_->{tag} } @outs;
     for my $obs (qw(observatory burstObservatory)) {
-      next unless ref $c->{$obs} eq "HASH" && ref $c->{$obs}{subjectSelector} eq "ARRAY";
-      return "selector" if grep { picks_ours($_) } @{ $c->{$obs}{subjectSelector} };
+      next unless ref $c->{$obs} eq "HASH" && set($c->{$obs}{subjectSelector});
+      my $sel = $c->{$obs}{subjectSelector};
+      return "selector" if ref $sel ne "ARRAY";
+      return "selector" if grep { my $x = $_; picks_ours($x) || (defined $x && !ref $x && grep { index($_, $x) == 0 } @free) } @$sel;
     }
     "" }
   sub check {
@@ -1625,6 +1663,8 @@ KS_XRAY_PL='
     # download stream, which is pinned like the outbound itself, #37)
     my $tame = sub { my ($o, $t) = @_;
       if (exists $o->{sendThrough}) { delete $o->{sendThrough}; $unbound{$t} = 1 if defined $t }
+      # a reverse portal through the server (VLESS settings.reverse) is not a client'"'"'s to open
+      delete $o->{settings}{reverse} if ref $o->{settings} eq "HASH" && exists $o->{settings}{reverse};
       # $net: the network when the stream names none (a download inherits its outbound'"'"'s)
       my $pinned = sub { my ($r, $ss, $net) = @_;
         return if ipv4($$r);
