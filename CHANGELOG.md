@@ -7,6 +7,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 ## [Unreleased]
 
 ### Added
+- `killswitch://` links that act (#23, ADR 0029): `connect` connects at once (no password prompt);
+  `disconnect` and `toggle` (when it would disconnect) ask «Отключить VPN?» in the window;
+  `add?url=<https link>` always asks «Добавить подписку?» and shows the subscription's host. No
+  link turns protection off or pauses it; unknown links do nothing and are logged without the link.
 - Settings › Дополнительно «Перенос настроек» (#15, ADR 0024): «Сохранить в файл…» writes the app
   and protection settings to a JSON file, «Загрузить из файла…» reads one back, «Сбросить…» returns
   them to the defaults. Both show every change first; protection settings go through the usual
