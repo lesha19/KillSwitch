@@ -1386,9 +1386,10 @@ core_generate_mihomo() (
   fi
 
   # Why the core may leave the tunnel at all (pf, rules()): the subscription sends something
-  # DIRECT (a rule, a provider download, a DNS server), or the admin put apps outside the VPN.
+  # DIRECT (a rule, a provider download, a DNS server), the routing profile does (ADR 0034), or
+  # the admin put apps outside the VPN.
   {
-    grep -qE '^(rule|provider-proxy)'$'\t' "$w/direct" && echo rules
+    grep -qE '^(rule|profile-rule|provider-proxy)'$'\t' "$w/direct" && echo rules
     cat "$w/dns-egress"
     [ -n "$apps" ] && echo splitapps
   } > "$w/egress"
@@ -1856,7 +1857,7 @@ KS_XRAY_PL='
       }
       # its block and proxy rules sit in front of the direct ones and shadow them: with anything
       # of it going direct, the whole profile in order is approved (review B1)
-      push @direct, "profile\t" . $J->encode(\@prof) if grep { $_->{outboundTag} eq $direct } @prof;
+      push @direct, "profile\t" . $J->encode(\@prof) if defined $direct && grep { $_->{outboundTag} eq $direct } @prof;
       push @added, { kind => "routing-profile", items => [$pname] };
     }
     splice @direct, $outat, 0, @outlines if @direct;
@@ -2314,7 +2315,7 @@ refresh_check() {
   # (direct_unapproved); with no record of an import at all, only an import
   if { [ -s "$3" ] || [ -s "$APPROVED_DIRECT" ]; } && ! cmp -s "$3" "$APPROVED_DIRECT" &&
      { [ ! -f "$APPROVED_DIRECT" ] || { direct_unapproved "$3" && ! direct_subset "$3"; }; }; then
-    echo "Профиль меняет, что идёт мимо VPN (DIRECT): нужно подтверждение паролем администратора" >&2
+    echo "Профиль меняет, что идёт мимо VPN (DIRECT)$(direct_parts "$3"): нужно подтверждение паролем администратора" >&2
     rc=3
   fi
   return "$rc"
@@ -2336,14 +2337,30 @@ core_commit() {
   mv "$tmp" "$(core_conf)"
 }
 
-# direct_subset <direct>: every line of this signature is one of the import's approved signature
-# (ADR 0034, review S5): a direct routing profile turned off or replaced by one that only blocks or
-# sends through the VPN, a subscription's DIRECT rule gone. Each line stands for a part that goes
-# direct as a whole (a rule with its target, a group with its members, a provider with its list, an
-# outbound, the DNS settings, the routing profile with all its rules in order), so fewer of them is
-# never more past the VPN; the profile's own rules are "profile-rule", never a subscription's.
+# direct_subset <direct>: only the person's routing profile went direct less (ADR 0034, review S5,
+# re-review F1): every line but the profile's own ("profile-rule", "profile") and the freedom
+# outbounds ("outbound") is the approved signature's, in the same order, and each of those is one
+# of the approved ones. Whole lines of a subscription's rules may not be fewer: one to a group or
+# balancer that can also go direct shields the DIRECT rules behind it (and split apps' rules, KS's
+# own, must not be taken over by a subscription's rule of the same text).
 direct_subset() {
-  [ -f "$APPROVED_DIRECT" ] && ! grep -qvxF -f "$APPROVED_DIRECT" -- "$1"
+  [ -f "$APPROVED_DIRECT" ] || return 1
+  local own=$'^(profile-rule|profile|outbound)\t'
+  cmp -s <(grep -vE "$own" -- "$1") <(grep -vE "$own" -- "$APPROVED_DIRECT") &&
+    ! { grep -E "$own" -- "$1" || :; } | grep -qvxF -f "$APPROVED_DIRECT"
+}
+
+# direct_parts <direct>: which part of the signature is not the approved one, for the app to say
+# (re-review F4): " [profile]" (the routing profile's lines), " [subscription]" (the rest; a freedom
+# outbound only when one was approved before, else it came with the profile), or both.
+direct_parts() {
+  local a=$APPROVED_DIRECT p="" s=""
+  [ -f "$a" ] || a=/dev/null
+  { grep -E $'^(profile-rule|profile)\t' -- "$1" || :; } | grep -qvxF -f "$a" && p=profile
+  cmp -s <(grep -vE $'^(profile-rule|profile|outbound)\t' -- "$1") <(grep -vE $'^(profile-rule|profile|outbound)\t' -- "$a") || s=subscription
+  if grep -q $'^outbound\t' -- "$a" && { grep -E $'^outbound\t' -- "$1" || :; } | grep -qvxF -f "$a"; then s=subscription; fi
+  [ -n "$p$s" ] || s=subscription
+  if [ -n "$p" ] && [ -n "$s" ]; then echo " [$p,$s]"; else echo " [$p$s]"; fi
 }
 
 # direct_unapproved <direct>: a generated config for another Xray host sends past the VPN what

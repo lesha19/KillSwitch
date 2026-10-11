@@ -236,4 +236,81 @@ s5() {
 s5 mihomo gm "$T/base.json"
 s5 xray gx "$fx/xray-panel.json" 1
 
+# --- re-review F1/F3: only the profile's own lines may be fewer. A subscription rule to a group or
+# balancer that can go direct is itself a signature line; dropping or moving it lets what it took
+# fall onto an approved DIRECT rule behind it. The rest of the signature must stay as approved, in
+# order
+printf 'core=mihomo\n' > "$SETTINGS"
+f1m() { /usr/bin/perl -MJSON::PP -e 'local $/; my $p = JSON::PP->new->decode(<STDIN>); my $s = "🚀 Выбор сервера";
+  my %r = (1 => "DOMAIN-SUFFIX,bank.ru,$s", 2 => "DOMAIN-SUFFIX,ru,DIRECT", 3 => "MATCH,$s");
+  $p->{rules} = [ map { $r{$_} } split //, $ARGV[0] ]; delete $p->{"rule-providers"}; print JSON::PP->new->encode($p)' "$1" < "$fx/ok-full.json" > "$T/f1-$1.json"
+  gm "$T/f1-$1.json" "f1-m$1" || bad "f1 $1: $(cat "$T/err")"; }
+f1m 123; f1m 23; f1m 213
+SERVERS="$T/f1-m123.srv"; APPROVED_HOSTS="$T/none"; APPROVED_DIRECT="$T/f1-m123.direct"; : > "$T/pins"
+for v in 23 213; do
+  refresh_check "$T/f1-m$v.srv" "$T/pins" "$T/f1-m$v.direct" 2>/dev/null; rc=$?
+  [ "$rc" = 3 ] && ok "mihomo: a rule to a group holding DIRECT dropped or moved in front of DIRECT ($v): the admin" || bad "mihomo f1 $v: rc $rc"
+done
+printf 'core=xray\n' > "$SETTINGS"
+f1x() { /usr/bin/perl -MJSON::PP -e 'local $/; my $p = JSON::PP->new->decode(<STDIN>); my $c = $p->[0];
+  push @{ $c->{routing}{balancers} }, { tag => "vpn-lb", selector => ["LT_1"], fallbackTag => "direct" };
+  my @r = ({ domain => ["domain:bank.ru"], balancerTag => "vpn-lb" }, { domain => ["domain:ru"], outboundTag => "direct" });
+  unshift @{ $c->{routing}{rules} }, ($ARGV[0] eq "A" ? @r : $ARGV[0] eq "B" ? $r[1] : @r[1, 0]);
+  $#$p = 0; print JSON::PP->new->encode($p)' "$1" < "$fx/xray-panel.json" > "$T/f1x-$1.json"
+  gx "$T/f1x-$1.json" "f1-x$1" || bad "f1x $1: $(cat "$T/err")"; }
+f1x A; f1x B; f1x C
+SERVERS="$T/f1-xA.srv"; APPROVED_HOSTS="$T/none"; APPROVED_DIRECT="$T/f1-xA.direct"; : > "$T/pins"
+for v in B C; do
+  refresh_check "$T/f1-x$v.srv" "$T/pins" "$T/f1-x$v.direct" 2>/dev/null; rc=$?
+  [ "$rc" = 3 ] && ok "Xray: a rule to a balancer falling back to freedom dropped or moved ($v): the admin" || bad "xray f1 $v: rc $rc"
+done
+# F3: split app turned off, the subscription carries the same process rule
+put_setting splitapps /Applications/Foo.app
+gx "$fx/xray-panel.json" f3-on || bad "f3 on: $(cat "$T/err")"
+put_setting splitapps ""
+/usr/bin/perl -MJSON::PP -e 'local $/; my $p = JSON::PP->new->decode(<STDIN>);
+  unshift @{ $p->[0]{routing}{rules} }, { process => ["/Applications/Foo.app/"], outboundTag => "direct" }; print JSON::PP->new->encode($p)' < "$fx/xray-panel.json" > "$T/f3.json"
+gx "$T/f3.json" f3-sub || bad "f3 sub: $(cat "$T/err")"
+SERVERS="$T/f3-on.srv"; APPROVED_HOSTS="$T/none"; APPROVED_DIRECT="$T/f3-on.direct"; : > "$T/pins"
+refresh_check "$T/f3-sub.srv" "$T/pins" "$T/f3-sub.direct" 2>/dev/null; rc=$?
+[ "$rc" = 3 ] && ok "Xray: the subscription taking over a split app that was turned off: the admin" || bad "f3: rc $rc"
+
+# --- re-review F2: a subscription with nothing direct of its own and a profile with direct entries:
+# pf lets the core out (egress rules), or the profile's direct sites are blocked
+printf 'core=mihomo\n' > "$SETTINGS"
+/usr/bin/perl -MJSON::PP -e 'local $/; my $p = JSON::PP->new->decode(<STDIN>); delete $p->{"rule-providers"}; $p->{rules} = ["MATCH,🚀 Выбор сервера"]; print JSON::PP->new->encode($p)' < "$T/base.json" > "$T/f2-clean.json"
+with_routing "$T/f2-clean.json" "$T/f2-p.json" '$h = { name => "P", direct => { sites => ["domain:example.com"] } }'
+gm "$T/f2-clean.json" f2-none || bad "f2 clean: $(cat "$T/err")"
+gm "$T/f2-p.json" f2-p || bad "f2 profile: $(cat "$T/err")"
+! grep -qx rules "$T/f2-none.egress" && grep -qx rules "$T/f2-p.egress" &&
+  ok "mihomo: a clean subscription with a direct profile: egress rules (pf lets its direct sites out)" || bad "f2 egress: [$(cat "$T/f2-none.egress")] [$(cat "$T/f2-p.egress")]"
+
+# --- re-review nit: Xray without a freedom outbound and a profile that only blocks: no warnings
+printf 'core=xray\n' > "$SETTINGS"
+/usr/bin/perl -MJSON::PP -e 'local $/; my $p = JSON::PP->new->decode(<STDIN>); my $c = $p->[0];
+  $c->{routing}{rules} = [ grep { ($_->{outboundTag} // "") ne "direct" } @{ $c->{routing}{rules} } ];
+  $c->{outbounds} = [ grep { $_->{protocol} ne "freedom" } @{ $c->{outbounds} } ]; delete $c->{dns};
+  $#$p = 0; print JSON::PP->new->encode($p)' < "$fx/xray-panel.json" > "$T/nofree.json"
+with_routing "$T/nofree.json" "$T/nofree-b.json" '$h = { name => "B", block => { sites => ["domain:ads.example.com"] } }' 1
+gx "$T/nofree-b.json" nofree-b && [ ! -s "$T/err" ] && ok "Xray: no freedom outbound, a block-only profile: nothing on stderr" || bad "nofree: [$(cat "$T/err")]"
+
+# --- re-review F4: the refusal says which part changed, so the app does not guess: [profile],
+# [subscription] or both (a block/proxy-only profile too, when its "proxy" group can go direct)
+printf 'core=mihomo\n' > "$SETTINGS"
+SERVERS="$T/f1-m123.srv"; APPROVED_HOSTS="$T/none"; APPROVED_DIRECT="$T/f1-m123.direct"; : > "$T/pins"
+refresh_check "$T/f1-m23.srv" "$T/pins" "$T/f1-m23.direct" 2>"$T/rc.err"
+grep -q '(DIRECT) \[subscription\]:' "$T/rc.err" && ok "refusal: [subscription] when only the subscription's part changed" || bad "who sub: $(cat "$T/rc.err")"
+with_routing "$T/f1-123.json" "$T/f4-p.json" '$h = { name => "P", proxy => { sites => ["domain:example.org"] } }'
+gm "$T/f4-p.json" f4-p || bad "f4 p: $(cat "$T/err")"
+refresh_check "$T/f4-p.srv" "$T/pins" "$T/f4-p.direct" 2>"$T/rc.err"
+grep -q '(DIRECT) \[profile\]:' "$T/rc.err" && ok "  [profile]: a proxy-only profile into a group that holds DIRECT" || bad "who profile: $(cat "$T/rc.err")"
+with_routing "$T/f1-23.json" "$T/f4-b.json" '$h = { name => "P", direct => { sites => ["domain:example.com"] } }'
+gm "$T/f4-b.json" f4-b || bad "f4 b: $(cat "$T/err")"
+refresh_check "$T/f4-b.srv" "$T/pins" "$T/f4-b.direct" 2>"$T/rc.err"
+grep -q '(DIRECT) \[profile,subscription\]:' "$T/rc.err" && ok "  [profile,subscription]: both" || bad "who both: $(cat "$T/rc.err")"
+printf 'core=xray\n' > "$SETTINGS"
+SERVERS="$T/s5-xray-off.srv"; APPROVED_HOSTS="$T/none"; APPROVED_DIRECT="$T/s5-xray-off.direct"; : > "$T/pins"
+refresh_check "$T/s5-xray-on.srv" "$T/pins" "$T/s5-xray-on.direct" 2>"$T/rc.err"
+grep -q '(DIRECT) \[profile\]:' "$T/rc.err" && ok "  Xray: [profile] when a direct profile is turned on" || bad "who xray: $(cat "$T/rc.err")"
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
