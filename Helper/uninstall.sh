@@ -24,10 +24,13 @@ dscl . -delete /Groups/_ksvpn 2>/dev/null
 nb=/Library/LaunchDaemons/netbird.plist
 if [ "$(/usr/libexec/PlistBuddy -c 'Print :GroupName' "$nb" 2>/dev/null)" = _ksnetbird ]; then
   /usr/libexec/PlistBuddy -c 'Delete :GroupName' "$nb"
-  label=$(/usr/libexec/PlistBuddy -c 'Print :Label' "$nb")
-  launchctl bootout "system/$label" 2>/dev/null
-  for _ in $(seq 1 50); do launchctl print "system/$label" >/dev/null 2>&1 || break; sleep 0.2; done
-  launchctl bootstrap system "$nb" 2>/dev/null
+  label=$(/usr/libexec/PlistBuddy -c 'Print :Label' "$nb" 2>/dev/null)
+  # no label, no bootout: "system/" alone is not NetBird's job
+  if [ -n "$label" ]; then
+    launchctl bootout "system/$label" 2>/dev/null
+    for _ in $(seq 1 50); do launchctl print "system/$label" >/dev/null 2>&1 || break; sleep 0.2; done
+    launchctl bootstrap system "$nb" 2>/dev/null
+  fi
 fi
 dscl . -delete /Groups/_ksnetbird 2>/dev/null
 rm -f /Library/LaunchDaemons/local.killswitch.plist /Library/LaunchDaemons/local.killswitch.core.plist /etc/sudoers.d/killswitch

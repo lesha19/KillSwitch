@@ -314,5 +314,19 @@ check "no sudoers user to keep: refused (exit 2)" "$rc" 2
 ) > "$tmp/order"
 check "version_lt: 0.13<0.14, 0.9.1<0.13, not 0.14<0.14, 0.14<0.13, 1.0<0.99; 0.13<0.13.1" "$(cat "$tmp/order")" "<<===<"
 
+# a group id for _ksvpn / _ksnetbird from 450-499: the first free one, never a taken one
+gids=$(
+  # shellcheck source=../install.sh
+  . "$here/../install.sh"; set +e
+  GIDS=$(seq 450 451; echo 453)
+  dscl() { printf '_x %s\n' $GIDS; }
+  g=$(free_gid); echo "$g rc=$?"
+  GIDS=$(seq 450 499)
+  g=$(free_gid 2>"$tmp/gid-err"); echo "$g rc=$?"
+)
+check "free_gid: the first free one" "$(head -1 <<<"$gids")" "452 rc=0"
+check "free_gid: none free fails (no taken id reused)" "$(sed -n 2p <<<"$gids")" " rc=1"
+check "free_gid: says why" "$(grep -c '450-499' "$tmp/gid-err")" 1
+
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
