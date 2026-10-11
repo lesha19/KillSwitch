@@ -81,7 +81,7 @@ refused "201 configs" '@$a = ($c) x 201' "Слишком много"
 
 # --- the protocol allow-list (vless vmess trojan shadowsocks freedom blackhole dns loopback)
 for p in wireguard socks http hysteria hysteria2 tuic VLESS " vless" "vless " "vless\n" ""; do
-  refused "protocol «$p»" '$c->{outbounds}[0]{protocol} = "'"$p"'"' "незнакомый тип сервера"
+  refused "protocol «${p}»" '$c->{outbounds}[0]{protocol} = "'"$p"'"' "незнакомый тип сервера"
 done
 refused "protocol as a list" '$c->{outbounds}[0]{protocol} = ["vless"]' "незнакомый тип сервера"
 refused "protocol missing" 'delete $c->{outbounds}[0]{protocol}' "незнакомый тип сервера"
@@ -92,12 +92,12 @@ refused "no server at all" '@{$c->{outbounds}} = grep { $_->{protocol} !~ /vless
 # --- server addresses: IPv4 or a host name we pin, nothing else
 for h in "a b.example.com" "a.example.com;id" 'a.example.com$(id)' "a.example.com/x" "-a.example.com" "a..b" "2001:db8::1" "::ffff:1.2.3.4" \
          "[2001:db8::1]" "localhost" "é.example.com" "١.٢.٣.٤" "1.2.3.٤"; do
-  refused "server address «$h»" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = "'"$h"'"'
+  refused "server address «${h}»" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = "'"$h"'"'
 done
 # panels put placeholder hosts at 0.0.0.0 or 127.0.0.1 («подписка истекла», days left): such a
 # host is dropped and named in the report, the others stay; refused only when none is left
 for h in 0.0.0.0 127.0.0.1 224.0.0.1 255.255.255.255 999.1.1.1 1.2.3.256 01.2.3.4 0177.0.0.1 1.2.3 2130706433; do
-  perhost "server address «$h»" '$b->{outbounds}[0]{settings}{vnext}[0]{address} = "'"$h"'"'
+  perhost "server address «${h}»" '$b->{outbounds}[0]{settings}{vnext}[0]{address} = "'"$h"'"'
 done
 refused "server address with a newline" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = "a.example.com\nb"'
 refused "server address a number" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = 16909060'
@@ -173,14 +173,14 @@ for t in ks-dns-out ks-block ks-direct ks-ping-0 ks-fetch ks-api ks-x; do
   perhost "outbound tag $t" 'push @{$b->{outbounds}}, { tag => "'"$t"'", protocol => "blackhole" }'
 done
 for s in "" k ks ks- ks-d; do
-  perhost "balancer selector «$s»" '$b->{routing}{balancers}[0]{selector} = ["LT_", "'"$s"'"]'
-  perhost "burstObservatory selector «$s»" '$b->{burstObservatory}{subjectSelector} = ["'"$s"'"]'
+  perhost "balancer selector «${s}»" '$b->{routing}{balancers}[0]{selector} = ["LT_", "'"$s"'"]'
+  perhost "burstObservatory selector «${s}»" '$b->{burstObservatory}{subjectSelector} = ["'"$s"'"]'
 done
 perhost "observatory selector «»" '$b->{observatory} = { subjectSelector => [""] }'
 # a balancer falls back to fallbackTag when every member is down: never KillSwitch's, only an
 # outbound of the same host, and a freedom one counts in the direct signature
 for f in ks-direct ks-block nope; do
-  perhost "balancer fallbackTag «$f»" '$b->{routing}{balancers}[0]{fallbackTag} = "'"$f"'"'
+  perhost "balancer fallbackTag «${f}»" '$b->{routing}{balancers}[0]{fallbackTag} = "'"$f"'"'
 done
 perhost "balancer fallbackTag a list" '$b->{routing}{balancers}[0]{fallbackTag} = ["LT_1"]'
 if accepted "balancer fallbackTag to the subscription's freedom" '$c->{routing}{balancers}[0]{fallbackTag} = "direct";
@@ -200,7 +200,7 @@ fi
 # --- DNS: nothing that queries outside Xray's routing (+local) or outlives the core (fakedns)
 for s in localhost LocalHost " localhost" fakedns "fakedns+others" " fakedns " "tcp+local://1.1.1.1" "TCP+LOCAL://1.1.1.1" "udp+local://1.1.1.1" \
          "https+local://1.1.1.1/dns-query" "h2c+local://1.1.1.1/dns-query" "quic+local://1.1.1.1"; do
-  if accepted "DNS server «$s»" '$c->{dns}{servers}[1]{address} = "'"$s"'"; push @{$c->{dns}{servers}}, "'"$s"'"'; then
+  if accepted "DNS server «${s}»" '$c->{dns}{servers}[1]{address} = "'"$s"'"; push @{$c->{dns}{servers}}, "'"$s"'"'; then
     [ "$(j 'scalar grep { my $x = ref $_ ? $_->{address} : $_; $x =~ /local|fakedns/i } @{ $c->{dns}{servers} }')" = 0 ] &&
       grep -q '"reason":"bad-value"' "$tmp/c.report" && ok "  dropped (as a server object and as a string), named in the report" || bad "  dns: $(j '$c->{dns}{servers}')"
   fi
