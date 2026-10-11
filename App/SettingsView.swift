@@ -199,7 +199,7 @@ private struct VPNSettings: View {
                     HStack {
                         Button(revealed == nil ? String(localized: "Показать") : String(localized: "Скрыть")) {
                             revealed = revealed == nil ? client.revealURL() : nil
-                        }
+                        }.hiddenByProvider(client.urlHidden)
                         Button("Изменить…") { editing = true; revealed = nil }
                         Spacer()
                         Button("Удалить…", role: .destructive) { confirmRemove = true }
@@ -799,6 +799,7 @@ struct AboutView: View {
                     Text("KillSwitch ставит обновления сам, пока вы им не пользуетесь. VPN и защита при этом не прерываются.")
                 }
             }
+            ProviderSupportSection()
             NetworkHintsSection()
             Section("Советы") {
                 LabeledContent("Выключи «Частный узел iCloud»: он может обходить защиту.") {

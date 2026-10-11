@@ -26,4 +26,16 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertTrue(report.contains("Версия: 0.6 (6)"))
         XCTAssertFalse(report.contains("x.example"))
     }
+
+    /// #26: a subscription link never reaches the copied diagnostics, with or without its scheme,
+    /// even with a short token (Remnawave's shortUuid) the key rule would not catch.
+    func testSubscriptionLinkNeverCopied() {
+        for text in ["fetch https://sub.example.com/Ab12cd34 failed",
+                     "could not reach sub.example.com/Ab12cd34: timed out",
+                     "error at sub.example.com:8443/api/sub/Ab12cd34?x=1"] {
+            let report = Diagnostics.report([("Ошибка", text)])
+            XCTAssertFalse(report.contains("sub.example.com"), report)
+            XCTAssertFalse(report.contains("Ab12cd34"), report)
+        }
+    }
 }

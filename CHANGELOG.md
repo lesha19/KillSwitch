@@ -11,6 +11,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   filter by country, protocol or group, and the subscription's server description under the name
   (#40). Ping is drawn as three signal bars; with Xray the ping-all button is off.
 - Settings › Общие «Запускать без окна»: start in the menu bar only (#40).
+- The provider's announcement (`announce`, `announce-url` headers, plain or `base64:`) on the main
+  screen until ✕, again when the text changes; support link and e-mail (`support-url`,
+  `support-email`) in «О программе» (#22). Plain text only, links only http(s)/tg/mailto.
+- `hide-url` header: «Показать» of the subscription link is off and the link is never revealed (#26).
+
+### Fixed
+- Diagnostics also drop the port and path of a link without its scheme (`host/token`) (#26).
 
 ## [0.17.0] - 2026-10-11
 
