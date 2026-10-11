@@ -105,6 +105,32 @@ final class XrayManualTests: XCTestCase {
         XCTAssertEqual(try XrayProfile(body: String(decoding: merged.data, as: UTF8.self)).servers, merged.servers)
     }
 
+    func testNamesTheHelperTakes() throws {
+        // a link's #fragment, percent-decoded: no control characters, at most 256 bytes with the mark
+        let long = String(repeating: "я", count: 300)
+        let manual: [(name: String, proxy: [String: Any])] = [
+            ("Вар\u{7}шава\n", try ProxyLink.parse("trojan://pw@pl.example:443#a")),
+            (long, try ProxyLink.parse("trojan://pw@pl2.example:443#b")),
+            (long, try ProxyLink.parse("trojan://pw@pl3.example:443#b")),
+        ]
+        let merged = try XCTUnwrap(XrayManual.merge(subscription: nil, manual: manual))
+        XCTAssertEqual(merged.servers[0], "Варшава (свой)")
+        for name in merged.servers {
+            XCTAssertLessThanOrEqual(name.utf8.count, 256, name)
+            XCTAssertFalse(name.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) })
+        }
+        XCTAssertNotEqual(merged.servers[1], merged.servers[2], "still unique after the cut")
+    }
+
+    func testAServerNameTheHelperRefusesIsSkippedNotTheImport() throws {
+        // Helper/ks host(): letters, digits, dots and dashes; one bad own server must not block the rest
+        let proxy = try ProxyLink.parse("trojan://pw@g_x.example.com:443#a")
+        XCTAssertNotNil(XrayManual.unsupported(proxy))
+        let merged = try XCTUnwrap(XrayManual.merge(subscription: nil, manual: [("A", proxy), ("B", try ProxyLink.parse("trojan://pw@203.0.113.7:443#b"))]))
+        XCTAssertEqual(merged.servers, ["B (свой)"])
+        XCTAssertEqual(merged.skipped, ["A"])
+    }
+
     func testNothingToAddKeepsTheBodyAsItCame() throws {
         let subscription = Data(#"[{"remarks":"a","outbounds":[]}]"#.utf8)
         XCTAssertEqual(XrayManual.merge(subscription: subscription, manual: [])?.data, subscription)

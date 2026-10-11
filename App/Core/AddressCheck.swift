@@ -138,10 +138,15 @@ enum AddressCheck {
     /// With Xray: the report's rule objects in order, for the same ordinary visit (TCP to 443 from
     /// some program, into our TUN, sniffed as TLS). All conditions of a rule must hold; a list
     /// holds when one entry does. What no rule takes goes to Xray's first outbound (`fallback`).
-    static func check(_ target: Target, report: RoutingReport, context: Context) -> Result {
+    /// nil: a report of a helper before ADR 0027 (no rule objects), nothing to walk.
+    static func check(_ target: Target, report: RoutingReport, context: Context) -> Result? {
+        guard report.targets != nil else { return nil }
         var caveats: [Caveat] = []
         for (position, rule) in report.rules.enumerated() {
-            guard let object = rule.xray else { continue }
+            guard let object = rule.xray else {
+                caveats.append(Caveat(position: position, rule: rule.rule, reason: String(localized: "правило слишком большое, здесь его не проверить")))
+                continue
+            }
             switch evaluate(xray: object, target, context) {
             case .no: continue
             case .unknown(let reason): caveats.append(Caveat(position: position, rule: rule.rule, reason: reason))
@@ -344,7 +349,9 @@ struct IPv4: Equatable {
     }
 
     var isPrivate: Bool {
-        ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10"].contains {
+        // and what Xray's geoip:private also counts: this network, IETF, benchmarking, documentation
+        ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10",
+         "0.0.0.0/8", "192.0.0.0/24", "198.18.0.0/15", "192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24"].contains {
             AddressCheck.cidr($0, contains: String(value >> 24) + "." + String(value >> 16 & 255) + "." + String(value >> 8 & 255) + "." + String(value & 255)) == true
         }
     }

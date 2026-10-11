@@ -88,6 +88,17 @@ enum Multihop {
             && !$0.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) }
     }
 
+    /// The entry to turn on with: the first one not known dead (the core's last check); none when
+    /// every candidate is dead (ADR 0027: a dead entry drops the VPN at once).
+    static func preferred(_ candidates: [String], alive: (String) -> Bool?) -> String? {
+        candidates.first { alive($0) != false }
+    }
+
+    /// Exits to pick from with double VPN on: never the entry, that would be one hop (ADR 0027).
+    static func exits(_ names: [String], entry: String?) -> [String] {
+        names.filter { $0 != entry }
+    }
+
     private static func label(_ name: String) -> String {
         let parts = ServerName(name)
         guard let flag = parts.flag else { return name }

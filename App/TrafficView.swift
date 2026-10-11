@@ -697,6 +697,8 @@ private struct CheckAddressTab: View {
     @State private var query = ""
     @State private var result: (target: String, result: AddressCheck.Result)?
     @State private var invalid = false
+    /// The helper wrote the Xray report before ADR 0027: no rules to walk.
+    @State private var outdated = false
 
     var body: some View {
         if let report = control.routing {
@@ -712,6 +714,10 @@ private struct CheckAddressTab: View {
                     }
                     if invalid {
                         StatusLabel("Это не похоже на сайт или IP-адрес", systemImage: "exclamationmark.triangle", tint: .orange)
+                    }
+                    if outdated {
+                        StatusLabel("Ответа нет: служба KillSwitch старой версии не сохраняет правила для проверки. Обнови службу.",
+                                    systemImage: "questionmark.circle", tint: .orange)
                     }
                 } footer: {
                     Text("Проверка проходит правила так же, как ядро, для обычного открытия сайта: TCP, порт 443. Ничего не отправляется в сеть.")
@@ -735,9 +741,10 @@ private struct CheckAddressTab: View {
         let context = AddressCheck.Context(providers: report.providers,
                                            geosite: { geo.site($0, contains: $1) },
                                            geoip: { geo.ip($0, inCountry: $1) })
-        result = (target.host ?? target.ip ?? query, report.isXray
-                  ? AddressCheck.check(target, report: report, context: context)
-                  : AddressCheck.check(target, rules: report.rules.map(\.rule), context: context))
+        let answer = report.isXray ? AddressCheck.check(target, report: report, context: context)
+                                   : AddressCheck.check(target, rules: report.rules.map(\.rule), context: context)
+        outdated = answer == nil
+        result = answer.map { (target.host ?? target.ip ?? query, $0) }
     }
 
     @ViewBuilder

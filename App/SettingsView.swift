@@ -369,7 +369,7 @@ private struct MultihopRows: View {
         let candidates = Multihop.candidates(control.proxies?.servers ?? [], exit: exit)
         let entry = control.multihopEntry
         Toggle(isOn: Binding(get: { entry != nil },
-                             set: { on in control.setMultihop(entry: on ? (pending ?? candidates.first) : nil) })) {
+                             set: { on in control.setMultihop(entry: on ? (pending ?? Multihop.preferred(candidates, alive: { control.proxies?.alive($0) })) : nil) })) {
             Text("Двойной VPN")
             Text("Через два сервера: вход видит твой адрес, выход — сайты. Медленнее.")
         }
@@ -379,7 +379,7 @@ private struct MultihopRows: View {
                 .font(.caption).foregroundStyle(.secondary)
         } else {
             Picker("Сервер входа", selection: Binding(
-                get: { entry ?? pending ?? candidates.first ?? "" },
+                get: { entry ?? pending ?? Multihop.preferred(candidates, alive: { control.proxies?.alive($0) }) ?? candidates.first ?? "" },
                 set: { new in
                     pending = new
                     if entry != nil, new != entry { control.setMultihop(entry: new) }
