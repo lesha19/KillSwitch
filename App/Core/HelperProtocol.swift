@@ -43,6 +43,8 @@ enum HelperIdentity {
     func coreSelect(group: String, proxy: String, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreDelay(name: String, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreRefresh(profile: FileHandle, reply: @escaping @Sendable (Int32, String, String) -> Void)
+    /// «Собрать отчёт» (ADR 0021): the archive is written into `output`, a file the app opened.
+    func diagReport(output: FileHandle, reply: @escaping @Sendable (Int32, String, String) -> Void)
 
     func protectionOff(authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func pause(minutes: Int, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)

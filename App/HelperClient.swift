@@ -101,6 +101,7 @@ final class HelperClient {
     private func call(_ command: HelperCommand, authorization auth: Data?) async -> HelperReply? {
         let connection = connect()
         var profile: FileHandle?
+        var report: (handle: FileHandle, path: String)?
         switch command {
         case .coreImport(let path), .coreRefresh(let path):
             // opened here, as the user: the daemon never opens a user's path as root
@@ -108,10 +109,29 @@ final class HelperClient {
                 return HelperReply(status: HelperReply.failedToRun, stdout: "", stderr: "Не удалось открыть профиль")
             }
             profile = handle
+        case .diagReport(let directory):
+            // the file is the user's, made here; the daemon only writes into the open handle
+            let path = directory + "/" + DiagReport.fileName(for: Date())
+            guard FileManager.default.createFile(atPath: path, contents: nil),
+                  let handle = FileHandle(forWritingAtPath: path) else {
+                return HelperReply(status: HelperReply.failedToRun, stdout: "", stderr: "Не удалось создать файл отчёта")
+            }
+            report = (handle, path)
         default:
             break
         }
-        defer { try? profile?.close() }
+        defer { try? profile?.close(); try? report?.handle.close() }
+        if let report {
+            let reply = await withCheckedContinuation { (continuation: CheckedContinuation<HelperReply?, Never>) in
+                let once = Once(continuation)
+                let proxy = connection.remoteObjectProxyWithErrorHandler { @Sendable _ in once.resume(nil) }
+                guard let helper = proxy as? HelperProtocol else { once.resume(nil); return }
+                helper.diagReport(output: report.handle) { @Sendable in once.resume(HelperReply(status: $0, stdout: $1, stderr: $2)) }
+            }
+            // ks prints the archive's path: the app's file stands for it
+            guard let reply, reply.status == 0 else { try? FileManager.default.removeItem(atPath: report.path); return reply }
+            return HelperReply(status: 0, stdout: report.path, stderr: "")
+        }
         return await withCheckedContinuation { (continuation: CheckedContinuation<HelperReply?, Never>) in
             let once = Once(continuation)
             let proxy = connection.remoteObjectProxyWithErrorHandler { @Sendable _ in once.resume(nil) }
@@ -132,6 +152,7 @@ final class HelperClient {
             case .coreSelect(let group, let proxy): helper.coreSelect(group: group, proxy: proxy, reply: reply)
             case .coreDelay(let name): helper.coreDelay(name: name, reply: reply)
             case .coreRefresh: helper.coreRefresh(profile: profile!, reply: reply)
+            case .diagReport: once.resume(nil)   // answered above
             case .protectionOff: helper.protectionOff(authorization: form, reply: reply)
             case .repair: helper.repair(authorization: form, reply: reply)
             case .pause(let minutes): helper.pause(minutes: minutes, authorization: form, reply: reply)

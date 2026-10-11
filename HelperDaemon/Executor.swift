@@ -10,11 +10,11 @@ enum Executor {
     private static let queue = DispatchQueue(label: "com.lesha19.KillSwitch.helper.run", attributes: .concurrent)
 
     static func perform(_ command: HelperCommand, authorization: Data? = nil, profile: FileHandle? = nil,
-                        reply: @escaping @Sendable (Int32, String, String) -> Void) {
+                        output: FileHandle? = nil, reply: @escaping @Sendable (Int32, String, String) -> Void) {
         Activity.shared.begin()
         queue.async {
             defer { Activity.shared.end() }
-            let result = run(command, authorization: authorization, profile: profile)
+            let result = output.map { report(command, into: $0) } ?? run(command, authorization: authorization, profile: profile)
             Log.daemon.info("\(String(describing: command.program), privacy: .public) \(command.arguments.first ?? "", privacy: .public): \(result.status)")
             reply(result.status, result.stdout, result.stderr)
         }
@@ -49,6 +49,34 @@ enum Executor {
             return HelperReply(status: HelperReply.refused, stdout: "", stderr: "Недопустимые данные")
         }
         return Runner.run(command)
+    }
+
+    /// «Собрать отчёт» (ADR 0021): ks writes the archive into a root-only folder of ours (it never
+    /// gets a user's path), then only that archive is copied into the file the app opened.
+    private static func report(_ command: HelperCommand, into output: FileHandle) -> HelperReply {
+        defer { try? output.close() }
+        guard case .diagReport = command else {
+            return HelperReply(status: HelperReply.refused, stdout: "", stderr: "Отчёт не к этой команде")
+        }
+        var info = stat()
+        guard fstat(output.fileDescriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, let dir = PrivateDirectory.make() else {
+            return HelperReply(status: HelperReply.failedToRun, stdout: "", stderr: "Не удалось записать отчёт")
+        }
+        defer { PrivateDirectory.remove(dir) }
+        let reply = Runner.run(.diagReport(directory: dir.path))
+        guard reply.status == 0 else { return reply }
+        guard let path = DiagReport.archive(printed: reply.stdout, in: dir.path),
+              let input = FileHandle(forReadingAtPath: path) else {
+            return HelperReply(status: HelperReply.failedToRun, stdout: "", stderr: "Отчёт не получился")
+        }
+        defer { try? input.close() }
+        do {
+            try output.truncate(atOffset: 0)
+            while let chunk = try input.read(upToCount: 1 << 20), !chunk.isEmpty { try output.write(contentsOf: chunk) }
+        } catch {
+            return HelperReply(status: HelperReply.failedToRun, stdout: "", stderr: "Не удалось записать отчёт")
+        }
+        return HelperReply(status: 0, stdout: "", stderr: "")
     }
 
     /// The app's profile into a root-only directory of the daemon: ks then reads only our copy

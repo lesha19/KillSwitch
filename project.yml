@@ -154,6 +154,7 @@ targets:
       - App/Core/HelperUpgrade.swift
       - App/Core/DaemonExecutable.swift
       - App/Core/PrivateDirectory.swift
+      - App/Core/DiagReport.swift
     settings:
       base:
         PRODUCT_NAME: KillSwitchHelper

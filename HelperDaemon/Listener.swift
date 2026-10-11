@@ -48,6 +48,9 @@ final class Endpoint: NSObject, HelperProtocol, Sendable {
     func coreRefresh(profile: FileHandle, reply: @escaping Reply) {
         Executor.perform(.coreRefresh(profile: Executor.profilePlaceholder), profile: profile, reply: reply)
     }
+    func diagReport(output: FileHandle, reply: @escaping Reply) {
+        Executor.perform(.diagReport(directory: Executor.profilePlaceholder), output: output, reply: reply)
+    }
 
     func repair(authorization: Data, reply: @escaping Reply) {
         Executor.perform(.repair, authorization: authorization, reply: reply)

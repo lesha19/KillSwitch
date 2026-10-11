@@ -17,6 +17,9 @@ enum HelperCommand: Equatable, Sendable {
     case coreDelay(String)
     /// Refused by ks (exit 3) if the profile brings new servers: the subscription auto-update.
     case coreRefresh(profile: String)
+    /// «Собрать отчёт» (ADR 0021): the redacted archive into this folder. Through the daemon the
+    /// app opens the file and the daemon gives ks its own folder (`Executor`).
+    case diagReport(directory: String)
 
     // Widen or edit what may leave the Mac without the VPN: behind the authorization right.
     case protectionOff
@@ -54,7 +57,7 @@ enum HelperCommand: Equatable, Sendable {
     var needsAuthorization: Bool {
         switch self {
         case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic, .coreConnections,
-             .coreSelect, .coreDelay, .coreRefresh, .upgrade:
+             .coreSelect, .coreDelay, .coreRefresh, .diagReport, .upgrade:
             false
         default:
             true
@@ -84,6 +87,7 @@ enum HelperCommand: Equatable, Sendable {
         case .coreSelect(let group, let proxy): ["core", "select", group, proxy]
         case .coreDelay(let name): ["core", "delay", name]
         case .coreRefresh(let profile): ["core", "refresh", profile]
+        case .diagReport(let directory): ["diag", "report", directory]
         case .protectionOff: ["off"]
         case .pause(let minutes): ["pause", String(minutes)]
         case .setSwitch(let key, let on): ["set", key, on ? "1" : "0"]
@@ -109,7 +113,7 @@ enum HelperCommand: Equatable, Sendable {
             true
         case .coreSelect(let group, let proxy): Self.isName(group) && Self.isName(proxy)
         case .coreDelay(let name): Self.isName(name)
-        case .coreRefresh(let profile), .coreImport(let profile): Self.isProfilePath(profile)
+        case .coreRefresh(let profile), .coreImport(let profile), .diagReport(let profile): Self.isProfilePath(profile)
         case .pause(let minutes): (0...9999).contains(minutes)
         case .setSwitch(let key, _): Self.switchKeys.contains(key)
         case .setSplitApps(let names):
@@ -190,6 +194,7 @@ enum HelperCommand: Equatable, Sendable {
             case ("core", 3) where arguments[1] == "delay": command = .coreDelay(arguments[2])
             case ("core", 3) where arguments[1] == "import": command = .coreImport(profile: arguments[2])
             case ("core", 3) where arguments[1] == "refresh": command = .coreRefresh(profile: arguments[2])
+            case ("diag", 3) where arguments[1] == "report": command = .diagReport(directory: arguments[2])
             case ("core", 4) where arguments[1] == "select": command = .coreSelect(group: arguments[2], proxy: arguments[3])
             default: return nil
             }
@@ -213,7 +218,8 @@ enum HelperCommand: Equatable, Sendable {
     static let multihopOff = "off"
     /// `ks set <key> 0|1`; all behind the right, «Блокировать рекламу» (adblock) too: it changes
     /// what the core refuses, and only an admin turns that on or off, as with the password before.
-    static let switchKeys: Set<String> = ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock"]
+    /// «Подробная диагностика» (diag, ADR 0021) too: it changes what the core records.
+    static let switchKeys: Set<String> = ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag"]
     static let maxSplitApps = 50
     static let maxInstallServers = 512
 
