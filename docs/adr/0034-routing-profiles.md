@@ -53,25 +53,31 @@ as a DIRECT change.
   the approved one nor a part of it (below): the app then names the profile in the notice and
   only a click imports it with the admin's password. A profile that only blocks or sends through
   the VPN changes nothing pf lets out and needs no password. pf is never touched by a profile.
-- **Fewer lines need no password** (review S5). `refresh_check` also accepts a signature every
-  line of which is in the import's approved one (`direct_subset`). Why that never sends more past
-  the VPN: every line is a whole part that goes direct — a rule with its target, a group with its
-  members, a rule provider with its list, a provider's download proxy, a freedom outbound with its
-  settings, the DNS settings as one object, a balancer with its members, the first outbound when
-  it is freedom, and the profile with all its rules in order. Dropping a line removes a way out
-  and adds none: traffic a dropped direct rule took falls to later rules, which go through the VPN
-  or are direct rules still in the approved signature; a group, provider or outbound no longer
-  listed no longer goes direct. The profile's part is approved only as the identical `profile`
-  line; without it the profile has no rule that can go direct and can only take traffic away from
-  the subscription's direct rules (block or VPN in front of them). The profile's direct rules are
-  `profile-rule`, never `rule`, so a subscription that copies one is not covered by the profile's
-  approval. What this leans on is the rule ADR 0013 already has: a subscription's DIRECT rule,
-  once approved, is approved whatever its non-direct rules in front of it do (they are not in the
-  signature; a provider dropping one is a passwordless refresh already). Turning a direct profile
-  off, deleting it or picking one without direct rules thus needs no password while the
-  subscription's own DIRECT is unchanged; a profile's link update that narrows its direct list
-  still changes the `profile` line and needs the password (and says so). Compared only with the
-  import's approval, not with what a passwordless refresh left running.
+- **Fewer profile lines need no password** (review S5, narrowed in the re-review, F1).
+  `refresh_check` also accepts a signature whose lines other than the profile's own
+  (`profile-rule`, `profile`) and the freedom outbounds (`outbound`) are exactly the approved
+  ones in the same order, and whose `profile-rule`, `profile` and `outbound` lines are each among
+  the approved ones (`direct_subset`). A first version accepted any subset of lines; that was
+  wrong: a subscription rule to a group that can also go direct (mihomo) or to a balancer with a
+  freedom member or fallback (Xray) is itself a signature line, and dropping or moving it lets what
+  it took fall onto an approved DIRECT rule behind it — VPN traffic turned direct. So nothing of
+  the subscription's part (its rules, groups, providers, DNS, balancers, the default, split apps'
+  rules) may be fewer or move. Why the profile's part may: the profile's rules all come before the
+  subscription's; it is approved only as the identical `profile` line (all its rules in order),
+  and without that line no rule of it can go direct, so it can only take traffic away from the
+  subscription's rules (block or VPN in front of them), which are then exactly as approved, in
+  order. The profile's direct rules are `profile-rule`, never `rule`, so a subscription that copies
+  one is a change of its own part. `outbound` lines may be fewer: they pin a freedom outbound's
+  settings and are printed for every one of them once anything goes direct, so with the
+  subscription's part unchanged one disappears only when nothing goes direct any more (the profile
+  turned off over a subscription with nothing direct) or the outbound is gone (then nothing can
+  use it); a changed outbound is a new line, not approved. What remains leans on ADR 0013's rule
+  that a subscription's DIRECT rule, once approved, stands whatever non-direct rules in front of it
+  do (they are not in the signature). Turning a direct profile off, deleting it or picking one
+  without direct rules thus needs no password while the subscription's part is unchanged; a
+  profile's link update that narrows its direct list still changes the `profile` line and needs
+  the password. Compared only with the import's approval, not with what a passwordless refresh
+  left running.
 - **Visible.** The routing report marks the rules `from: "profile"` with the profile's name;
   «Трафик» › «Правила» shows them with a «профиль» badge; «Проверить адрес» walks them like the
   others (they are ordinary rules).
@@ -92,10 +98,16 @@ as a DIRECT change.
   would refuse the whole config and with it every subscription update (review S3; mihomo's GEOIP
   reads `geoip.metadb`, where an unknown country only never matches). The name may have 64
   characters (code points) in any script; the helper counted bytes before (review S2).
-- **The pending change is said.** The app keeps which profile the core has
-  (`routingProfileApplied`) and names a waiting change after it: the profile in use that sends
-  sites direct, or a direct profile turned off while the subscription also changed. The old rules
-  work until the password, and the notices say so.
+- **The pending change is said.** The refusal names the part that is not approved
+  (`direct_parts`: ` [profile]`, ` [subscription]`, ` [profile,subscription]` after «(DIRECT)»),
+  and the app names the notice after it: «Профиль «…» меняет, что идёт мимо VPN», or «Подписка и
+  профиль «…» меняют…» with the provider's part told as the provider's; an older helper says
+  nothing, read as the subscription's. A block/proxy-only profile can be a profile part too (its
+  «через VPN» group holds DIRECT). The old rules work until the password, and the notices say so
+  (re-review F4; an earlier version guessed from the profile it applied last and blamed the
+  profile for a provider's change).
+- **Egress.** mihomo's egress counts `profile-rule` lines, so a subscription with nothing direct
+  of its own and a direct profile gets egress `rules` (re-review F2).
 - **Xray freedom outbound.** The subscription's freedom outbounds join the signature once anything
   goes direct, also when only split apps or the profile do (review S1); they keep their place in
   the signature, so signatures that had them are byte-identical.
@@ -107,7 +119,10 @@ as a DIRECT change.
   click; the notice names the profile and says the old rules work until then.
 - Profile fetches run one at a time under `updating` and put each result back by id, so a profile
   deleted during a fetch is not overwritten or trapped on (review S4); the daily check fetches the
-  profiles and then updates the subscription, one after the other.
+  profiles and then updates the subscription, one after the other. A fetch ends within 60 s
+  (30 s without a byte), so it cannot hold `updating` for long (re-review F5).
+- A keychain read that fails is not «no links»: nothing is written over then, and a later save
+  keeps the links it did not load.
 - Xray with only split apps going direct through the subscription's freedom outbound asks for the
   password once after this change (the outbound joined the signature).
 - Left for later: QR import, replacing a profile of the same name, a profile update interval
