@@ -1457,7 +1457,7 @@ core_generate_xray() (
       /usr/bin/perl -MJSON::PP -MStorable -MDigest::SHA -e "$KS_XRAY_PL"' approve()' > "$w/approved.all" || exit 1
     sort -u "$w/approved.all" > "$w/approved"
     # a host that cannot be built is not approved for a switch (one to it fails the same way)
-    [ ! -s "$w/e/skipped" ] || log_event "server switch approval skipped (cannot be built): $(head -c 2000 "$w/e/skipped" | paste -sd, -)"
+    [ ! -s "$w/e/skipped" ] || log_event "server switch approval skipped (cannot be built): $(head -n 20 "$w/e/skipped" | paste -sd, -)"
   fi
   rm -f "$out" "$srv_out" "$out.pins" "$out.direct" "$out.egress" "$out.report" "$out.approved"   # a leftover would keep its mode
   cp "$w/config.json" "$out" && cp "$w/servers" "$srv_out" && cp "$w/pins" "$out.pins" && cp "$w/direct" "$out.direct" &&
@@ -1714,7 +1714,9 @@ KS_XRAY_PL='
       if (eval { build(); 1 }) {
         open my $f, "<:raw", "$W/direct" or die; local $/; my $d = <$f>; close $f;
         print Digest::SHA::sha256_hex($d), "\n";
-      } else { open my $s, ">>", "$W/skipped" or die; print $s "$n\n"; close $s }
+      } else {   # the name for the log: one line, at most 64 characters, cut between characters
+        my $t = $n; utf8::decode($t); $t =~ s/[\x00-\x1f\x7f]/ /g; $t = substr($t, 0, 64); utf8::encode($t);
+        open my $s, ">>", "$W/skipped" or die; print $s "$t\n"; close $s }
     }
   }
 '

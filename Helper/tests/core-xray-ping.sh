@@ -86,6 +86,11 @@ KS_APPROVE_ALL=1 gen || bad "approve all: $(cat "$T/err")"
 [ "$lt" != "$de" ] && [ "$(sort "$T/c.approved" | paste -sd, -)" = "$(printf '%s\n%s\n' "$lt" "$de" | sort | paste -sd, -)" ] &&
   ok "approval: a host with no server skipped, the hosts after it still approved" || bad "approved: $(cat "$T/c.approved") lt $lt de $de"
 grep -q 'approval skipped.*🇱🇹Литва 2' "$EVENTS" && ok "  the skipped host logged" || bad "  events: $(cat "$EVENTS")"
+hosts '$a->[1]{outbounds} = [ grep { $_->{protocol} !~ /vless/ } @{ $a->[1]{outbounds} } ]; $a->[1]{remarks} = "Ж" x 100'
+: > "$EVENTS"; KS_APPROVE_ALL=1 gen
+w64=$(printf 'Ж%.0s' $(seq 1 64))
+grep -q "skipped (cannot be built): ${w64}\$" "$EVENTS" && iconv -f UTF-8 -t UTF-8 "$EVENTS" >/dev/null 2>&1 &&
+  ok "  a long name logged cut to 64 characters, between characters" || bad "  long name: $(cat "$EVENTS")"
 
 # --- the observatory's answer (gRPC GetOutboundStatus), decoded
 grpc_frame() {  # the reply the API sends: alive ks-ping-0 at 87 ms, ks-ping-1 dead, someone else's LT_1
