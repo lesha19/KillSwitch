@@ -105,4 +105,16 @@ rules > "$tmp/out"
   { echo "FAIL  damaged + standby: $(cat "$tmp/out")"; fails=$((fails + 1)); }
 rm -f "$SETTINGS"
 
+# NetBird: its daemon is let out by its group (netbird_sync tags it), under the tailscale setting
+core_running() { return 0; }
+rm -f "$SETTINGS"; rules > "$tmp/out"
+expect "tailscale default on: NetBird's daemon group passes" "^pass out quick group $NB_GROUP flags any keep state$"
+echo tailscale=0 > "$SETTINGS"; rules > "$tmp/out"
+expect "tailscale=0: no NetBird pass" "group $NB_GROUP" absent
+rm -f "$SETTINGS"
+dscl() { [ "$3" != "/Groups/$NB_GROUP" ]; }   # an install from before the group
+rules > "$tmp/out"
+expect "no NetBird group yet: no NetBird pass" "group $NB_GROUP" absent
+dscl() { return 0; }
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

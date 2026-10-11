@@ -4,6 +4,18 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Fixed
+- NetBird works with protection on: its daemon binds WireGuard, STUN, relay and management
+  connections to Wi‑Fi/Ethernet, past any VPN, so pf dropped them and peers stayed «Connecting».
+  The watchdog now starts NetBird's launchd job with the new group `_ksnetbird` (only while the
+  plist runs code signed by NetBird GmbH, team TA739QLA7A, and the Tailscale setting is on) and pf
+  lets that group out; the content filter trusts NetBird's signature like Tailscale's. One switch
+  for both: Settings › Защита › «Tailscale, NetBird». A NetBird update that rewrites its plist is
+  tagged again within seconds; turning the switch off or uninstalling takes the group off. Each
+  change restarts NetBird's daemon once.
+
 ## [0.17.0] - 2026-10-11
 
 ### Added

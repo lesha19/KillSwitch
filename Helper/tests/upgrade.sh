@@ -18,7 +18,7 @@ watch_run() {  # watch_run <signal>: starts the watchdog loop on fakes, sends th
   (
     # shellcheck source=../ks
     . "$here/../ks"
-    DIR="$d"; FLAG="$d/disabled"; SETTINGS="$d/settings"; EVENTS="$d/events.log"; STATEF="$d/daemon-state"
+    DIR="$d"; FLAG="$d/disabled"; SETTINGS="$d/settings"; EVENTS="$d/events.log"; STATEF="$d/daemon-state"; NB_PLIST="$d/none"
     WIFI_MARK="$d/wifi-off-by-ks"
     printf '#!/bin/bash\necho "$*" > %s/execd\n' "$d" > "$d/new-ks"; chmod +x "$d/new-ks"
     KS_SELF="$d/new-ks"

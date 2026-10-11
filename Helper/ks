@@ -70,6 +70,9 @@ INVALIDF="$DIR/invalid"   # world-readable: what made the last load block everyt
 WIFI_MARK="$DIR/wifi-off-by-ks" # Wi-Fi was switched off by us at shutdown
 SIGF="$DIR/tunnels"      # tunnel interfaces the loaded rules were built for
 TSRELAYS="$DIR/tsrelays" # Tailscale DERP relays + control plane, root-owned
+NB_GROUP="_ksnetbird"    # NetBird's daemon runs with this gid when tailscale=1 (netbird_sync)
+NB_PLIST="/Library/LaunchDaemons/netbird.plist" # NetBird's own launchd job, written by its installer
+NB_TEAM="TA739QLA7A"     # NetBird GmbH's Developer ID team
 CORE_DIR="$DIR/core"     # mihomo, config.yaml, geoip.metadb, root-owned
 CORE_GROUP="_ksvpn"      # the core runs with this gid; nothing else can get it
 CORE_JOB="system/local.killswitch.core"
@@ -239,7 +242,11 @@ rules() {  # rules [allow-file] [servers-file] [manual-servers-file]
       echo 'pass out quick proto tcp to <ts_relays> port { 80, 443 } flags any keep state'
       echo 'pass out quick proto udp to <ts_relays> port 3478 keep state'
     fi
-    # tailnet traffic only, not exit-node traffic
+    # NetBird's root daemon, recognised by its group (netbird_sync): it binds WireGuard, STUN,
+    # relay and management sockets to the physical interface, and its relays change
+    dscl . -read "/Groups/$NB_GROUP" PrimaryGroupID >/dev/null 2>&1 &&
+      echo "pass out quick group $NB_GROUP flags any keep state"
+    # tailnet traffic only, not exit-node traffic (NetBird's network is in 100.64.0.0/10 too)
     [ -n "$ts" ] && echo "pass out quick on { $ts } inet to { 100.64.0.0/10 } flags any keep state"
     [ -n "$ts" ] && echo "pass out quick on { $ts } inet6 to { fd7a:115c:a1e0::/48 } flags any keep state"
   fi
@@ -387,11 +394,56 @@ watch_pass() {
   LAST_FLAG=$flag
   guard "$mode"
   [ $(($1 % 2)) = 0 ] && core_guard
+  [ $(($1 % 10)) = 5 ] && netbird_sync
   if [ -f "$WIFI_MARK" ] && { [ -f "$FLAG" ] || [ "$PROT" = on ]; }; then
     while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" on; done < "$WIFI_MARK"
     rm -f "$WIFI_MARK"; log_event "rules up: network on"
   fi
   publish_state
+}
+
+# NetBird binds its sockets (WireGuard, STUN, relays, management) to the physical interface, past
+# any VPN, and its relays come from its management server and change, so they cannot be listed
+# like Tailscale's. Instead launchd starts its daemon with gid $NB_GROUP (GroupName in its plist,
+# the way our core gets _ksvpn) and rules() lets that group out. Tagged only while tailscale=1 and
+# the plist runs code signed by NetBird's team; an update that rewrites the plist or the binary is
+# looked at again. A change restarts the daemon (a few seconds without NetBird).
+nb_bin() { /usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$NB_PLIST" 2>/dev/null; }
+nb_group() { /usr/libexec/PlistBuddy -c 'Print :GroupName' "$NB_PLIST" 2>/dev/null; }
+nb_want() {
+  local bin
+  [ "$(setting tailscale 1)" = 1 ] && dscl . -read "/Groups/$NB_GROUP" PrimaryGroupID >/dev/null 2>&1 || return 1
+  bin=$(nb_bin) && [ -n "$bin" ] || return 1
+  codesign -v -R="anchor apple generic and certificate leaf[subject.OU] = \"$NB_TEAM\"" "$bin" 2>/dev/null
+}
+nb_sig() { echo "$(setting tailscale 1) $(stat -L -f '%i %Fm %z' "$NB_PLIST" "$(nb_bin)" 2>/dev/null | paste -sd' ' -)"; }
+nb_restart() {
+  local label
+  label=$(/usr/libexec/PlistBuddy -c 'Print :Label' "$NB_PLIST" 2>/dev/null) || return 1
+  launchctl bootout "system/$label" 2>/dev/null
+  for _ in $(seq 1 50); do launchctl print "system/$label" >/dev/null 2>&1 || break; sleep 0.2; done
+  launchctl bootstrap system "$NB_PLIST" 2>/dev/null
+}
+NB_SIG=""
+netbird_sync() {  # the watchdog, every few seconds: nothing to do unless the plist, binary or setting changed
+  local sig want=0 have=0
+  [ -f "$NB_PLIST" ] || { NB_SIG=""; return 0; }
+  sig=$(nb_sig)
+  [ "$sig" = "$NB_SIG" ] && return 0
+  nb_want && want=1
+  [ "$(nb_group)" = "$NB_GROUP" ] && have=1
+  if [ "$want" != "$have" ]; then
+    /usr/libexec/PlistBuddy -c 'Delete :GroupName' "$NB_PLIST" >/dev/null 2>&1
+    [ "$want" = 1 ] && /usr/libexec/PlistBuddy -c "Add :GroupName string $NB_GROUP" "$NB_PLIST" >/dev/null 2>&1
+    # PlistBuddy exits 0 even when it could not save: read the file back
+    have=0; [ "$(nb_group)" = "$NB_GROUP" ] && have=1
+    [ "$want" = "$have" ] || return 0
+    if [ "$want" = 1 ]; then log_event "netbird: its daemon let past the VPN, restarting it"
+    else log_event "netbird: its daemon goes through the VPN again, restarting it"; fi
+    nb_restart
+    sig=$(nb_sig)
+  fi
+  NB_SIG=$sig
 }
 
 # Boot window guard, run when launchd stops the watchdog (see "ks watch"). A watchdog switched

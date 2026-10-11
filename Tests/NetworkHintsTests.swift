@@ -46,5 +46,6 @@ final class NetworkHintsTests: XCTestCase {
         XCTAssertEqual(NetworkHints.Hint.overlay("Tailscale").title, "Работает Tailscale")
         XCTAssertTrue(NetworkHints.Hint.overlay("Tailscale").text.contains("100.64.0.0/10"))
         XCTAssertTrue(NetworkHints.Hint.overlay("ZeroTier").text.contains("Адреса без VPN"))
+        XCTAssertTrue(NetworkHints.Hint.overlay("NetBird").text.contains("так задумано"))
     }
 }

@@ -13,6 +13,8 @@ enum TrustedCode {
         case core
         /// Tailscale's app and network extension, Developer ID or Mac App Store build.
         case tailscale
+        /// NetBird's daemon and app, Developer ID (NetBird GmbH).
+        case netbird
     }
 
     static func requirementText(_ program: Program) -> String {
@@ -26,6 +28,8 @@ enum TrustedCode {
             return #"anchor apple generic and certificate leaf[subject.OU] = "W5364U7YZB""#
                 + #" or anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.9] exists"#
                 + #" and (identifier "io.tailscale.ipn.macos" or identifier "io.tailscale.ipn.macos.network-extension")"#
+        case .netbird:
+            return #"anchor apple generic and certificate leaf[subject.OU] = "TA739QLA7A""#
         }
     }
 
