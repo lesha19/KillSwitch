@@ -101,6 +101,9 @@ edit '$a->[0]{remarks} = "Литва\tвход"'
 gen "$tmp/p.json" && bad "a tab in a host name accepted" || ok "a control character in a host name: refused"
 edit '$a->[0]{remarks} = "x" x 257'
 gen "$tmp/p.json" && bad "a 257-byte host name accepted" || ok "a host name over 256 bytes: refused"
+edit '$a->[0]{remarks} = "x" . "я" x 200'
+gen "$tmp/p.json"; iconv -f UTF-8 -t UTF-8 < "$tmp/err" >/dev/null 2>&1 && grep -q 'я…' "$tmp/err" &&
+  ok "  the refusal names it cut on a character, not mid-letter" || bad "  cut: $(od -c < "$tmp/err" | head -3)"
 gen "$fx/xray-panel.json"
 [ "$(q 'join ",", map { "$_->{name}:$_->{type}" } @{ $c->{proxies} }')" = "LT_1:vless,LT_1_FB:vless" ] &&
   [ "$(q 'join ",", map { "$_->{name}:" . join "+", @{ $_->{proxies} } } @{ $c->{groups} }')" = "country-lb:LT_1+LT_1_FB" ] &&

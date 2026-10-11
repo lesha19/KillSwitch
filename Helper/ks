@@ -1449,6 +1449,17 @@ core_generate_xray() (
     ACCESS=$([ "$(setting diag 0)" = 1 ] && [ -d "$DIAG" ] && echo "$DIAG/access.log") \
     /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' build()' || exit 1
   if [ -f "$w/multihop-gone" ]; then   # built one hop: the setting says so too (ADR 0027)
+    # set by hand (ks set multihop): refused with the reason, never stored as on while one hop
+    if [ -n "${KS_MULTIHOP_STRICT:-}" ]; then
+      case "$(head -1 "$w/multihop-gone")" in
+        "not a server of the subscription") fail "Двойной VPN: сервера входа «$(setting multihop off)» нет в подписке" ;;
+        "it is the running server") fail "Двойной VPN: «$(setting multihop off)» сейчас выход, выбери другой сервер входа" ;;
+        "no server to connect through") fail "Двойной VPN: у сервера «$(setting multihop off)» нет сервера, через который можно подключиться" ;;
+        "it connects through another server itself") fail "Двойной VPN: сервер «$(setting multihop off)» сам подключается через другой сервер, входом он быть не может" ;;
+        "the subscription has its own ks-entry") fail "Двойной VPN: в подписке уже есть outbound «ks-entry»" ;;
+        *) fail "Двойной VPN: сервер выхода подключается напрямую через другой outbound подписки, цепочка через вход не получится" ;;
+      esac
+    fi
     log_event "double VPN off: its entry «$(setting multihop off)»: $(head -1 "$w/multihop-gone")"
     put_setting multihop off || exit 1
   fi
@@ -1511,7 +1522,7 @@ KS_XRAY_PL='
     for my $i (0 .. $#$a) {
       my $c = $a->[$i]; my $n = name_of($c, $i);
       # the name goes into settings (xrayserver=, multihop=) and the report (ADR 0027)
-      die "Имя сервера «" . substr($n, 0, 64) . "…» в подписке не подходит: управляющие символы или длиннее 256 байт\n"
+      die "Имя сервера «" . do { my $s = $n; utf8::decode($s); $s = substr($s, 0, 64); utf8::encode($s); $s } . "…» в подписке не подходит: управляющие символы или длиннее 256 байт\n"
         if $n =~ /[\x00-\x1f\x7f]/ || length $n > 256;
       my %tags;
       for my $o (@{ $c->{outbounds} }) {
@@ -1570,7 +1581,9 @@ KS_XRAY_PL='
     if (length($ENV{MULTIHOP} // "") && $ENV{MULTIHOP} ne "off") {
       ($ei) = grep { name_of($a->[$_], $_) eq $ENV{MULTIHOP} } 0 .. $#$a;
       if (!defined $ei) { $gone = "not a server of the subscription" }
-      elsif ($ei != $ci) {
+      # an older or stale pick (the first host by default) that is the entry: one hop
+      elsif ($ei == $ci) { $gone = "it is the running server" }
+      else {
         my $o = first_proxy($a->[$ei]);
         if (!$o) { $gone = "no server to connect through" }
         elsif (chained($o)) { $gone = "it connects through another server itself" }
@@ -1616,6 +1629,19 @@ KS_XRAY_PL='
     }
     $tame->($_, undef) for @pings;   # their changes are those of the hosts
     if ($entry && $tag{"ks-entry"}) { $gone = "the subscription has its own ks-entry"; undef $entry }
+    # a server of this host the subscription chains through something that is no server (freedom)
+    # would dial directly, past the entry
+    if ($entry) {
+      for my $o (grep { $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && chained($_) } @$outs) {
+        my ($t, %seen) = ($o);
+        while ($t && chained($t) && !$seen{$t}++) {
+          my $n = ref $t->{proxySettings} eq "HASH" ? $t->{proxySettings}{tag} : $t->{streamSettings}{sockopt}{dialerProxy};
+          $t = defined $n && !ref $n ? $tag{$n} : undef;
+        }
+        next if $t && !chained($t) && $t->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/;
+        $gone = "a server of the running host connects directly through another outbound"; undef $entry; last;
+      }
+    }
     if ($entry) {
       $tame->($entry, undef);   # its changes are those of its host
       # every server of this host through the entry; one the subscription reaches through another
@@ -2388,7 +2414,8 @@ set_splitapps() {
 # with it first; the setting is stored only if that works. With Xray the entry is a host of the
 # subscription (its first server, ADR 0027); "ks set core" turns it off.
 set_multihop() {
-  local s pid="" i
+  local s pid="" i prev
+  prev=$(setting multihop off)
   if [ "$1" != off ]; then
     valid_name "$1" || { echo "Плохое имя прокси" >&2; return 1; }
     [ -f "$(core_profile)" ] && [ -f "$PINS" ] || { echo "Сначала возьми профиль" >&2; return 1; }
@@ -2396,27 +2423,38 @@ set_multihop() {
       # the generator would turn a host it cannot use off by itself: here it is refused, said why
       grep -qxF -- "$1" <(report_servers) || { echo "Двойной VPN: в подписке нет сервера «$1»" >&2; return 1; }
       [ "$1" != "$(report_selected)" ] || { echo "Двойной VPN: «$1» сейчас выход, выбери другой сервер входа" >&2; return 1; }
-      ! xray_pings 2>/dev/null | awk -F'\t' -v n="$1" '$1 == n && $2 == 0 { f = 1 } END { exit !f }' ||
-        { echo "Двойной VPN: сервер входа «$1» сейчас не отвечает" >&2; return 1; }
+      # only while double VPN is off are the probes direct: with an entry set, another host's
+      # «dead» may be the entry's (the new chain is checked after the restart instead)
+      if [ "$prev" = off ] && xray_pings 2>/dev/null | N=$1 awk -F'\t' '$1 == ENVIRON["N"] && $2 == 0 { f = 1 } END { exit !f }'; then
+        echo "Двойной VPN: сервер входа «$1» сейчас не отвечает" >&2; return 1
+      fi
       core_job; [ "$CORE_RUN" = 1 ] && pid=$CORE_PID
     fi
   fi
   s=$(mktemp) || return 1
   cp "$SETTINGS" "$s" 2>/dev/null
   put_setting multihop "$1" "$s"
-  if [ -f "$(core_profile)" ] && [ -f "$PINS" ] && ! SETTINGS=$s core_rebuild "$PINS"; then rm -f "$s"; return 1; fi
+  # strict: an entry the build could only make one hop of is refused, not stored (ADR 0027)
+  if [ -f "$(core_profile)" ] && [ -f "$PINS" ] && ! KS_MULTIHOP_STRICT=1 SETTINGS=$s core_rebuild "$PINS"; then rm -f "$s"; return 1; fi
   rm -f "$s"
   put_setting multihop "$1" || return 1
   reload_if_on; core_reload
   [ -n "$pid" ] || return 0
-  # Xray was running: the chain must answer after the restart, or one hop again (fail closed, pf
-  # blocked all along, and recoverable: the VPN is not left on a dead entry)
+  # Xray was running: the chain must answer after the restart, or the previous chain (checked the
+  # same way) or one hop again: fail closed (pf blocked all along) and recoverable, the VPN is never
+  # left on a dead entry
   if core_up "$pid"; then
     for ((i = 0; i < ${CHAIN_TRIES:-3}; i++)); do
       [ "$(diag_probe | cut -d' ' -f2)" = 1 ] && return 0
       sleep "${CHAIN_WAIT:-2}"
     done
   fi
+  if [ "$prev" != off ] && [ "$prev" != "$1" ] && [ -z "${KS_MULTIHOP_BACK:-}" ] && KS_MULTIHOP_BACK=1 set_multihop "$prev" >/dev/null 2>&1; then
+    log_event "double VPN back: «$prev», no answer through «$1»"
+    echo "Двойной VPN: через «$1» соединение не установилось, вход снова «$prev»" >&2
+    return 1
+  fi
+  [ -n "${KS_MULTIHOP_BACK:-}" ] && return 1   # the caller goes one hop
   log_event "double VPN off: no answer through «$1»"
   set_multihop off >/dev/null 2>&1
   echo "Двойной VPN: через «$1» соединение не установилось, двойной VPN выключен" >&2

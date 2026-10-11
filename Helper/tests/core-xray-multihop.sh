@@ -70,9 +70,13 @@ cmp -s "$T/c.direct" "$T/direct.single" && cmp -s "$T/c.egress" "$T/egress.singl
 [ "$(j 'scalar grep { $_->{name} eq "ks-entry" } @{ $c->{proxies} }' "$T/c.report")" = 0 ] && ok "  ks-entry not listed as a proxy of the subscription" || bad "  proxies"
 xtest "double VPN" "$T/c"
 
-# the running host is the entry itself: one hop, nothing to chain
-printf 'core=xray\nmultihop=🇩🇪Германия\nxrayserver=🇩🇪Германия\n' > "$SETTINGS"
-gen && [ "$(dialers)" = "DE_1=-,DE_1_FB=-,ks-ping-0=-,ks-ping-1=-" ] && ok "the entry is the running host: one hop" || bad "entry = exit: $(cat "$T/err") $(dialers)"
+# the running host is the entry itself (an older pick, or a stale pick falling back to the first
+# host): one hop, so double VPN goes off, logged, never «Литва → Литва» on screen
+printf 'core=xray\nmultihop=🇩🇪Германия\nxrayserver=🇩🇪Германия\n' > "$SETTINGS"; : > "$EVENTS"
+gen && [ "$(dialers)" = "DE_1=-,DE_1_FB=-,ks-ping-0=-,ks-ping-1=-" ] && [ "$(setting multihop x)" = off ] &&
+  grep -q 'double VPN off: its entry «🇩🇪Германия»: it is the running server' "$EVENTS" &&
+  ok "the entry is the running host: one hop, double VPN off and logged" || bad "entry = exit: $(cat "$T/err") $(dialers) $(setting multihop x)"
+: > "$EVENTS"
 
 # an entry the build cannot use (gone from the subscription, a mihomo name from before, chained, a
 # tag clash): double VPN goes off, logged, so a refresh or a rebuild never stays refused for it
@@ -84,6 +88,11 @@ dropped() {  # dropped <what> [dialers]: built one hop, the setting off, the rea
 }
 hosts; printf 'core=xray\nmultihop=🇳🇱Нидерланды\n' > "$SETTINGS"; dropped "an entry not in the subscription"
 printf 'core=xray\nmultihop=NL reality\n' > "$SETTINGS"; dropped "a mihomo proxy name from before"
+printf 'core=xray\nmultihop=🇱🇹Литва\nxrayserver=🇳🇱Gone\n' > "$SETTINGS"; dropped "a stale pick that falls back to the entry host"
+# a server of the running host the subscription sends through a freedom outbound would dial directly
+hosts '$a->[0]{outbounds}[1]{proxySettings} = { tag => "direct" }'
+printf 'core=xray\nmultihop=🇩🇪Германия\n' > "$SETTINGS"; dropped "a server of the exit chained through «direct»"
+hosts
 hosts '$a->[1]{outbounds}[0]{proxySettings} = { tag => "DE_1_FB" }'
 printf 'core=xray\nmultihop=🇩🇪Германия\n' > "$SETTINGS"; dropped "an entry reached through another outbound" "LT_1=-,LT_1_FB=-,ks-ping-0=-"
 hosts '$a->[0]{outbounds}[2]{tag} = "ks-entry"; $_->{outboundTag} =~ s/\Adirect\z/ks-entry/ for grep { defined $_->{outboundTag} } @{ $a->[0]{routing}{rules} }'
@@ -115,6 +124,21 @@ xray_select "🇩🇪Германия" 2>"$T/err" && bad "the entry picked as th
 set_multihop off 2>"$T/err" && [ "$(setting multihop x)" = off ] &&
   [ "$(j 'scalar grep { $_->{streamSettings}{sockopt}{dialerProxy} } @{ $c->{outbounds} }' "$cfg")" = 0 ] &&
   ok "  off: one hop again" || bad "  off: $(cat "$T/err")"
+# set by hand, strict: an entry the generator would build one hop with is refused, never stored
+# (the UI would say double VPN while the exit sees the Mac's address)
+hosts '$a->[1]{outbounds}[0]{proxySettings} = { tag => "DE_1_FB" }'
+core_import "$T/p.json" import 2>"$T/err" || bad "import chained entry: $(cat "$T/err")"
+set_multihop "🇩🇪Германия" 2>"$T/err" && bad "an entry that would be one hop stored" ||
+  { [ "$(setting multihop x)" = off ] && grep -q 'через другой' "$T/err" &&
+    [ "$(j 'scalar grep { ($_->{streamSettings}{sockopt}{dialerProxy} // "") eq "ks-entry" } @{ $c->{outbounds} }' "$cfg")" = 0 ] &&
+    ok "  an entry the build cannot use: refused with the reason, nothing stored" || bad "  strict: $(cat "$T/err") $(setting multihop x)"; }
+hosts; core_import "$T/p.json" import 2>"$T/err" || bad "import: $(cat "$T/err")"
+# a name is compared as it is (awk -v would read «\m» as an escape)
+cp "$REPORT" "$T/report.keep"
+/usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); push @{ $r->{servers} }, { name => "Гер\\мания" }; print JSON::PP->new->encode($r)' < "$T/report.keep" > "$REPORT"
+xray_pings() { printf '%s\t0\t0\n' 'Гер\мания'; }
+set_multihop 'Гер\мания' 2>"$T/err"; grep -q 'не отвечает' "$T/err" && ok "  a backslash in a name: compared as it is" || bad "  backslash: $(cat "$T/err")"
+cp "$T/report.keep" "$REPORT"
 # a dead entry is refused; with the core running, the chain must answer after the restart
 xray_pings() { printf '🇱🇹Литва\t1\t50\n🇩🇪Германия\t0\t0\n'; }
 set_multihop "🇩🇪Германия" 2>"$T/err" && bad "a dead entry stored" ||
@@ -129,6 +153,22 @@ set_multihop "🇩🇪Германия" 2>"$T/err" && bad "a chain that does not
     grep -q 'double VPN off: no answer through' "$EVENTS" && ok "  running, no answer through the chain: back to one hop, logged" || bad "  rollback: $(cat "$T/err") $(setting multihop x)"; }
 PROBE="90 1"
 set_multihop "🇩🇪Германия" 2>"$T/err" && [ "$(setting multihop x)" = "🇩🇪Германия" ] && ok "  running, the chain answers: kept" || bad "  verified: $(cat "$T/err")"
+# a third host; with an entry set, the others' probes go through it, so their «dead» says nothing
+# of them: switching the entry is not refused for it (the chain is checked after the restart)
+hosts 'my $x = $c->decode($c->encode($a->[1])); $x->{remarks} = "🇳🇱Нидерланды"; $_->{settings}{vnext}[0]{address} = "203.0.113.30" for @{ $x->{outbounds} }[0, 1];
+  $_->{tag} =~ s/\ADE_/NL_/ for @{ $x->{outbounds} }; push @$a, $x'
+core_import "$T/p.json" import 2>"$T/err" || bad "import three: $(cat "$T/err")"
+xray_pings() { printf '🇱🇹Литва\t0\t0\n🇩🇪Германия\t0\t0\n🇳🇱Нидерланды\t0\t0\n'; }
+set_multihop "🇳🇱Нидерланды" 2>"$T/err" && [ "$(setting multihop x)" = "🇳🇱Нидерланды" ] &&
+  ok "  another entry while one is set: not refused for probes that went through the old one" || bad "  switch entry: $(cat "$T/err")"
+# a failed change of entry keeps the old chain (checked again), not one hop
+: > "$T/pn"; diag_probe() { local n; n=$(wc -l < "$T/pn"); echo x >> "$T/pn"; if [ "$n" -lt 2 ]; then echo "0 0"; else echo "90 1"; fi; }
+set_multihop "🇩🇪Германия" 2>"$T/err" && bad "a chain that does not answer kept" ||
+  { [ "$(setting multihop x)" = "🇳🇱Нидерланды" ] && grep -q 'double VPN back: «🇳🇱Нидерланды», no answer through «🇩🇪Германия»' "$EVENTS" &&
+    grep -q 'Нидерланды' "$T/err" && ok "  a new entry that does not answer: back to the previous one, logged" || bad "  back: $(cat "$T/err") $(setting multihop x)"; }
+PROBE="0 0"; diag_probe() { echo "$PROBE"; }
+set_multihop "🇩🇪Германия" 2>"$T/err" && bad "kept without an answer" ||
+  { [ "$(setting multihop x)" = off ] && ok "  and when the previous one does not answer either: one hop" || bad "  back fails: $(setting multihop x)"; }
 core_job() { CORE_RUN=0; CORE_PID=""; }
 
 # --- the upgrade (_regen): a multihop= from the mihomo era, read by an Xray report without targets
