@@ -28,17 +28,25 @@ final class AutoConnector: NSObject, CLLocationManagerDelegate {
     private(set) var location: CLAuthorizationStatus = .notDetermined
     /// What the last automatic attempt did, for Settings.
     private(set) var lastAction: String?
+    /// «Сети Wi‑Fi» (WiFiRules), kept in UserDefaults on this Mac only.
+    private(set) var rules = WiFiRules.decode(UserDefaults.standard.data(forKey: WiFiRules.key))
+    /// A network's preferred server could not be picked, for «Сети Wi‑Fi».
+    private(set) var ruleNote: String?
 
     private let control: KillSwitchControl
+    private let client: VPNClient
     private let monitor = NWPathMonitor()
     private let locationManager = CLLocationManager()
     private var network = AutoConnect.Network(online: false, wifi: false, ssid: nil, interfaces: [])
     private var lastIdentity: String?
     private var started = false
     private var pending: Task<Void, Never>?
+    /// «Добавить текущую сеть» was clicked before macOS answered the Location prompt.
+    private var addWhenAllowed = false
 
-    init(control: KillSwitchControl) {
+    init(control: KillSwitchControl, client: VPNClient) {
         self.control = control
+        self.client = client
         super.init()
         locationManager.delegate = self
         location = locationManager.authorizationStatus
@@ -79,7 +87,33 @@ final class AutoConnector: NSObject, CLLocationManagerDelegate {
         Task { @MainActor in
             location = status
             readSSID()
+            if addWhenAllowed, status != .notDetermined {
+                addWhenAllowed = false
+                if let ssid { setRules(WiFiRules.adding(ssid, to: rules)) }
+            }
         }
+    }
+
+    /// «Добавить текущую сеть». Without a Location answer yet, macOS asks first (Settings has
+    /// explained why), and the network is added once the name can be read.
+    func addCurrentNetwork() {
+        if location == .notDetermined {
+            addWhenAllowed = true
+            requestLocation()
+            return
+        }
+        if let ssid { setRules(WiFiRules.adding(ssid, to: rules)) }
+    }
+
+    func update(_ rule: WiFiRules.Rule) {
+        setRules(rules.map { $0.ssid == rule.ssid ? rule : $0 })
+    }
+
+    func removeRule(_ ssid: String) { setRules(rules.filter { $0.ssid != ssid }) }
+
+    private func setRules(_ new: [WiFiRules.Rule]) {
+        rules = new
+        UserDefaults.standard.set(WiFiRules.encode(new), forKey: WiFiRules.key)
     }
 
     // MARK: -
@@ -121,10 +155,17 @@ final class AutoConnector: NSObject, CLLocationManagerDelegate {
             connected: connection == .connected || connection == .connecting,
             otherVPN: connection == .otherApp
         )
-        let settings = AutoConnect.Settings(enabled: enabled, skipTrusted: skipTrusted, trusted: trusted)
-        switch AutoConnect.decide(settings, network: network, core: core) {
+        let server = preferredServer()
+        let settings = AutoConnect.Settings(enabled: enabled, skipTrusted: skipTrusted, trusted: trusted, rules: rules)
+        let decision = AutoConnect.decide(settings, network: network, core: core)
+        if let server, decision != .connect {
+            Task { await control.chooseAutomatically(server) }
+        }
+        switch decision {
         case .connect:
             Task {
+                // picked first, so the connection goes straight to it
+                if let server { await control.chooseAutomatically(server) }
                 let ok = await control.coreOnAutomatically()
                 lastAction = ok ? String(localized: "Подключился сам \(Self.now)") : String(localized: "Не получилось подключиться сам \(Self.now)")
             }
@@ -136,6 +177,22 @@ final class AutoConnector: NSObject, CLLocationManagerDelegate {
             Notifier.shared.post(.otherVPN(name: control.otherVPNName))
         case .skip:
             break
+        }
+    }
+
+    /// This Wi-Fi's «Предпочитаемый сервер», when it is not the current one already.
+    private func preferredServer() -> ServerPicker.Entry? {
+        let rule = network.wifi ? WiFiRules.rule(for: network.ssid, in: rules) : nil
+        let entries = (control.proxies ?? client.profileProxies).map(ServerPicker.entries) ?? []
+        switch WiFiRules.server(for: rule, entries: entries, current: control.pickedServer) {
+        case .keep:
+            return nil
+        case .select(let entry):
+            ruleNote = nil
+            return entry
+        case .missing(let name):
+            ruleNote = String(localized: "Сервера «\(name)» больше нет в подписке, выбран прежний (\(Self.now))")
+            return nil
         }
     }
 

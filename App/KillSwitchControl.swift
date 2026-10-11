@@ -327,6 +327,29 @@ final class KillSwitchControl {
         }
     }
 
+    /// «Предпочитаемый сервер» of a Wi-Fi network (WiFiRules): like `choose`, but never asks for a
+    /// password, since nobody clicked.
+    func chooseAutomatically(_ entry: ServerPicker.Entry) async {
+        setChosen(entry.name)
+        serversDown = nil
+        guard coreRunning else {
+            pendingChoice = entry
+            if let data = try? JSONEncoder().encode(entry) { UserDefaults.standard.set(data, forKey: Self.pendingKey) }
+            return
+        }
+        for step in proxies.map({ Failover.path(for: entry, in: $0) }) ?? entry.path {
+            _ = await callHelper(["core", "select", step.group, step.proxy], interactive: false)
+        }
+        loadProxies(force: true)
+    }
+
+    /// The current server in «Выбор сервера» terms: the running core's choice, else the one
+    /// waiting for «Подключить».
+    var pickedServer: String? {
+        if coreRunning, let proxies { return ServerPicker.selected(proxies) }
+        return pendingChoice?.name
+    }
+
     // MARK: auto-failover (Failover, ADR 0005)
 
     /// The server the person picked last, or the last good one after a switch.
@@ -532,6 +555,7 @@ final class KillSwitchControl {
         switch await callHelper(["core", "on"], interactive: false) {
         case .ok:
             error = nil
+            await applyPendingChoice()   // a server picked while disconnected, or a network's preferred one
             return true
         case .needsPassword:
             notify(.autoConnectNeedsPassword)
