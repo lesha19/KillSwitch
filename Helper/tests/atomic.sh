@@ -39,6 +39,9 @@ for i in $(seq 2 21); do drop_setting "k$i" & put_setting "n$i" 1 & done; wait
 check "20 drops and 20 puts at once all land" [ "$(grep -c '^k' "$SETTINGS") $(grep -c '^n' "$SETTINGS")" = "19 20" ]
 put_setting dns 1 "$tmp/other"
 check "put_setting into another file (set_multihop's copy) still works" grep -qx 'dns=1' "$tmp/other"
+# set_multihop's copy of the settings (and its lock) in a folder of its own, not in a temporary
+# directory others share
+check "set_multihop copies the settings into a private folder" [ -n "$(declare -f set_multihop | grep 'd=$(mktemp -d)')" -a -z "$(declare -f set_multihop | grep 's=$(mktemp)')" ]
 
 # "ks set <key>" writes through put_setting, not its own copy of it
 check "ks set <switch> uses put_setting" [ -z "$(grep -n '> "\$SETTINGS.tmp"' "$here/../ks")" ]
@@ -59,6 +62,30 @@ check "  every one of 40 concurrent lines kept ($(grep -c ' new ' "$EVENTS"))" [
 check "  the oldest dropped, the rest in order" [ "$(grep -m1 '^old' "$EVENTS")" = "old 40" ]
 check "  mode 644" [ "$(stat -f %Lp "$EVENTS")" = 644 ]
 rmdir "$EVENTS.tmp"
+
+# --- the lock files are root's alone (0600): a local user who could open one could hold it for
+# ever, and every log line, setting, core import and watchdog pass would wait on it (review of #50)
+check "settings.lock and events.log.lock are 0600" [ "$(stat -f %Lp "$SETTINGS.lock" "$EVENTS.lock" | sort -u)" = 600 ]
+rm -f "$SETTINGS.lock"; (umask 022; : > "$SETTINGS.lock"); ino=$(stat -f %i "$SETTINGS.lock")
+put_setting lan 1
+check "  one left 0644 by an older ks is replaced by a 0600 one" [ "$(stat -f %Lp "$SETTINGS.lock")" = 600 -a "$(stat -f %i "$SETTINGS.lock")" != "$ino" ]
+rm -f "$SETTINGS.lock"; ln -s "$tmp/victim" "$SETTINGS.lock"
+put_setting lan 0
+check "  a link at its name is never followed" [ ! -e "$tmp/victim" -a ! -L "$SETTINGS.lock" -a "$(stat -f %Lp "$SETTINGS.lock")" = 600 ] && grep -qx lan=0 "$SETTINGS"
+# log_event does not wait for a held lock: after a moment the line is appended without the trim
+perl -MFcntl=:flock -e 'open my $f, ">>", $ARGV[0] or die; flock $f, LOCK_EX or die; print "held\n"; $| = 1; sleep 15' "$EVENTS.lock" > "$tmp/held" &
+holder=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -s "$tmp/held" ] && break; sleep 0.2; done
+start=$(date +%s); log_event "while held"; took=$(( $(date +%s) - start ))
+kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+check "log_event with its lock held elsewhere: done in ${took} s, not 30" [ "$took" -le 4 ]
+check "  the line is there" grep -q ' while held$' "$EVENTS"
+# the lockf locks: core, dns, netbird, diagnostics
+(umask 022; : > "$tmp/old.lock"); ln -s "$tmp/victim2" "$tmp/link.lock"
+lock_ready "$tmp/core.lock"; lock_ready "$tmp/old.lock"; lock_ready "$tmp/link.lock"
+check "lock_ready: new, 0644 and linked lock files all become plain 0600 files" \
+  [ "$(stat -f '%Lp %HT' "$tmp/core.lock" "$tmp/old.lock" "$tmp/link.lock" | sort -u)" = "600 Regular File" -a ! -e "$tmp/victim2" ]
+check "every lockf of ks prepares its file with lock_ready" [ -z "$(grep -n 'lockf -k' "$here/../ks" | grep -v lock_ready)" ]
 
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

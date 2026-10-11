@@ -292,8 +292,11 @@ physical_services() {
     /Device: (en|bridge)[0-9]+\)/ { if (name != "") print name; name = "" }'
 }
 
-log_event() {  # the line and the trim to 500 lines under one lock (locked_rewrite, #50)
-  locked_rewrite "$EVENTS" 'push @L, $ARGV[0]; splice @L, 0, @L - 500 if @L > 500' "$(date '+%Y-%m-%d %H:%M:%S') $*"
+log_event() {  # the line and the trim to 500 lines under one lock (locked_rewrite, #50); a lock
+  # held longer than 2 s (never by ks itself) gets the line appended untrimmed, the watchdog never waits
+  local line
+  line="$(date '+%Y-%m-%d %H:%M:%S') $*"
+  locked_rewrite_wait 2 "$line" "$EVENTS" 'push @L, $ARGV[0]; splice @L, 0, @L - 500 if @L > 500' "$line"
   diag_event log msg="$*"
 }
 
@@ -602,7 +605,7 @@ nb_try_restart() {  # nb_try_restart <failures so far> <now>
   log_event "netbird: its daemon did not start again (launchctl bootstrap failed), next try in ${delay} s"
   return 1
 }
-netbird_bg() { [ -f "$NB_PLIST" ] || return 0; lockf -k -t 0 "$DIR/netbird.lock" "$0" _netbird >/dev/null 2>&1 & }
+netbird_bg() { [ -f "$NB_PLIST" ] || return 0; lock_ready "$DIR/netbird.lock" 2>/dev/null; lockf -k -t 0 "$DIR/netbird.lock" "$0" _netbird >/dev/null 2>&1 & }
 netbird_sync() {  # netbird_sync [now]: nothing to do unless the plist, binary or setting changed
   local sig want=0 have=0 now=${1:-$(date +%s)} n next
   [ -f "$NB_PLIST" ] || { rm -f "$NB_SIGF" "$NB_RETRYF" "$NB_UPF"; return 0; }
@@ -2021,15 +2024,37 @@ servers_migrate() {  # before the split every server was added by hand
   if [ -f "$SERVERS" ]; then cp "$SERVERS" "$SERVERS_MANUAL"; else : > "$SERVERS_MANUAL"; fi
 }
 
+# Lock files are root's alone: a plain 0600 file of ours. One that is not (0644 from an older ks,
+# a link, someone else's) is replaced first; a local user who could open a lock file could hold
+# it for ever, and every write of ks behind it would wait (review of #50).
+# shellcheck disable=SC2016 # perl, not shell
+KS_LOCK_OPEN_PL='
+    sub lock_open { my $l = shift; my @s = lstat $l;
+      unlink $l or die "$l: $!\n" if @s && (-l _ || !-f _ || ($s[2] & 07777) != 0600 || $s[4] != $>);
+      sysopen my $h, $l, O_RDWR | O_CREAT | O_NOFOLLOW, 0600 or die "$l: $!\n"; $h }'
+lock_ready() {  # lock_ready <file>: the file lockf will lock, root-only (KS_LOCK_OPEN_PL)
+  /usr/bin/perl -e 'use Fcntl qw(O_RDWR O_CREAT O_NOFOLLOW);'"$KS_LOCK_OPEN_PL"' lock_open($ARGV[0])' "$1"
+}
 # locked_rewrite <file> <perl code changing @L> [its args, in @ARGV]: the file's lines read,
 # changed and written back as a new 0644 file moved into place, all under an flock of <file>.lock
 # (#50): a concurrent writer (the failover's xrayserver next to "ks set", two log_event) loses
 # nothing, a reader never sees half a file, and the temporary file's name is this process's own.
-locked_rewrite() {
-  /usr/bin/perl -e 'use Fcntl qw(:flock O_WRONLY O_CREAT O_EXCL);
-    my ($f, $code) = splice @ARGV, 0, 2;
-    open my $lk, ">>", "$f.lock" or die "$f.lock: $!\n";
-    local $SIG{ALRM} = sub { die "$f.lock: busy\n" }; alarm 30; flock $lk, LOCK_EX or die "$f.lock: $!\n"; alarm 0;
+# The lock file is root's alone (lock_open, 0600): one others could open, they could hold for ever.
+locked_rewrite() { locked_rewrite_wait 30 "" "$@"; }
+# locked_rewrite_wait <seconds> <line> <file> <code> [args]: as locked_rewrite, but after <seconds>
+# without the lock <line> (if not empty) is appended as it is, without the rewrite (log_event).
+locked_rewrite_wait() {
+  /usr/bin/perl -e 'use Fcntl qw(:flock O_RDWR O_WRONLY O_CREAT O_EXCL O_APPEND O_NOFOLLOW);
+    my ($wait, $busy, $f, $code) = splice @ARGV, 0, 4;
+    '"$KS_LOCK_OPEN_PL"'
+    my $lk = lock_open("$f.lock");
+    my $got; my $until = time + $wait;
+    until ($got = flock $lk, LOCK_EX | LOCK_NB) { last if time >= $until; select undef, undef, undef, 0.1 }
+    unless ($got) {
+      die "$f.lock: busy\n" unless length $busy;
+      sysopen my $o, $f, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW, 0644 or die "$f: $!\n";
+      print $o "$busy\n"; close $o or die "$f: $!\n"; exit 0;
+    }
     our @L = ();
     if (open my $in, "<", $f) { @L = <$in>; chomp @L; close $in }
     eval $code; die $@ if $@;
@@ -2380,7 +2405,7 @@ rotate_due() {
   ROT_LAST=$1; ROT_NEXT=$(($1 + 1800))
 }
 # skipped if an import, refresh or setting change holds the lock
-core_rotate_bg() { lockf -k -t 0 "$CORE_DIR/core.lock" "$0" _rotate >/dev/null 2>&1 & }
+core_rotate_bg() { lock_ready "$CORE_DIR/core.lock" 2>/dev/null; lockf -k -t 0 "$CORE_DIR/core.lock" "$0" _rotate >/dev/null 2>&1 & }
 net_sig() {  # primary interface and router
   printf 'show State:/Network/Global/IPv4\n' | scutil | awk '$1 == "PrimaryInterface" || $1 == "Router" { print $3 }' | paste -sd' ' -
 }
@@ -2456,17 +2481,19 @@ set_splitapps() {
 # "ks set multihop <entry proxy>|off": double VPN. The entry is checked by building the config
 # with it first; the setting is stored only if that works.
 set_multihop() {
-  local s
+  local d s
   if [ "$1" != off ]; then
     [ "$(core_kind)" = mihomo ] || { echo "Двойной VPN пока работает только с ядром mihomo" >&2; return 1; }
     valid_name "$1" || { echo "Плохое имя прокси" >&2; return 1; }
     [ -f "$CORE_PROFILE" ] && [ -f "$PINS" ] || { echo "Сначала возьми профиль" >&2; return 1; }
   fi
-  s=$(mktemp) || return 1
+  # the copy and its lock in a folder of their own (0700), never at a name others could take
+  d=$(mktemp -d) || return 1
+  s="$d/settings"
   cp "$SETTINGS" "$s" 2>/dev/null
   put_setting multihop "$1" "$s"
-  if [ -f "$CORE_PROFILE" ] && [ -f "$PINS" ] && ! SETTINGS=$s core_rebuild "$PINS"; then rm -f "$s" "$s.lock"; return 1; fi
-  rm -f "$s" "$s.lock"
+  if [ -f "$CORE_PROFILE" ] && [ -f "$PINS" ] && ! SETTINGS=$s core_rebuild "$PINS"; then rm -rf "$d"; return 1; fi
+  rm -rf "$d"
   put_setting multihop "$1" || return 1
   reload_if_on; core_reload
 }
@@ -2617,7 +2644,7 @@ core_log_tidy() {
 }
 
 # "ks core on|off" and the watchdog run these at the same time; lockf serialises them.
-dns_locked() { lockf -k -t 30 "$CORE_DIR/dns.lock" "$0" _dns "$1"; }
+dns_locked() { lock_ready "$CORE_DIR/dns.lock" 2>/dev/null; lockf -k -t 30 "$CORE_DIR/dns.lock" "$0" _dns "$1"; }
 core_running() { launchctl print "$CORE_JOB" 2>/dev/null | grep -q 'state = running'; }
 
 # "interface address" for every tunnel interface (utun, ipsec, ppp), IPv4 and IPv6, sorted.
@@ -3029,7 +3056,7 @@ diag_tick() {
   D_INIT=1; D_TICK=$SECONDS; D_PROT=$PROT; D_STANDBY=${STANDBY:-0}; D_TSIG=$TSIG; D_CORE=$CORE_STATE; D_PID=$CORE_PID
 }
 # not in the tests (they cannot write a root folder) and skipped while the last one still runs
-diag_bg() { [ -d "$DIAG" ] && [ -w "$DIAG" ] || return 0; lockf -k -t 0 "$DIAG/.lock" "$0" _diag >/dev/null 2>&1 & }
+diag_bg() { [ -d "$DIAG" ] && [ -w "$DIAG" ] || return 0; lock_ready "$DIAG/.lock" 2>/dev/null; lockf -k -t 0 "$DIAG/.lock" "$0" _diag >/dev/null 2>&1 & }
 
 # The core's launchd job: CORE_RUN 1|0, CORE_PID, CORE_EXIT (the last exit code or signal).
 PID_RE='pid = ([0-9]+)'; EXIT_RE='last exit code = ([0-9]+)'; SIGNAL_RE='last terminating signal = ([A-Za-z0-9: ]+)'
@@ -3391,7 +3418,7 @@ core_lock_wanted() {
   esac
   return 1
 }
-core_lock_exec() { lockf -k -t "$1" "$CORE_DIR/core.lock" "${@:2}"; }   # core_lock_exec <seconds to wait> <command…>
+core_lock_exec() { lock_ready "$CORE_DIR/core.lock" 2>/dev/null; lockf -k -t "$1" "$CORE_DIR/core.lock" "${@:2}"; }   # core_lock_exec <seconds to wait> <command…>
 
 [ "${BASH_SOURCE[0]}" = "$0" ] || return 0   # sourced by Helper/tests
 # reads nothing but this file: no root needed
@@ -3400,7 +3427,7 @@ core_lock_exec() { lockf -k -t "$1" "$CORE_DIR/core.lock" "${@:2}"; }   # core_l
 passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,32p' "$0" >&2; exit 1; }
 
 # The core lock (core_lock_wanted, above).
-if core_lock_wanted "$@" && [ "$KS_LOCK_HELD" = 0 ] && [ -d "$CORE_DIR" ]; then KS_LOCKED=$$ exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@"; fi
+if core_lock_wanted "$@" && [ "$KS_LOCK_HELD" = 0 ] && [ -d "$CORE_DIR" ]; then lock_ready "$CORE_DIR/core.lock" 2>/dev/null; KS_LOCKED=$$ exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@"; fi
 
 case "${1:-status}" in
   apply) guard ;;
