@@ -2343,7 +2343,7 @@ core_commit() {
 # outbound, the DNS settings, the routing profile with all its rules in order), so fewer of them is
 # never more past the VPN; the profile's own rules are "profile-rule", never a subscription's.
 direct_subset() {
-  [ -f "$APPROVED_DIRECT" ] && [ -z "$(grep -vxF -f "$APPROVED_DIRECT" -- "$1")" ]
+  [ -f "$APPROVED_DIRECT" ] && ! grep -qvxF -f "$APPROVED_DIRECT" -- "$1"
 }
 
 # direct_unapproved <direct>: a generated config for another Xray host sends past the VPN what
