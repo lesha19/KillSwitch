@@ -2674,7 +2674,7 @@ KS_FAILOVER_PL='
     my $country = $flag->($cur);
     my ($best) = sort { $p{$a}[1] <=> $p{$b}[1] }
       grep { $_ ne $cur && length $_ <= 256 && !/[\x00-\x1f\x7f]/ && length $country && $flag->($_) eq $country && $p{$_} && $p{$_}[0] && ($why ne "slow" || $p{$_}[1] * 2 < $ms) } @names;
-    if (defined $best) { $out = join "\t", "switch", $cur, $best, $why, $ms, $usual; %s = (server => $best, last => $now, manual => "") }
+    if (defined $best) { $out = join "\t", "switch", $cur, $best, $why, $ms, $usual; $s{last} = $now }   # the rest follows once the switch happened (failover_pass)
     elsif (!$s{told}) { $out = join "\t", "stay", $cur, "-", $why, $ms, $usual; $s{told} = 1 }
   }
   $s{hist} = join ",", @h if ($s{server} eq $cur);
@@ -2697,6 +2697,9 @@ failover_pass() {  # failover_pass [epoch]
   if [ "$why" = slow ]; then text=slow; else text="no answer"; fi
   if [ "$act" = switch ]; then
     if xray_select "$to" 2>/dev/null; then
+      # only now the new host in the state, failover's and not a pick by hand. A refused switch
+      # (KS-10) keeps the running server's state, a pick by hand stays one, and waits the cooldown
+      printf 'server=%s\nlast=%s\nmanual=\n' "$to" "$now" > "$CORE_DIR/failover.tmp" && mv "$CORE_DIR/failover.tmp" "$CORE_DIR/failover"
       log_event "failover ($text): $from -> $to"
       if [ "$why" = slow ]; then diag_event failover from="$from" to="$to" reason="$why" ms="$ms" usual="$usual"
       else diag_event failover from="$from" to="$to" reason="$why"; fi
