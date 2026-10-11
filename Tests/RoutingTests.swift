@@ -113,6 +113,9 @@ final class RoutingReportTests: XCTestCase {
             "Значение не прошло проверку",
         ])
         XCTAssertEqual(RoutingReport.Dropped.reasonText("something-new"), "something-new")
+        // the own DoH and own addresses of sites replace the template's (ADR 0031, 0033): never the raw code
+        XCTAssertEqual(RoutingReport.Dropped.reasonText("own-doh"), "Вместо него — твой DNS-over-HTTPS")
+        XCTAssertEqual(RoutingReport.Dropped.reasonText("own-hosts"), "Вместо него — твой адрес сайта")
     }
 
     func testTakenDNSAndEgressAsText() throws {

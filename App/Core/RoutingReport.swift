@@ -222,6 +222,8 @@ extension RoutingReport.Dropped {
         case "not-allowed": return String(localized: "Этого KillSwitch из подписки не берёт")
         case "bad-value": return String(localized: "Значение не прошло проверку")
         case "parse": return String(localized: "Не удалось разобрать правило")
+        case "own-doh": return String(localized: "Вместо него — твой DNS-over-HTTPS")
+        case "own-hosts": return String(localized: "Вместо него — твой адрес сайта")
         default: return reason
         }
     }
