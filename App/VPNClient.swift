@@ -664,7 +664,8 @@ final class VPNClient {
         if viaVPN { configuration.connectionProxyDictionary = SubscriptionSource.proxy }
         let session = URLSession(configuration: configuration)
         defer { session.finishTasksAndInvalidate() }
-        let (data, response) = try await session.data(for: request)
+        let (bytes, response) = try await session.bytes(for: request, delegate: SubscriptionFetch.RedirectGuard(original: url))
+        let data = try await SubscriptionFetch.collect(bytes)
         guard let http = response as? HTTPURLResponse else { throw FetchError.status(0, nil) }
         var headers: [String: String] = [:]
         for (key, value) in http.allHeaderFields {

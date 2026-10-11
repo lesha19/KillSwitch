@@ -42,7 +42,13 @@ enum ProfileConverter {
         }
         let loaded: Any?
         do {
-            loaded = try Yams.load(yaml: text, resolver)
+            let node = try Yams.compose(yaml: text, resolver)
+            // KS-21: composing shares an alias's node; turning it into values copies it each time
+            var budget = maxNodes
+            if let node, !fits(node, &budget) { throw ProfileError.badYAML("too many nodes after aliases") }
+            loaded = node?.any
+        } catch let error as ProfileError {
+            throw error
         } catch {
             throw ProfileError.badYAML(String(describing: error).prefix(200).description)
         }
@@ -55,6 +61,20 @@ enum ProfileConverter {
 
     static func json(_ profile: Profile) throws -> Data {
         try JSONSerialization.data(withJSONObject: profile, options: [.sortedKeys])
+    }
+
+    /// Far above a real 20 MB profile, far below what nested aliases ("billion laughs") expand to.
+    static let maxNodes = 4_000_000
+
+    /// Counts the nodes as they will be expanded, stopping as soon as `budget` runs out.
+    private static func fits(_ node: Node, _ budget: inout Int) -> Bool {
+        budget -= 1
+        guard budget >= 0 else { return false }
+        switch node {
+        case .scalar, .alias: return true
+        case .mapping(let mapping): return mapping.allSatisfy { fits($0.key, &budget) && fits($0.value, &budget) }
+        case .sequence(let sequence): return sequence.allSatisfy { fits($0, &budget) }
+        }
     }
 
     /// mihomo reads YAML 1.2 (go-yaml v3): only true/false are booleans, no sexagesimal or

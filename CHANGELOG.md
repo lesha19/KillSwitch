@@ -36,6 +36,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   notifications, is cleaned like the announcement (one line, no control or bidi characters, at most
   64 characters). Provider links are kept only as https, `mailto:` and a Telegram chat
   (`tg://resolve?domain=…`); plain http and other `tg:` links (log-in, proxy) are dropped.
+- Subscription fetch (KS-21): the body is read only up to 20 MB (what the helper takes), a
+  redirect is followed only to https and the device headers (HWID, model) go only to the link's
+  own host, and YAML whose aliases expand to millions of nodes is refused before it is expanded.
 
 ## [0.18.1] - 2026-10-11
 
