@@ -151,22 +151,79 @@ PROBE="90 1"; pass; PROBE="0 0"; pass; pass; pass
 [ "$(grep -c 'no live server' "$EVENTS")" = 2 ] && ok "  and again after it answered in between" || bad "  nolive again: $(cat "$EVENTS")"
 
 OBS=$'ks-ping-0\t1\t100\nks-ping-1\t1\t110\nks-ping-2\t1\t30'
-reset_fo; PROBE="100 1"
+reset_fo; put_setting xrayserver ""; PROBE="100 1"   # no server picked by hand: the first host, auto
 for _ in 1 2 3 4 5 6; do pass; done
 PROBE="450 1"
 for _ in 1 2 3 4 5 6; do pass; done
 [ ! -e "$T/selected" ] && ok "latency above 3× the usual for less than 2 minutes: stays" || bad "slow switch too early: $(cat "$T/selected")"
 pass
 [ "$(cat "$T/selected" 2>/dev/null)" = "🇱🇹Литва 2" ] && grep -q 'failover (slow): 🇱🇹Литва -> 🇱🇹Литва 2$' "$EVENTS" &&
-  ok "more than 3× the usual latency for 2 minutes: switched to a faster host of the country" || bad "slow: $(cat "$T/selected" 2>&1) $(cat "$EVENTS")"
+  ok "auto (no pick by hand): more than 3× the usual latency for 2 minutes: switched to a faster host of the country" || bad "slow: $(cat "$T/selected" 2>&1) $(cat "$EVENTS")"
 grep -q '"reason":"slow","ms":450,"usual":100' "$DIAG"/events-*.jsonl && ok "  the journal has the latency and the usual one" || bad "  journal: $(cat "$DIAG"/events-*.jsonl)"
 OBS=$'ks-ping-0\t1\t100\nks-ping-1\t1\t400\nks-ping-2\t1\t30'
-reset_fo; PROBE="100 1"
+reset_fo; put_setting xrayserver ""; PROBE="100 1"
 for _ in 1 2 3 4 5 6; do pass; done
 PROBE="450 1"
 for _ in 1 2 3 4 5 6 7 8; do pass; done
 [ ! -e "$T/selected" ] && grep -q 'failover (slow): 🇱🇹Литва, no faster server of its country' "$EVENTS" &&
   ok "slow, but the other host of the country is no faster: stays, logged" || bad "slow no faster: $(cat "$T/selected" 2>&1) $(cat "$EVENTS")"
+
+# --- a server picked by hand is respected: never left for being slow, only when it is dead
+OBS=$'ks-ping-0\t1\t100\nks-ping-1\t1\t110\nks-ping-2\t1\t30'
+reset_fo; PROBE="100 1"   # xrayserver=🇱🇹Литва: picked by hand
+for _ in 1 2 3 4 5 6; do pass; done
+PROBE="450 1"
+for _ in $(seq 1 12); do pass; done
+[ ! -e "$T/selected" ] && [ ! -s "$EVENTS" ] && ok "picked by hand and slow: stays, nothing logged" || bad "slow manual: $(cat "$T/selected" 2>&1) $(cat "$EVENTS")"
+PROBE="0 0"; pass; pass; pass
+[ "$(cat "$T/selected" 2>/dev/null)" = "🇱🇹Литва 2" ] && ok "  picked by hand and dead (3 failures): moved" || bad "  dead manual: $(cat "$T/selected" 2>&1)"
+PROBE="100 1"; for _ in 1 2 3 4 5 6 7 8 9 10; do pass; done
+PROBE="450 1"; for _ in $(seq 1 8); do pass; done
+[ "$(tail -1 "$T/selected")" = "🇱🇹Литва" ] && ok "  the host failover moved to is not a pick by hand: slow moves on from it" || bad "  after failover: $(cat "$T/selected")"
+
+# --- a pick by hand («ks core select») starts over: no failover from it within the cooldown
+OBS=$'ks-ping-0\t1\t100\nks-ping-1\t1\t110\nks-ping-2\t1\t30'
+reset_fo; put_setting xrayserver ""; PROBE="0 0"
+pass; pass
+KS_NOW=$NOW core_select "$XRAY_GROUP" "🇱🇹Литва" 2>"$T/err" || bad "select: $(cat "$T/err")"
+grep -qx 'manual=🇱🇹Литва' "$CORE_DIR/failover" && grep -qx 'fails=0' "$CORE_DIR/failover" && grep -qx "last=$NOW" "$CORE_DIR/failover" &&
+  ok "select by hand: the failover state starts over, the pick remembered, the cooldown from now" || bad "state: $(cat "$CORE_DIR/failover")"
+for _ in 1 2 3 4 5 6 7 8; do pass; done
+[ "$(cat "$T/selected")" = "🇱🇹Литва" ] && ok "  dead right after the pick: kept for 3 minutes" || bad "  moved within the cooldown: $(cat "$T/selected")"
+pass; pass
+[ "$(tail -1 "$T/selected")" = "🇱🇹Литва 2" ] && ok "  still dead after them: moved" || bad "  after the cooldown: $(cat "$T/selected")"
+
+# --- a pick by hand and a failover switch at the same moment: one after the other, the pick last
+cat > "$T/run.sh" <<'EOF'
+. "$KS"
+DIR=$T; CORE_DIR=$T/core; SETTINGS=$T/settings; EVENTS=$T/events.log; REPORT=$T/core/routing.json; DIAG=$T/diag
+core_job() { CORE_RUN=1; CORE_PID=100; }
+diag_probe() { echo "0 0"; }
+xray_observe() { printf 'ks-ping-0\t0\t0\nks-ping-1\t1\t110\nks-ping-2\t1\t30\n'; }
+xray_select() { echo "start $1" >> "$T/order"; sleep 1; put_setting xrayserver "$1"
+  /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); $r->{selected} = $ARGV[0]; print JSON::PP->new->encode($r)' "$1" < "$REPORT" > "$REPORT.n" &&
+    mv "$REPORT.n" "$REPORT"; echo "end $1" >> "$T/order"; }
+case $1 in
+  failover) failover_pass 2000000 ;;
+  select) KS_NOW=2000001 core_select "$XRAY_GROUP" "🇩🇪Германия" ;;
+esac
+EOF
+both() {  # both <first> <second>: the second starts while the first holds the lock
+  rm -f "$T/order"; cp "$T/c.report" "$REPORT"; put_setting xrayserver "🇱🇹Литва"
+  printf 'server=🇱🇹Литва\nfails=2\nlast=0\nmanual=\n' > "$CORE_DIR/failover"
+  export T KS="$here/../ks"
+  core_lock_exec "$(lock_wait "$1")" bash "$T/run.sh" "$1" & sleep 0.4
+  core_lock_exec "$(lock_wait "$2")" bash "$T/run.sh" "$2" 2>"$T/lock.err"; wait
+}
+lock_wait() { if [ "$1" = failover ]; then echo 0; else echo 120; fi; }   # failover_bg and the dispatcher
+core_lock_wanted core select && ! core_lock_wanted core delay && ok "ks core select runs under the core lock (like import, refresh, _regen)" || bad "select not locked"
+grep -q 'core_lock_exec 0 "\$0" _failover' <(declare -f failover_bg) && ok "  the watchdog's failover pass under the same lock, never waiting" || bad "  failover_bg: $(declare -f failover_bg)"
+both failover select
+[ "$(paste -sd, - < "$T/order")" = "start 🇱🇹Литва 2,end 🇱🇹Литва 2,start 🇩🇪Германия,end 🇩🇪Германия" ] && [ "$(setting xrayserver "")" = "🇩🇪Германия" ] &&
+  ok "failover switching, then a pick by hand: it waits, one restart after the other, the pick wins" || bad "order: $(cat "$T/order")"
+both select failover
+[ "$(paste -sd, - < "$T/order")" = "start 🇩🇪Германия,end 🇩🇪Германия" ] && [ "$(setting xrayserver "")" = "🇩🇪Германия" ] &&
+  ok "a pick by hand switching, then the failover pass: skipped, the pick stays" || bad "order: $(cat "$T/order")"
 
 OBS=$'ks-ping-0\t0\t0\nks-ping-1\t1\t120\nks-ping-2\t1\t30'
 reset_fo; put_setting failover 0; PROBE="0 0"

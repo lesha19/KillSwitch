@@ -2358,7 +2358,8 @@ xray_select() {
 # latency (the median of its last 30 answers, at least 5), and the live host of the same country
 # (the flag its name starts with) with the lowest latency in the observatory takes over, for a slow
 # one only if it answers in less than half the time. Never another country, never twice in 3
-# minutes, nothing while the setting failover=0. The switch is the one the person makes
+# minutes, nothing while the setting failover=0. A server picked by hand (core select) is left only
+# when dead, never for being slow, and kept at least 3 minutes after the pick. The switch is the one the person makes
 # (xray_select: new config, Xray restarted, pf blocks meanwhile, the protection stays on).
 # State in $CORE_DIR/failover.
 # shellcheck disable=SC2016 # perl, not shell
@@ -2369,7 +2370,10 @@ KS_FAILOVER_PL='
   my $cur = $r->{selected} // $names[0] // exit 0;
   my %s;
   if (open my $f, "<", $ENV{ST}) { for (split /\n/, <$f>) { my ($k, $v) = split /=/, $_, 2; $s{$k} = $v if defined $v } }
+  # the pick by hand: the last one ks core select made, else (no state yet) xrayserver=
+  my $manual = exists $s{manual} ? $s{manual} : $ENV{PICK};
   %s = (server => $cur, last => $s{last} // 0) if ($s{server} // "") ne $cur;
+  $s{manual} = $manual;
   my @h = grep { /\A[0-9]+\z/ } split /,/, $s{hist} // "";
   my @sorted = sort { $a <=> $b } @h;
   my $usual = @h >= 5 ? $sorted[$#sorted / 2] : 0;
@@ -2379,7 +2383,8 @@ KS_FAILOVER_PL='
     if ($usual && $ms > 3 * $usual) { $s{high} ||= $now }
     else { $s{high} = 0; push @h, $ms; shift @h while @h > 30 }
   } else { $s{fails} = ($s{fails} // 0) + 1 }
-  my $why = $s{fails} >= 3 ? "no-answer" : $s{high} && $now - $s{high} >= 120 ? "slow" : "";
+  # slow moves only off a host failover chose (or the default one), never off a pick by hand
+  my $why = $s{fails} >= 3 ? "no-answer" : $s{high} && $now - $s{high} >= 120 && $manual ne $cur ? "slow" : "";
   my $out = "";
   my $flag = sub { my $n = shift; utf8::decode($n); $n =~ /\A([\x{1F1E6}-\x{1F1FF}]{2})/ ? $1 : "" };
   if (!$why) { $s{told} = 0 }
@@ -2388,7 +2393,7 @@ KS_FAILOVER_PL='
     my $country = $flag->($cur);
     my ($best) = sort { $p{$a}[1] <=> $p{$b}[1] }
       grep { $_ ne $cur && length $country && $flag->($_) eq $country && $p{$_} && $p{$_}[0] && ($why ne "slow" || $p{$_}[1] * 2 < $ms) } @names;
-    if (defined $best) { $out = join "\t", "switch", $cur, $best, $why, $ms, $usual; %s = (server => $best, last => $now) }
+    if (defined $best) { $out = join "\t", "switch", $cur, $best, $why, $ms, $usual; %s = (server => $best, last => $now, manual => "") }
     elsif (!$s{told}) { $out = join "\t", "stay", $cur, "-", $why, $ms, $usual; $s{told} = 1 }
   }
   $s{hist} = join ",", @h if ($s{server} eq $cur);
@@ -2402,7 +2407,7 @@ failover_pass() {  # failover_pass [epoch]
   core_job
   [ "$CORE_RUN" = 1 ] || return 0
   read -r probe ok <<<"$(diag_probe)"
-  out=$(PROBE_MS=$probe PROBE_OK=$ok NOW=$now P=$(xray_pings 2>/dev/null) ST="$CORE_DIR/failover" \
+  out=$(PROBE_MS=$probe PROBE_OK=$ok NOW=$now PICK=$(setting xrayserver "") P=$(xray_pings 2>/dev/null) ST="$CORE_DIR/failover" \
     /usr/bin/perl -MJSON::PP -e "$KS_FAILOVER_PL" < "$REPORT") || return 0
   [ -n "$out" ] || return 0
   IFS=$'\t' read -r act from to why ms usual <<<"$out"
@@ -2422,12 +2427,16 @@ failover_pass() {  # failover_pass [epoch]
     log_event "failover ($text): $from, no live server of its country"
   fi
 }
-failover_bg() { [ -d "$CORE_DIR" ] && lockf -k -t 0 "$CORE_DIR/core.lock" "$0" _failover >/dev/null 2>&1 & }
+failover_bg() { [ -d "$CORE_DIR" ] && core_lock_exec 0 "$0" _failover >/dev/null 2>&1 & }
 core_select() {  # core_select <group> <proxy>: switch a select group, e.g. to another server
   local body rc
   if [ "$(core_kind)" = xray ]; then
     [ "$1" = "$XRAY_GROUP" ] || { echo "С ядром Xray выбирается только сервер" >&2; return 1; }
-    xray_select "$2"; return
+    xray_select "$2" || return 1
+    # a pick by hand starts the failover over and is kept for its cooldown at least (ADR 0023)
+    printf 'server=%s\nlast=%s\nfails=0\nmanual=%s\n' "$2" "${KS_NOW:-$(date +%s)}" "$2" > "$CORE_DIR/failover.tmp" &&
+      mv "$CORE_DIR/failover.tmp" "$CORE_DIR/failover"
+    return
   fi
   body=$(mktemp) || return 1
   echo '{"name":""}' > "$body"
@@ -2984,18 +2993,25 @@ passwordless_args_ok() {
   esac
 }
 
+# Everything that writes the core's config or restarts it runs under one lock: the person's server
+# pick (core select) included, so it never overlaps the failover pass (ADR 0023), which never waits
+# (core_lock_exec 0); the watchdog's rotation skips its turn while it is held.
+core_lock_wanted() {
+  case "${1:-}:${2:-}" in
+    core:import|core:refresh|core:select|set:splitapps|set:multihop|set:adblock|set:diag|_regen:|repair:) return 0 ;;
+  esac
+  return 1
+}
+core_lock_exec() { lockf -k -t "$1" "$CORE_DIR/core.lock" "${@:2}"; }   # core_lock_exec <seconds to wait> <command…>
+
 [ "${BASH_SOURCE[0]}" = "$0" ] || return 0   # sourced by Helper/tests
 # reads nothing but this file: no root needed
 [ "${1:-}" = version ] && { ks_version "$0"; exit 0; }
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
 passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,32p' "$0" >&2; exit 1; }
 
-# Everything that writes the core's config runs under one lock (the watchdog's rotation skips
-# its turn while it is held).
-case "${1:-}:${2:-}" in
-  core:import|core:refresh|set:splitapps|set:multihop|set:adblock|set:diag|_regen:|repair:)
-    [ -n "${KS_LOCKED:-}" ] || [ ! -d "$CORE_DIR" ] || KS_LOCKED=1 exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@" ;;
-esac
+# The core lock (core_lock_wanted, above).
+if core_lock_wanted "$@" && [ -z "${KS_LOCKED:-}" ] && [ -d "$CORE_DIR" ]; then KS_LOCKED=1 exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@"; fi
 
 case "${1:-status}" in
   apply) guard ;;

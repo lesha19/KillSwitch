@@ -61,6 +61,11 @@ config (a port per host, Xray does not start when one is taken); `RoutingService
   inbound, which always goes to the running host (ADR 0016).
   - 3 failures in a row → «no answer». A latency above 3× the median of the host's last 30 answers
     (at least 5; slow answers do not enter the median) for 2 minutes → «slow».
+  - A server picked by hand (`ks core select`; without failover state yet, `xrayserver=`) is left
+    only when it is dead (3 failures), never for being slow: the person chose it. «Slow» moves only
+    off a host failover itself chose or the default first host (no pick: the auto mode). A pick by
+    hand starts the failover state over (`manual=`, failures 0) with the 3-minute cooldown from
+    that moment, so a just-picked server is kept at least that long.
   - The new host: the live one of the same country — the flag its name starts with — with the
     lowest latency in the observatory; for «slow» only one answering in under half the time.
     Never another country (ADR 0005), never twice within 3 minutes. None: logged once while it
@@ -87,7 +92,9 @@ config (a port per host, Xray does not start when one is taken); `RoutingService
   observatory one request per host a minute.
 - Country is the leading flag in ks; the app also recognises a country by name or code
   (`ServerName`). A host named without a leading flag is never a failover target.
-- `ks core select` by the person is not under the core lock, so a switch by the person and one by
-  the watchdog at the same moment are not ordered (the last one wins).
+- `ks core select` runs under the core lock too (`core_lock_wanted`): the person's pick waits for
+  a failover switch in progress (up to 120 s) and comes after it, the failover pass never waits
+  (`lockf -t 0`) and skips its turn while a pick is being made; never two restarts at once, the
+  pick by hand is the last word. With mihomo the select (an API call) waits for the lock as well.
 - `Helper/tests/core-xray-ping.sh` (generator, decoding, delay, proxies, failover pass, the live
   API against the real binary), `Tests/FailoverTests.swift`, `Tests/ProtectionLogTests.swift`.

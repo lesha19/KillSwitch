@@ -14,7 +14,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 - Xray: automatic server switch (#32, ADR 0023). When the running server does not answer 3 times
   in a row (a probe every 20 s) or answers more than 3× slower than usual for 2 minutes, KillSwitch
   moves to the fastest working server of the same country, never to another country and not more
-  than once in 3 minutes. The protection stays on during the switch (about a second of restart,
+  than once in 3 minutes. A server picked by hand is left only when it stops answering, never for
+  being slow, and is kept at least 3 minutes after the pick. The protection stays on during the switch (about a second of restart,
   pf blocks). Logged in Журнал защиты and the diagnostics journal; a notification and the status
   line as with the fallback way. Settings › Способ подключения «Переключать сервер, если он
   перестал отвечать», on by default (`ks set failover 0|1`).
