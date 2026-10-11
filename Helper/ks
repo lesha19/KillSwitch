@@ -2083,18 +2083,44 @@ core_plist_sync() {
 }
 
 # "ks set core xray|mihomo" (admin): the core that runs from now on. Servers, pins and approvals
-# belong to the last import, which was in the other core's format: a running core is stopped (pf
-# keeps blocking) and the app imports the subscription for the new one in the same admin batch
-# ("ks core import", then "ks core on").
+# belong to the last import, which was in the other core's format: the app imports the subscription
+# for the new one next ("ks core import", then "ks core on", which swaps the launchd job). A running
+# core keeps running until then: with protection on, the subscription in the new format can only
+# be fetched, and its server names resolved, through it.
 set_core() {
   [[ "$1" =~ ^(xray|mihomo)$ ]] || { echo "usage: ks set core xray|mihomo" >&2; return 1; }
   [ -x "$CORE_DIR/$1" ] || { echo "Ядро $1 не установлено" >&2; return 1; }
-  launchctl bootout "$CORE_JOB" 2>/dev/null
   put_setting core "$1" || return 1
-  core_plist_sync 2>/dev/null
   rm -f "$(core_conf)"   # built from an older import: "ks core on" waits for a new one
   log_event "core: $1 (waits for the subscription)"
   echo "Ядро $1 выбрано: возьми подписку заново, чтобы его запустить" >&2
+}
+
+# launchctl bootout returns before the job is gone, and bootstrap refuses it until then
+job_gone() { for _ in $(seq 1 50); do launchctl print "$1" >/dev/null 2>&1 || return 0; sleep 0.2; done; return 1; }
+
+# "ks core on" (passwordless)
+core_on() {
+  [ -x "$CORE_DIR/$(core_kind)" ] || { echo "Ядро не установлено" >&2; return 1; }
+  [ -s "$(core_conf)" ] || { echo "Нет конфига ядра: сначала возьми подписку" >&2; return 1; }
+  # two TUNs fight over routes and DNS: the other VPN has to be off first
+  if ! core_running && { pgrep -x DropwebCore >/dev/null || [ -n "$(vpn_ifaces)" ]; }; then
+    echo "Сначала отключи VPN в dropweb или Happ" >&2; return 1
+  fi
+  core_log_tidy
+  diag_dir   # a config with the access log names it (ADR 0021)
+  # the stats port taken by another program (or free again): the config follows first
+  if ! core_running && xray_api_check; then "$0" _regen >/dev/null 2>&1 || true; fi
+  launchctl enable "$CORE_JOB"
+  # the job of the chosen core (ADR 0020); a loaded job of the other one goes first
+  if core_plist_sync 2>/dev/null; then launchctl bootout "$CORE_JOB" 2>/dev/null; job_gone "$CORE_JOB"; fi
+  launchctl bootstrap system "$CORE_PLIST" 2>/dev/null ||
+    launchctl kickstart "$CORE_JOB"
+  # DNS goes to the core only once it runs; otherwise the Mac would be left without names
+  for _ in 1 2 3 4 5 6 7 8 9 10; do core_running && break; sleep 0.5; done
+  core_running || { echo "Ядро не запустилось" >&2; return 1; }
+  dns_locked apply >/dev/null
+  log_event "core on"
 }
 
 # "ks set splitapps <list>": apps outside the VPN, "" clears. The rebuilt config lets the core out
@@ -2981,27 +3007,7 @@ case "${1:-status}" in
     ;;
   core)
     case "${2:-state}" in
-      on)
-        [ -x "$CORE_DIR/$(core_kind)" ] || { echo "Ядро не установлено" >&2; exit 1; }
-        [ -s "$(core_conf)" ] || { echo "Нет конфига ядра: сначала возьми подписку" >&2; exit 1; }
-        # two TUNs fight over routes and DNS: the other VPN has to be off first
-        if ! core_running && { pgrep -x DropwebCore >/dev/null || [ -n "$(vpn_ifaces)" ]; }; then
-          echo "Сначала отключи VPN в dropweb или Happ" >&2; exit 1
-        fi
-        core_log_tidy
-        diag_dir   # a config with the access log names it (ADR 0021)
-        # the stats port taken by another program (or free again): the config follows first
-        if ! core_running && xray_api_check; then "$0" _regen >/dev/null 2>&1 || true; fi
-        launchctl enable "$CORE_JOB"
-        # the job of the chosen core (ADR 0020); a loaded job of the other one goes first
-        if core_plist_sync 2>/dev/null; then launchctl bootout "$CORE_JOB" 2>/dev/null; fi
-        launchctl bootstrap system "$CORE_PLIST" 2>/dev/null ||
-          launchctl kickstart "$CORE_JOB"
-        # DNS goes to the core only once it runs; otherwise the Mac would be left without names
-        for _ in 1 2 3 4 5 6 7 8 9 10; do core_running && break; sleep 0.5; done
-        core_running || { echo "Ядро не запустилось" >&2; exit 1; }
-        dns_locked apply >/dev/null
-        log_event "core on" ;;
+      on) core_on || exit 1 ;;
       off)
         launchctl bootout "$CORE_JOB" 2>/dev/null
         launchctl disable "$CORE_JOB"

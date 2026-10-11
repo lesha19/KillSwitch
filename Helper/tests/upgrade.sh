@@ -288,6 +288,16 @@ KEEP_E=1 upgrade --upgrade >/dev/null 2>&1
 check "core=xray: its job, its config rebuilt" \
   "$(cmp -s "$root/ld/local.killswitch.core.plist" "$here/../local.killswitch.core.xray.plist" && echo xray-job) $(grep -c '^ks _regen' "$root/calls")" "xray-job 1"
 
+# "ks set core xray" while mihomo runs: mihomo keeps the VPN until the Xray subscription is imported
+# and "ks core on" swaps the job; an upgrade meanwhile must not start Xray without its config
+setup xraypending
+xray_bundle
+printf 'core=xray\n' >> "$root/lib/settings"
+out=$(KEEP_E=1 upgrade --upgrade 2>&1); rc=$?
+check "core=xray chosen, its config not yet imported, mihomo running: upgrade succeeds" "$rc" 0
+check "  the running mihomo job stays" "$(cmp -s "$root/ld/local.killswitch.core.plist" "$here/../local.killswitch.core.plist" && echo mihomo-job)" mihomo-job
+check "  the core not restarted" "$(grep -cE 'kickstart|(bootout|bootstrap) .*core' "$root/calls")" 0
+
 setup coreoff
 echo core-2 > "$root/bundle/mihomo"
 CORE_LOADED=0 upgrade --upgrade >/dev/null 2>&1
