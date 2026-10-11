@@ -4,6 +4,14 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Added
+- Server list: «Недавние» (last 5 chosen, #13), «Порядок» by subscription / ping / name (#25), a
+  filter by country, protocol or group, and the subscription's server description under the name
+  (#40). Ping is drawn as three signal bars; with Xray the ping-all button is off.
+- Settings › Общие «Запускать без окна»: start in the menu bar only (#40).
+
 ## [0.17.0] - 2026-10-11
 
 ### Added
