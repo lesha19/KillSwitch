@@ -140,7 +140,7 @@ xray_select() {
   /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); $r->{selected} = $ARGV[0]; print JSON::PP->new->encode($r)' "$1" < "$REPORT" > "$REPORT.n" &&
     mv "$REPORT.n" "$REPORT"
 }
-reset_fo() { rm -f "$CORE_DIR/failover" "$T/selected" "$DIAG"/events-*.jsonl; : > "$EVENTS"; cp "$T/c.report" "$REPORT"; put_setting xrayserver "🇱🇹Литва"; }
+reset_fo() { rm -f "$CORE_DIR"/failover* "$T/selected" "$DIAG"/events-*.jsonl; : > "$EVENTS"; cp "$T/c.report" "$REPORT"; put_setting xrayserver "🇱🇹Литва"; }
 pass() { failover_pass "$NOW"; NOW=$((NOW + 20)); }
 OBS=$'ks-ping-0\t0\t0\nks-ping-1\t1\t120\nks-ping-2\t1\t30'
 reset_fo; NOW=1000000
@@ -304,6 +304,27 @@ put_setting core xray
 reset_fo; xray_select() { return 1; }
 for _ in 1 2 3; do pass; done
 grep -q 'failover failed: 🇱🇹Литва -> 🇱🇹Литва 2' "$EVENTS" && ok "a switch that fails: logged, the running config stays" || bad "failed switch: $(cat "$EVENTS")"
+# ADR 0023: the state follows the switch only once it happened; a refused one (KS-10, exit 3)
+# leaves the server picked by hand a pick by hand, and that server is not tried again for 30
+# minutes (ADR 0030 review: not every cooldown)
+grep -qx 'server=🇱🇹Литва' "$CORE_DIR/failover" && grep -qx 'manual=🇱🇹Литва' "$CORE_DIR/failover" &&
+  ok "  the failed switch: still the hand-picked server, still a pick by hand" || bad "  state: $(cat "$CORE_DIR/failover")"
+for _ in 1 2 3 4 5 6 7 8; do pass; done
+[ "$(grep -c 'failover failed' "$EVENTS")" = 1 ] && ok "  not tried again within 3 minutes" || bad "  retries: $(cat "$EVENTS")"
+pass
+[ "$(grep -c 'failover failed' "$EVENTS")" = 1 ] && ok "  nor after them: that server is skipped 30 minutes" || bad "  after cooldown: $(cat "$EVENTS")"
+NOW=$((NOW + 1800)); pass; pass; pass
+[ "$(grep -c 'failover failed' "$EVENTS")" = 2 ] && ok "  tried again after 30 minutes" || bad "  after 30 min: $(cat "$EVENTS")"
+OBS=$'ks-ping-0\t1\t100\nks-ping-1\t1\t110\nks-ping-2\t1\t30'
+seen=$(grep -c 'failover' "$EVENTS")
+PROBE="100 1"; for _ in 1 2 3 4 5 6; do pass; done
+PROBE="450 1"; for _ in $(seq 1 12); do pass; done
+[ "$(grep -c 'failover' "$EVENTS")" = "$seen" ] && ok "  later slow: the hand-picked server is not left for being slow" || bad "  slow after failed switch: $(cat "$EVENTS")"
+reset_fo; xray_select() { echo "$1" >> "$T/selected"; return 0; }
+OBS=$'ks-ping-0\t0\t0\nks-ping-1\t1\t120\nks-ping-2\t1\t30'; PROBE="0 0"
+pass; pass; pass
+grep -qx 'server=🇱🇹Литва 2' "$CORE_DIR/failover" && grep -qx 'manual=' "$CORE_DIR/failover" &&
+  ok "a switch that worked: the new server in the state, not a pick by hand" || bad "state after switch: $(cat "$CORE_DIR/failover")"
 
 # --- the watchdog starts it every 20 s, only while the core runs and the protection is on
 calls=0

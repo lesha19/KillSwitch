@@ -120,5 +120,11 @@ check "an appcast without items: taken" "$(published_build_problem 1 "$tmp/empty
 printf 'KS_VERSION="0.19.0" # the app'"'"'s version\n' > "$tmp/ks"
 check "KS_VERSION equal to the app's: taken" "$(ks_version_problem "$tmp/ks" 0.19.0)" ""
 check "KS_VERSION different: refused" "$(ks_version_problem "$tmp/ks" 0.19.1 | grep -c 'KS_VERSION «0.19.0»')" 1
+# bash 3.2 in a UTF-8 locale (the CI runner, a Terminal) takes a non-ASCII byte after "$name" for
+# part of the name: $ks then » reads the variable "ks\xc2" (unbound under set -u). Braces, always.
+check "no \$name right before a non-ASCII character in the scripts (bash 3.2, UTF-8 locale)" \
+  "$(perl -ne 'print "$ARGV:$.\n" if /\$[A-Za-z_][A-Za-z0-9_]*[\x80-\xff]/; close ARGV if eof' "$here"/../../scripts/*.sh "$here"/../*.sh "$here"/*.sh)" ""
+check "KS_VERSION different, in a UTF-8 locale: refused" \
+  "$(LC_ALL=en_US.UTF-8 /bin/bash -c '. "$1"; ks_version_problem "$2" 0.19.1' _ "$here/../../scripts/release.sh" "$tmp/ks" 2>&1 | grep -c 'KS_VERSION «0.19.0»')" 1
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

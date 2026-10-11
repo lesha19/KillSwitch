@@ -133,6 +133,23 @@ final class FailoverTests: XCTestCase {
         XCTAssertEqual(Failover.state(chosen: "🇱🇹Литва 2", proxies: try xray()), .fine)
     }
 
+    /// ADR 0023 also moves off a host that still answers but three times slower: both stay alive,
+    /// and the selector changing to another host of its country is the helper's switch.
+    func testXraySwitchOffASlowHostIsNoticed() throws {
+        XCTAssertEqual(Failover.state(chosen: "🇱🇹Литва", proxies: try xray(alive1: true)),
+                       .switched(from: "🇱🇹Литва", to: "🇱🇹Литва 2"))
+        XCTAssertEqual(Failover.state(chosen: "🇱🇹Литва 2", proxies: try xray(alive1: true)), .fine)
+        // another country is never the helper's: the person picked it
+        XCTAssertEqual(Failover.state(chosen: "🇱🇹Литва", proxies: try xray(now: "🇩🇪Германия", alive1: true)), .fine)
+        // right after a pick the list may still show the old host: not a switch
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertEqual(Failover.state(chosen: "🇱🇹Литва", proxies: try xray(alive1: true), pickedAt: now - 5, now: now), .fine)
+        XCTAssertEqual(Failover.state(chosen: "🇱🇹Литва", proxies: try xray(alive1: true), pickedAt: now - 120, now: now),
+                       .switched(from: "🇱🇹Литва", to: "🇱🇹Литва 2"))
+        XCTAssertEqual(Failover.state(chosen: "🇱🇹Литва", proxies: try xray(), pickedAt: now - 5, now: now),
+                       .switched(from: "🇱🇹Литва", to: "🇱🇹Литва 2"), "a dead host is a switch at any time")
+    }
+
     /// The helper moves within the country by itself: the person is asked only when every host of it is silent.
     func testXrayCountryDownOnlyWhenEveryHostOfItIsSilent() throws {
         XCTAssertEqual(Failover.state(chosen: "🇱🇹Литва", proxies: try xray(now: "🇱🇹Литва")), .fine)

@@ -142,6 +142,32 @@ final class CLITests: XCTestCase {
 
     private let main = "🚀 Выбор сервера"
 
+    /// mihomo's JSON has no group order: the CLI reads the profile's order the app saved, so the
+    /// main selector is «🚀 Выбор сервера», not the alphabetically first «Свои серверы».
+    func testProxiesUseTheAppsGroupOrder() throws {
+        let suite = "CLITests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
+        defaults.set(["🚀 Выбор сервера", "⚡ Авто", "Свои серверы"], forKey: CoreProxies.groupOrderKey)
+        let list = try XCTUnwrap(CLI.proxies(json, appDefaults: defaults))
+        XCTAssertEqual(list.groups.first?.name, main)
+        XCTAssertEqual(CLI.Status(state: "on", coreState: "on", proxies: list).server, "⚡ Авто")
+        XCTAssertEqual(try CLI.selection("дом", in: list).get(),
+                       [.init(group: "Свои серверы", proxy: "Дом"), .init(group: main, proxy: "Свои серверы")])
+        XCTAssertTrue(ServerPicker.entries(list).contains { $0.name == "🇩🇪 Германия" })
+        XCTAssertNil(CLI.proxies("not json", appDefaults: defaults))
+    }
+
+    /// Without a saved order (another account, before the first import) the selector no other
+    /// group offers comes first: it is the one the rules use.
+    func testWithoutAnOrderTheTopSelectorComesFirst() throws {
+        let suite = "CLITests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: suite) }
+        XCTAssertEqual(CLI.proxies(json, appDefaults: defaults)?.groups.first?.name, main)
+        XCTAssertEqual(try CoreProxies(data: Data(json.utf8)).groups.first?.name, main)
+    }
+
     func testSelectByExactName() throws {
         XCTAssertEqual(try CLI.selection("LT-Vilnius", in: proxies()).get(), [.init(group: main, proxy: "LT-Vilnius")])
     }

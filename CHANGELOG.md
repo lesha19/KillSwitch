@@ -116,6 +116,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   app settings from the file are not applied either.
 - Taking a subscription with many servers: approving what every server sends past the VPN parses
   the profile once (200 servers: about 14 s instead of about 2 minutes).
+- `killswitch status`, `server list` and `server select` with a subscription that has its own
+  server group («Свои серверы») next to the main one: they took the alphabetically first group for
+  the main selector, so they showed its choice, left out the subscription's servers, and picking an
+  own server did not switch to it. The CLI now uses the group order the app saved from the profile.
+- Xray: a switch away from a server that still answered but became three times slower was not
+  noticed by the app: no notification, nothing in the status line, and the next connection went
+  back to the slow server.
+- «Загрузить из файла…»: a changed Wi‑Fi network rule was shown only by its name («Cafe → Cafe»);
+  the confirmation now says what changes («Cafe: подключаться, сервер …» → «Cafe: не подключаться»).
 
 ### Security
 - The daemon accepts one more client, `com.lesha19.KillSwitch.cli`, signed by the same team; the
