@@ -56,14 +56,13 @@ patches = {
         # the state is set by Render.swift; a real refresh would ask ks and show its absence
         ("    func refresh() {", "        return"),
         ("    private static func exec(", "        (-1, \"\")"),
-        # reading Happ's group container makes macOS ask "access data from other apps" and hangs
-        ("    private static func readHappServers() -> [String] {", "        return []"),
         # «Трафик»: the report and the connections are set by Render.swift
         ("    func readRouting() {", "        return"),
         ("    func watchConnections(_ on: Bool) {", "        return"),
     ],
     "VPNClient.swift": [("    init(control: KillSwitchControl) {", "        self.control = control")],
-    "AutoConnector.swift": [("    init(control: KillSwitchControl) {", "        self.control = control\n        super.init()")],
+    "AutoConnector.swift": [("    init(control: KillSwitchControl, client: VPNClient) {",
+                           "        self.control = control\n        self.client = client\n        super.init()")],
     "FilterControl.swift": [("    override init() {", "        super.init()")],
     "LeakTester.swift": [("    init() {", "    ")],
     "OnboardingView.swift": [("    private func rememberHome() {", "        return")],
@@ -106,7 +105,13 @@ enum Keychain {
 @MainActor @Observable final class Updater {
     var canCheck = true
     var automaticallyUpdates = true
+    var betaUpdates = false
+    var relaunchPending = false
     func check() {}
+    func relaunch() {}
+}
+struct RelaunchBanner: View {
+    var body: some View { EmptyView() }
 }
 struct CheckForUpdatesButton: View {
     let updater: Updater
