@@ -45,7 +45,8 @@ Rules are loaded at boot, before login.
   never prompting (a notification instead), with trusted Wi-Fi networks (the name needs Location access
   on macOS 14+; without it every network is untrusted); «Запускать при входе» (SMAppService);
   «Программы без VPN» (apps by CFBundleExecutable → `ks set splitapps <list>`);
-  «Двойной VPN» (`ks set multihop <entry>|off`, chain shown in the window).
+  «Двойной VPN» (`ks set multihop <entry>|off`, chain shown in the window); «Размер пакетов VPN (MTU)»
+  for troubleshooting (`ks set mtu auto|1280…1500`, ADR 0032).
 - `App/Core/` — pure parsers (no AppKit), unit-tested by the `KillSwitchTests` target:
   `xcodegen generate && xcodebuild -scheme KillSwitch test CODE_SIGNING_ALLOWED=NO`.
 - `CLI/` — `killswitch`, the command line over the daemon (ADR 0025), shipped at
@@ -148,7 +149,10 @@ the bundled geodata in place or kept the old file because its sha256 was not the
   route, bytes; no source addresses) for its «Соединения» tab. Double VPN: `ks set multihop <proxy>|off`
   (`multihop=` in `settings`) sets `dialer-proxy: <proxy>` on every other proxy, so pf lets the core
   reach only the entry server; the entry must be a proxy of the profile without its own dialer-proxy.
-  Both need the admin password (not in sudoers: splitapps widens direct egress). The app switches servers without the API being exposed: `ks core proxies` (JSON of
+  Both need the admin password (not in sudoers: splitapps widens direct egress). The TUN's MTU:
+  `ks set mtu auto|1280…1500` (`mtu=` in `settings`, admin, both cores; «auto» = Xray 1500, mihomo
+  9000) rebuilds the config, restarts the core once and puts the previous value back if it does not
+  come up (ADR 0032). The app switches servers without the API being exposed: `ks core proxies` (JSON of
   groups and proxies), `ks core select <group> <proxy>`, `ks core delay <group|proxy>` talk to the
   controller socket; names are length- and control-character-checked and fully percent-encoded.
   `Helper/tests/core-config.sh` runs the generator against fixture profiles, attack ones included,
