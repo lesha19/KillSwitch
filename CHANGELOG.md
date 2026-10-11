@@ -25,6 +25,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   новые серверы». Now the banner, the notification and Settings say «Подписка меняет правила
   „напрямую“» and that part of the traffic will go past the VPN, so the admin knows what the
   password approves.
+- DHCP rule (KS-14): UDP from port 68 to a server's port 67 passed for any program, a way past the
+  kill switch. It now passes only from root's sockets (the system's DHCP client); broadcasts are
+  unchanged.
 
 ## [0.18.1] - 2026-10-11
 

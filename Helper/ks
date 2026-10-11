@@ -225,7 +225,9 @@ rules() {  # rules [allow-file] [servers-file] [manual-servers-file]
       echo "pass out quick proto tcp to { $PROBE_RU } port 443 group $CORE_GROUP flags any keep state"
     fi
   fi
-  echo 'pass out quick inet proto udp from any port 68 to any port 67 keep state'
+  # DHCP renewals to the server (unicast) from the system's DHCP client only: any program may bind
+  # UDP port 68 (KS-14). DISCOVER and REBIND go to 255.255.255.255, passed by the next rule.
+  echo 'pass out quick inet proto udp from any port 68 to any port 67 user 0 keep state'
   echo 'pass out quick inet to { 169.254.0.0/16, 224.0.0.0/4, 255.255.255.255 } keep state'
   # IPv6: the core runs without it (ipv6: false), so IPv6 is never tunnelled and only link-local
   # and multicast pass here (neighbour discovery, Bonjour, AirDrop), plus the tailnet below. A

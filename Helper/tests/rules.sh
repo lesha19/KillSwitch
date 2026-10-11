@@ -117,4 +117,9 @@ rules > "$tmp/out"
 expect "no NetBird group yet: no NetBird pass" "group $NB_GROUP" absent
 dscl() { return 0; }
 
+# KS-14: any program may bind UDP port 68; the DHCP pass is for the system's DHCP client (root)
+rm -f "$SETTINGS"; rules > "$tmp/out"
+expect "DHCP to a server's port 67 only from root's socket" '^pass out quick inet proto udp from any port 68 to any port 67 user 0 keep state$'
+expect "no DHCP pass for any process" '^pass out quick inet proto udp from any port 68 to any port 67 keep state$' absent
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
