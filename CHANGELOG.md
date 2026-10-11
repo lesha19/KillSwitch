@@ -80,6 +80,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   app settings from the file are not applied either.
 - Taking a subscription with many servers: approving what every server sends past the VPN parses
   the profile once (200 servers: about 14 s instead of about 2 minutes).
+- A large subscription (~19 MB) no longer freezes the window while it is read (#50).
+- Settings changed at the same moment (a «ks set» and the automatic server switch) no longer
+  lose one another; the protection log and the pause are written whole (#50).
+- Subscriptions whose rule providers send request headers (`header`) are taken (#37).
 
 ### Security
 - The daemon accepts one more client, `com.lesha19.KillSwitch.cli`, signed by the same team; the
@@ -142,6 +146,21 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   (needed for passwordless switches and failover) is built from the imported profile when no
   refresh changed it since the import; otherwise the next import with the password builds it.
 - `ks repair` keeps only host addresses in the Tailscale relay list (KS-19), as the check does.
+- Password prompt: install.sh and uninstall.sh run from a copy of the app in a folder of root's
+  own, checked there against the daemon's signature requirement (#37, as ADR 0012). Nothing put
+  into the app between the app's check and the run can run as root.
+- `ks core import` through the password prompt reads the profile as the file's owner, never a
+  link or a file with a second name; root's own file only from folders only root can change (#37).
+- Xray subscriptions (#37, a fuzz test of the generator): the second server of an XHTTP
+  connection (`downloadSettings`) is pinned and approved like the first; DNS servers
+  `udp+local`, `h2c+local` and every other `+local`, `fakedns+…` and ` localhost` are dropped;
+  tags `ks-…` and balancer or observatory selectors that would pick KillSwitch's own outbounds are
+  refused; invalid server addresses (999.1.1.1, 01.2.3.4, 0/127/224+) are refused instead of
+  blocking everything in pf; raw socket options (`customSockopt`) are removed.
+- `KS_NOW`, `KS_APPROVE_ALL` and `KS_LOCKED` never come from the caller; the core lock's re-exec
+  is believed only from its own lockf (#50).
+- NetBird: every link on the way to its binary is followed and its folder checked; a link in a
+  folder others can write is logged, not refused (#50, docs/security/hardening-0.20.md).
 
 ## [0.18.1] - 2026-10-11
 
