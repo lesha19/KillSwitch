@@ -200,6 +200,7 @@ cat > "$EVENTS" <<'XEOF'
 2026-10-11 14:00:00 server addresses changed: lt.example.com 203.0.113.40 -> 203.0.113.41
 2026-10-11 14:01:00 fetched https://sub.example.org/api/sub/Zx81kq0 for 00000000-0000-4000-8000-000000000001
 2026-10-11 14:02:00 core on
+2026-10-11 14:03:00 subscription sub.example.net/Ab12cd34 and panel.example.net:8443/sub/Qx7tok9 and lt.example.com/Lt5tok2
 XEOF
 printf 'dial tcp 203.0.113.10:443 via sni.hidden.example: key Z84J2Iel0123abcdQWERTYxyz9\n' > "$CORE_DIR/core.log"
 printf '[{"remarks":"LT","outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"lt.example.com"}]},
@@ -267,6 +268,8 @@ grep -rq 'server-1' "$r/events.log" && grep -q 'server-1' "$r/routing.json" && [
   ok "report: masked as stable placeholders (server-N)" || bad "placeholders: $(cat "$r/events.log")"
 grep -rqE 'sub\.example\.org|00000000-0000-4000|Z84J2Iel' "$r" && bad "report holds a link, uuid or key: $(grep -rE 'sub\.example|00000000|Z84J' "$r" | head -3)" ||
   ok "report: links, uuids and keys masked"
+grep -rqE 'Ab12cd34|Qx7tok9|Lt5tok2|sub\.example\.net' "$r" && bad "report holds a scheme-less link's token: $(grep -rE 'Ab12cd34|Qx7tok9|Lt5tok2|example\.net' "$r" | head -3)" ||
+  ok "report: a link without its scheme (host[:port]/token) masked whole (#26)"
 grep -rq 'root only secret' "$r" && bad "report holds a file planted by link: $names" || ok "report: no hard-linked or symlinked crash file"
 [ "$(cat "$r/crash/xray-2026-10-10-120000.ips")" = '{"procName":"xray"}' ] && ok "report: crash report copied whole" || bad "crash copy: $(cat "$r/crash/xray-2026-10-10-120000.ips")"
 grep -rqE '198\.51\.100|192\.0\.2\.55|2001:db8:1::5|93\.184\.216' "$r" && bad "report holds a public address: $(grep -rE '198\.51\.100|192\.0\.2\.55|2001:db8|93\.184' "$r" | head -4)" ||

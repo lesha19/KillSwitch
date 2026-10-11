@@ -2727,6 +2727,9 @@ diag_redact() {
     while (my $file = <STDIN>) {
       chomp $file;
       my $s = do { local $/; open my $f, "<", $file or next; <$f> };
+      # a link without its scheme (host[:port]/token) carries the subscription token too (#26);
+      # before the server names, which would leave "server-N/token". Not a component of a file path.
+      $s =~ s{(?<![\w.\-/])(?:[A-Za-z0-9\-]+\.)+[A-Za-z]{2,}(?::\d{1,5})?/\S+}{<ссылка>}g;
       $s =~ s/(?<![\w.-])($re)(?![\w-]|\.\w)/$label{$1}/g if defined $re;
       # an address a pinned name had before (events.log: "<name> <old> -> <new>")
       $s =~ s/(server-\d+) \d{1,3}(?:\.\d{1,3}){3}(?![\w.])/$1 <old>/g;

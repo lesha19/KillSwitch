@@ -45,6 +45,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   included, not only WireGuard, STUN, relay and management traffic.
 - «Установить и перезапустить» did nothing while a sheet was open (e.g. «Начало работы»); a build
   installed but not relaunched is now relaunched or offered with «Перезапустить» (#35).
+- A subscription link without its scheme (`host/token`) kept its token in «Скопировать диагностику»
+  and in «Собрать отчёт»; the host is now masked with its port and path (#26).
 
 ## [0.17.0] - 2026-10-11
 
