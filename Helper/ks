@@ -2276,11 +2276,16 @@ core_plist_sync() {
 # import and goes ("ks core on" waits for a new one), except when it is the one already chosen or
 # its job is the loaded one (back before the other core's import worked): that core runs on it.
 set_core() {
-  local keep=0
+  local keep=0 mine other
   [[ "$1" =~ ^(xray|mihomo)$ ]] || { echo "usage: ks set core xray|mihomo" >&2; return 1; }
   [ -x "$CORE_DIR/$1" ] || { echo "Ядро $1 не установлено" >&2; return 1; }
   [ "$(core_kind)" = "$1" ] && keep=1
   launchctl print "$CORE_JOB" >/dev/null 2>&1 && cmp -s "$CORE_DIR/plist.$1" "$CORE_PLIST" && keep=1
+  # its import is the last one (that of the other core failed or never came): the servers, pins
+  # and approvals in place are that config's, so it stays even with the core off
+  mine=$CORE_PROFILE; other="$CORE_DIR/profile-xray.json"
+  [ "$1" = xray ] && { mine=$other; other=$CORE_PROFILE; }
+  [ -f "$mine" ] && { [ ! -e "$other" ] || mtime_older "$other" "$mine"; } && keep=1
   put_setting core "$1" || return 1
   [ "$keep" = 1 ] || rm -f "$(core_conf)"
   log_event "core: $1 (waits for the subscription)"

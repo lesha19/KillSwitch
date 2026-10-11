@@ -183,6 +183,7 @@ set_core mihomo 2>"$tmp/err"
 # "ks core import" resolves its server names after "ks set core". With the running core stopped
 # nothing could leave (pf) and the Mac stayed without a VPN; the running one stays until "core on".
 echo '<plist>mihomo</plist>' > "$CORE_PLIST"; echo cfg > "$CORE_DIR/config.yaml"; echo stale > "$CORE_DIR/xray.json"
+echo '{}' > "$CORE_PROFILE"   # mihomo runs: its import was the last one
 LOADED=1; : > "$tmp/launchd"
 set_core xray 2>"$tmp/err"
 ! grep -qE 'bootout|bootstrap|kickstart|disable' "$tmp/launchd" && [ "$(cat "$CORE_PLIST")" = '<plist>mihomo</plist>' ] &&
@@ -197,6 +198,16 @@ set_core mihomo 2>/dev/null
 echo '{}' > "$CORE_DIR/xray.json"; put_setting core xray
 set_core xray 2>/dev/null
 [ -s "$CORE_DIR/xray.json" ] && ok "set core to the one already chosen: its config kept" || bad "set core same: $(ls "$CORE_DIR")"
+# mihomo not running: back to the core whose import was the last one (the other's failed), its
+# config matches the servers and approvals in place and stays, no import with the password needed
+LOADED=0; put_setting core xray
+set_core mihomo 2>/dev/null
+[ -s "$CORE_DIR/config.yaml" ] && ok "set core back to the core imported last, not running: its config kept" || bad "set core back, off: $(ls "$CORE_DIR")"
+# the last import was Xray's: mihomo's config is from an older one and goes
+put_setting core xray; touch "$CORE_DIR/profile-xray.json"
+set_core mihomo 2>/dev/null
+[ ! -e "$CORE_DIR/config.yaml" ] && ok "  after an import for the other core: the older config goes" || bad "  stale kept: $(ls "$CORE_DIR")"
+LOADED=1
 rm -f "$CORE_DIR/xray.json"; put_setting core xray
 set_core sing-box 2>/dev/null && bad "set core sing-box accepted" || ok "set core: only xray or mihomo"
 
