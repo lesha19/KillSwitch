@@ -4,6 +4,16 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Security
+- NetBird (KS-09, #45): root no longer runs NetBird's binary. Its CLI (`status`, `up` after a
+  restart) runs as the user at the console, never while nobody is logged in, and only when the
+  binary passes NetBird's code signature check right before the run. A binary that someone other
+  than root could change (the file or a folder above it, links resolved; a folder only the admin
+  group may write, like /Applications, is accepted) is no longer taken for NetBird: it gets no
+  pass past the VPN and is never run.
+
 ## [0.18.1] - 2026-10-11
 
 ### Added

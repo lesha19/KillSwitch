@@ -430,11 +430,29 @@ NB_UPF="$DIR/netbird-up"
 NB_UP_TIMEOUT=30; NB_STATUS_TIMEOUT=5; NB_SETTLE=20; NB_SOCK_WAIT=50  # settle/sock: 0.5 s polls
 nb_bin() { /usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$NB_PLIST" 2>/dev/null; }
 nb_group() { /usr/libexec/PlistBuddy -c 'Print :GroupName' "$NB_PLIST" 2>/dev/null; }
+# KS-09: root never executes NetBird's binary. Its CLI runs as the user at the console (who could
+# run it anyway; its daemon's socket is srw-rw-rw-), never while nobody is logged in, and only a
+# binary that only root can change and that is signed by NetBird's team right before the run.
+NB_OWNER=0
+nb_user() { local u; u=$(stat -f %u /dev/console 2>/dev/null) && [[ "$u" =~ ^[0-9]+$ ]] && [ "$u" != 0 ] && echo "$u"; }
+# nb_trusted <path>: the real path (links resolved) when the file and every folder above it belong
+# to root and nobody else can write them; a folder only the admin group may write (/Applications)
+# is accepted. Anything else could be swapped by a user: not NetBird.
+nb_trusted() {
+  perl -MCwd=abs_path -e 'my ($o, $p) = @ARGV; my $r = abs_path($p) // exit 1;
+    my @s = stat $r or exit 1; -f _ && ($s[4] == 0 || $s[4] == $o) && !($s[2] & 022) or exit 1;
+    for (my $d = $r; $d ne "/";) { $d =~ s{/[^/]*$}{}; $d = "/" if $d eq "";
+      @s = stat $d or exit 1; ($s[4] == 0 || $s[4] == $o) && !($s[2] & 02) or exit 1;
+      !($s[2] & 020) || $s[5] == 80 || $s[5] == 0 or exit 1 }
+    print "$r\n"' "$NB_OWNER" "$1"
+}
+nb_signed() { codesign -v -R="anchor apple generic and certificate leaf[subject.OU] = \"$NB_TEAM\"" "$1" 2>/dev/null; }
 nb_want() {
   local bin
   [ "$(setting tailscale 1)" = 1 ] && dscl . -read "/Groups/$NB_GROUP" PrimaryGroupID >/dev/null 2>&1 || return 1
   bin=$(nb_bin) && [ -n "$bin" ] || return 1
-  codesign -v -R="anchor apple generic and certificate leaf[subject.OU] = \"$NB_TEAM\"" "$bin" 2>/dev/null
+  bin=$(nb_trusted "$bin") || { log_event "netbird: its binary can be changed by others than root, not let past the VPN"; return 1; }
+  nb_signed "$bin"
 }
 nb_addr() {  # the daemon address from the plist's --daemon-addr, NetBird's default otherwise
   local a i=1 prev=""
@@ -445,11 +463,14 @@ nb_addr() {  # the daemon address from the plist's --daemon-addr, NetBird's defa
   done
   echo unix:///var/run/netbird.sock
 }
-nb_cli() {  # nb_cli <seconds> <args...>: NetBird's CLI against its daemon, killed after <seconds>
-  local t=$1; shift
-  perl -e '$t = shift; $p = fork; defined $p or exit 1; if (!$p) { exec @ARGV; exit 127 }
+nb_cli() {  # nb_cli <seconds> <args...>: NetBird's CLI against its daemon as the console user, killed after <seconds>
+  local t=$1 u bin; shift
+  u=$(nb_user) && bin=$(nb_trusted "$(nb_bin)") && nb_signed "$bin" || return 1
+  perl -MPOSIX -e '$t = shift; $u = shift; @pw = getpwuid $u or exit 1; $p = fork; defined $p or exit 1;
+    if (!$p) { $) = "$pw[3] $pw[3]"; POSIX::setgid($pw[3]) && POSIX::setuid($u) && $< == $u && $> == $u && $u != 0 or exit 1;
+      @ENV{qw(HOME USER LOGNAME)} = @pw[7, 0, 0]; exec @ARGV; exit 127 }
     $SIG{ALRM} = sub { kill 9, $p; exit 124 }; alarm $t; waitpid $p, 0; exit($? >> 8)' \
-    "$t" "$(nb_bin)" "$@" --daemon-addr "$(nb_addr)"
+    "$t" "$u" "$bin" "$@" --daemon-addr "$(nb_addr)"
 }
 nb_connected() { nb_cli "$NB_STATUS_TIMEOUT" status 2>/dev/null | grep -q '^Management: Connected'; }
 nb_reconnect() {  # after a restart that worked: connect again if it was connected before
