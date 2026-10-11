@@ -94,6 +94,11 @@ enum Multihop {
         candidates.first { alive($0) != false }
     }
 
+    /// The helper turned double VPN off without the person asking (ADR 0027): say so out loud.
+    static func turnedOffByItself(was: String?, now: String?, asked: Bool) -> Bool {
+        was != nil && now == nil && !asked
+    }
+
     /// Exits to pick from with double VPN on: never the entry, that would be one hop (ADR 0027).
     static func exits(_ names: [String], entry: String?) -> [String] {
         names.filter { $0 != entry }

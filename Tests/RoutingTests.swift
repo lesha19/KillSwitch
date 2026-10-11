@@ -423,7 +423,7 @@ final class XrayAddressCheckTests: XCTestCase {
     }
 
     func testPrivateAsXrayKnowsIt() {
-        for ip in ["0.1.2.3", "192.0.0.8", "198.18.0.1", "198.19.255.1", "192.0.2.1", "198.51.100.1", "203.0.113.9", "10.0.0.1"] {
+        for ip in ["0.1.2.3", "192.0.0.8", "198.18.0.1", "198.19.255.1", "192.0.2.1", "198.51.100.1", "203.0.113.9", "10.0.0.1", "192.88.99.1", "224.0.0.251", "239.1.1.1", "255.255.255.255"] {
             XCTAssertEqual(IPv4(ip)?.isPrivate, true, ip)
         }
         XCTAssertEqual(IPv4("8.8.8.8")?.isPrivate, false)

@@ -34,6 +34,7 @@ enum ProtectionLog {
             return String(localized: "Выбран сервер «\(ServerName.display(String(message[arrow.upperBound...])))»")
         }
         if let failover = failover(message) { return failover }
+        if let doubleVPN = doubleVPN(message) { return doubleVPN }
         if message.hasPrefix("double VPN: ") {
             let value = message.dropFirst("double VPN: ".count)
             return value == "off" ? String(localized: "Двойной VPN выключен") : String(localized: "Двойной VPN: вход через «\(ServerName.display(String(value)))»")
@@ -83,6 +84,42 @@ enum ProtectionLog {
 
     /// The helper's automatic server switch with Xray (ADR 0023): `failover (no answer|slow): A -> B`,
     /// `failover (…): A, no live|faster server of its country`, `failover failed: A -> B, A kept`.
+    /// The helper turned «Двойной VPN» off or back by itself (ADR 0027): `double VPN off: its entry
+    /// «X»: <why>`, `double VPN off: no answer through «X»`, `double VPN off: «X» was set for the other
+    /// way of connecting`, `double VPN back: «A», no answer through «B»`.
+    private static func doubleVPN(_ message: String) -> String? {
+        let names = quoted(message).map { ServerName.display($0) }
+        if message.hasPrefix("double VPN back: "), names.count == 2 {
+            return String(localized: "Через «\(names[1])» соединение не установилось — вход снова «\(names[0])»")
+        }
+        guard message.hasPrefix("double VPN off: ") else { return nil }
+        let name = names.first ?? ""
+        if message.hasPrefix("double VPN off: no answer through ") {
+            return String(localized: "Двойной VPN выключен: через «\(name)» соединение не установилось")
+        }
+        if message.hasSuffix("was set for the other way of connecting") {
+            return String(localized: "Двойной VPN выключен: он был настроен для другого способа подключения")
+        }
+        if message.hasSuffix(": not a server of the subscription") {
+            return String(localized: "Двойной VPN выключен: сервера входа «\(name)» больше нет в подписке")
+        }
+        if message.hasSuffix(": it is the running server") {
+            return String(localized: "Двойной VPN выключен: «\(name)» сейчас и вход, и выход")
+        }
+        return String(localized: "Двойной VPN выключен: сервер входа «\(name)» больше не подходит")
+    }
+
+    /// The «…»-quoted parts of a line, in order.
+    private static func quoted(_ text: String) -> [String] {
+        var result: [String] = []
+        var rest = Substring(text)
+        while let open = rest.firstIndex(of: "«"), let close = rest[open...].firstIndex(of: "»") {
+            result.append(String(rest[rest.index(after: open)..<close]))
+            rest = rest[rest.index(after: close)...]
+        }
+        return result
+    }
+
     private static func failover(_ message: String) -> String? {
         let name = { (s: Substring) in ServerName.display(String(s)) }
         // ks refused a server switch that would change what goes past the VPN (KS-10)

@@ -351,7 +351,8 @@ struct IPv4: Equatable {
     var isPrivate: Bool {
         // and what Xray's geoip:private also counts: this network, IETF, benchmarking, documentation
         ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10",
-         "0.0.0.0/8", "192.0.0.0/24", "198.18.0.0/15", "192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24"].contains {
+         "0.0.0.0/8", "192.0.0.0/24", "198.18.0.0/15", "192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24",
+         "192.88.99.0/24", "224.0.0.0/3"].contains {
             AddressCheck.cidr($0, contains: String(value >> 24) + "." + String(value >> 16 & 255) + "." + String(value >> 8 & 255) + "." + String(value & 255)) == true
         }
     }
