@@ -59,8 +59,8 @@ gen "$fx/xray-panel.json" || bad "panel config refused: $(cat "$tmp/err")"
   ok "routing: balancer and domain strategy kept" || bad "balancers: $(j '$c->{routing}')"
 [ "$(j '"$c->{log}{loglevel} $c->{log}{access}"')" = "warning none" ] && ok "log: warnings only, no access log (no visited sites)" ||
   bad "log: $(j '$c->{log}')"
-[ "$(j 'join ",", map { $_->{tag} } @{ $c->{outbounds} }')" = "LT_1,LT_1_FB,direct,block,dns-out" ] &&
-  ok "outbounds: the template's, in order" || bad "outbounds: $(j 'join ",", map { $_->{tag} } @{ $c->{outbounds} }')"
+[ "$(j 'join ",", map { $_->{tag} } @{ $c->{outbounds} }')" = "LT_1,LT_1_FB,direct,block,dns-out,ks-ping-0" ] &&
+  ok "outbounds: the template's, in order, then the host's probe (ADR 0023)" || bad "outbounds: $(j 'join ",", map { $_->{tag} } @{ $c->{outbounds} }')"
 [ "$(paste -sd, - < "$tmp/c.egress")" = rules,dns ] && ok "egress: direct rules and DNS servers reached directly" ||
   bad "egress: $(cat "$tmp/c.egress")"
 grep -q '^rule	' "$tmp/c.direct" && grep -q '"outboundTag":"direct"' "$tmp/c.direct" && ok "direct signature: the rules to freedom" ||
@@ -133,7 +133,7 @@ gen "$tmp/p.json" && [ "$(cat "$tmp/c.egress")" = rules ] && grep -q '^default	d
 edit '$a->[0]{routing}{balancers}[0]{selector} = ["LT_", "dir"]; $a->[0]{routing}{rules} = [ { port => "0-65535", balancerTag => "country-lb" } ]; $a->[0]{dns}{servers} = ["8.8.8.8"]'
 gen "$tmp/p.json" && [ "$(cat "$tmp/c.egress")" = rules ] && ok "a balancer that holds freedom: egress rules" || bad "balancer direct: $(cat "$tmp/c.egress")"
 edit 'splice @{ $a->[0]{outbounds} }, 4, 1; $a->[0]{routing}{rules} = [ grep { ($_->{outboundTag} // "") ne "dns-out" } @{ $a->[0]{routing}{rules} } ]'
-gen "$tmp/p.json" && [ "$(j '$c->{routing}{rules}[0]{outboundTag}')" = ks-dns-out ] && [ "$(j '$c->{outbounds}[-1]{protocol}')" = dns ] &&
+gen "$tmp/p.json" && [ "$(j '$c->{routing}{rules}[0]{outboundTag}')" = ks-dns-out ] && [ "$(j '(grep { $_->{tag} !~ /\Aks-ping-/ } @{ $c->{outbounds} })[-1]{protocol}')" = dns ] &&
   ok "no dns outbound in the template: ours added for the system's DNS" || bad "dns-out: $(j '$c->{routing}{rules}[0]')"
 
 # --- several hosts: all approved, the chosen one runs
@@ -162,7 +162,7 @@ gen "$fx/xray-panel.json" || bad "with choices refused: $(cat "$tmp/err")"
   ok "splitapps: programs around the VPN by name or folder" || bad "splitapps: $(j '$c->{routing}{rules}[3]')"
 xtest "ad block and programs around the VPN" "$tmp/c"
 [ "$(paste -sd, - < "$tmp/c.egress")" = rules,dns,splitapps ] && ok "splitapps: in the egress reasons" || bad "egress: $(cat "$tmp/c.egress")"
-[ "$(q 'join ",", map { $_->{kind} } @{ $c->{added} }')" = "adblock,splitapps" ] && ok "report: the choices named" || bad "added: $(q '$c->{added}')"
+[ "$(q 'join ",", map { $_->{kind} } @{ $c->{added} }')" = "adblock,splitapps,ping" ] && ok "report: the choices named (and the probes)" || bad "added: $(q '$c->{added}')"
 rm -f "$SETTINGS" "$CORE_DIR/geosite.dat"
 printf 'adblock=1\n' > "$SETTINGS"
 gen "$fx/xray-panel.json" && [ "$(j '$c->{routing}{rules}[2]{inboundTag}[0]')" = direct-dns ] && ok "adblock without geosite.dat: no rule" ||

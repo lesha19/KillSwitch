@@ -32,8 +32,8 @@ xtest() {  # xtest <name> <config>
 
 # --- Xray: counters through the stats API, on loopback only
 gen "$fx/xray-panel.json" || bad "panel config refused: $(cat "$tmp/err")"
-[ "$(j '$c->{api}{listen}')" = "127.0.0.1:$CORE_API_PORT" ] && [ "$(j 'join ",", @{ $c->{api}{services} }')" = StatsService ] &&
-  ok "api: StatsService only, on 127.0.0.1:$CORE_API_PORT" || bad "api: $(j '$c->{api}')"
+[ "$(j '$c->{api}{listen}')" = "127.0.0.1:$CORE_API_PORT" ] && [ "$(j 'join ",", @{ $c->{api}{services} }')" = StatsService,ObservatoryService ] &&
+  ok "api: StatsService and the read-only ObservatoryService (ADR 0023), on 127.0.0.1:$CORE_API_PORT" || bad "api: $(j '$c->{api}')"
 [ "$(j 'ref $c->{stats}')" = HASH ] && ok "stats: on" || bad "stats: $(j '$c->{stats}')"
 [ "$(j 'join ",", map { "$_=" . ($c->{policy}{system}{$_} ? 1 : 0) } sort keys %{ $c->{policy}{system} }')" = \
   "statsInboundDownlink=1,statsInboundUplink=1,statsOutboundDownlink=1,statsOutboundUplink=1" ] &&
