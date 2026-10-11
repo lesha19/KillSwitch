@@ -229,6 +229,16 @@ perhost "vless flat settings «Address»" 'delete $b->{outbounds}[0]{settings}{v
 perhost "a DNS server «Address»" 'push @{$b->{dns}{servers}}, { Address => "tcp+local://9.9.9.9" }'
 perhost "«TAG» next to tag" '$b->{outbounds}[2]{TAG} = "LT_9"'
 perhost "«sockopt» spelled «SockOpt» with an interface" '$b->{outbounds}[0]{streamSettings}{SockOpt} = { interface => "en0" }'
+# only the keys the checks read: Xray's own spellings of the others are the subscription's
+# (0.19.1 review, second round: observatory.probeURL, accepted by 0.19.0, was refused)
+if accepted "an observatory with probeURL, Xray's spelling" 'delete $c->{burstObservatory};
+      $c->{observatory} = { subjectSelector => ["LT_"], probeURL => "https://www.google.com/generate_204", probeInterval => "30s", enableConcurrency => JSON::PP::true }'; then
+  [ "$(j '$c->{observatory}{probeURL}')" = https://www.google.com/generate_204 ] && ok "  taken as it is" || bad "  observatory: $(j '$c->{observatory}')"
+fi
+accepted "keys the checks do not read, in any case" '$c->{dns}{servers}[1]{QueryStrategy} = "UseIPv4"; delete $c->{dns}{servers}[1]{queryStrategy};
+      $c->{dns}{QueryStrategy} = delete $c->{dns}{queryStrategy} // "UseIPv4";
+      $c->{outbounds}[2]{settings}{DomainStrategy} = delete $c->{outbounds}[2]{settings}{domainStrategy} // "UseIPv4";
+      $c->{routing}{balancers}[0]{Strategy} = { type => "random" }; delete $c->{routing}{balancers}[0]{strategy}' && ok "  taken"
 if accepted "a ws Host header in any case is the subscription's own" '$c->{outbounds}[0]{streamSettings} = { network => "ws", security => "tls",
       wsSettings => { path => "/p", headers => { HOST => "a.example.com", "User-Agent" => "x" } } }'; then
   ok "  taken (header names are not Xray's keys)"

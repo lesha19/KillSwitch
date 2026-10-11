@@ -1544,13 +1544,12 @@ KS_XRAY_PL='
   # review). Go also folds «ſ» (U+017F) to s and «K» (U+212A) to k, raw or escaped, so a key with
   # any character outside ASCII is refused the same way (second round). Names of HTTP headers, DNS
   # hosts and rule attributes are data, not keys of Xray. Only the sections the config takes.
-  my %KEYS = map { (lc $_ => $_) } qw(remarks outbounds inbounds routing dns policy observatory burstObservatory api stats
-    reverse fakedns log transport meta tag protocol settings vnext servers address port users streamSettings sockopt
-    dialerProxy interface mark customSockopt sendThrough proxySettings network security tlsSettings realitySettings
-    serverName xhttpSettings splithttpSettings wsSettings httpupgradeSettings downloadSettings extra host headers
-    balancers selector fallbackTag strategy subjectSelector probeUrl rules outboundTag balancerTag inboundTag type domain
-    ip port process domainStrategy domainMatcher ruleTag sourcePort source sourceIP user protocol attrs localIP localPort
-    vlessRoute nonIPQuery queryStrategy sniffing hosts);
+  # (the keys the checks and the edits below read in what the config takes as it is; a section or
+  # a routing key in another case is not taken at all, a rule with one is dropped)
+  my %KEYS = map { (lc $_ => $_) } qw(tag protocol settings vnext servers address reverse streamSettings sendThrough
+    proxySettings sockopt dialerProxy interface mark customSockopt network security tlsSettings realitySettings serverName
+    xhttpSettings splithttpSettings wsSettings httpupgradeSettings downloadSettings extra host headers selector fallbackTag
+    subjectSelector);
   sub odd_case { my $x = shift;
     if (ref $x eq "HASH") {
       my %seen;
