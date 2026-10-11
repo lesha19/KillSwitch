@@ -28,7 +28,7 @@ private struct QRScanSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Сканировать QR-код").font(.headline)
+            Text("Сканировать QR-код").font(.headline).accessibilityAddTraits(.isHeader)
             Text("Нажми ⌃⇧⌘4 и выдели QR-код на экране: снимок попадёт в буфер обмена. Или открой картинку с кодом, или перетащи её сюда.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
@@ -182,7 +182,7 @@ private struct SubscriptionQRSheet: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Text("QR-код подписки").font(.headline)
+            Text("QR-код подписки").font(.headline).accessibilityAddTraits(.isHeader)
             Image(code, scale: 1, label: Text("QR-код ссылки на подписку"))
                 .interpolation(.none).resizable().scaledToFit()
                 .frame(width: 260, height: 260)
