@@ -1508,7 +1508,9 @@ KS_XRAY_PL='
   my $J = JSON::PP->new->canonical;
   sub rd { local $/; open my $f, "<", $_[0] or die "$_[0]\n"; JSON::PP->new->decode(<$f>) }
   sub wr { open my $f, ">", $_[0] or die; print $f JSON::PP->new->canonical->encode($_[1]); close $f or die }
-  sub ipv4 { $_[0] =~ /\A\d{1,3}(\.\d{1,3}){3}\z/ }
+  # dotted decimal only, each part 0-255 without a leading zero: pf would refuse 999.1.1.1 (and
+  # block everything), Xray would take 01.2.3.4 for a name and resolve it (#37)
+  sub ipv4 { my @p = $_[0] =~ /\A(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\z/ or return 0; !grep { $_ > 255 || /\A0\d/ } @p }
   sub host { $_[0] =~ /\A[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\z/ }
   my $LOADED;   # parsed and checked once per run; later loads (approve) get copies, build edits its own
   sub load {
@@ -1526,12 +1528,21 @@ KS_XRAY_PL='
     $a
   }
   # the server addresses of a proxy outbound, as references to edit in place
-  sub addrs { my $o = shift; my $s = $o->{settings}; return () unless ref $s eq "HASH";
+  sub own_addrs { my $o = shift; my $s = $o->{settings}; return () unless ref $s eq "HASH";
     my @r;
     for my $k (qw(vnext servers)) { push @r, map { \$_->{address} } grep { ref $_ eq "HASH" } @{ ref $s->{$k} eq "ARRAY" ? $s->{$k} : [] } }
     push @r, \$s->{address} if exists $s->{address} && $o->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/;
     @r }
-  sub name_of { my ($c, $i) = @_; my $r = $c->{remarks}; defined $r && !ref $r && length $r ? $r : "#" . ($i + 1) }
+  # XHTTP may download from another server: streamSettings.xhttpSettings.downloadSettings, or the
+  # same inside xhttpSettings.extra; each one a stream setting of its own with address and port (#37)
+  sub downloads { my $o = shift; my $ss = $o->{streamSettings}; return () unless ref $ss eq "HASH" && ref $ss->{xhttpSettings} eq "HASH";
+    my $x = $ss->{xhttpSettings};
+    grep { ref $_ eq "HASH" } ($x->{downloadSettings}, ref $x->{extra} eq "HASH" ? $x->{extra}{downloadSettings} : undef) }
+  sub addrs { my $o = shift; (own_addrs($o), map { \$_->{address} } grep { exists $_->{address} } downloads($o)) }
+  # a line break would make one name two in the lists ks core select reads (#37)
+  sub name_of { my ($c, $i) = @_; my $r = $c->{remarks}; defined $r && !ref $r && length $r ? $r =~ s/[\r\n\t]/ /gr : "#" . ($i + 1) }
+  # a selector of a balancer or an observatory that also picks KillSwitch'"'"'s outbounds (ks-…)
+  sub picks_ours { my $s = shift; defined $s && !ref $s && (index("ks-", $s) == 0 || $s =~ /\Aks-/) }
   sub check {
     my $a = load(); my %hosts;
     for my $i (0 .. $#$a) {
@@ -1542,8 +1553,10 @@ KS_XRAY_PL='
         my $p = $o->{protocol} // "";
         die "$n: незнакомый тип сервера «$p» (KillSwitch берёт $ENV{PROTOS})\n" unless $p =~ /\A($ENV{PROTOS})\z/;
         my $t = $o->{tag} // ""; die "$n: два outbound с тегом «$t»\n" if length $t && $tags{$t}++;
+        die "$n: тег «$t» занят KillSwitch (ks-…)\n" if $t =~ /\Aks-/;
         for my $r (addrs($o)) {
           my $h = $$r // ""; die "$n: у сервера нет адреса\n" if ref $h || !length $h;
+          die "$n: не похоже на адрес сервера: $h\n" if ipv4($h) && $h =~ /\A(0|127|22[4-9]|2[3-5]\d)\./;   # good_server_ip
           next if ipv4($h);
           die "$n: адрес сервера $h — IPv6, KillSwitch пускает к серверам только IPv4\n" if $h =~ /:/;
           die "$n: не похоже на адрес сервера: $h\n" unless host($h);
@@ -1552,8 +1565,17 @@ KS_XRAY_PL='
       }
       for my $o (@{ $c->{outbounds} }) {
         my @to = grep { defined } ($o->{proxySettings} && ref $o->{proxySettings} eq "HASH" ? $o->{proxySettings}{tag} : undef,
-                                   ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" ? $o->{streamSettings}{sockopt}{dialerProxy} : undef);
+                                   map { ref $_ eq "HASH" && ref $_->{sockopt} eq "HASH" ? $_->{sockopt}{dialerProxy} : undef } $o->{streamSettings}, downloads($o));
         for (@to) { die "$n: «" . ($o->{tag} // "?") . "» подключается через несуществующий «$_»\n" if ref $_ || !$tags{$_} }
+      }
+      my $r = ref $c->{routing} eq "HASH" ? $c->{routing} : {};
+      for my $b (ref $r->{balancers} eq "ARRAY" ? @{ $r->{balancers} } : ()) {
+        next unless ref $b eq "HASH" && ref $b->{selector} eq "ARRAY";
+        for (grep { picks_ours($_) } @{ $b->{selector} }) { die "$n: балансировщик «" . ($b->{tag} // "?") . "» выбирает и outbound KillSwitch (ks-…) по «$_»\n" }
+      }
+      for my $obs (qw(observatory burstObservatory)) {
+        next unless ref $c->{$obs} eq "HASH" && ref $c->{$obs}{subjectSelector} eq "ARRAY";
+        for (grep { picks_ours($_) } @{ $c->{$obs}{subjectSelector} }) { die "$n: $obs выбирает и outbound KillSwitch (ks-…) по «$_»\n" }
       }
     }
     print "$_\n" for sort keys %hosts;
@@ -1594,20 +1616,26 @@ KS_XRAY_PL='
     my %cfg = map { exists $c->{$_} ? ($_ => $c->{$_}) : () } keys %keep;
     my $outs = $cfg{outbounds};
     # bound to no interface (pf lets the core out by its group), server names pinned (ADR 0020)
+    # (customSockopt sets raw socket options, the bound interface among them; also in an XHTTP
+    # download stream, which is pinned like the outbound itself, #37)
     my $tame = sub { my ($o, $t) = @_;
       if (exists $o->{sendThrough}) { delete $o->{sendThrough}; $unbound{$t} = 1 if defined $t }
-      my $so = ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" ? $o->{streamSettings}{sockopt} : undef;
-      for my $k (qw(interface mark)) { if ($so && exists $so->{$k}) { delete $so->{$k}; $unbound{$t} = 1 if defined $t } }
-      for my $r (addrs($o)) {
-        next if ipv4($$r);
+      my $pinned = sub { my ($r, $ss) = @_;
+        return if ipv4($$r);
         my $h = $$r; $$r = $pin{$h};
-        my $ss = ref $o->{streamSettings} eq "HASH" ? $o->{streamSettings} : undef;
         my $sec = $ss ? $ss->{security} // "" : "";
         if ($sec eq "tls" || $sec eq "reality") {
           my $k = $sec . "Settings"; $ss->{$k} = {} unless ref $ss->{$k} eq "HASH";
           $ss->{$k}{serverName} = $h unless defined $ss->{$k}{serverName} && length $ss->{$k}{serverName};
         }
+      };
+      my $ss = ref $o->{streamSettings} eq "HASH" ? $o->{streamSettings} : undef;
+      for my $s ($ss, downloads($o)) {
+        my $so = $s && ref $s->{sockopt} eq "HASH" ? $s->{sockopt} : undef;
+        for my $k (qw(interface mark customSockopt)) { if ($so && exists $so->{$k}) { delete $so->{$k}; $unbound{$t} = 1 if defined $t } }
       }
+      $pinned->($_, $ss) for own_addrs($o);
+      for my $d (downloads($o)) { $pinned->(\$d->{address}, $d) if exists $d->{address} }
     };
     my (%tag, %freedom, $dnsout, $block, $direct, $proxy);
     for my $o (@$outs) {
@@ -1679,10 +1707,12 @@ KS_XRAY_PL='
     }
     unshift @report, map { { rule => rule_text($_), from => "killswitch" } } @ours;
     $rt{rules} = [ @ours, @rules ];
-    # DNS: the system resolver is ourselves (127.0.0.1:53), fakedns would outlive the core
+    # DNS: the system resolver is ourselves (127.0.0.1:53), fakedns would outlive the core, and
+    # any <scheme>+local (udp, tcp, https, h2c, quic…) queries straight past routing (#37)
     if (ref $cfg{dns} eq "HASH" && ref $cfg{dns}{servers} eq "ARRAY") {
       $cfg{dns}{servers} = [ grep { my $s = ref $_ eq "HASH" ? $_->{address} // "" : $_ // "";
-        my $bad = $s =~ /\A(localhost|fakedns)\z/i || $s =~ m{\A(https|tcp|quic)\+local://}i;
+        my $x = ref $s ? "" : $s =~ s/\A\s+|\s+\z//gr;
+        my $bad = $x =~ /\A(localhost|fakedns(\+\w+)?)\z/i || $x =~ m{\A[a-z0-9]+\+local:}i;
         push @dropped, { section => "dns", item => $s, reason => "bad-value" } if $bad; !$bad } @{ $cfg{dns}{servers} } ];
     }
     # sniffing: the template inbound'"'"'s, else routing only

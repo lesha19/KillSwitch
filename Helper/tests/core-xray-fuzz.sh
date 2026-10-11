@@ -1,0 +1,196 @@
+#!/bin/bash
+# shellcheck disable=SC2034 # globals here are read by the sourced Helper/ks
+# The Xray subscription is a second parser that root runs on what a panel sends (ADR 0020, #37):
+# hostile and broken configs against its allow-list. Each case is the panel fixture with one
+# change; it must be refused, or come out with nothing that sends traffic past the tunnel or the
+# approval of servers (direct signature, servers for pf). Accepted configs also pass
+# "xray run -test" when the binary is there. No root, no network.
+#   Helper/tests/core-xray-fuzz.sh   (XRAY=/path/to/xray)
+set -u
+here=$(cd "$(dirname "$0")" && pwd)
+# shellcheck source=../ks
+. "$here/../ks"
+XRAY=${XRAY:-/Library/KillSwitch/core/xray}; [ -x "$XRAY" ] || [ ! -x "$here/../xray" ] || XRAY="$here/../xray"
+fx="$here/fixtures"
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+SETTINGS="$tmp/settings"; : > "$SETTINGS"
+CORE_DIR="$tmp/core"; mkdir "$CORE_DIR"
+resolve_host() { case "$1" in *.example.com) echo 203.0.113.40 ;; *) return 1 ;; esac; }
+fails=0
+ok()  { echo "ok    $*"; }
+bad() { echo "FAIL  $*"; fails=$((fails + 1)); }
+# edit <perl over $c, the fixture's config (and $a, the array)>: the changed subscription in $tmp/p.json
+edit() { /usr/bin/perl -MJSON::PP -e 'local $/; my $a = JSON::PP->new->decode(<STDIN>); my $c = $a->[0]; eval $ARGV[0]; die $@ if $@;
+           print JSON::PP->new->encode($a)' "$1" < "$fx/xray-panel.json" > "$tmp/p.json"; }
+j() { /usr/bin/perl -MJSON::PP -e 'local $/; my $c = JSON::PP->new->decode(<STDIN>); my $v = eval $ARGV[0]; die $@ if $@;
+        print ref $v ? JSON::PP->new->canonical->encode($v) : $v // ""' "$1" < "${2:-$tmp/c}"; }
+gen() { core_generate_xray "$tmp/p.json" "$tmp/c" "$tmp/s" 2>"$tmp/err"; }
+xtest() {  # xtest <name>: the generated config passes xray run -test
+  [ -x "$XRAY" ] || return 0
+  local out
+  out=$(XRAY_LOCATION_ASSET=$(dirname "$XRAY") "$XRAY" run -test -format json -c "$tmp/c" 2>&1) || bad "$1: xray run -test: $(tail -1 <<<"$out" | head -c 300)"
+}
+refused() {  # refused <name> <perl edit> [what the message says]
+  edit "$2"
+  if gen; then bad "$1: accepted"
+  elif [ -n "${3:-}" ] && ! grep -qF -- "$3" "$tmp/err"; then bad "$1: refused, but: $(head -c 300 "$tmp/err")"
+  else ok "$1: refused"; fi
+}
+accepted() {  # accepted <name> <perl edit>: generated and passes xray run -test
+  edit "$2"
+  if gen; then xtest "$1"; return 0; fi
+  bad "$1: refused: $(head -c 300 "$tmp/err")"; return 1
+}
+raw() {  # raw <name> <file content>: never accepted
+  printf '%s' "$2" > "$tmp/p.json"
+  if gen; then bad "raw $1: accepted"; else ok "raw $1: refused"; fi
+}
+
+# --- not an Xray subscription at all
+raw empty ""
+raw null null
+raw object '{}'
+raw "empty list" '[]'
+raw "list of numbers" '[1,2]'
+raw "outbounds not a list" '[{"outbounds":{}}]'
+raw truncated '[{"outbounds":[]}'
+raw yaml $'proxies:\n  - name: a\n    type: vless\n'
+raw "mihomo JSON" '{"proxies":[{"name":"a","type":"vless","server":"1.2.3.4","port":443}]}'
+raw "byte order mark" $'\xef\xbb\xbf[{"outbounds":[{"protocol":"vless","tag":"a","settings":{"vnext":[{"address":"1.2.3.4","port":443}]}}]}]'
+deep=$(printf '{"a":%.0s' $(seq 1 600)); deep_end=$(printf '}%.0s' $(seq 1 600))
+raw "nested 600 deep" "[{\"outbounds\":[{\"protocol\":\"vless\",\"tag\":\"a\",\"settings\":{\"vnext\":[{\"address\":\"1.2.3.4\",\"port\":443}]}}],\"policy\":${deep}1${deep_end}}]"
+head -c 20000001 /dev/zero | tr '\0' ' ' > "$tmp/p.json"
+gen && bad "more than 20 MB: accepted" || ok "more than 20 MB: refused"
+refused "201 configs" '@$a = ($c) x 201' "Слишком много"
+
+# --- the protocol allow-list (vless vmess trojan shadowsocks freedom blackhole dns loopback)
+for p in wireguard socks http hysteria hysteria2 tuic VLESS " vless" "vless " "vless\n" ""; do
+  refused "protocol «$p»" '$c->{outbounds}[0]{protocol} = "'"$p"'"' "незнакомый тип сервера"
+done
+refused "protocol as a list" '$c->{outbounds}[0]{protocol} = ["vless"]' "незнакомый тип сервера"
+refused "protocol missing" 'delete $c->{outbounds}[0]{protocol}' "незнакомый тип сервера"
+refused "an outbound that is a string" 'push @{$c->{outbounds}}, "freedom"' "не объект"
+refused "two outbounds with one tag" 'push @{$c->{outbounds}}, { tag => "LT_1", protocol => "freedom" }' "два outbound"
+refused "no server at all" '@{$c->{outbounds}} = grep { $_->{protocol} !~ /vless/ } @{$c->{outbounds}}' "нет ни одного сервера"
+
+# --- server addresses: IPv4 or a host name we pin, nothing else
+for h in "a b.example.com" "a.example.com;id" 'a.example.com$(id)' "a.example.com/x" "-a.example.com" "a..b" "2001:db8::1" "::ffff:1.2.3.4" \
+         "[2001:db8::1]" "localhost" "0177.0.0.1" "2130706433" "999.1.1.1" "1.2.3.256" "01.2.3.4" "1.2.3" "0.0.0.0" "127.0.0.1" "224.0.0.1" \
+         "255.255.255.255" "é.example.com"; do
+  refused "server address «$h»" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = "'"$h"'"'
+done
+refused "server address with a newline" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = "a.example.com\nb"'
+refused "server address a number" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = 16909060'
+refused "server address a list" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = ["1.2.3.4"]' "нет адреса"
+refused "server address empty" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = ""' "нет адреса"
+for v in "1e30" "-1" '"443-500"'; do
+  edit '$c->{outbounds}[0]{settings}{vnext}[0]{port} = '"$v"
+  if gen && [ -x "$XRAY" ] && XRAY_LOCATION_ASSET=$(dirname "$XRAY") "$XRAY" run -test -format json -c "$tmp/c" >/dev/null 2>&1; then
+    bad "port $v: Xray takes it"
+  else ok "port $v: never runs (refused here or by xray run -test before it is put in place)"; fi
+done
+# a second server in the same outbound (flat address next to vnext, servers in vless) is
+# checked and approved like the first
+if accepted "a second address in vless (servers)" 'push @{$c->{outbounds}[0]{settings}{servers}}, { address => "198.51.100.9", port => 443 }'; then
+  grep -qx 198.51.100.9 "$tmp/s" && ok "  its address is a server for pf (approved with the import)" || bad "  servers: $(paste -sd' ' "$tmp/s")"
+fi
+
+# XHTTP can download from another server (downloadSettings, also inside "extra"): that address
+# is a server too, pinned and approved like the others, never dialled by name
+xh='$c->{outbounds}[0]{streamSettings} = { network => "xhttp", security => "tls", tlsSettings => { serverName => "a.example.com" },
+      xhttpSettings => { path => "/x", mode => "auto", downloadSettings => { address => "dl.example.com", port => 443, network => "xhttp",
+      security => "tls", xhttpSettings => { path => "/y" }, sockopt => { interface => "en0", mark => 7, customSockopt => [{ level => "0", opt => "25", value => "4" }] } } } }'
+if accepted "XHTTP downloadSettings to another host" "$xh"; then
+  [ "$(j '$c->{outbounds}[0]{streamSettings}{xhttpSettings}{downloadSettings}{address}')" = 203.0.113.40 ] &&
+    [ "$(j '$c->{outbounds}[0]{streamSettings}{xhttpSettings}{downloadSettings}{tlsSettings}{serverName}')" = dl.example.com ] &&
+    ok "  pinned to its approved address, the name kept for TLS" || bad "  download: $(j '$c->{outbounds}[0]{streamSettings}{xhttpSettings}{downloadSettings}')"
+  grep -qx 203.0.113.40 "$tmp/s" && grep -q '^dl.example.com	203.0.113.40$' "$tmp/c.pins" && ok "  a server for pf, and among the pinned names refresh compares" ||
+    bad "  servers: $(paste -sd' ' "$tmp/s") pins: $(cat "$tmp/c.pins")"
+  [ "$(j 'join ",", sort keys %{ $c->{outbounds}[0]{streamSettings}{xhttpSettings}{downloadSettings}{sockopt} }')" = "" ] &&
+    ok "  its socket bound to no interface or mark" || bad "  sockopt: $(j '$c->{outbounds}[0]{streamSettings}{xhttpSettings}{downloadSettings}{sockopt}')"
+fi
+if accepted "XHTTP downloadSettings inside extra" '$c->{outbounds}[0]{streamSettings} = { network => "xhttp", security => "tls",
+      xhttpSettings => { path => "/x", extra => { downloadSettings => { address => "198.51.100.8", port => 443, network => "xhttp", xhttpSettings => { path => "/y" } } } } }'; then
+  grep -qx 198.51.100.8 "$tmp/s" && ok "  its address is a server for pf too" || bad "  servers: $(paste -sd' ' "$tmp/s")"
+fi
+refused "XHTTP download address not a server address" '$c->{outbounds}[0]{streamSettings} = { network => "xhttp",
+      xhttpSettings => { downloadSettings => { address => "a.example.com;id", port => 443 } } }' "не похоже на адрес"
+refused "XHTTP download through a missing outbound" '$c->{outbounds}[0]{streamSettings} = { network => "xhttp",
+      xhttpSettings => { downloadSettings => { address => "198.51.100.8", port => 443, sockopt => { dialerProxy => "nope" } } } }' "несуществующий"
+
+# --- sockets bound past pf's view: interface, mark and raw socket options removed
+if accepted "sockopt interface, mark, customSockopt, sendThrough" '$c->{outbounds}[0]{streamSettings}{sockopt}{interface} = "en0";
+      $c->{outbounds}[0]{streamSettings}{sockopt}{mark} = 255; $c->{outbounds}[0]{sendThrough} = "192.168.1.5";
+      $c->{outbounds}[0]{streamSettings}{sockopt}{customSockopt} = [{ level => "0", opt => "25", value => "4", type => "int" }];
+      $c->{outbounds}[2]{sendThrough} = "origin"; $c->{outbounds}[2]{streamSettings}{sockopt}{customSockopt} = [{ opt => "25", value => "4" }]'; then
+  [ "$(j 'join ",", grep { /interface|mark|customSockopt/ } map { keys %{ $_->{streamSettings}{sockopt} || {} } } @{ $c->{outbounds} }')" = "" ] &&
+    [ "$(j 'scalar grep { exists $_->{sendThrough} } @{ $c->{outbounds} }')" = 0 ] &&
+    ok "  all removed (servers and freedom alike)" || bad "  left: $(j '[map { [$_->{sendThrough}, $_->{streamSettings}{sockopt}] } @{ $c->{outbounds} }]')"
+fi
+
+# --- tags: KillSwitch's own (ks-…) are not the subscription's to take, balancers and observers
+# that would pick them (a prefix of "ks-") neither: «Программы без VPN» adds a freedom ks-direct
+# that no direct signature counts
+for t in ks-dns-out ks-block ks-direct ks-ping-0 ks-fetch ks-api ks-x; do
+  refused "outbound tag $t" 'push @{$c->{outbounds}}, { tag => "'"$t"'", protocol => "blackhole" }' "ks-"
+done
+for s in "" k ks ks- ks-d; do
+  refused "balancer selector «$s»" '$c->{routing}{balancers}[0]{selector} = ["LT_", "'"$s"'"]' "ks-"
+  refused "burstObservatory selector «$s»" '$c->{burstObservatory}{subjectSelector} = ["'"$s"'"]' "ks-"
+done
+refused "observatory selector «»" '$c->{observatory} = { subjectSelector => [""] }' "ks-"
+echo 'splitapps=/Applications/Foo.app' > "$SETTINGS"
+if accepted "a balancer of the subscription with «Программы без VPN» on" ''; then
+  [ "$(j 'join ",", map { @{ $_->{selector} } } @{ $c->{routing}{balancers} }')" = LT_ ] && ok "  its selector cannot reach ks-direct" || bad "  balancers: $(j '$c->{routing}{balancers}')"
+fi
+: > "$SETTINGS"
+if accepted "a rule to KillSwitch's ks-ping-0 or ks-fetch" 'unshift @{$c->{routing}{rules}}, { network => "tcp", outboundTag => "ks-ping-0" }, { network => "udp", outboundTag => "ks-fetch" }'; then
+  [ "$(j 'scalar grep { ($_->{outboundTag} // "") =~ /\Aks-(ping|fetch)/ } @{ $c->{routing}{rules} }')" = 0 ] && ok "  dropped: no such target of the subscription" || bad "  rules: $(j '$c->{routing}{rules}')"
+fi
+
+# --- DNS: nothing that queries outside Xray's routing (+local) or outlives the core (fakedns)
+for s in localhost LocalHost " localhost" fakedns "fakedns+others" " fakedns " "tcp+local://1.1.1.1" "TCP+LOCAL://1.1.1.1" "udp+local://1.1.1.1" \
+         "https+local://1.1.1.1/dns-query" "h2c+local://1.1.1.1/dns-query" "quic+local://1.1.1.1"; do
+  if accepted "DNS server «$s»" '$c->{dns}{servers}[1]{address} = "'"$s"'"; push @{$c->{dns}{servers}}, "'"$s"'"'; then
+    [ "$(j 'scalar grep { my $x = ref $_ ? $_->{address} : $_; $x =~ /local|fakedns/i } @{ $c->{dns}{servers} }')" = 0 ] &&
+      grep -q '"reason":"bad-value"' "$tmp/c.report" && ok "  dropped (as a server object and as a string), named in the report" || bad "  dns: $(j '$c->{dns}{servers}')"
+  fi
+done
+if accepted "the DNS outbound's own address" '$c->{outbounds}[4]{settings} = { address => "1.1.1.1", port => 53, network => "tcp" }'; then
+  [ "$(j '$c->{outbounds}[4]{settings}')" = '{"nonIPQuery":"reject"}' ] && ok "  replaced: queries only to the signed DNS servers" || bad "  dns-out: $(j '$c->{outbounds}[4]')"
+fi
+
+# --- sections and keys the config never takes
+if accepted "api, stats, reverse, fakedns, transport, inbounds of the panel" '$c->{api} = { tag => "api", services => ["HandlerService", "LoggerService"] };
+      $c->{stats} = {}; $c->{reverse} = { portals => [{ tag => "p", domain => "x.example.com" }] }; $c->{fakedns} = [{ ipPool => "198.18.0.0/15" }];
+      $c->{transport} = {}; push @{$c->{inbounds}}, { tag => "evil", protocol => "socks", listen => "0.0.0.0", port => 1080 }'; then
+  [ "$(j 'join ",", sort keys %$c')" = "api,burstObservatory,dns,inbounds,log,outbounds,policy,routing,stats" ] &&
+    [ "$(j 'join ",", @{ $c->{api}{services} }')" = StatsService,ObservatoryService ] &&
+    [ "$(j 'join ",", map { $_->{tag} } @{ $c->{inbounds} }')" = ks-tun,ks-dns,ks-fetch ] &&
+    ok "  only ours: the stats API on loopback, our three inbounds" || bad "  top: $(j 'join ",", sort keys %$c') api $(j '$c->{api}') in $(j '[map { $_->{tag} } @{ $c->{inbounds} }]')"
+fi
+if accepted "a rule with a webhook or an unknown key" 'unshift @{$c->{routing}{rules}}, { webhook => { url => "http://198.51.100.1/" }, outboundTag => "LT_1" }, { evil => 1, outboundTag => "direct" }'; then
+  [ "$(j 'scalar grep { exists $_->{webhook} || exists $_->{evil} } @{ $c->{routing}{rules} }')" = 0 ] && ok "  dropped" || bad "  rules: $(j '$c->{routing}{rules}')"
+fi
+if accepted "a rule of the subscription for our inbounds" 'unshift @{$c->{routing}{rules}}, { inboundTag => ["ks-dns", "ks-fetch"], outboundTag => "direct" }'; then
+  [ "$(j 'join "|", map { JSON::PP->new->canonical->encode($_) } @{ $c->{routing}{rules} }[0, 1]')" = \
+    '{"inboundTag":["ks-dns"],"outboundTag":"dns-out"}|{"inboundTag":["ks-fetch"],"outboundTag":"LT_1"}' ] && ok "  ours still come first" || bad "  rules: $(j '$c->{routing}{rules}')"
+fi
+
+# --- names: shown, stored as xrayserver=, logged; no line breaks and no control characters
+refused "a control character in a name" '$c->{remarks} = "a\x07b"' "Управляющие символы"
+refused "a key longer than 256" '$c->{outbounds}[0]{"k" x 300} = 1'
+if accepted "a line break in a name" '$c->{remarks} = "Real\nFake\r\tx"'; then
+  [ "$(j '$c->{servers}[0]{name}' "$tmp/c.report")" = "Real Fake  x" ] && ok "  shown as spaces (one line per name for ks core select)" || bad "  name: $(j '$c->{servers}' "$tmp/c.report")"
+fi
+if accepted "shell and JSON in names, paths and hosts of the transport" '$c->{remarks} = "\$(id)`id`\"; rm -rf /";
+      $c->{outbounds}[0]{streamSettings}{realitySettings}{spiderX} = "/\$(id)`id`;\"x"'; then
+  [ "$(j '$c->{servers}[0]{name}' "$tmp/c.report")" = "\$(id)\`id\`\"; rm -rf /" ] && ok "  taken as text" || bad "  name: $(j '$c->{servers}' "$tmp/c.report")"
+fi
+# the choice of host by name never runs anything either
+echo 'xrayserver=$(touch '"$tmp"'/ran)' > "$SETTINGS"
+edit ''; gen; [ ! -e "$tmp/ran" ] && ok "a stored server name is never run" || bad "xrayserver ran"
+: > "$SETTINGS"
+
+echo
+[ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
