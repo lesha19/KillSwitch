@@ -158,6 +158,30 @@ perhost "an address elsewhere in the stream settings" '$b->{outbounds}[0]{stream
 refused "XHTTP download through a missing outbound" '$c->{outbounds}[0]{streamSettings} = { network => "xhttp",
       xhttpSettings => { downloadSettings => { address => "198.51.100.8", port => 443, sockopt => { dialerProxy => "nope" } } } }' "несуществующий"
 
+# --- a rebuild from the kept pins (rotation, settings, ks _regen, a passwordless switch): a host
+# whose XHTTP download goes to a name without a pin (0.19.0 did not pin those) is left out, the
+# others still build; the next import with the password pins and approves it (0.19.1 review 2)
+edit 'my $b = JSON::PP->new->decode(JSON::PP->new->encode($c)); $b->{remarks} = "Плохой";
+      $b->{outbounds}[0]{streamSettings} = { network => "xhttp", security => "tls", xhttpSettings => { path => "/x",
+        downloadSettings => { address => "dl.example.com", port => 443, network => "xhttp", security => "tls", xhttpSettings => { path => "/y" } } } };
+      push @$a, $b'
+: > "$tmp/pins0"
+if KS_PINS="$tmp/pins0" gen; then
+  xtest "unpinned download on a rebuild"
+  [ "$(j 'join "|", map { $_->{name} } @{ $c->{servers} }' "$tmp/c.report")" = "🇱🇹Литва" ] &&
+    [ "$(j 'join "|", map { "$_->{item}:$_->{reason}" } grep { $_->{section} eq "servers" } @{ $c->{dropped} }' "$tmp/c.report")" = "Плохой:download" ] &&
+    [ "$(paste -sd' ' "$tmp/s")" = 203.0.113.10 ] && [ ! -s "$tmp/c.pins" ] &&
+    ok "a rebuild with a download name not pinned: that host left out (download), the other runs" ||
+    bad "unpinned download on a rebuild: servers $(j '$c->{servers}' "$tmp/c.report") dropped $(j '$c->{dropped}' "$tmp/c.report") pf $(paste -sd' ' "$tmp/s")"
+else bad "a rebuild with a download name not pinned: refused: $(cat "$tmp/err")"; fi
+printf 'dl.example.com\t203.0.113.40\n' > "$tmp/pins1"
+if KS_PINS="$tmp/pins1" gen && [ "$(j 'join "|", map { $_->{name} } @{ $c->{servers} }' "$tmp/c.report")" = "🇱🇹Литва|Плохой" ]; then
+  ok "  pinned (after an import): both hosts"
+else bad "  pinned: servers $(j '$c->{servers}' "$tmp/c.report") $(cat "$tmp/err")"; fi
+if gen && [ "$(j 'join "|", map { $_->{name} } @{ $c->{servers} }' "$tmp/c.report")" = "🇱🇹Литва|Плохой" ] && grep -q '^dl.example.com	' "$tmp/c.pins"; then
+  ok "  an import: resolved, pinned, both hosts"
+else bad "  import: servers $(j '$c->{servers}' "$tmp/c.report") $(cat "$tmp/err")"; fi
+
 # --- what Xray reads as unset is not a server or a chain (0.19.1 review): an empty fallbackTag
 # (no fallback), an empty dialerProxy (no chain), a download address null or "" (the outbound's own)
 if accepted "balancer fallbackTag empty (no fallback)" '$c->{routing}{balancers}[0]{fallbackTag} = ""'; then
