@@ -9,7 +9,7 @@
 #   ks netrestore           network services turned off at shutdown back on (if the watchdog is gone)
 #   ks set <key> <0|1>      lan, tailscale, dns, direct (see rules() below), wifiguard, adblock, failover
 #   ks set splitapps <a,b>  apps outside the VPN; "" clears
-#   ks set multihop <proxy>|off  double VPN: every other proxy is reached through this one
+#   ks set multihop <proxy>|off  double VPN: every other proxy (Xray: the running host) is reached through this one
 #   ks set core xray|mihomo the core that runs (ADR 0020); the subscription is imported again for it
 #   ks set diag 0|1         «Подробная диагностика»: Xray's access log in the journal (ADR 0021)
 #   ks allow <addr[/n]>     always let this address or network out without VPN
@@ -1418,7 +1418,8 @@ core_generate_mihomo() (
 # switching hosts (xrayserver=<remarks>) needs no password; the chosen one, else the first, becomes
 # the config. Taken as the panel wrote them: outbounds (only the protocols below), routing, dns,
 # policy, observatory. Ours: the inbounds (TUN, system DNS on 127.0.0.1:53, the app's fetch on
-# 127.0.0.1:47890), the log, our rules first. Same files as core_generate: config, servers,
+# 127.0.0.1:47890), the log, our rules first; with multihop=<host> («Двойной VPN», ADR 0027) that
+# host's server as ks-entry, which every server of the running host is dialed through. Same files as core_generate: config, servers,
 # .pins, .direct, .egress, .report. Runs in a subshell: "exit" leaves only the generator.
 XRAY_PROTOCOLS='vless|vmess|trojan|shadowsocks|freedom|blackhole|dns|loopback'
 core_generate_xray() (
@@ -1442,7 +1443,7 @@ core_generate_xray() (
   done < "$w/hosts"
   # pass 2: the config and what goes with it
   W=$w PROTOS=$XRAY_PROTOCOLS PICK=$(setting xrayserver "") ADBLOCK=$(setting adblock 0) \
-    GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) APPS=$(setting splitapps "") \
+    GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) APPS=$(setting splitapps "") MULTIHOP=$(setting multihop off) \
     TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT API_PORT=$([ -f "$CORE_DIR/api-off" ] || echo "$CORE_API_PORT") \
     ACCESS=$([ "$(setting diag 0)" = 1 ] && [ -d "$DIAG" ] && echo "$DIAG/access.log") \
     /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' build()' || exit 1
@@ -1494,6 +1495,10 @@ KS_XRAY_PL='
     push @r, \$s->{address} if exists $s->{address} && $o->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/;
     @r }
   sub name_of { my ($c, $i) = @_; my $r = $c->{remarks}; defined $r && !ref $r && length $r ? $r : "#" . ($i + 1) }
+  # reached through another outbound of its config (proxySettings, sockopt.dialerProxy)
+  sub chained { my $o = shift; $o->{proxySettings} || (ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" && exists $o->{streamSettings}{sockopt}{dialerProxy}) }
+  # a host'"'"'s server: its first proxy outbound with a tag
+  sub first_proxy { my $c = shift; my ($o) = grep { ref $_ eq "HASH" && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && length($_->{tag} // "") } @{ $c->{outbounds} }; $o }
   sub check {
     my $a = load(); my %hosts;
     for my $i (0 .. $#$a) {
@@ -1543,10 +1548,22 @@ KS_XRAY_PL='
     # another outbound) once more as ks-ping-<n>, for the observatory only; no rule leads there
     my @pings;
     for my $i (0 .. $#$a) {
-      my ($o) = grep { ref $_ eq "HASH" && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && length($_->{tag} // "") } @{ $a->[$i]{outbounds} };
-      next if !$o || $o->{proxySettings} || (ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" && exists $o->{streamSettings}{sockopt}{dialerProxy});
+      my $o = first_proxy($a->[$i]);
+      next if !$o || chained($o);
       $o = $J->decode($J->encode($o)); $o->{tag} = "ks-ping-$i";
       push @pings, $o; $servers[$i]{ping} = $o->{tag};
+    }
+    # «Двойной VPN» (ADR 0027): the entry host'"'"'s server as ks-entry; never a silent single hop
+    my $entry;
+    if (length($ENV{MULTIHOP} // "") && $ENV{MULTIHOP} ne "off") {
+      my ($ei) = grep { name_of($a->[$_], $_) eq $ENV{MULTIHOP} } 0 .. $#$a;
+      die "Двойной VPN: сервера входа «$ENV{MULTIHOP}» нет в подписке\n" unless defined $ei;
+      if ($ei != $ci) {
+        my $o = first_proxy($a->[$ei]);
+        die "Двойной VPN: у сервера входа «$ENV{MULTIHOP}» нет сервера, через который можно подключиться\n" unless $o;
+        die "Двойной VPN: сервер входа «$ENV{MULTIHOP}» сам подключается через другой\n" if chained($o);
+        $entry = $J->decode($J->encode($o)); $entry->{tag} = "ks-entry";
+      }
     }
     my $c = $a->[$ci];
     my (@dropped, @added, %unbound);
@@ -1586,6 +1603,18 @@ KS_XRAY_PL='
       $tame->($o, $t);
     }
     $tame->($_, undef) for @pings;   # their changes are those of the hosts
+    if ($entry) {
+      die "Двойной VPN: в подписке уже есть outbound «ks-entry»\n" if $tag{"ks-entry"};
+      $tame->($entry, undef);   # its changes are those of its host
+      # every server of this host through the entry; one the subscription reaches through another
+      # outbound goes through that one, and so through the entry too
+      for my $o (grep { $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && !chained($_) } @$outs) {
+        $o->{streamSettings} = {} unless ref $o->{streamSettings} eq "HASH";
+        $o->{streamSettings}{sockopt} = {} unless ref $o->{streamSettings}{sockopt} eq "HASH";
+        $o->{streamSettings}{sockopt}{dialerProxy} = "ks-entry";
+      }
+      push @added, { kind => "multihop", items => [ $ENV{MULTIHOP} ] };
+    }
     die "В конфиге «" . name_of($c, $ci) . "» нет ни одного сервера\n" unless defined $proxy;
     unless (defined $dnsout) { $dnsout = "ks-dns-out"; push @$outs, { tag => $dnsout, protocol => "dns", settings => { nonIPQuery => "reject" } }; push @added, { kind => "dns-out", items => [$dnsout] } }
     my $r = ref $cfg{routing} eq "HASH" ? $cfg{routing} : {};
@@ -1681,6 +1710,7 @@ KS_XRAY_PL='
       push @$outs, @pings;
       push @added, { kind => "ping", items => [ map { $_->{tag} } @pings ] };
     }
+    push @$outs, $entry if $entry;
     $cfg{inbounds} = [
       { tag => "ks-tun", protocol => "tun", sniffing => $sniff,
         settings => { mtu => 1500, gateway => [ $ENV{TUN_GW} ], autoSystemRoutingTable => ["0.0.0.0/0"], autoOutboundsInterface => "auto" } },
@@ -1696,7 +1726,7 @@ KS_XRAY_PL='
     return if $ENV{DIRECT_ONLY};
     wr("$W/report.json", { version => 1, core => "xray", rules => \@report, dropped => \@dropped, providers => [],
       groups => [ map { { name => $_, type => "balancer", proxies => $bal{$_}, from => "subscription" } } sort keys %bal ],
-      proxies => [ map { { name => $_->{tag}, type => $_->{protocol} } } grep { ($_->{tag} // "") !~ /\Aks-ping-/ && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ } @$outs ],
+      proxies => [ map { { name => $_->{tag}, type => $_->{protocol} } } grep { ($_->{tag} // "") !~ /\Aks-(ping-|entry\z)/ && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ } @$outs ],
       added => \@added, sniffer => { from => ($tpl ? "subscription" : "killswitch"), value => $sniff },
       dns => { servers => \@dnss, taken => {} }, egress => [ grep { $egress{$_} } qw(rules dns splitapps) ],
       servers => \@servers, selected => name_of($c, $ci) });
@@ -2269,6 +2299,8 @@ set_core() {
   [ -x "$CORE_DIR/$1" ] || { echo "Ядро $1 не установлено" >&2; return 1; }
   [ "$(core_kind)" = "$1" ] && keep=1
   launchctl print "$CORE_JOB" >/dev/null 2>&1 && cmp -s "$CORE_DIR/plist.$1" "$CORE_PLIST" && keep=1
+  # «Двойной VPN» names its entry in the format of the core it was set for (ADR 0027)
+  [ "$(core_kind)" = "$1" ] || put_setting multihop off || return 1
   put_setting core "$1" || return 1
   [ "$keep" = 1 ] || rm -f "$(core_conf)"
   log_event "core: $1 (waits for the subscription)"
@@ -2313,18 +2345,18 @@ set_splitapps() {
 }
 
 # "ks set multihop <entry proxy>|off": double VPN. The entry is checked by building the config
-# with it first; the setting is stored only if that works.
+# with it first; the setting is stored only if that works. With Xray the entry is a host of the
+# subscription (its first server, ADR 0027); "ks set core" turns it off.
 set_multihop() {
   local s
   if [ "$1" != off ]; then
-    [ "$(core_kind)" = mihomo ] || { echo "Двойной VPN пока работает только с ядром mihomo" >&2; return 1; }
     valid_name "$1" || { echo "Плохое имя прокси" >&2; return 1; }
-    [ -f "$CORE_PROFILE" ] && [ -f "$PINS" ] || { echo "Сначала возьми профиль" >&2; return 1; }
+    [ -f "$(core_profile)" ] && [ -f "$PINS" ] || { echo "Сначала возьми профиль" >&2; return 1; }
   fi
   s=$(mktemp) || return 1
   cp "$SETTINGS" "$s" 2>/dev/null
   put_setting multihop "$1" "$s"
-  if [ -f "$CORE_PROFILE" ] && [ -f "$PINS" ] && ! SETTINGS=$s core_rebuild "$PINS"; then rm -f "$s"; return 1; fi
+  if [ -f "$(core_profile)" ] && [ -f "$PINS" ] && ! SETTINGS=$s core_rebuild "$PINS"; then rm -f "$s"; return 1; fi
   rm -f "$s"
   put_setting multihop "$1" || return 1
   reload_if_on; core_reload
@@ -2637,8 +2669,9 @@ KS_FAILOVER_PL='
   elsif ($now - $s{last} >= 180) {
     my %p = map { my @f = split /\t/; ($f[0] => [ $f[1], $f[2] ]) } split /\n/, $ENV{P} // "";
     my $country = $flag->($cur);
+    my $entry = $ENV{ENTRY} // "";   # «Двойной VPN»: the entry is no exit (ADR 0027)
     my ($best) = sort { $p{$a}[1] <=> $p{$b}[1] }
-      grep { $_ ne $cur && length $country && $flag->($_) eq $country && $p{$_} && $p{$_}[0] && ($why ne "slow" || $p{$_}[1] * 2 < $ms) } @names;
+      grep { $_ ne $cur && $_ ne $entry && length $country && $flag->($_) eq $country && $p{$_} && $p{$_}[0] && ($why ne "slow" || $p{$_}[1] * 2 < $ms) } @names;
     if (defined $best) { $out = join "\t", "switch", $cur, $best, $why, $ms, $usual; %s = (server => $best, last => $now, manual => "") }
     elsif (!$s{told}) { $out = join "\t", "stay", $cur, "-", $why, $ms, $usual; $s{told} = 1 }
   }
@@ -2655,7 +2688,7 @@ failover_pass() {  # failover_pass [epoch]
   # no network at all (no primary interface): a failed probe says nothing of the server
   [ -n "$(primary_iface)" ] || return 0
   read -r probe ok <<<"$(diag_probe)"
-  out=$(PROBE_MS=$probe PROBE_OK=$ok NOW=$now PICK=$(setting xrayserver "") P=$(xray_pings 2>/dev/null) ST="$CORE_DIR/failover" \
+  out=$(PROBE_MS=$probe PROBE_OK=$ok NOW=$now PICK=$(setting xrayserver "") ENTRY=$(setting multihop off) P=$(xray_pings 2>/dev/null) ST="$CORE_DIR/failover" \
     /usr/bin/perl -MJSON::PP -e "$KS_FAILOVER_PL" < "$REPORT") || return 0
   [ -n "$out" ] || return 0
   IFS=$'\t' read -r act from to why ms usual <<<"$out"

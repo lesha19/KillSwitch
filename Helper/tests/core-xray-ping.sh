@@ -164,6 +164,12 @@ for _ in 1 2 3 4 5 6; do pass; done
 PROBE="90 1"; pass; PROBE="0 0"; pass; pass; pass
 [ "$(grep -c 'no live server' "$EVENTS")" = 2 ] && ok "  and again after it answered in between" || bad "  nolive again: $(cat "$EVENTS")"
 
+OBS=$'ks-ping-0\t0\t0\nks-ping-1\t1\t120\nks-ping-2\t1\t30'
+reset_fo; put_setting multihop "🇱🇹Литва 2"; PROBE="0 0"
+for _ in 1 2 3 4; do pass; done
+[ ! -e "$T/selected" ] && ok "double VPN (ADR 0027): the entry host is never failover's new exit (that would be one hop)" || bad "switched to the entry: $(cat "$T/selected")"
+put_setting multihop off
+
 OBS=$'ks-ping-0\t1\t100\nks-ping-1\t1\t110\nks-ping-2\t1\t30'
 reset_fo; put_setting xrayserver ""; PROBE="100 1"   # no server picked by hand: the first host, auto
 for _ in 1 2 3 4 5 6; do pass; done
