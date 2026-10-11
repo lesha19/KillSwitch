@@ -396,7 +396,11 @@ enum ProxyLink {
         func flag(_ key: String) -> Bool { ["1", "true"].contains(query[key]?.lowercased() ?? "") }
 
         func base(type: String) -> [String: Any] {
-            ["name": name ?? "\(host):\(port)", "type": type, "server": host, "port": port]
+            var proxy: [String: Any] = ["name": name ?? "\(host):\(port)", "type": type, "server": host, "port": port]
+            if let description = query[ServerDescription.linkParameter].flatMap(ServerDescription.clean) {
+                proxy[ServerDescription.key] = description
+            }
+            return proxy
         }
     }
 }

@@ -195,7 +195,7 @@ struct ServersScreen: View {
 
     private func row(_ entry: ServerPicker.Entry, current: String?, tag: String? = nil) -> some View {
         ServerPickerRow(entry: entry, current: entry.name == current, favourite: favourites.contains(entry.name),
-                        ping: ping(entry), leaf: entry.isFastest ? proxies?.leaf(of: entry.name) : nil,
+                        description: client.profileProxies?.serverDescription(of: entry.name), ping: ping(entry), leaf: entry.isFastest ? proxies?.leaf(of: entry.name) : nil,
                         choose: { choose(entry) }, toggleFavourite: { toggleFavourite(entry.name) })
             .tag(tag ?? entry.id)
     }
@@ -259,6 +259,8 @@ private struct ServerPickerRow: View {
     let entry: ServerPicker.Entry
     let current: Bool
     let favourite: Bool
+    /// The subscription's few words about the server (ServerDescription), under the name.
+    let description: String?
     let ping: ServerPicker.Ping
     /// The server «Самый быстрый» goes through now.
     let leaf: String?
@@ -274,7 +276,12 @@ private struct ServerPickerRow: View {
             if entry.isFastest {
                 Image(systemName: "bolt.fill").foregroundStyle(.secondary).accessibilityHidden(true)
             }
-            Text(entry.title).lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(entry.title).lineLimit(1)
+                if let description {
+                    Text(verbatim: description).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
             Spacer(minLength: 4)
             if let leaf, let flag = ServerName(leaf).flag { Text(flag).accessibilityHidden(true) }
             PingView(ping: ping)
@@ -291,12 +298,21 @@ private struct ServerPickerRow: View {
         .onTapGesture(perform: choose)
         .onHover { hovering = $0 }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(entry.isFastest ? ServerPicker.fastestTitle : ServerName.spoken(entry.name) + (entry.own ? String(localized: ", свой") : ""))
+        .accessibilityLabel(spokenName)
         .accessibilityValue([ping.spoken, current ? String(localized: "выбран") : "", favourite ? String(localized: "в избранном") : ""]
             .filter { !$0.isEmpty }.joined(separator: ", "))
         .accessibilityAddTraits(current ? [.isSelected, .isButton] : .isButton)
         .accessibilityHint("Подключиться через этот сервер")
         .accessibilityAction(named: favourite ? String(localized: "Убрать из избранного") : String(localized: "Добавить в избранное"), toggleFavourite)
+    }
+
+    /// «Литва, свой, Netflix и YouTube»: the name without emoji, then the description.
+    private var spokenName: String {
+        guard !entry.isFastest else { return ServerPicker.fastestTitle }
+        var parts = [ServerName.spoken(entry.name)]
+        if entry.own { parts[0] += String(localized: ", свой") }
+        if let description { parts.append(description) }
+        return parts.joined(separator: ", ")
     }
 }
 

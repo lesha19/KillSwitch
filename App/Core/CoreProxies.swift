@@ -24,6 +24,8 @@ struct CoreProxies: Equatable {
     private var aliveByName: [String: Bool] = [:]
     /// Each server's type as given (mihomo's «Vless», the profile's «vless»), for the filter.
     private var types: [String: String] = [:]
+    /// ServerDescription of the profile's servers.
+    private var descriptions: [String: String] = [:]
 
     static let helperDNSGroup = "KS-DNS"
     /// The one selector Helper/ks offers with Xray (XRAY_GROUP): the subscription's hosts.
@@ -76,7 +78,9 @@ struct CoreProxies: Equatable {
         let types = ["select": "Selector", "url-test": "URLTest", "fallback": "Fallback", "load-balance": "LoadBalance",
                      "relay": "Relay"]
         for proxy in profile["proxies"] as? [[String: Any]] ?? [] {
-            if let name = proxy["name"] as? String, let type = proxy["type"] as? String { self.types[name] = type }
+            guard let name = proxy["name"] as? String else { continue }
+            if let type = proxy["type"] as? String { self.types[name] = type }
+            if let description = proxy[ServerDescription.key] as? String { descriptions[name] = description }
         }
         for group in profile["proxy-groups"] as? [[String: Any]] ?? [] {
             guard let name = group["name"] as? String, let type = types[(group["type"] as? String ?? "").lowercased()],
@@ -92,6 +96,9 @@ struct CoreProxies: Equatable {
     }
 
     func delay(_ name: String) -> Int? { delays[name] }
+
+    /// The subscription's few words about the server (ServerDescription); only from a profile.
+    func serverDescription(of name: String) -> String? { descriptions[name] }
 
     /// «VLESS», «Shadowsocks»…: the server's protocol as people know it; nil for unknown names.
     func protocolName(of name: String) -> String? {
