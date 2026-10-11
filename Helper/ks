@@ -2162,7 +2162,7 @@ core_reload() {
 # the lists keep their good lines; all end up ours and not writable by others. Then the rules
 # load as usual and the core's config follows the settings.
 repair() {
-  local bad f
+  local bad f kind line
   bad=$(root_files_bad | paste -sd, -)
   # the files are fine but pf refused the rules once (load): loading them again is the repair
   [ -n "$bad" ] || { echo "nothing to repair"; [ ! -f "$INVALIDF" ] || reload_if_on; return 0; }
@@ -2171,8 +2171,10 @@ repair() {
     [ -L "$SETTINGS.bad" ] || chmod -R go-rwx "$SETTINGS.bad"
   fi
   for f in "$ALLOW" "$SERVERS_MANUAL" "$SERVERS_CORE" "$TSRELAYS"; do
-    root_file_ok "$f" relays && root_file_ok "$f" addrs && continue
-    { [ -f "$f" ] && [ ! -L "$f" ] && grep -E "^($ADDR_LINE)\$" "$f"; } > "$f.tmp"
+    # relays are host addresses only (KS-19), the other lists may hold networks
+    if [ "$f" = "$TSRELAYS" ]; then kind=relays; line=$HOST_LINE; else kind=addrs; line=$ADDR_LINE; fi
+    root_file_ok "$f" "$kind" && continue
+    { [ -f "$f" ] && [ ! -L "$f" ] && grep -E "^($line)\$" "$f"; } > "$f.tmp"
     if [ "$f" = "$SERVERS_CORE" ]; then chmod 600 "$f.tmp"; else chmod 644 "$f.tmp"; fi
     rm -rf "$f"; mv "$f.tmp" "$f"
   done

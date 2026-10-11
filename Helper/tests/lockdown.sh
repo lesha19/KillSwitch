@@ -233,6 +233,11 @@ repair >/dev/null
 grep -q 'repaired: settings,allow,servers' "$EVENTS" && ok "  logged" || bad "  log: $(cat "$EVENTS")"
 : > "$EVENTS"; repair >/dev/null
 [ ! -s "$EVENTS" ] && ok "repair with nothing damaged: does nothing" || bad "repair again: $(cat "$EVENTS")"
+# KS-19: a relay list with a network keeps only its host addresses, never 0.0.0.0/0
+printf '# relays\n100.64.0.1\n0.0.0.0/0\n::/0\n2001:db8::1\n' > "$TSRELAYS"
+repair >/dev/null
+[ "$(grep -v '^#' "$TSRELAYS" | paste -sd, -)" = "100.64.0.1,2001:db8::1" ] && [ -z "$(root_files_bad)" ] &&
+  ok "repair: tsrelays keeps its host addresses, networks dropped" || bad "repair tsrelays: $(paste -sd, "$TSRELAYS"), bad: $(root_files_bad)"
 
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
