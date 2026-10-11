@@ -194,6 +194,21 @@ final class SettingsBackupTests: XCTestCase {
         XCTAssertEqual(SettingsBackup.broadNetworkWarnings(["0.0.0.0/1", "128.0.0.0/8"]).count, 1)
     }
 
+    /// «Cafe → Cafe» said nothing: a Wi‑Fi rule's change shows what it does, and only the rules
+    /// that change.
+    func testWiFiRuleChangesShowTheirValues() throws {
+        let current = SettingsBackup.Settings(app: [WiFiRules.key: .rules([.init(ssid: "Cafe", autoConnect: true, server: "🇳🇱Нидерланды"),
+                                                                            .init(ssid: "Home", autoConnect: true)])], root: nil)
+        let new = SettingsBackup.Settings(app: [WiFiRules.key: .rules([.init(ssid: "Cafe", autoConnect: false),
+                                                                        .init(ssid: "Home", autoConnect: true),
+                                                                        .init(ssid: "Office", autoConnect: true, server: "🇩🇪Германия")])], root: nil)
+        let change = try XCTUnwrap(SettingsBackup.changes(from: current, to: new).first)
+        XCTAssertEqual(change.old, "Cafe: подключаться, сервер 🇳🇱 Нидерланды")
+        XCTAssertEqual(change.new, "Cafe: не подключаться; Office: подключаться, сервер 🇩🇪 Германия")
+        let removed = SettingsBackup.changes(from: new, to: .init(app: [WiFiRules.key: .rules([])], root: nil)).first
+        XCTAssertEqual(removed?.new, "нет")
+    }
+
     /// The same entries in another order change nothing, in the sheet and in the commands.
     func testReorderedRootListIsNoChange() {
         var new = root

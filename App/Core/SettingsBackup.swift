@@ -374,6 +374,14 @@ enum SettingsBackup {
         var result: [Change] = []
         for field in fields {
             guard let value = new.app[field.key], value != current.app[field.key] else { continue }
+            if case .rules(let rules) = value {
+                // only the rules that change, each with what it does: «Cafe → Cafe» told nothing
+                let old: [WiFiRules.Rule]
+                if case .rules(let now) = current.app[field.key] { old = now } else { old = [] }
+                result.append(Change(key: field.key, title: field.title, old: rulesText(old.filter { !rules.contains($0) }),
+                                     new: rulesText(rules.filter { !old.contains($0) }), root: false))
+                continue
+            }
             result.append(Change(key: field.key, title: field.title, old: current.app[field.key].map { describe($0, field) } ?? "—",
                                  new: describe(value, field), root: false))
         }
@@ -433,6 +441,17 @@ enum SettingsBackup {
     }
 
     private static func onOff(_ on: Bool) -> String { on ? String(localized: "вкл") : String(localized: "выкл") }
+
+    /// «Cafe: подключаться, сервер 🇳🇱 Нидерланды; Home: не подключаться», at most three.
+    private static func rulesText(_ rules: [WiFiRules.Rule]) -> String {
+        guard !rules.isEmpty else { return String(localized: "нет") }
+        let shown = rules.prefix(3).map { rule in
+            let connect = rule.autoConnect ? String(localized: "подключаться") : String(localized: "не подключаться")
+            let server = rule.server.map { String(localized: "сервер \(ServerName.display($0))") }
+            return "\(rule.ssid): " + ([connect] + (server.map { [$0] } ?? [])).joined(separator: ", ")
+        }.joined(separator: "; ")
+        return rules.count > 3 ? shown + " " + String(localized: "и ещё \(rules.count - 3)") : shown
+    }
 
     private static func listText(_ list: [String]) -> String {
         guard !list.isEmpty else { return String(localized: "нет") }
