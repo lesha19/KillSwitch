@@ -174,20 +174,33 @@ enum RoutingProfiles {
         return load(defaults).first { $0.id.uuidString == id }
     }
 
-    /// mihomo: the profile for the helper with "x-ks-routing" (nil: as it was).
+    static let hintKey = "x-ks-routing"
+
+    /// mihomo: the profile for the helper with "x-ks-routing" (nil: none). One the subscription
+    /// brought itself is always taken out: only the person picks a profile.
     static func adding(_ routing: RoutingProfile?, to profile: Profile) -> Profile {
-        guard let routing else { return profile }
         var profile = profile
-        profile["x-ks-routing"] = routing.hint
+        profile[hintKey] = routing?.hint
         return profile
     }
 
-    /// Xray: the hint in the panel's first config (the helper applies it to every host).
+    /// Xray: the hint in the panel's first config (the helper applies it to every host). One the
+    /// subscription brought in any config is always taken out; with none there and none chosen the
+    /// panel's bytes stay as they are.
     static func addingXray(_ routing: RoutingProfile?, to data: Data) -> Data {
-        guard let routing, var array = (try? JSONSerialization.jsonObject(with: data)) as? [Any],
-              var first = array.first as? [String: Any] else { return data }
-        first["x-ks-routing"] = routing.hint
-        array[0] = first
+        guard var array = (try? JSONSerialization.jsonObject(with: data)) as? [Any], !array.isEmpty else { return data }
+        let theirs = array.contains { ($0 as? [String: Any])?[hintKey] != nil }
+        guard routing != nil || theirs else { return data }
+        array = array.map { config in
+            guard var c = config as? [String: Any] else { return config }
+            c[hintKey] = nil
+            return c
+        }
+        if let routing {
+            guard var first = array[0] as? [String: Any] else { return data }
+            first[hintKey] = routing.hint
+            array[0] = first
+        }
         return (try? JSONSerialization.data(withJSONObject: array, options: [.sortedKeys, .withoutEscapingSlashes])) ?? data
     }
 }

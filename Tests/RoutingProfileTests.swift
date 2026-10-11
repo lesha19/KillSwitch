@@ -84,6 +84,26 @@ final class RoutingProfileTests: XCTestCase {
         XCTAssertEqual(RoutingProfiles.addingXray(p, to: Data("{}".utf8)), Data("{}".utf8), "not an array: left alone")
     }
 
+    /// Review S6: a subscription's own "x-ks-routing" would be applied and shown as the person's
+    /// profile; it is taken out of every config whatever the person chose.
+    func testSubscriptionCannotBringItsOwnProfile() throws {
+        let p = try RoutingProfile.parse(incy)
+        let theirs: [String: Any] = ["name": "Мой выбор", "direct": ["sites": ["domain:example.com"]]]
+        let panel = try JSONSerialization.data(withJSONObject: [["remarks": "A", "outbounds": [], "x-ks-routing": theirs],
+                                                                ["remarks": "B", "outbounds": [], "x-ks-routing": theirs]])
+        let none = try XCTUnwrap(JSONSerialization.jsonObject(with: RoutingProfiles.addingXray(nil, to: panel)) as? [[String: Any]])
+        XCTAssertEqual(none.count, 2)
+        XCTAssertTrue(none.allSatisfy { $0["x-ks-routing"] == nil }, "«Как в подписке»: none left")
+        XCTAssertEqual(none[1]["remarks"] as? String, "B")
+        let ours = try XCTUnwrap(JSONSerialization.jsonObject(with: RoutingProfiles.addingXray(p, to: panel)) as? [[String: Any]])
+        XCTAssertEqual((ours[0]["x-ks-routing"] as? [String: Any])?["name"] as? String, "RU напрямую", "the person's, not theirs")
+        XCTAssertNil(ours[1]["x-ks-routing"])
+
+        let profile: Profile = ["proxies": [], "rules": ["MATCH,DIRECT"], "x-ks-routing": theirs]
+        XCTAssertNil(RoutingProfiles.adding(nil, to: profile)["x-ks-routing"], "mihomo: taken out too")
+        XCTAssertEqual((RoutingProfiles.adding(p, to: profile)["x-ks-routing"] as? [String: Any])?["name"] as? String, "RU напрямую")
+    }
+
     func testStoredList() throws {
         var p = try RoutingProfile.parse(incy)
         p.url = "https://example.com/routing.json"
