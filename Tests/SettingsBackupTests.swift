@@ -34,7 +34,7 @@ final class SettingsBackupTests: XCTestCase {
 
     private let root = SettingsBackup.Root(core: .xray,
                                            switches: ["lan": true, "tailscale": true, "dns": false, "wifiguard": true,
-                                                      "direct": false, "adblock": false, "diag": false],
+                                                      "direct": false, "adblock": false, "diag": false, "failover": true],
                                            exceptions: ["10.8.0.0/24"], manualServers: [], splitApps: ["Telegram"])
 
     // MARK: export
@@ -158,6 +158,22 @@ final class SettingsBackupTests: XCTestCase {
     }
 
     // MARK: reset
+
+    func testAutomaticServerSwitchTravels() throws {
+        var current = root
+        current.switches?["failover"] = true
+        var new = root
+        new.switches?["failover"] = false
+        let read = try SettingsBackup.read(file(root: ["switches": ["failover": false]]))
+        XCTAssertEqual(read.root?.switches, ["failover": false])
+        let changes = SettingsBackup.changes(from: .init(app: [:], root: current), to: .init(app: [:], root: new))
+        XCTAssertEqual(changes.map(\.key), ["failover"])
+        XCTAssertEqual(changes.first?.title, "Переключать сервер, если он перестал отвечать")
+        XCTAssertEqual(SettingsBackup.rootCommands(helper: helper, current: current, new: new), [[helper, "set", "failover", "0"]])
+        XCTAssertEqual(SettingsBackup.reset.root?.switches?["failover"], true, "on by default, as in ks (ADR 0023)")
+        XCTAssertEqual(SettingsBackup.rootCommands(helper: helper, current: new, new: try XCTUnwrap(SettingsBackup.reset.root)).first,
+                       [helper, "set", "failover", "1"])
+    }
 
     func testResetIsTheDefaults() throws {
         defaults.set(9, forKey: "pauseShort")

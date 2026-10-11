@@ -294,7 +294,7 @@ final class KillSwitchControl {
 
     /// «Перенос настроек» (SettingsBackup, ADR 0024): the root settings as Settings shows them.
     var rootSettings: SettingsBackup.Root {
-        .init(core: coreChoice, switches: switches.merging(["direct": allowDirect, "adblock": adBlock, "diag": diagVerbose]) { $1 },
+        .init(core: coreChoice, switches: switches.merging(["direct": allowDirect, "adblock": adBlock, "diag": diagVerbose, "failover": autoSwitch]) { $1 },
               exceptions: exceptions, manualServers: manualServers, splitApps: splitApps)
     }
     /// A loaded or reset set of root settings: the commands of their own screens, one password;

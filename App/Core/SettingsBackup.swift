@@ -48,8 +48,9 @@ enum SettingsBackup {
     /// What Settings shows, with ks's own defaults (Helper/ks `setting`, KillSwitchControl.readSettings).
     static let defaultSwitches: [String: Bool] = [
         "lan": true, "tailscale": true, "wifiguard": true, "dns": false, "direct": false, "adblock": false, "diag": false,
+        "failover": true,
     ]
-    private static let switchOrder = ["lan", "dns", "tailscale", "wifiguard", "direct", "adblock", "diag"]
+    private static let switchOrder = ["lan", "dns", "tailscale", "wifiguard", "direct", "adblock", "diag", "failover"]
 
     /// «Сбросить»: every app setting to its default; the root switches to ks's defaults and the
     /// lists emptied. The way of connecting stays (changing it imports the subscription again).
@@ -361,6 +362,7 @@ enum SettingsBackup {
         case "direct": String(localized: "Пускать dropweb мимо VPN (слабее защиты)")
         case "adblock": String(localized: "Блокировать рекламу и трекеры")
         case "diag": String(localized: "Подробная диагностика (все соединения)")
+        case "failover": String(localized: "Переключать сервер, если он перестал отвечать")
         default: key
         }
     }
