@@ -2050,7 +2050,7 @@ core_apply_settings() {
 # restarted for it (about a second, pf keeps blocking): if it ran and does not come up again within
 # about 5 s (core_up), the previous config and its files go back and Xray is restarted with them.
 core_regen() {
-  local prof conf tmp srv="$SERVERS_CORE.tmp" was=0 pid f files
+  local prof conf tmp srv="$SERVERS_CORE.tmp" was=0 pid f files other=0
   [ "$(core_kind)" = xray ] && xray_api_check
   switch_approval_migrate
   prof=$(core_profile); conf=$(core_conf); tmp="$conf.tmp"
@@ -2065,7 +2065,10 @@ core_regen() {
   files=("$conf" "$SERVERS" "$SERVERS_CORE" "$PINS" "$CORE_EGRESS" "$REPORT" "$CORE_DIR/direct")
   if [ "$(core_kind)" = xray ]; then
     core_job
-    [ "$CORE_RUN" = 1 ] && was=1 && pid=$CORE_PID
+    # mihomo's job still loaded ("core on" swapping to Xray runs this first): Xray's config is not
+    # its own, so it is neither restarted for it nor waited for (that would roll back)
+    launchctl print "$CORE_JOB" >/dev/null 2>&1 && cmp -s "$CORE_DIR/plist.mihomo" "$CORE_PLIST" && other=1
+    [ "$CORE_RUN" = 1 ] && [ "$other" = 0 ] && was=1 && pid=$CORE_PID
     for f in "${files[@]}"; do [ -f "$f" ] && cp -p "$f" "$f.prev"; done
   fi
   if ! core_commit "$tmp" "$srv" 2>"$conf.err"; then
@@ -2075,7 +2078,7 @@ core_regen() {
     return 1
   fi
   rm -f "$conf.err"
-  reload_if_on; core_reload
+  reload_if_on; [ "$other" = 1 ] || core_reload
   if [ "$was" = 1 ] && ! core_up "$pid"; then
     for f in "${files[@]}"; do [ -f "$f.prev" ] && mv "$f.prev" "$f"; done
     reload_if_on; launchctl kickstart -k "$CORE_JOB"

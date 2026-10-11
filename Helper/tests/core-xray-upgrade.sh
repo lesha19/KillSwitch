@@ -124,6 +124,15 @@ old_config; RUN=0; : > "$T/launchd"
 out=$(core_regen 2>&1) && [ "$(restarts)" = 0 ] && ! cmp -s "$CORE_DIR/xray.json" "$T/old.json" &&
   ok "_regen, core off: new config, no restart" || bad "_regen off: $out $(restarts)"
 
+# --- mihomo's job loaded while the kind is already Xray ("core on" swapping, its _regen): mihomo
+# is not restarted for Xray's config, nor rolled back while it takes its time
+echo '<plist>mihomo</plist>' > "$CORE_DIR/plist.mihomo"; cp "$CORE_DIR/plist.mihomo" "$CORE_PLIST"
+old_config; RUN=1; UP=0; : > "$T/launchd"; : > "$EVENTS"
+core_regen >/dev/null 2>&1 && [ "$(restarts)" = 0 ] && ! cmp -s "$CORE_DIR/xray.json" "$T/old.json" && ! grep -q 'rolled back' "$EVENTS" &&
+  ok "_regen with mihomo's job loaded: the new Xray config in place, mihomo not restarted, nothing rolled back" ||
+  bad "_regen under mihomo: restarts $(restarts), $(cat "$EVENTS")"
+rm -f "$CORE_DIR/plist.mihomo" "$CORE_PLIST"; UP=1; RUN=0
+
 # --- (c) the stats port taken by another program
 RUN=0; API_HOLDER=4242; : > "$EVENTS"
 xray_api_check && [ -f "$CORE_DIR/api-off" ] && ok "port taken: noticed" || bad "port taken: not noticed"
