@@ -364,10 +364,21 @@ guard() {
     restore_main_ruleset
   elif [ "$(root_files_sig)" != "$(cat "$FILESF" 2>/dev/null)" ]; then why="settings files changed"
   elif [ "$(rules_hash)" != "$(cat "$HASHF" 2>/dev/null)" ]; then why="rules were changed or flushed"
+  elif standby_changed; then why="standby $([ "$STANDBY" = 1 ] && echo ended || echo began)"
   fi
   if [ -z "$why" ]; then PROT=on; return 0; fi
   log_event "$why: reloading"
   if load "$TSIG"; then PROT=on; else PROT=off; log_event "reload failed"; fi
+}
+# Standby (ADR 0018) also depends on whether our core runs, which the tunnel list does not show:
+# our core's TUN can go a moment before launchd says the core stopped, and rules loaded then block
+# the other VPN until its tunnels change. Only a 198.18 tunnel makes standby possible; damaged
+# files mean the lockdown whatever runs.
+standby_changed() {
+  local s=0
+  [ ! -f "$INVALIDF" ] || return 1
+  [[ "$TSIG" == "vpn: "* ]] || { vpn_standby && s=1; }
+  [ "$s" != "${STANDBY:-0}" ]
 }
 
 # Someone loaded a main ruleset without Apple's anchor point, so ours is not evaluated at all.

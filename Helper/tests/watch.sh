@@ -109,6 +109,20 @@ grep -q '^block drop out quick all$' "$tmp/anchor" && [ "$(st standby)" = 0 ] &&
 ADDRS="utun4 198.18.0.1
 utun7 198.18.128.1"; CORE_RUNS=1
 passes 52 52
+# our core stopping next to that VPN: its TUN can be gone a moment before launchd says it stopped;
+# the rules loaded in that moment block, and standby has to follow without a tunnel change
+ADDRS="utun4 198.18.0.1"
+passes 54 54
+grep -q '^block drop out quick all$' "$tmp/anchor" || bad "(setup) our TUN gone, core still running: blocking expected"
+CORE_RUNS=0
+passes 55 56
+[ "$(cat "$tmp/anchor")" = "pass out quick all flags any keep state" ] && [ "$(st standby)" = 1 ] &&
+  ok "our core stopped after its TUN went, the other VPN up: standby within 2 passes" || bad "stale blocking: $(cat "$tmp/anchor"; cat "$STATEF")"
+: > "$tmp/calls"; passes 57 60
+grep -q 'anchor.*-f -' "$tmp/calls" && bad "  standby reloaded again without a change" || ok "  then left alone"
+ADDRS="utun4 198.18.0.1
+utun7 198.18.128.1"; CORE_RUNS=1
+passes 61 61
 
 # --- "ks off" raced with a reload: rules loaded although off
 echo 0 > "$FLAG"; rules > "$tmp/anchor"; : > "$EVENTS"

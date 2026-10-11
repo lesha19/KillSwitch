@@ -12,6 +12,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   subscription refresh, an import, a setting or a server address change reloading at the same
   moment): such a load is tried again, and «Сбросить настройки» now loads the rules again when the
   files themselves are fine.
+- Another VPN (Happ) could stay cut after our VPN was switched off next to it: when our core's tunnel
+  went a moment before launchd reported the core stopped, the blocking rules loaded then stayed
+  until the tunnels changed again. The watchdog now checks every 2 s whether standby (ADR 0018)
+  still matches.
 
 ## [0.18.1] - 2026-10-11
 
