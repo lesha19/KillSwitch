@@ -35,11 +35,7 @@ enum ProtectionLog {
         }
         if let failover = failover(message) { return failover }
         if let doubleVPN = doubleVPN(message) { return doubleVPN }
-        if message.hasPrefix("tunnel MTU: ") {
-            let value = String(message.dropFirst("tunnel MTU: ".count))
-            let mtu = TunnelMTU.title(value == HelperCommand.mtuAuto ? nil : Int(value))
-            return String(localized: "Размер пакетов VPN (MTU): \(mtu), VPN перезапущен")
-        }
+        if let mtu = tunnelMTU(message) { return mtu }
         if message.hasPrefix("double VPN: ") {
             let value = message.dropFirst("double VPN: ".count)
             return value == "off" ? String(localized: "Двойной VPN выключен") : String(localized: "Двойной VPN: вход через «\(ServerName.display(String(value)))»")
@@ -112,6 +108,22 @@ enum ProtectionLog {
             return String(localized: "Двойной VPN выключен: «\(name)» сейчас и вход, и выход")
         }
         return String(localized: "Двойной VPN выключен: сервер входа «\(name)» больше не подходит")
+    }
+
+    /// «Размер пакетов VPN» (ADR 0032): `tunnel MTU: <v>, VPN restarted`, `tunnel MTU: <v>` (the VPN
+    /// was off: nothing restarted), `tunnel MTU: <v> refused, back to <old>: …` (it did not start).
+    private static func tunnelMTU(_ message: String) -> String? {
+        guard message.hasPrefix("tunnel MTU: ") else { return nil }
+        let words = message.dropFirst("tunnel MTU: ".count).split(separator: " ").map { String($0.trimmingCharacters(in: CharacterSet(charactersIn: ",:"))) }
+        func title(_ value: String) -> String { TunnelMTU.title(value == HelperCommand.mtuAuto ? nil : Int(value)) }
+        guard let value = words.first else { return nil }
+        if words.count >= 5, words[1] == "refused", words[2] == "back", words[3] == "to" {
+            return String(localized: "VPN не запустился с размером пакетов \(title(value)) — вернули прежний: \(title(words[4]))")
+        }
+        if words.count >= 3, words[1] == "VPN", words[2] == "restarted" {
+            return String(localized: "Размер пакетов VPN (MTU): \(title(value)), VPN перезапущен")
+        }
+        return String(localized: "Размер пакетов VPN (MTU): \(title(value))")
     }
 
     /// The «…»-quoted parts of a line, in order.

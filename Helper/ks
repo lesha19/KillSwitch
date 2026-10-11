@@ -2449,7 +2449,7 @@ set_mtu() {
   fi
   mtu_back; mtu_store "$prev"; reload_if_on; core_restart
   log_event "tunnel MTU: $1 refused, back to $prev: the VPN did not start with it"
-  echo "VPN не запустился с MTU $1: вернули прежнее значение ($([ "$prev" = auto ] && echo Авто || echo "$prev"))" >&2
+  echo "VPN не запустился с MTU ${1/auto/Авто}: вернули прежнее значение (${prev/auto/Авто})" >&2
   return 1
 }
 # the copies set_mtu made go back in place (a file that was not there goes); uses its $files
