@@ -11,6 +11,7 @@
 #   ks set splitapps <a,b>  apps outside the VPN; "" clears
 #   ks set multihop <proxy>|off  double VPN: every other proxy is reached through this one
 #   ks set core xray|mihomo the core that runs (ADR 0020); the subscription is imported again for it
+#   ks set diag 0|1         «Подробная диагностика»: Xray's access log in the journal (ADR 0021)
 #   ks allow <addr[/n]>     always let this address or network out without VPN
 #   ks unallow <addr[/n]>
 #   ks server-add <addr>    VPN server: reachable by any process (needed by Happ)
@@ -23,6 +24,7 @@
 #   ks core proxies         groups and proxies of the running core (JSON)
 #   ks core select <group> <proxy> | delay <group|proxy>
 #   ks core traffic         "up=<bytes> down=<bytes>" through the core so far (the menu bar speed)
+#   ks diag report <dir>    the journal and the state, redacted, as one .tar.gz in <dir> (ADR 0021)
 #   ks core connections     the core's live connections and rule providers, JSON (the «Трафик» window)
 #   ks probe                "link=0|1 ru=0|1 foreign=0|1": why nothing works (ADR 0006)
 #   ks apply                (re)load rules once unless disabled
@@ -264,6 +266,7 @@ physical_services() {
 
 log_event() {
   echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$EVENTS"
+  diag_event log msg="$*"
   chmod 644 "$EVENTS"
   if [ "$(wc -l < "$EVENTS")" -gt 500 ]; then
     tail -n 500 "$EVENTS" > "$EVENTS.tmp" && mv "$EVENTS.tmp" "$EVENTS"
@@ -395,6 +398,8 @@ watch_pass() {
     rm -f "$WIFI_MARK"; log_event "rules up: network on"
   fi
   publish_state
+  diag_tick
+  [ $(($1 % 10)) = 5 ] && diag_bg
 }
 
 # Boot window guard, run when launchd stops the watchdog (see "ks watch"). A watchdog switched
@@ -2116,14 +2121,15 @@ tun_guard() {
 # Watchdog part for the core: the system DNS follows it. Set while it runs (and set again if
 # the system overwrote it), restored when it has not been running for 5 s or is unloaded,
 # so a crashed core does not leave the Mac without names.
-CORE_DOWN=""; CORE_STATE=off; LOG_CHECKS=0
+CORE_DOWN=""; CORE_STATE=off; LOG_CHECKS=0; CORE_PID=""; CORE_EXIT=""
 core_guard() {
   local p now changed
   if ! p=$(launchctl print "$CORE_JOB" 2>/dev/null); then
-    CORE_DOWN=""; CORE_STATE=off; rm -f "$FOREIGN_VPN"
+    CORE_DOWN=""; CORE_STATE=off; CORE_PID=""; rm -f "$FOREIGN_VPN"
     [ -f "$DNS_STATE" ] && { dns_locked restore; log_event "core not loaded: DNS restored"; }
     return 0
   fi
+  core_job_parse "$p"   # the pid and last exit for the journal (diag_tick)
   if grep -q 'state = running' <<<"$p"; then
     CORE_DOWN=""; CORE_STATE=on
     # lockf and a second ks only when something has to be written
@@ -2155,8 +2161,9 @@ core_api() {  # core_api <method> <path> [json-body-file]: prints the reply, fai
   { cat "$out"; echo; } >&2; rm -f "$out"; return 1
 }
 # With Xray the servers to choose from are the subscription's hosts (its configs, by remarks):
-# one selector named $XRAY_GROUP, in the shape of mihomo's /proxies, from the report. No API, no
-# latency, traffic or connections (ADR 0020); the app hides what needs them.
+# one selector named $XRAY_GROUP, in the shape of mihomo's /proxies, from the report. Xray's API
+# is its stats service alone (ADR 0021): traffic comes from it; no latency or connections (ADR
+# 0020), the app hides what needs them.
 XRAY_GROUP="Сервер"
 xray_only_mihomo() { [ "$(core_kind)" = xray ] && { echo "С ядром Xray это недоступно" >&2; return 0; }; return 1; }
 core_proxies() {
@@ -2196,11 +2203,20 @@ core_delay() {  # core_delay <group|proxy>: latency test through it, JSON
   if grep -q '"all":' <<<"$info"; then core_api GET "/group/$name/delay?$q"
   else core_api GET "/proxies/$name/delay?$q"; fi
 }
+# xray_stats: "up=<bytes> down=<bytes>" of all of Xray's inbounds (its stats API on loopback)
+xray_stats() {
+  local j
+  j=$("$CORE_DIR/xray" api statsquery --server=127.0.0.1:$CORE_API_PORT -t 2 2>/dev/null) || { echo "Ядро не сказало, сколько передано" >&2; return 1; }
+  /usr/bin/perl -MJSON::PP -e 'local $/; my $s = eval { JSON::PP->new->decode(<STDIN>) } or exit 1; my %t = (uplink => 0, downlink => 0);
+    for (ref $s->{stat} eq "ARRAY" ? @{ $s->{stat} } : ()) {
+      next unless ref $_ eq "HASH" && ($_->{name} // "") =~ /\Ainbound>>>[^>]+>>>traffic>>>(uplink|downlink)\z/; $t{$1} += $_->{value} // 0 }
+    print "up=$t{uplink} down=$t{downlink}\n"' <<<"$j"
+}
 # core_traffic: the totals of /connections and nothing else of it (no hosts, addresses or
-# processes leave ks); the app takes the speed from two readings.
+# processes leave ks); the app takes the speed from two readings. With Xray: its counters.
 core_traffic() {
   local j up down
-  xray_only_mihomo && return 1
+  if [ "$(core_kind)" = xray ]; then xray_stats; return; fi
   j=$(core_api GET /connections) || return 1
   up=$(sed -nE 's/.*"uploadTotal":([0-9]+).*/\1/p' <<<"$j")
   down=$(sed -nE 's/.*"downloadTotal":([0-9]+).*/\1/p' <<<"$j")
@@ -2270,6 +2286,183 @@ splitapps_parse() {
 }
 urlencode() { printf '%s' "$1" | od -An -v -tx1 | tr -s ' \n' '%%' | sed 's/%$//'; }  # every byte
 
+# The diagnostics journal (ADR 0021), local only, root-only ($DIAG is 700; the app gets it through
+# «Собрать отчёт», redacted). JSON lines, a file a day:
+#   metrics-<day>.jsonl  one line a minute (diag_metric): versions, the core, protection, a probe
+#                        through the core, bytes, network and DNS in effect; no server address
+#   events-<day>.jsonl   what changed (diag_event): every events.log line, sleep/wake, tunnels, the
+#                        core's start/stop/restart with its exit, protection, standby, network, DNS
+#   access*.log          Xray's access log, only with «Подробная диагностика» (diag=1): every
+#                        connection with its destination; deleted when that is switched off
+# Kept 7 days and about 50 MB in all (diag_tidy). The watchdog notices what it already knows each
+# second (diag_tick, no extra process); everything that needs a tool runs in the background every
+# 10 s under a lock (diag_pass, like core_rotate_bg), so the 1-second loop keeps its pace.
+DIAG_KEEP_DAYS=7
+DIAG_MAX=50000000    # bytes of the journal in all; the oldest files go first
+ACCESS_MAX=20000000  # the open access log is put aside past this
+diag_dir() { [ -d "$DIAG" ] || ( umask 077; mkdir -p "$DIAG" ); chmod 700 "$DIAG" 2>/dev/null; }
+json_str() {  # a JSON string: quotes and backslashes escaped, control characters as spaces
+  local s=$1
+  s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//[[:cntrl:]]/ }
+  printf '"%s"' "$s"
+}
+diag_event() {  # diag_event <kind> [key=value ...]: digits-only values as numbers
+  [ -d "$DIAG" ] && [ -w "$DIAG" ] || return 0
+  local now line kv v
+  now=$(date '+%Y-%m-%d %Y-%m-%dT%H:%M:%S%z')
+  line="{\"t\":\"${now#* }\",\"ev\":$(json_str "$1")"
+  shift
+  for kv in "$@"; do
+    v=${kv#*=}
+    if [[ "$v" =~ ^[0-9]{1,15}$ ]]; then line+=",\"${kv%%=*}\":$v"; else line+=",\"${kv%%=*}\":$(json_str "$v")"; fi
+  done
+  printf '%s}\n' "$line" >> "$DIAG/events-${now%% *}.jsonl"
+}
+
+# diag_tick: the watchdog's own view, compared with the last pass. A gap of more than 30 s in the
+# loop is the Mac waking up (the loop does not run while it sleeps) or the clock jumping. SECONDS
+# follows the wall clock, so this costs nothing.
+D_INIT=""; D_TICK=0; D_PROT=""; D_STANDBY=""; D_TSIG=""; D_CORE=""; D_PID=""
+diag_tick() {
+  if [ -n "$D_INIT" ]; then
+    [ $((SECONDS - D_TICK)) -gt 30 ] && diag_event wake after=$((SECONDS - D_TICK))
+    [ "$PROT" != "$D_PROT" ] && diag_event protection value="$PROT"
+    [ "${STANDBY:-0}" != "$D_STANDBY" ] && diag_event standby value="${STANDBY:-0}"
+    [ "$TSIG" != "$D_TSIG" ] && diag_event tunnels value="$TSIG"
+    if [ "$CORE_STATE" != "$D_CORE" ]; then
+      if [ "$CORE_STATE" = on ]; then diag_event core-start pid="$CORE_PID"
+      else diag_event core-stop pid="$D_PID" exit="$CORE_EXIT"; fi
+    elif [ "$CORE_STATE" = on ] && [ -n "$D_PID" ] && [ -n "$CORE_PID" ] && [ "$CORE_PID" != "$D_PID" ]; then
+      diag_event core-restart from="$D_PID" to="$CORE_PID"
+    fi
+  fi
+  D_INIT=1; D_TICK=$SECONDS; D_PROT=$PROT; D_STANDBY=${STANDBY:-0}; D_TSIG=$TSIG; D_CORE=$CORE_STATE; D_PID=$CORE_PID
+}
+# not in the tests (they cannot write a root folder) and skipped while the last one still runs
+diag_bg() { [ -d "$DIAG" ] && [ -w "$DIAG" ] || return 0; lockf -k -t 0 "$DIAG/.lock" "$0" _diag >/dev/null 2>&1 & }
+
+# The core's launchd job: CORE_RUN 1|0, CORE_PID, CORE_EXIT (the last exit code or signal).
+PID_RE='pid = ([0-9]+)'; EXIT_RE='last exit code = ([0-9]+)'; SIGNAL_RE='last terminating signal = ([A-Za-z0-9: ]+)'
+core_job_parse() {  # core_job_parse <launchctl print output>
+  CORE_PID=""; CORE_EXIT=""
+  [[ "$1" =~ $PID_RE ]] && CORE_PID=${BASH_REMATCH[1]}
+  if [[ "$1" =~ $SIGNAL_RE ]]; then CORE_EXIT=${BASH_REMATCH[1]}; elif [[ "$1" =~ $EXIT_RE ]]; then CORE_EXIT=${BASH_REMATCH[1]}; fi
+}
+core_job() {
+  local p
+  CORE_RUN=0; CORE_PID=""; CORE_EXIT=""
+  p=$(launchctl print "$CORE_JOB" 2>/dev/null) || return 0
+  grep -q 'state = running' <<<"$p" && CORE_RUN=1
+  core_job_parse "$p"
+}
+# "<ms> <1|0>": a request through the core's fetch inbound, which always goes to a server (ADR 0016)
+diag_probe() {
+  local r f
+  r=$(curl -q -s -o /dev/null -m 5 -x "http://127.0.0.1:$FETCH_PORT" -w '%{http_code} %{time_total}' http://cp.cloudflare.com/generate_204 2>/dev/null)
+  [[ "${r#* }" =~ ^([0-9]+)\.([0-9]*) ]] || { echo "0 0"; return 0; }
+  f="${BASH_REMATCH[2]}000"
+  echo "$((10#${BASH_REMATCH[1]} * 1000 + 10#${f:0:3})) $([ "${r%% *}" = 204 ] && echo 1 || echo 0)"
+}
+dns_servers() {  # the system's first resolver, comma separated
+  scutil --dns 2>/dev/null | awk '/^resolver #/ { if (n++) exit } /nameserver\[[0-9]+\]/ { print $3 }' | paste -sd, -
+}
+sig8() { printf '%s' "$1" | shasum -a 256 | cut -c1-8; }
+
+# The background pass keeps what it compares with in $DIAG/state (later lines win).
+diag_load() {
+  local k v
+  D_seen=""; D_net=""; D_dns=""; D_ver=""; D_mt=0; D_up=""; D_down=""
+  [ -f "$DIAG/state" ] || return 0
+  while IFS='=' read -r k v; do
+    case "$k" in seen) D_seen=$v ;; net) D_net=$v ;; dns) D_dns=$v ;; ver) D_ver=$v ;; mt) D_mt=$v ;; up) D_up=$v ;; down) D_down=$v ;; esac
+  done < "$DIAG/state"
+  [[ "$D_mt" =~ ^[0-9]+$ ]] || D_mt=0
+}
+diag_save() {
+  printf 'seen=1\nnet=%s\ndns=%s\nver=%s\nmt=%s\nup=%s\ndown=%s\n' "$D_net" "$D_dns" "$KS_VERSION" "$D_mt" "$D_up" "$D_down" > "$DIAG/state.tmp" &&
+    mv "$DIAG/state.tmp" "$DIAG/state"
+}
+D_up=""; D_down=""
+diag_metric() {  # diag_metric <epoch>: one JSON line
+  local now=$1 prot standby tun=0 server="" probe=null pok=null up=0 down=0 t u="" d="" sig dns pid=null
+  core_job
+  prot=$(sed -n 's/^protection=//p' "$STATEF" 2>/dev/null)
+  standby=$(sed -n 's/^standby=//p' "$STATEF" 2>/dev/null); [[ "$standby" =~ ^[01]$ ]] || standby=0
+  utun_addrs | awk -v a="$CORE_TUN_ADDR" '$2 == a { f = 1 } END { exit !f }' && tun=1
+  [ "$(core_kind)" = xray ] && server=$(setting xrayserver "")
+  [ -n "$CORE_PID" ] && pid=$CORE_PID
+  if [ "$CORE_RUN" = 1 ]; then
+    read -r probe pok <<<"$(diag_probe)"
+    t=$(core_traffic 2>/dev/null)
+    [[ "$t" =~ ^up=([0-9]+)\ down=([0-9]+)$ ]] && { u=${BASH_REMATCH[1]}; d=${BASH_REMATCH[2]}; }
+    if [ -n "$u" ]; then
+      # counters start at zero with the core: smaller than the last reading means a restart
+      if [[ "$D_up" =~ ^[0-9]+$ ]]; then if [ "$u" -ge "$D_up" ]; then up=$((u - D_up)); else up=$u; fi; fi
+      if [[ "$D_down" =~ ^[0-9]+$ ]]; then if [ "$d" -ge "$D_down" ]; then down=$((d - D_down)); else down=$d; fi; fi
+    fi
+    D_up=$u; D_down=$d
+  else
+    D_up=0; D_down=0
+  fi
+  sig=$(net_sig); dns=$(dns_servers)
+  printf '{"t":"%s","v":%s,"core":"%s","running":%s,"pid":%s,"protection":%s,"standby":%s,"tun":%s,"server":%s,"probe_ms":%s,"probe_ok":%s,"up":%s,"down":%s,"iface":%s,"net":"%s","dns":%s,"verbose":%s}\n' \
+    "$(date -r "$now" '+%Y-%m-%dT%H:%M:%S%z')" "$(json_str "$KS_VERSION")" "$(core_kind)" "$CORE_RUN" "$pid" "$(json_str "$prot")" \
+    "$standby" "$tun" "$(json_str "$server")" "$probe" "$pok" "$up" "$down" "$(json_str "${sig%% *}")" "$(sig8 "$sig")" \
+    "$(json_str "$dns")" "$(setting diag 0)"
+}
+# "ks _diag" (the watchdog, every 10 s, in the background): network, DNS and version changes, a
+# metric once a minute, then the tidy-up.
+diag_pass() {
+  local now=${1:-$(date +%s)} sig dns
+  diag_dir
+  diag_load
+  sig=$(net_sig); dns=$(dns_servers)
+  if [ "$D_seen" = 1 ]; then
+    [ "$(sig8 "$sig")" != "$D_net" ] && diag_event network iface="${sig%% *}" sig="$(sig8 "$sig")"
+    [ "$dns" != "$D_dns" ] && diag_event dns servers="$dns"
+    [ -n "$D_ver" ] && [ "$D_ver" != "$KS_VERSION" ] && diag_event version from="$D_ver" to="$KS_VERSION"
+  fi
+  D_net=$(sig8 "$sig"); D_dns=$dns
+  if [ $((now - D_mt)) -ge 60 ]; then
+    diag_metric "$now" >> "$DIAG/metrics-$(date -r "$now" +%Y-%m-%d).jsonl"
+    D_mt=$now
+    diag_tidy "$now"
+  fi
+  diag_save
+}
+# diag_tidy <epoch>: the access log put aside under its day (emptied in place: Xray appends), then
+# files older than 7 days removed, then the oldest until the journal fits DIAG_MAX.
+diag_tidy() {
+  local now=$1 a="$DIAG/access.log" mday list keep="" total=0 m z f
+  if [ -s "$a" ]; then
+    mday=$(date -r "$(stat -f %m "$a")" +%Y-%m-%d)
+    if [ "$mday" != "$(date -r "$now" +%Y-%m-%d)" ] || [ "$(stat -f %z "$a")" -gt "$ACCESS_MAX" ]; then
+      ( umask 077; cp -p "$a" "$DIAG/access-$mday-$(date -r "$now" +%H%M%S).log" ) && : > "$a"
+    fi
+  fi
+  list=$(stat -f '%m %z %N' "$DIAG"/*.jsonl "$DIAG"/access*.log 2>/dev/null | sort -n)
+  while read -r m z f; do
+    [ -n "$f" ] || continue
+    if [ "$f" != "$a" ] && [ $((now - m)) -gt $((DIAG_KEEP_DAYS * 86400)) ]; then rm -f "$f"; continue; fi
+    keep+="$m $z $f"$'\n'; total=$((total + z))
+  done <<<"$list"
+  while [ "$total" -gt "$DIAG_MAX" ] && read -r m z f; do
+    if [ "$f" = "$a" ]; then : > "$a"; else rm -f "$f"; fi
+    total=$((total - z))
+  done <<<"$keep"
+}
+
+# "ks set diag 0|1" (admin): «Подробная диагностика». The folder exists before a config names it
+# (Xray does not start otherwise); off deletes the connections recorded so far.
+set_diag() {
+  [[ "$1" =~ ^[01]$ ]] || { echo "usage: ks set diag 0|1" >&2; return 1; }
+  [ "$1" = 1 ] && diag_dir
+  put_setting diag "$1" || return 1
+  if [ "$(core_kind)" = xray ]; then core_apply_settings || return 1; fi
+  [ "$1" = 0 ] && rm -f "$DIAG"/access*.log
+  return 0
+}
+
 # "ks watch", the LaunchDaemon's loop.
 # Boot window guard (setting wifiguard): pf rules only come up a few seconds after the network, so
 # every network service on a physical port (Wi-Fi, Ethernet, iPhone USB, Thunderbolt) is disabled
@@ -2293,6 +2486,7 @@ watch_main() {
   local n=0
   trap on_term TERM
   trap on_hup HUP
+  diag_dir
   while :; do
     watch_pass "$n"; n=$((n + 1))
     sleep 1 & wait $!   # wait, unlike a plain sleep, lets the traps run at once
@@ -2328,12 +2522,12 @@ passwordless_args_ok() {
 # reads nothing but this file: no root needed
 [ "${1:-}" = version ] && { ks_version "$0"; exit 0; }
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
-passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,30p' "$0" >&2; exit 1; }
+passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,32p' "$0" >&2; exit 1; }
 
 # Everything that writes the core's config runs under one lock (the watchdog's rotation skips
 # its turn while it is held).
 case "${1:-}:${2:-}" in
-  core:import|core:refresh|set:splitapps|set:multihop|set:adblock|_regen:|repair:)
+  core:import|core:refresh|set:splitapps|set:multihop|set:adblock|set:diag|_regen:|repair:)
     [ -n "${KS_LOCKED:-}" ] || [ ! -d "$CORE_DIR" ] || KS_LOCKED=1 exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@" ;;
 esac
 
@@ -2342,6 +2536,7 @@ case "${1:-status}" in
   repair) repair ;;
   _rotate) core_rotate ;;  # internal, under the lock, started by the watchdog
   _regen) core_regen ;;    # internal, under the lock, run by install.sh after an upgrade
+  _diag) diag_pass ;;      # internal, under the journal's lock, started by the watchdog (ADR 0021)
   _dns)  # internal, under the lock of dns_locked
     case "${2:-}" in apply) dns_apply ;; restore) dns_restore ;; *) exit 1 ;; esac ;;
   watch) watch_main ;;
@@ -2361,6 +2556,10 @@ case "${1:-status}" in
         [ $# -eq 3 ] || { echo "usage: ks set core xray|mihomo" >&2; exit 1; }
         set_core "$val" || exit 1
         exit 0 ;;
+      diag)
+        [ $# -eq 3 ] || { echo "usage: ks set diag 0|1" >&2; exit 1; }
+        set_diag "$val" || exit 1
+        log_event "detailed diagnostics: $([ "$val" = 1 ] && echo on || echo off)"; exit 0 ;;
       multihop)
         [ $# -eq 3 ] || { echo "usage: ks set multihop <entry proxy>|off" >&2; exit 1; }
         set_multihop "$val" || exit 1
@@ -2417,6 +2616,7 @@ case "${1:-status}" in
           echo "Сначала отключи VPN в dropweb или Happ" >&2; exit 1
         fi
         core_log_tidy
+        diag_dir   # a config with the access log names it (ADR 0021)
         launchctl enable "$CORE_JOB"
         # the job of the chosen core (ADR 0020); a loaded job of the other one goes first
         if core_plist_sync 2>/dev/null; then launchctl bootout "$CORE_JOB" 2>/dev/null; fi
@@ -2471,5 +2671,5 @@ case "${1:-status}" in
     [ -f "$FLAG" ] && { u=$(cat "$FLAG"); [ "$u" = 0 ] && echo "disabled by hand" || echo "back on at $(date -r "$u" +%H:%M)"; }
     pfctl -a "$ANCHOR" -s rules 2>/dev/null
     ;;
-  *) sed -n '2,30p' "$0"; exit 1 ;;
+  *) sed -n '2,32p' "$0"; exit 1 ;;
 esac

@@ -60,4 +60,134 @@ rm -f "$SETTINGS"
 settings_lines_ok <(printf 'diag=1\ndiag=0\n') && ok "settings: diag=0|1 is ours" || bad "settings: diag refused"
 settings_lines_ok <(printf 'diag=verbose\n') && bad "settings: diag=verbose taken" || ok "settings: other diag values are not"
 
+# --- Xray's counters: "ks core traffic" sums the inbounds (the menu bar speed and the metrics)
+cat > "$CORE_DIR/xray" <<'XEOF'
+#!/bin/bash
+[ "$*" = "api statsquery --server=127.0.0.1:47891 -t 2" ] || exit 1
+cat "$(dirname "$0")/stats.json"
+XEOF
+chmod +x "$CORE_DIR/xray"
+echo core=xray > "$SETTINGS"
+cat > "$CORE_DIR/stats.json" <<'XEOF'
+{"stat":[{"name":"outbound>>>LT_1>>>traffic>>>downlink","value":900},{"name":"inbound>>>ks-tun>>>traffic>>>uplink","value":130},
+ {"name":"inbound>>>ks-tun>>>traffic>>>downlink","value":1000},{"name":"inbound>>>ks-dns>>>traffic>>>uplink"},
+ {"name":"inbound>>>ks-fetch>>>traffic>>>uplink","value":20},{"name":"inbound>>>ks-fetch>>>traffic>>>downlink","value":5}]}
+XEOF
+[ "$(core_traffic 2>&1)" = "up=150 down=1005" ] && ok "xray: core traffic from the stats API (inbounds summed)" || bad "xray traffic: $(core_traffic 2>&1)"
+echo '{}' > "$CORE_DIR/stats.json"
+[ "$(core_traffic 2>&1)" = "up=0 down=0" ] && ok "xray: no counters yet is zero" || bad "xray empty: $(core_traffic 2>&1)"
+rm -f "$SETTINGS"
+
+# --- the per-minute metrics line
+now=1791720000   # 2026-10-11, a whole minute
+core_job() { CORE_RUN=$RUN; CORE_PID=${PIDV:-}; }
+RUN=1; PIDV=4242
+diag_probe() { echo "187 1"; }
+core_traffic() { echo "up=$UP down=$DOWN"; }
+net_sig() { echo "en0 192.168.1.1"; }
+dns_servers() { echo "127.0.0.1"; }
+utun_addrs() { echo "utun7 $CORE_TUN_ADDR"; }
+printf 'pid=1\nprotection=on\ncore=on\ntunnels=vpn:utun7 ts:\nstandby=0\n' > "$STATEF"
+printf 'core=xray\nxrayserver=🇱🇹Литва\n' > "$SETTINGS"
+rm -rf "$DIAG"; diag_dir
+UP=1000 DOWN=5000 diag_metric "$now" > "$tmp/m1" || bad "metric failed"
+m() { j "$1" "$tmp/m1"; }
+[ "$(m '$c->{t}')" = "$(date -r "$now" '+%Y-%m-%dT%H:%M:%S%z')" ] && [ "$(m '$c->{v}')" = "$KS_VERSION" ] && [ "$(m '$c->{core}')" = xray ] &&
+  ok "metric: time, version, core" || bad "metric head: $(cat "$tmp/m1")"
+[ "$(m '"$c->{running} $c->{pid} $c->{protection} $c->{standby} $c->{tun}"')" = "1 4242 on 0 1" ] &&
+  ok "metric: core running with its pid, protection, standby, our tunnel up" || bad "metric state: $(cat "$tmp/m1")"
+[ "$(m '$c->{server}')" = "🇱🇹Литва" ] && ok "metric: the chosen server by name" || bad "metric server: $(m '$c->{server}')"
+[ "$(m '"$c->{probe_ms} $c->{probe_ok}"')" = "187 1" ] && ok "metric: probe through the core" || bad "metric probe: $(cat "$tmp/m1")"
+[ "$(m '"$c->{up} $c->{down}"')" = "0 0" ] && ok "metric: first reading has no delta" || bad "metric bytes: $(cat "$tmp/m1")"
+[ "$(m '$c->{iface}')" = en0 ] && [[ "$(m '$c->{net}')" =~ ^[0-9a-f]{8}$ ]] && ! grep -q 192.168.1.1 "$tmp/m1" &&
+  ok "metric: interface, router only as a signature" || bad "metric net: $(cat "$tmp/m1")"
+[ "$(m '$c->{dns}')" = 127.0.0.1 ] && [ "$(m '$c->{verbose}')" = 0 ] && ok "metric: DNS in effect, verbose off" || bad "metric dns: $(cat "$tmp/m1")"
+grep -qE '203\.0\.113|example\.com' "$tmp/m1" && bad "metric holds a server address" || ok "metric: no server address"
+UP=1600 DOWN=9000 diag_metric $((now + 60)) > "$tmp/m1"
+[ "$(m '"$c->{up} $c->{down}"')" = "600 4000" ] && ok "metric: bytes since the last minute" || bad "delta: $(cat "$tmp/m1")"
+UP=100 DOWN=200 diag_metric $((now + 120)) > "$tmp/m1"
+[ "$(m '"$c->{up} $c->{down}"')" = "100 200" ] && ok "metric: core restarted, counters from zero" || bad "restart delta: $(cat "$tmp/m1")"
+RUN=0; PIDV=""
+diag_metric $((now + 180)) > "$tmp/m1"
+[ "$(m '"$c->{running} " . (defined $c->{probe_ms} ? "probe" : "null")')" = "0 null" ] && ok "metric: core down, no probe" || bad "down: $(cat "$tmp/m1")"
+RUN=1; PIDV=4242
+# the background pass: one line a minute into the day's file, network and DNS changes as events
+rm -rf "$DIAG"; diag_dir
+UP=1 DOWN=1 diag_pass "$now"; UP=1 DOWN=1 diag_pass $((now + 10))
+day=$(date -r "$now" +%Y-%m-%d)
+[ "$(wc -l < "$DIAG/metrics-$day.jsonl" | tr -d ' ')" = 1 ] && ok "pass: one metric a minute" || bad "metrics: $(cat "$DIAG"/metrics-* 2>&1)"
+UP=1 DOWN=1 diag_pass $((now + 61))
+[ "$(wc -l < "$DIAG/metrics-$day.jsonl" | tr -d ' ')" = 2 ] && ok "pass: the next minute" || bad "metrics 2: $(wc -l < "$DIAG/metrics-$day.jsonl")"
+/usr/bin/perl -MJSON::PP -ne 'JSON::PP->new->decode($_)' "$DIAG/metrics-$day.jsonl" && ok "metrics: JSON lines" || bad "metrics not JSON"
+ev() { cat "$DIAG"/events-*.jsonl 2>/dev/null; }
+[ -z "$(ev)" ] && ok "pass: the first look at the network is no event" || bad "first pass events: $(ev)"
+net_sig() { echo "en1 10.0.0.1"; }; dns_servers() { echo "10.0.0.1"; }
+diag_pass $((now + 70))
+ev | grep -q '"ev":"network","iface":"en1"' && ok "event: network changed (interface, router signature)" || bad "net event: $(ev)"
+ev | grep -q '"ev":"dns","servers":"10.0.0.1"' && ok "event: DNS changed" || bad "dns event: $(ev)"
+ev | grep '"ev":"network"' | grep -q 10.0.0.1 && bad "router address in the network event: $(ev)" || ok "event: router address not written"
+printf 'ver=0.0.1\n' >> "$DIAG/state"
+diag_pass $((now + 80))
+ev | grep -q "\"ev\":\"version\",\"from\":\"0.0.1\",\"to\":\"$KS_VERSION\"" && ok "event: helper version changed" || bad "version event: $(ev)"
+
+# --- what the watchdog notices every second: wake, tunnels, the core, protection
+rm -rf "$DIAG"; diag_dir
+PROT=on; STANDBY=0; TSIG="vpn:utun7 ts:"; CORE_STATE=on; CORE_PID=100; CORE_EXIT=""
+SECONDS=1000; diag_tick 1
+SECONDS=1001; diag_tick 2
+[ -z "$(ev)" ] && ok "tick: nothing changed, nothing written" || bad "quiet tick: $(ev)"
+SECONDS=1200; diag_tick 3
+ev | grep -q '"ev":"wake","after":199' && ok "tick: a gap in the loop is a wake (sleep), with its length" || bad "wake: $(ev)"
+TSIG="vpn: ts:"; CORE_STATE=off; CORE_PID=""; CORE_EXIT="1"; SECONDS=1201; diag_tick 4
+ev | grep -q '"ev":"tunnels","value":"vpn: ts:"' && ok "tick: tunnel down" || bad "tunnels: $(ev)"
+ev | grep -q '"ev":"core-stop","pid":100,"exit":1' && ok "tick: core stopped, with its exit" || bad "core stop: $(ev)"
+CORE_STATE=on; CORE_PID=200; SECONDS=1202; diag_tick 5
+ev | grep -q '"ev":"core-start","pid":200' && ok "tick: core started" || bad "core start: $(ev)"
+CORE_PID=300; SECONDS=1203; diag_tick 6
+ev | grep -q '"ev":"core-restart","from":200,"to":300' && ok "tick: core restarted (pid changed)" || bad "restart: $(ev)"
+PROT=off; STANDBY=1; SECONDS=1204; diag_tick 7
+ev | grep -q '"ev":"protection","value":"off"' && ev | grep -q '"ev":"standby","value":1' && ok "tick: protection and standby" || bad "prot: $(ev)"
+: > "$EVENTS"; log_event 'core: Сервер -> "x" \ y'
+ev | tail -1 | /usr/bin/perl -MJSON::PP -ne '$e = JSON::PP->new->decode($_); exit !($e->{ev} eq "log" && $e->{msg} eq q{core: Сервер -> "x" \ y})' &&
+  ok "events.log lines go to the journal too, escaped" || bad "log event: $(ev | tail -1)"
+ev | /usr/bin/perl -MJSON::PP -ne 'JSON::PP->new->decode($_)' && ok "events: JSON lines" || bad "events not JSON"
+DIAG="$tmp/none"; log_event "no journal"; DIAG="$tmp/diag"
+[ ! -e "$tmp/none" ] && ok "no diag folder (tests, old install): log_event still works" || bad "diag folder made by log_event"
+
+# --- rotation: 7 days, about 50 MB, the access log by day
+rm -rf "$DIAG"; diag_dir
+old=$(date -r $((now - 8 * 86400)) +%Y%m%d%H%M); mid=$(date -r $((now - 3 * 86400)) +%Y%m%d%H%M)
+echo x > "$DIAG/metrics-old.jsonl"; touch -t "$old" "$DIAG/metrics-old.jsonl"
+echo x > "$DIAG/events-mid.jsonl"; touch -t "$mid" "$DIAG/events-mid.jsonl"
+echo "yesterday.example" > "$DIAG/access.log"; touch -t "$(date -r $((now - 86400)) +%Y%m%d%H%M)" "$DIAG/access.log"
+diag_tidy "$now"
+[ ! -e "$DIAG/metrics-old.jsonl" ] && [ -e "$DIAG/events-mid.jsonl" ] && ok "tidy: older than 7 days removed, newer kept" || bad "tidy age: $(ls "$DIAG")"
+yday=$(date -r $((now - 86400)) +%Y-%m-%d)
+ls "$DIAG"/access-"$yday"*.log >/dev/null 2>&1 && [ ! -s "$DIAG/access.log" ] && [ -e "$DIAG/access.log" ] &&
+  ok "tidy: yesterday's access log kept under its day, the open one emptied in place" || bad "access rotation: $(ls "$DIAG")"
+[ "$(stat -f %Lp "$DIAG")" = 700 ] && ok "diag folder: owner only" || bad "diag mode $(stat -f %Lp "$DIAG")"
+rm -rf "$DIAG"; diag_dir
+DIAG_MAX=3000
+for d in 5 4 3 2 1; do head -c 1000 /dev/zero > "$DIAG/metrics-d$d.jsonl"; touch -t "$(date -r $((now - d * 3600)) +%Y%m%d%H%M)" "$DIAG/metrics-d$d.jsonl"; done
+diag_tidy "$now"
+[ "$(cd "$DIAG" && ls metrics-* | paste -sd, -)" = "metrics-d1.jsonl,metrics-d2.jsonl,metrics-d3.jsonl" ] && ok "tidy: over the cap the oldest go first" ||
+  bad "cap: $(ls "$DIAG")"
+head -c 5000 /dev/zero > "$DIAG/access.log"
+diag_tidy "$(date +%s)"
+[ "$(cat "$DIAG"/* | wc -c | tr -d ' ')" -le 3000 ] && [ -e "$DIAG/access.log" ] && ok "tidy: a huge access log is cut, the folder under the cap" || bad "access cap: $(ls -l "$DIAG")"
+DIAG_MAX=50000000
+
+# --- ks set diag 0|1
+rm -rf "$DIAG"; diag_dir
+echo "a.example" > "$DIAG/access.log"; echo "b.example" > "$DIAG/access-2026-10-10.log"
+core_apply_settings() { echo applied >> "$tmp/applied"; }
+echo core=xray > "$SETTINGS"
+set_diag 0 && [ -z "$(ls "$DIAG"/access* 2>/dev/null)" ] && ok "set diag 0: the recorded connections are deleted" || bad "diag 0: $(ls "$DIAG")"
+grep -qx diag=0 "$SETTINGS" && [ "$(cat "$tmp/applied")" = applied ] && ok "set diag 0: stored, the core's config follows" || bad "diag 0 setting"
+rm -rf "$DIAG"; set_diag 1 && [ -d "$DIAG" ] && grep -qx diag=1 "$SETTINGS" && ok "set diag 1: folder made before the config names it" || bad "diag 1"
+echo core=mihomo > "$SETTINGS"; : > "$tmp/applied"
+set_diag 1 && [ ! -s "$tmp/applied" ] && ok "set diag with mihomo: nothing to rebuild" || bad "mihomo diag"
+set_diag verbose 2>/dev/null && bad "set diag verbose taken" || ok "set diag: 0 or 1 only"
+rm -f "$SETTINGS"
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
