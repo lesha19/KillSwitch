@@ -2209,8 +2209,8 @@ mtime_older() {
   awk -v a="$a" -v b="$b" 'BEGIN { exit !(a + 0 < b + 0) }'
 }
 
-# core_up <pid before the restart>: the restarted Xray runs (another pid) and listens on its
-# inbounds, within CORE_UP_TRIES half-seconds.
+# core_up <pid before the restart>: the restarted core (Xray; mihomo too for set_mtu) runs (another
+# pid) and listens on its fetch inbound, within CORE_UP_TRIES half-seconds.
 CORE_UP_TRIES=10
 core_up() {
   local i
@@ -2413,16 +2413,49 @@ core_on() {
 mtu_ok() { [[ "$1" =~ ^1[2-5][0-9][0-9]$ ]] && [ "$1" -ge 1280 ] && [ "$1" -le 1500 ]; }
 tun_mtu() { local v; v=$(setting mtu ""); if mtu_ok "$v"; then echo "$v"; fi; }
 core_restart() { if launchctl print "$CORE_JOB" >/dev/null 2>&1; then launchctl kickstart -k "$CORE_JOB"; fi; }
-# "ks set mtu auto|<n>": the config rebuilt with it and the core restarted, so the TUN is made
-# anew (about a second, pf keeps blocking); one the generator or the core does not take leaves the
-# old value. Admin, like the other core settings.
+# "ks set mtu auto|<n>": the config is built with it on a copy of the settings first and the value
+# stored only if that works (as set_multihop). The TUN is made anew only by a restart (Xray has no
+# reload, mihomo's API reload keeps the old TUN), so either core is restarted once (about a second,
+# pf keeps blocking). A core that ran must come up again (core_up); if it does not, or the restart
+# fails, the previous value, config and its files go back and the core is restarted with them. The
+# same value again changes nothing; the journal says «restarted» only when the core was.
 set_mtu() {
-  local prev
+  local prev s pid="" job=0 f files
   [ "$1" = auto ] || mtu_ok "$1" || { echo "MTU — число от 1280 до 1500 или auto" >&2; return 1; }
-  prev=$(setting mtu auto)
-  mtu_store "$1" || return 1
-  if ! core_apply_settings; then mtu_store "$prev"; return 1; fi
-  core_restart
+  prev=$(tun_mtu); prev=${prev:-auto}
+  [ "$1" != "$prev" ] || { echo "MTU already $1"; return 0; }
+  if [ ! -f "$(core_profile)" ] || [ ! -f "$PINS" ]; then   # no subscription yet: its import builds with it
+    mtu_store "$1" || return 1
+    log_event "tunnel MTU: $1"; return 0
+  fi
+  files=("$(core_conf)" "$SERVERS" "$SERVERS_CORE" "$PINS" "$CORE_EGRESS" "$REPORT" "$CORE_DIR/direct")
+  launchctl print "$CORE_JOB" >/dev/null 2>&1 && job=1
+  core_job; [ "$CORE_RUN" = 1 ] && pid=$CORE_PID
+  s=$(mktemp) || return 1
+  cp "$SETTINGS" "$s" 2>/dev/null
+  for f in "${files[@]}"; do rm -f "$f.prev"; [ ! -f "$f" ] || cp -p "$f" "$f.prev"; done
+  if ! SETTINGS=$s mtu_store "$1" || ! SETTINGS=$s core_rebuild "$PINS" || ! mtu_store "$1"; then
+    rm -f "$s" "$s.tmp"; mtu_back; return 1
+  fi
+  rm -f "$s"
+  reload_if_on
+  if [ "$job" = 0 ]; then
+    for f in "${files[@]}"; do rm -f "$f.prev"; done
+    log_event "tunnel MTU: $1"; return 0
+  fi
+  if core_restart && { [ -z "$pid" ] || core_up "$pid"; }; then
+    for f in "${files[@]}"; do rm -f "$f.prev"; done
+    log_event "tunnel MTU: $1, VPN restarted"; return 0
+  fi
+  mtu_back; mtu_store "$prev"; reload_if_on; core_restart
+  log_event "tunnel MTU: $1 refused, back to $prev: the VPN did not start with it"
+  echo "VPN не запустился с MTU $1: вернули прежнее значение ($([ "$prev" = auto ] && echo Авто || echo "$prev"))" >&2
+  return 1
+}
+# the copies set_mtu made go back in place (a file that was not there goes); uses its $files
+mtu_back() {
+  local f
+  for f in "${files[@]}"; do if [ -f "$f.prev" ]; then mv "$f.prev" "$f"; else rm -f "$f"; fi; done
 }
 mtu_store() {  # mtu_store auto|<n>
   if [ "$1" = auto ]; then
@@ -3446,11 +3479,14 @@ core_lock_wanted() {
 }
 core_lock_exec() { lockf -k -t "$1" "$CORE_DIR/core.lock" "${@:2}"; }   # core_lock_exec <seconds to wait> <command…>
 
+# the command list at the top of this file, up to its first empty line
+ks_usage() { sed -n '2,/^$/{/./p;}' "${BASH_SOURCE[0]}"; }
+
 [ "${BASH_SOURCE[0]}" = "$0" ] || return 0   # sourced by Helper/tests
 # reads nothing but this file: no root needed
 [ "${1:-}" = version ] && { ks_version "$0"; exit 0; }
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
-passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,32p' "$0" >&2; exit 1; }
+passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; ks_usage >&2; exit 1; }
 
 # The core lock (core_lock_wanted, above).
 if core_lock_wanted "$@" && [ -z "${KS_LOCKED:-}" ] && [ -d "$CORE_DIR" ]; then KS_LOCKED=1 exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@"; fi
@@ -3488,8 +3524,7 @@ case "${1:-status}" in
         log_event "detailed diagnostics: $([ "$val" = 1 ] && echo on || echo off)"; exit 0 ;;
       mtu)
         [ $# -eq 3 ] || { echo "usage: ks set mtu auto|1280…1500" >&2; exit 1; }
-        set_mtu "$val" || exit 1
-        log_event "tunnel MTU: $val"; exit 0 ;;
+        set_mtu "$val" || exit 1; exit 0 ;;
       multihop)
         [ $# -eq 3 ] || { echo "usage: ks set multihop <entry proxy>|off" >&2; exit 1; }
         set_multihop "$val" || exit 1
@@ -3585,5 +3620,5 @@ case "${1:-status}" in
     [ -f "$FLAG" ] && { u=$(cat "$FLAG"); [ "$u" = 0 ] && echo "disabled by hand" || echo "back on at $(date -r "$u" +%H:%M)"; }
     pfctl -a "$ANCHOR" -s rules 2>/dev/null
     ;;
-  *) sed -n '2,32p' "$0"; exit 1 ;;
+  *) ks_usage; exit 1 ;;
 esac

@@ -69,24 +69,75 @@ if [ -x "$MIHOMO" ]; then
   out=$("$MIHOMO" -t -d "$T/home" -f "$T/m-1420" 2>&1) && ok "  mihomo -t" || bad "  mihomo -t: $(tail -2 <<<"$out")"
 else echo "skip  mihomo -t (no $MIHOMO)"; fi
 
-# --- "ks set mtu": checked, stored, the config rebuilt and the core restarted
-APPLY_RC=0; core_apply_settings() { echo "apply $(setting mtu auto)" >> "$T/applied"; return "$APPLY_RC"; }
-core_restart() { echo restart >> "$T/applied"; }
-printf 'core=xray\nmtu=1400\n' > "$SETTINGS"; rm -f "$T/applied"
-set_mtu 1380 && [ "$(setting mtu auto)" = 1380 ] && [ "$(paste -sd, - < "$T/applied")" = "apply 1380,restart" ] &&
-  ok "set mtu 1380: stored, rebuilt, the core restarted" || bad "set: $(cat "$SETTINGS") $(cat "$T/applied" 2>&1)"
-rm -f "$T/applied"
-set_mtu auto && ! grep -q '^mtu=' "$SETTINGS" && grep -qx core=xray "$SETTINGS" && [ "$(paste -sd, - < "$T/applied")" = "apply auto,restart" ] &&
-  ok "set mtu auto: the line goes, the rest stays" || bad "auto: $(cat "$SETTINGS")"
-rm -f "$T/applied"
+# --- "ks set mtu": the real chain (import, rebuild, commit, restart, core_up); only launchd, lsof,
+# pf and the core binaries are replaced. The job: $T/job (loaded), its pid in $T/pid; a restart gives a
+# new pid; $T/up: the new core listens; $T/kickfail: kickstart fails; $T/refuse: the core's check fails.
+ALLOW="$DIR/allow"; TSRELAYS="$DIR/none"; SERVERS="$DIR/servers"; SERVERS_MANUAL="$DIR/servers-manual"
+SERVERS_CORE="$DIR/servers-core"; CORE_PROFILE="$CORE_DIR/profile.json"; PINS="$CORE_DIR/pins"
+APPROVED_HOSTS="$CORE_DIR/approved-hosts"; APPROVED_DIRECT="$CORE_DIR/approved-direct"
+CORE_EGRESS="$CORE_DIR/egress"; REPORT="$CORE_DIR/routing.json"; CORE_CTL="$CORE_DIR/ctl/mihomo.sock"
+mkdir -p "$CORE_DIR/ctl"; : > "$SERVERS_MANUAL"
+for b in xray mihomo; do printf '#!/bin/sh\n[ ! -e "%s/refuse" ]\n' "$T" > "$CORE_DIR/$b"; chmod 755 "$CORE_DIR/$b"; done
+install() { :; }; pfctl() { cat >/dev/null; }; dscl() { return 0; }; loaded() { return 1; }
+vpn_ifaces() { :; }; ts_ifaces() { :; }; xray_observe() { return 1; }; sleep() { :; }
+core_api() { echo api >> "$T/calls"; }
+launchctl() {
+  case "$1" in
+    print) [ -e "$T/job" ] || return 1; printf 'state = running\npid = %s\n' "$(cat "$T/pid")" ;;
+    kickstart) echo kickstart >> "$T/calls"; [ ! -e "$T/kickfail" ] || return 1; echo $(( $(cat "$T/pid") + 1 )) > "$T/pid" ;;
+  esac
+}
+lsof() { [ -e "$T/up" ] && cat "$T/pid"; }
+CORE_UP_TRIES=2
+kicks() { grep -c kickstart "$T/calls" 2>/dev/null; }
+conf_mtu() { if [ "$(core_kind)" = xray ]; then j '(grep { $_->{tag} eq "ks-tun" } @{ $c->{inbounds} })[0]{settings}{mtu}' "$(core_conf)"; else j '$c->{tun}{mtu} // "none"' "$(core_conf)"; fi; }
+for core in xray mihomo; do
+  printf 'core=%s\n' "$core" > "$SETTINGS"; rm -f "$T/job" "$T/up" "$T/kickfail" "$T/refuse"; : > "$EVENTS"
+  if [ "$core" = xray ]; then prof=$fx/xray-panel.json; else prof=$fx/ok-full.json; fi
+  core_import "$prof" import >/dev/null 2>"$T/err" || bad "$core: import: $(cat "$T/err")"
+  echo 100 > "$T/pid"; : > "$T/job"; : > "$T/up"; : > "$T/calls"
+  set_mtu 1380 2>"$T/err" && [ "$(setting mtu auto)" = 1380 ] && [ "$(conf_mtu)" = 1380 ] &&
+    ok "$core: set mtu 1380: stored, in the config" || bad "$core set: $(cat "$T/err") $(cat "$SETTINGS")"
+  [ "$(kicks)" = 1 ] && ok "  exactly one restart" || bad "  $core restarts: $(paste -sd, - < "$T/calls")"
+  grep -qx '.*tunnel MTU: 1380, VPN restarted' "$EVENTS" && ok "  the journal: restarted" || bad "  journal: $(cat "$EVENTS")"
+  : > "$T/calls"; : > "$EVENTS"
+  set_mtu 1380 >/dev/null 2>&1 && [ "$(kicks)" = 0 ] && [ ! -s "$EVENTS" ] && ok "  the same value again: nothing restarted or logged" ||
+    bad "  same value: $(paste -sd, - < "$T/calls") $(cat "$EVENTS")"
+  # the core does not come up with the new value: the previous one, its config and a restart back
+  cp "$(core_conf)" "$T/conf.before"; rm -f "$T/up"; : > "$T/calls"; : > "$EVENTS"
+  if set_mtu 1280 2>"$T/err"; then bad "$core: a core that does not come up: success"; fi
+  [ "$(setting mtu auto)" = 1380 ] && cmp -s "$(core_conf)" "$T/conf.before" && [ "$(kicks)" = 2 ] &&
+    grep -q 'MTU 1280' "$T/err" && grep -q 'tunnel MTU: 1280 refused, back to 1380' "$EVENTS" &&
+    ok "  the core does not come up: back to 1380 and its config, restarted with it, said and logged" ||
+    bad "  rollback: $(cat "$T/err") $(setting mtu auto) $(conf_mtu) $(paste -sd, - < "$T/calls") $(cat "$EVENTS")"
+  ls "$CORE_DIR" | grep -q '\.prev$' && bad "  .prev files left" || ok "  no copies left"
+  # the restart itself fails after the config was put in place: the same way back
+  : > "$T/up"; : > "$T/kickfail"; : > "$T/calls"
+  if set_mtu auto 2>"$T/err"; then bad "$core: a failed restart: success"; fi
+  [ "$(setting mtu auto)" = 1380 ] && cmp -s "$(core_conf)" "$T/conf.before" && grep -q 'MTU' "$T/err" &&
+    ok "  the restart fails after the config was put in place: back to 1380 and its config" ||
+    bad "  kick fail: $(cat "$T/err") $(setting mtu auto) $(conf_mtu)"
+  rm -f "$T/kickfail"
+  # a config the core's own check refuses: nothing stored, nothing restarted
+  : > "$T/refuse"; : > "$T/calls"
+  if set_mtu 1500 2>/dev/null; then bad "$core: a refused config: success"; fi
+  [ "$(setting mtu auto)" = 1380 ] && cmp -s "$(core_conf)" "$T/conf.before" && [ "$(kicks)" = 0 ] &&
+    ok "  a config the core refuses: the old value kept, nothing restarted" || bad "  refused: $(setting mtu auto) $(kicks)"
+  rm -f "$T/refuse"
+  # the VPN off (no job): stored and built, nothing restarted, the journal does not say restarted
+  rm -f "$T/job"; : > "$T/calls"; : > "$EVENTS"
+  set_mtu auto 2>"$T/err" && ! grep -q '^mtu=' "$SETTINGS" && grep -qx "core=$core" "$SETTINGS" && [ "$(kicks)" = 0 ] &&
+    grep -qx '.*tunnel MTU: auto' "$EVENTS" && ok "  the VPN off: auto stored, the line gone, no restart, the journal says no restart" ||
+    bad "  off: $(cat "$T/err") $(cat "$SETTINGS") $(kicks) $(cat "$EVENTS")"
+done
+# no subscription yet: only stored (the import builds with it)
+rm -f "$CORE_DIR"/profile* "$PINS"; printf 'core=xray\n' > "$SETTINGS"; : > "$T/calls"; : > "$T/job"
+set_mtu 1420 2>/dev/null && [ "$(setting mtu auto)" = 1420 ] && [ "$(kicks)" = 0 ] && ok "no subscription: stored, nothing restarted" || bad "no profile: $(kicks)"
+: > "$T/calls"
 for v in 1000 1501 abc "" 1400.5; do
   if set_mtu "$v" 2>/dev/null; then bad "set mtu '$v' accepted"; fi
 done
-[ ! -e "$T/applied" ] && ! grep -q '^mtu=' "$SETTINGS" && ok "anything else refused before anything is touched" || bad "bad values: $(cat "$SETTINGS")"
-put_setting mtu 1400; APPLY_RC=1; rm -f "$T/applied"
-if set_mtu 1300 2>/dev/null; then bad "a value the core refuses: success"; fi
-[ "$(setting mtu auto)" = 1400 ] && ! grep -q restart "$T/applied" && ok "a config that cannot be built: the old value back, nothing restarted" || bad "rollback: $(cat "$SETTINGS")"
-APPLY_RC=0
+[ ! -s "$T/calls" ] && [ "$(setting mtu auto)" = 1420 ] && ok "anything else refused before anything is touched" || bad "bad values: $(cat "$SETTINGS")"
 grep -q 'mtu)' <(declare -f passwordless_args_ok) && bad "mtu is passwordless" || ok "not among the passwordless commands (admin, like other core settings)"
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
