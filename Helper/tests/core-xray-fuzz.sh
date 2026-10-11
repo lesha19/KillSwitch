@@ -14,6 +14,7 @@ XRAY=${XRAY:-/Library/KillSwitch/core/xray}; [ -x "$XRAY" ] || [ ! -x "$here/../
 fx="$here/fixtures"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 SETTINGS="$tmp/settings"; : > "$SETTINGS"
+EVENTS="$tmp/events.log"; DIAG="$tmp/none"
 CORE_DIR="$tmp/core"; mkdir "$CORE_DIR"
 resolve_host() { case "$1" in *.example.com) echo 203.0.113.40 ;; *) return 1 ;; esac; }
 fails=0
@@ -86,7 +87,7 @@ done
 refused "protocol as a list" '$c->{outbounds}[0]{protocol} = ["vless"]' "незнакомый тип сервера"
 refused "protocol missing" 'delete $c->{outbounds}[0]{protocol}' "незнакомый тип сервера"
 refused "an outbound that is a string" 'push @{$c->{outbounds}}, "freedom"' "не объект"
-refused "two outbounds with one tag" 'push @{$c->{outbounds}}, { tag => "LT_1", protocol => "freedom" }' "два outbound"
+refused "two outbounds with one tag" 'push @{$c->{outbounds}}, { tag => "LT_1", protocol => "blackhole" }' "два outbound"
 refused "no server at all" '@{$c->{outbounds}} = grep { $_->{protocol} !~ /vless/ } @{$c->{outbounds}}; delete $c->{routing}{balancers}' "нет ни одного сервера"
 
 # --- server addresses: IPv4 or a host name we pin, nothing else
@@ -199,6 +200,54 @@ if accepted "a ws stream read as it is" '$c->{outbounds}[0]{streamSettings} = { 
   [ "$(j 'join ",", sort keys %{ $c->{outbounds}[0]{streamSettings} }')" = network,security,wsSettings ] && ok "  no xhttpSettings or splithttpSettings added" ||
     bad "  stream: $(j '$c->{outbounds}[0]{streamSettings}')"
 fi
+
+# --- the direct signature of a subscription that 0.19.0 approved is the same now: a different one
+# would make every passwordless switch and failover after the upgrade ask for the password
+# (0.19.1 review: reading the transports once added keys to every stream). The 0.19.0 hashes:
+for g in "xray-panel.json 5c3272a3902c1cee70f8f54e9bda93e469f103f69cc053b446f88a544c441599" \
+         "xray-3xui.json b05acca29ee7282b849360f55dea7bd65ad8937af75ef75d3b71fee028d541a9"; do
+  cp "$fx/${g%% *}" "$tmp/p.json"
+  if KS_APPROVE_ALL=1 gen; then
+    [ "$(shasum -a 256 < "$tmp/c.direct" | cut -c1-64)" = "${g#* }" ] && [ "$(cat "$tmp/c.approved")" = "${g#* }" ] &&
+      ok "${g%% *}: the direct signature 0.19.0 approved" || bad "${g%% *}: direct signature $(shasum -a 256 < "$tmp/c.direct") $(cat "$tmp/c.direct")"
+    xtest "${g%% *}"
+    grep -q ':null' "$tmp/c" && bad "${g%% *}: a key read as null added to the config" || ok "  no key read into existence (null) in the config"
+  else bad "${g%% *}: refused: $(cat "$tmp/err")"; fi
+done
+
+# --- Xray reads keys in any case (Go's JSON) and a selector as one string: «Selector»,
+# «fallbacktag», «Address» would pass a check that reads the exact spelling (0.19.1 review)
+perhost "balancer «Selector» to the freedom outbound" 'delete $b->{routing}{balancers}[0]{selector}; $b->{routing}{balancers}[0]{Selector} = ["direct"]'
+perhost "balancer selector as one string" '$b->{routing}{balancers}[0]{selector} = "direct"'
+perhost "balancer «fallbacktag»" '$b->{routing}{balancers}[0]{fallbacktag} = "direct"'
+perhost "observatory selector as one string" '$b->{burstObservatory}{subjectSelector} = "direct"'
+perhost "XHTTP «downloadsettings» with «Address»" '$b->{outbounds}[0]{streamSettings} = { network => "xhttp", xhttpSettings => { path => "/x",
+      downloadsettings => { Address => "evil.example.com", port => 443 } } }'
+perhost "vless flat settings «Address»" 'delete $b->{outbounds}[0]{settings}{vnext}; $b->{outbounds}[0]{settings}{Address} = "evil.example.com";
+      $b->{outbounds}[0]{settings}{port} = 443; $b->{outbounds}[0]{settings}{id} = "00000000-0000-4000-8000-000000000001"'
+perhost "a DNS server «Address»" 'push @{$b->{dns}{servers}}, { Address => "tcp+local://9.9.9.9" }'
+perhost "«TAG» next to tag" '$b->{outbounds}[2]{TAG} = "LT_9"'
+perhost "«sockopt» spelled «SockOpt» with an interface" '$b->{outbounds}[0]{streamSettings}{SockOpt} = { interface => "en0" }'
+if accepted "a ws Host header in any case is the subscription's own" '$c->{outbounds}[0]{streamSettings} = { network => "ws", security => "tls",
+      wsSettings => { path => "/p", headers => { HOST => "a.example.com", "User-Agent" => "x" } } }'; then
+  ok "  taken (header names are not Xray's keys)"
+fi
+
+# --- an observatory that probes through a freedom outbound sends its probes past the tunnel to
+# a URL of the subscription's choice; outbound settings.reverse would open a portal (0.19.1 review)
+perhost "burstObservatory selector picking the freedom outbound" '$b->{burstObservatory}{subjectSelector} = ["LT_", "dir"]'
+if accepted "outbound settings.reverse" '$c->{outbounds}[0]{settings}{reverse} = { tag => "r" }'; then
+  [ "$(j 'scalar grep { ref $_->{settings} eq "HASH" && exists $_->{settings}{reverse} } @{ $c->{outbounds} }')" = 0 ] && ok "  removed" || bad "  reverse: $(j '$c->{outbounds}[0]{settings}')"
+fi
+
+# --- the host picked by hand left out by a refresh: the first one runs, and the journal says why
+echo 'xrayserver=Плохой' > "$SETTINGS"; : > "$EVENTS"
+edit 'my $b = JSON::PP->new->decode(JSON::PP->new->encode($c)); $b->{remarks} = "Плохой"; $b->{outbounds}[0]{settings}{vnext}[0]{address} = "0.0.0.0"; push @$a, $b'
+if gen; then
+  [ "$(j '$c->{selected}' "$tmp/c.report")" = "🇱🇹Литва" ] && grep -q 'xray: server «Плохой» left out of the subscription (address), «🇱🇹Литва» runs' "$EVENTS" &&
+    ok "a picked host left out: the first runs, logged" || bad "picked host: $(j '$c->{selected}' "$tmp/c.report") events: $(cat "$EVENTS")"
+else bad "picked host left out: refused: $(cat "$tmp/err")"; fi
+: > "$SETTINGS"
 
 # --- sockets bound past pf's view: interface, mark and raw socket options removed
 if accepted "sockopt interface, mark, customSockopt, sendThrough" '$c->{outbounds}[0]{streamSettings}{sockopt}{interface} = "en0";
