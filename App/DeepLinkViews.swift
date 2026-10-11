@@ -16,7 +16,11 @@ enum DeepLinks {
             // the link itself is not logged: it may carry a subscription key
             log.notice("killswitch:// link ignored: \(String(describing: rejection), privacy: .public)")
         case .success(let link):
-            log.notice("killswitch:// link: \(link.logName, privacy: .private(mask: .hash))")
+            if case .add = link {
+                log.notice("killswitch:// link: \(link.logName, privacy: .private)")   // the host
+            } else {
+                log.notice("killswitch:// link: \(link.logName, privacy: .public)")
+            }
             Task { await handle(link) }
         }
     }
