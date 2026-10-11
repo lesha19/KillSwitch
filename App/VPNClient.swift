@@ -33,8 +33,10 @@ final class VPNClient {
     private(set) var needsConfirmation = false
     /// KS-12: what waits for the admin is a change of what goes past the VPN (DIRECT, DNS), not servers.
     private(set) var routingChanged = false
-    /// Where that change comes from: the subscription, or the routing profile (review S5).
+    /// Which part of that change is the routing profile's, as the helper says (re-review F4), and
+    /// the profile in use then (nil: «Как в подписке»).
     private(set) var routingSource: RoutingChangeSource = .subscription
+    private(set) var routingProfileName: String?
     /// Settings › «Маршрутизация» (ADR 0034): the profiles added, the one in use (nil: «Как в подписке»).
     private(set) var routingProfiles = RoutingProfiles.load(links: .keychain)
     private(set) var activeRoutingProfile = UserDefaults.standard.string(forKey: RoutingProfiles.activeKey).flatMap(UUID.init(uuidString:))
@@ -526,7 +528,6 @@ final class VPNClient {
     }
 
     private func importedXray(hash: String) {
-        RoutingProfiles.recordApplied(RoutingProfiles.active())
         reloadProfileProxies()
         UserDefaults.standard.set(hash, forKey: Self.importedKey)
         UserDefaults.standard.set([CoreProxies.xrayGroup], forKey: KillSwitchControl.groupOrderKey)
@@ -745,8 +746,7 @@ final class VPNClient {
     /// imports (admin prompt if needed), a timer only refreshes. `done` records what was imported.
     private func handOver(file: URL, hash: String, interactive: Bool, done: (String) -> Void) async -> Bool {
         if control.coreConfigured, UserDefaults.standard.string(forKey: Self.importedKey) == hash {
-            RoutingProfiles.recordApplied(RoutingProfiles.active())
-            lastError = nil
+                lastError = nil
             needsPassword = false
             needsConfirmation = false; routingChanged = false
             return true
@@ -759,14 +759,17 @@ final class VPNClient {
                 return true
             case .newServers, .routingChanged:
                 lastError = nil
-                let routing = outcome == .routingChanged
-                let source = routing ? RoutingProfiles.changeSource(active: RoutingProfiles.active()) : .subscription
+                var source = RoutingChangeSource.subscription
+                if case .routingChanged(let part) = outcome { source = part }
+                let routing = outcome != .newServers
                 if !needsConfirmation || routing != routingChanged || source != routingSource {
-                    Notifier.shared.post(!routing ? .newServers : source == .subscription ? .routingChanged : .profileRouting)
+                    // the provider's part is told as the provider's
+                    Notifier.shared.post(!routing ? .newServers : source == .profile ? .profileRouting : .routingChanged)
                 }
                 needsConfirmation = true
                 routingChanged = routing
                 routingSource = source
+                routingProfileName = RoutingProfiles.active()?.name
             case .needsPassword: needsPassword = true
             case .failed(let message): lastError = UserError.from(raw: message, context: .subscription)
             }
@@ -830,7 +833,6 @@ final class VPNClient {
     }
 
     private func imported(_ profile: Profile, hash: String) {
-        RoutingProfiles.recordApplied(RoutingProfiles.active())
         reloadProfileProxies()
         UserDefaults.standard.set(hash, forKey: Self.importedKey)
         let groups = (profile["proxy-groups"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }

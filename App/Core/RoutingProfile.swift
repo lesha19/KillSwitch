@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 /// A named routing profile the person added (ADR 0034, #30): block, through-the-VPN and direct
@@ -159,41 +158,20 @@ struct RoutingProfile: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-/// Where a change of what goes past the VPN that waits for the admin comes from (review S5).
+/// Which part of a change of what goes past the VPN waits for the admin, as the helper says
+/// (refresh_check, " [profile]" / " [subscription]" / " [profile,subscription]"; re-review F4).
 enum RoutingChangeSource: Equatable, Sendable {
-    /// The subscription's DIRECT rules or DNS (or nothing of the profile).
+    /// The subscription's DIRECT rules, DNS or outbounds (also: an older helper that does not say).
     case subscription
-    /// The profile in use sends sites direct and is not the one applied: its rules wait.
-    case profile(name: String)
-    /// The applied profile sent sites direct and is off now (or replaced by one that does not):
-    /// its rules stay until the password.
-    case profileOff
+    /// Only the routing profile's own rules.
+    case profile
+    case both
 }
 
 /// The profiles in UserDefaults (their links in the keychain) and the one in use (nil: «Как в подписке»).
 enum RoutingProfiles {
     static let listKey = "routingProfiles"
     static let activeKey = "routingProfileActive"
-    /// The profile the core has (its hint's SHA-256, "" for none) and whether it sends sites direct.
-    static let appliedKey = "routingProfileApplied"
-    static let appliedDirectKey = "routingProfileAppliedDirect"
-
-    static func fingerprint(_ routing: RoutingProfile?) -> String {
-        guard let routing, let data = try? JSONSerialization.data(withJSONObject: routing.hint, options: [.sortedKeys]) else { return "" }
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// The core took a config with this profile (nil: none).
-    static func recordApplied(_ routing: RoutingProfile?, _ defaults: UserDefaults = .standard) {
-        defaults.set(fingerprint(routing), forKey: appliedKey)
-        defaults.set(routing?.sendsDirect ?? false, forKey: appliedDirectKey)
-    }
-
-    static func changeSource(active: RoutingProfile?, _ defaults: UserDefaults = .standard) -> RoutingChangeSource {
-        guard fingerprint(active) != defaults.string(forKey: appliedKey) ?? "" else { return .subscription }
-        if let active, active.sendsDirect { return .profile(name: active.name) }
-        return defaults.bool(forKey: appliedDirectKey) ? .profileOff : .subscription
-    }
 
     /// The profiles' links ({id: url}): one may carry a token, so they live in the keychain like
     /// the subscription link (review N1); the list in UserDefaults has none.

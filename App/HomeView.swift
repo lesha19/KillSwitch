@@ -323,7 +323,7 @@ private struct NoticeBanner: View {
         }
         let notice = HomeNotice.pick(HomeNotice.Input(
             otherVPN: control.otherVPNActive,
-            usage: client.status.usage, newServers: client.needsConfirmation, routingChanged: client.routingChanged, routingSource: client.routingSource,
+            usage: client.status.usage, newServers: client.needsConfirmation, routingChanged: client.routingChanged, routingSource: client.routingSource, routingProfileName: client.routingProfileName,
             filterIncomplete: filterIncomplete, filterDismissed: filterDismissed, now: Date(),
             serversDown: control.serversDown, networkCause: control.networkCause,
             filterUpdateWaiting: control.filter.updateWaitingForApproval,
