@@ -203,6 +203,23 @@ core_apply_settings() { applied=$((applied + 1)); }
 applied=1
 set_doh "" && ! grep -q '^doh' "$SETTINGS" && grep -qx lan=1 "$SETTINGS" && [ "$applied" = 2 ] && ok "set doh \"\": the line gone, the rest kept" ||
   bad "set doh clear: $(cat "$SETTINGS")"
+# the new config put in place but the core not reloaded with it: the old value and the old config
+# back, so settings and the config never disagree (review of #14)
+eval "$(sed -n '/^core_apply_settings() {/,/^}/p' "$here/../ks")"   # the real one again, the stubs above replaced it
+CORE_PROFILE="$tmp/profile"; : > "$CORE_PROFILE"; PINS="$tmp/pins"; : > "$PINS"
+built=""; reloads=0
+core_rebuild() { built="$built $(setting doh -)"; }
+reload_if_on() { :; }
+core_reload() { reloads=$((reloads + 1)); [ "$reloads" -gt 1 ]; }
+put doh https://dns.example.com/dns-query
+set_doh "https://other.example.com/q" 2>/dev/null && bad "set doh: a failed reload reported as done" ||
+  { [ "$(setting doh "")" = https://dns.example.com/dns-query ] && [ "$built" = " https://other.example.com/q https://dns.example.com/dns-query" ] &&
+    ok "set doh: a failed reload puts the old value and the old config back" || bad "set doh reload rollback: $(cat "$SETTINGS") built:$built"; }
+built=""; reloads=1
+core_rebuild() { built="$built $(setting doh -)"; return 1; }
+set_doh "https://other.example.com/q" 2>/dev/null
+[ "$built" = " https://other.example.com/q" ] && [ "$reloads" = 1 ] && ok "set doh: a refused config is not rebuilt again (nothing was put in place)" ||
+  bad "set doh refused: built:$built reloads=$reloads"
 rm -f "$SETTINGS"
 
 echo

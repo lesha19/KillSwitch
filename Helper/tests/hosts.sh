@@ -81,6 +81,23 @@ core_apply_settings() { applied=$((applied + 1)); }
 applied=1
 set_hosts "" && ! grep -q '^hosts' "$SETTINGS" && grep -qx lan=1 "$SETTINGS" && [ "$applied" = 2 ] && ok "set hosts \"\": the line gone" ||
   bad "set hosts clear: $(cat "$SETTINGS")"
+# the new config put in place but the core not reloaded with it: the old value and the old config
+# back, so settings and the config never disagree (review of #28)
+eval "$(sed -n '/^core_apply_settings() {/,/^}/p' "$here/../ks")"   # the real one again, the stubs above replaced it
+CORE_PROFILE="$tmp/profile"; : > "$CORE_PROFILE";
+built=""; reloads=0
+core_rebuild() { built="$built $(setting hosts -)"; }
+reload_if_on() { :; }
+core_reload() { reloads=$((reloads + 1)); [ "$reloads" -gt 1 ]; }
+put hosts a.example.com=203.0.113.1
+set_hosts "b.example.com=203.0.113.2" 2>/dev/null && bad "set hosts: a failed reload reported as done" ||
+  { [ "$(setting hosts "")" = a.example.com=203.0.113.1 ] && [ "$built" = " b.example.com=203.0.113.2 a.example.com=203.0.113.1" ] &&
+    ok "set hosts: a failed reload puts the old value and the old config back" || bad "set hosts reload rollback: $(cat "$SETTINGS") built:$built"; }
+built=""; reloads=1
+core_rebuild() { built="$built $(setting hosts -)"; return 1; }
+set_hosts "b.example.com=203.0.113.2" 2>/dev/null
+[ "$built" = " b.example.com=203.0.113.2" ] && [ "$reloads" = 1 ] && ok "set hosts: a refused config is not rebuilt again (nothing was put in place)" ||
+  bad "set hosts refused: built:$built reloads=$reloads"
 rm -f "$SETTINGS" "$APPROVED_HOSTS" "$PINS"
 unset -f core_apply_settings
 

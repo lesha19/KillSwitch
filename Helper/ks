@@ -2199,11 +2199,25 @@ core_rebuild() {
   core_commit "$tmp" "$srv"
 }
 
-# A setting the generator reads changed: rebuild and reload if there is a kept profile.
+# A setting the generator reads changed: rebuild and reload if there is a kept profile. 4: the new
+# config is in place but the core was not reloaded with it.
 core_apply_settings() {
   [ -f "$(core_profile)" ] && [ -f "$PINS" ] || return 0
   core_rebuild "$PINS" || return 1
-  reload_if_on; core_reload
+  reload_if_on; core_reload || return 4
+}
+# setting_apply <put function> <new> <old>: a setting the generator reads, written and applied. A
+# config the core does not take must not stay in settings (every later rebuild would fail): then the
+# old value goes back, and when that config was already put in place (the reload failed) the config
+# is built again with the old value, so settings and the config never disagree.
+setting_apply() {
+  local rc
+  "$1" "$2" || return 1
+  core_apply_settings && return 0
+  rc=$?
+  "$1" "$3"
+  if [ "$rc" = 4 ]; then core_apply_settings >/dev/null 2>&1 || log_event "settings: the previous config not reloaded either"; fi
+  return 1
 }
 
 # "ks _regen" (install.sh, after an upgrade, under the core lock): the config again from the kept
@@ -2503,11 +2517,7 @@ set_doh() {
     echo "Адрес DNS-over-HTTPS должен быть вида https://имя-сервера/путь: без логина, без ? и #, не адрес в локальной сети" >&2
     return 1
   fi
-  doh_put "$1" || return 1
-  # a config the core does not take must not stay in settings: every later rebuild would fail
-  core_apply_settings && return 0
-  doh_put "$old"
-  return 1
+  setting_apply doh_put "$1" "$old"
 }
 doh_put() {  # doh_put <url>: the settings line, "" removes it
   if [ -n "$1" ]; then put_setting doh "$1"; return; fi
@@ -2526,11 +2536,7 @@ set_hosts() {
       echo "${e%%=*} — адрес сервера VPN: его менять нельзя" >&2; return 1
     fi
   done <<<"$list"
-  hosts_put "$(paste -sd, - <<<"$list")" || return 1
-  # a config the core does not take must not stay in settings: every later rebuild would fail
-  core_apply_settings && return 0
-  hosts_put "$old"
-  return 1
+  setting_apply hosts_put "$(paste -sd, - <<<"$list")" "$old"
 }
 hosts_put() {  # hosts_put <list>: the settings line, "" removes it
   if [ -n "$1" ]; then put_setting hosts "$1"; return; fi
