@@ -2463,6 +2463,126 @@ set_diag() {
   return 0
 }
 
+# "ks diag report <dir>" («Собрать отчёт», passwordless): the journal, the logs and the state in
+# one .tar.gz, every file redacted (diag_redact). Never the profiles, configs or pins. Through sudo
+# the archive is written as the user who ran it (root never opens a user's path); otherwise (the
+# daemon) only into a folder of ours that nobody else can write.
+diag_crash_dirs() {  # the system's crash reports and the console user's
+  local uid home
+  echo /Library/Logs/DiagnosticReports
+  uid=${SUDO_UID:-$(stat -f %u /dev/console 2>/dev/null)}
+  [[ "$uid" =~ ^[0-9]+$ ]] && [ "$uid" -ge 500 ] || return 0
+  home=$(dscacheutil -q user -a uid "$uid" 2>/dev/null | awk '$1 == "dir:" { print $2; exit }')
+  [ -n "$home" ] && echo "$home/Library/Logs/DiagnosticReports"
+}
+diag_status() {
+  local job
+  echo "protection: $(if loaded; then echo on; else echo off; fi)"
+  [ -f "$FLAG" ] && echo "off/pause flag: $(cat "$FLAG")"
+  echo "core: $(core_kind), $(core_running && echo running || echo not running)"
+  for job in "$CORE_JOB" "$WATCH_JOB"; do
+    echo "--- $job"
+    launchctl print "$job" 2>/dev/null | grep -E '^[[:space:]]*(state|pid|runs|last exit code|last terminating signal|program) = '
+  done
+  echo "--- pf"; pfctl -s info 2>/dev/null | head -3
+  echo "--- anchor $ANCHOR"; pfctl -a "$ANCHOR" -s rules 2>/dev/null
+  echo "--- other VPN next to the core"; cat "$FOREIGN_VPN" 2>/dev/null
+  echo "--- egress"; cat "$CORE_EGRESS" 2>/dev/null
+}
+diag_versions() {
+  local app=/Applications/KillSwitch.app/Contents/Info.plist
+  echo "helper (ks): $KS_VERSION"
+  echo "installed: $(cat "$DIR/installed" 2>/dev/null)"
+  [ -f "$app" ] && echo "app: $(plutil -extract CFBundleShortVersionString raw -o - "$app" 2>/dev/null) ($(plutil -extract CFBundleVersion raw -o - "$app" 2>/dev/null))"
+  [ -x "$CORE_DIR/xray" ] && echo "xray: $("$CORE_DIR/xray" version 2>/dev/null | head -1)"
+  [ -x "$CORE_DIR/mihomo" ] && echo "mihomo: $("$CORE_DIR/mihomo" -v 2>/dev/null | head -1)"
+  sw_vers 2>/dev/null
+  echo "model: $(sysctl -n hw.model 2>/dev/null) $(uname -m)"
+}
+diag_network() {
+  echo "primary: $(net_sig)"
+  echo "--- tunnels"; tun_addrs
+  echo "--- interfaces"; ifconfig -l 2>/dev/null
+  echo "--- scutil --dns"; scutil --dns 2>/dev/null | head -100
+  echo "--- routes (IPv4)"; netstat -rn -f inet 2>/dev/null | head -80
+  echo "--- routes (IPv6)"; netstat -rn -f inet6 2>/dev/null | head -40
+}
+diag_collect() {  # diag_collect <dir>
+  local d=$1 f dir
+  mkdir -p "$d/diag" "$d/crash" || return 1
+  for f in "$DIAG"/*.jsonl "$DIAG"/access*.log; do [ -f "$f" ] && cp -p "$f" "$d/diag/"; done
+  for f in "$EVENTS" "$STATEF" "$SETTINGS" "$DIR/installed" "$INVALIDF" "$CORE_DIR/core.log" "$CORE_DIR/core.log.1" "$REPORT"; do
+    [ -f "$f" ] && cp "$f" "$d/${f##*/}"
+  done
+  diag_status > "$d/status.txt" 2>/dev/null
+  diag_versions > "$d/versions.txt" 2>/dev/null
+  diag_network > "$d/network.txt" 2>/dev/null
+  diag_crash_dirs | while IFS= read -r dir; do
+    [ -d "$dir" ] || continue
+    find "$dir" -maxdepth 1 -type f -mtime -7 -size -5000k \( -name '*KillSwitch*' -o -name 'xray*' -o -name 'mihomo*' \) 2>/dev/null
+  done | head -30 | while IFS= read -r f; do cp "$f" "$d/crash/"; done
+}
+# diag_redact <dir>: the servers (addresses and names from the lists, the pins and the profiles'
+# outbounds) become server-1, server-2… (a pinned name and its address the same one); then links,
+# UUIDs and keys as in the app's «Скопировать диагностику» (App/Core/Diagnostics.swift). Other
+# addresses and domains stay: what was visited is the point of the access log.
+diag_redact() {
+  find "$1" -type f -print0 | SRV="$SERVERS $SERVERS_CORE $SERVERS_MANUAL $APPROVED_HOSTS" PINS=$PINS \
+    PROFILES="$CORE_DIR/profile-xray.json $CORE_PROFILE" /usr/bin/perl -MJSON::PP -0 -e '
+    my (@groups, %seen);
+    local $/ = "\n";
+    my $add = sub { my @t = grep { defined && !ref && length && !$seen{$_}++ } @_; push @groups, \@t if @t };
+    if (open my $f, "<", $ENV{PINS}) { for (sort <$f>) { chomp; $add->(split /\t/) } }
+    my $host = qr/\A[A-Za-z0-9]([A-Za-z0-9.:-]{0,251}[A-Za-z0-9])?\z/;
+    for my $p (split / /, $ENV{PROFILES}) {
+      my $j = eval { local $/; open my $f, "<", $p or die; JSON::PP->new->decode(<$f>) } or next;
+      my @roots = ref $j eq "ARRAY" ? map { ref $_ eq "HASH" ? $_->{outbounds} : () } @$j : ref $j eq "HASH" ? ($j->{proxies}) : ();
+      my $walk; $walk = sub { my $x = shift;
+        if (ref $x eq "HASH") { for (keys %$x) {
+          if (/\A(address|server|serverName|servername|sni|host|Host)\z/ && !ref $x->{$_} && $x->{$_} =~ $host && $x->{$_} =~ /[.:]/) { $add->($x->{$_}) }
+          else { $walk->($x->{$_}) } } }
+        elsif (ref $x eq "ARRAY") { $walk->($_) for @$x } };
+      $walk->($_) for @roots;
+    }
+    for my $l (split / /, $ENV{SRV}) { open my $f, "<", $l or next; my @a = map { chomp; $_ } <$f>; $add->($_) for sort @a }
+    my (%label, $n);
+    for my $g (@groups) { $n++; $label{$_} = "server-$n" for @$g }
+    my @tok = sort { length $b <=> length $a } keys %label;
+    my $re = @tok ? join "|", map { quotemeta } @tok : undef;
+    local $/ = "\0";
+    while (my $file = <STDIN>) {
+      chomp $file;
+      my $s = do { local $/; open my $f, "<", $file or next; <$f> };
+      $s =~ s/(?<![\w.-])($re)(?![\w-]|\.\w)/$label{$1}/g if defined $re;
+      # an address a pinned name had before (events.log: "<name> <old> -> <new>")
+      $s =~ s/(server-\d+) \d{1,3}(?:\.\d{1,3}){3}(?![\w.])/$1 <old>/g;
+      $s =~ s{[A-Za-z][A-Za-z0-9+.\-]*://\S+}{<ссылка>}g;
+      $s =~ s/[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/<uuid>/g;
+      $s =~ s{([A-Za-z0-9+/_\-]{20,}={0,2})}{ $1 =~ /[0-9]/ ? "<ключ>" : $1 }ge;
+      open my $o, ">", $file or die "$file\n"; print $o $s; close $o or die "$file\n";
+    }'
+}
+diag_report() {  # diag_report <dir>: prints the archive's path
+  local dest=${1:-} w name out m as=() rc
+  [[ "$dest" == /* ]] && [ -d "$dest" ] && [ ! -L "$dest" ] || { echo "Нет такой папки: $dest" >&2; return 1; }
+  if [ -n "${SUDO_UID:-}" ] && [ "$SUDO_UID" != 0 ]; then
+    as=(sudo -n -u "#$SUDO_UID")
+  else
+    m=$(stat -f '%u %Lp' "$dest") && [ "${m% *}" = "$OWNER_UID" ] && (( (8#${m#* } & 8#022) == 0 )) ||
+      { echo "В эту папку отчёт не пишется: $dest" >&2; return 1; }
+  fi
+  w=$(mktemp -d) || return 1
+  name="KillSwitch-report-$(date +%Y-%m-%d-%H%M)"
+  out="$dest/$name.tar.gz"
+  ( umask 077; diag_collect "$w/$name" ) && diag_redact "$w/$name" && tar -czf "$w/$name.tar.gz" -C "$w" "$name" &&
+    if [ ${#as[@]} -gt 0 ]; then "${as[@]}" /usr/bin/tee "$out" < "$w/$name.tar.gz" > /dev/null
+    else rm -f "$out" && cp "$w/$name.tar.gz" "$out"; fi
+  rc=$?
+  rm -rf "$w"
+  [ "$rc" = 0 ] || { echo "Не удалось собрать отчёт" >&2; return 1; }
+  echo "$out"
+}
+
 # "ks watch", the LaunchDaemon's loop.
 # Boot window guard (setting wifiguard): pf rules only come up a few seconds after the network, so
 # every network service on a physical port (Wi-Fi, Ethernet, iPhone USB, Thunderbolt) is disabled
@@ -2514,6 +2634,8 @@ passwordless_args_ok() {
         refresh) [ $# -eq 3 ] && [[ "$3" == /* && "${#3}" -le 1024 && "$3" != *[[:cntrl:]]* ]] ;;
         *) return 0 ;;
       esac ;;
+    # «Собрать отчёт»: the folder the archive goes to (written as the caller, diag_report)
+    diag) [ $# -eq 3 ] && [ "$2" = report ] && [[ "$3" == /* && "${#3}" -le 1024 && "$3" != *[[:cntrl:]]* ]] ;;
     *) return 0 ;;
   esac
 }
@@ -2660,6 +2782,7 @@ case "${1:-status}" in
     esac
     ;;
   probe) net_probe ;;
+  diag) diag_report "$3" || exit 1 ;;   # "diag report <dir>", checked by passwordless_args_ok
   state)
     if loaded; then echo on
     elif [ -f "$FLAG" ] && [ "$(cat "$FLAG")" != 0 ]; then echo "paused:$(cat "$FLAG")"

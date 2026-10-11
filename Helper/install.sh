@@ -57,7 +57,7 @@ sudoers_text() {  # sudoers_text <user> <ks>
   echo "Defaults!$ks env_keep-=\"HOME MAIL CHARSET LANG LANGUAGE LC_ALL LC_COLLATE LC_CTYPE LC_MESSAGES LC_MONETARY LC_NUMERIC LC_TIME SSH_AUTH_SOCK TZ EDITOR VISUAL\""
   echo "Defaults!$ks env_delete+=\"HOME CURL_HOME BASH_ENV ENV LC_ALL\""
   echo "$1 ALL=(root) NOPASSWD: $ks state, $ks probe, $ks on, $ks netrestore, $ks core state, $ks core on, $ks core off," \
-    "$ks core proxies, $ks core traffic, $ks core connections, $ks core select *, $ks core delay *, $ks core refresh *"
+    "$ks core proxies, $ks core traffic, $ks core connections, $ks core select *, $ks core delay *, $ks core refresh *, $ks diag report *"
 }
 
 # --upgrade: the user the installed entry names (install.sh wrote it), so nobody gains anything.
@@ -253,6 +253,8 @@ main() {
   install -d -o root -g wheel -m 711 "$DIR/core"
   [ -f "$DIR/core/core.log" ] || install -o root -g wheel -m 600 /dev/null "$DIR/core/core.log"
   chmod 600 "$DIR/core/core.log"
+  # the diagnostics journal (ADR 0021): root-only, the app gets it redacted through «Собрать отчёт»
+  install -d -o root -g wheel -m 700 "$DIR/diag"
   if [ -f mihomo ] || [ -f xray ]; then core_update; fi
   [ -e "$DIR/events.log" ] || install -o root -g wheel -m 644 /dev/null "$DIR/events.log"
 

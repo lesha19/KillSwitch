@@ -78,7 +78,7 @@ kept=$(sed -n 's/^Defaults!\/Library\/KillSwitch\/ks env_keep-="\(.*\)"$/\1/p' "
 for v in HOME MAIL LANG LC_ALL LC_CTYPE TZ SSH_AUTH_SOCK; do
   [[ " $kept " == *" $v "* ]] || check "env_keep-= has $v" no yes
 done
-check "the passwordless commands are exactly these (0.13: core traffic, ADR 0013: core connections)" "$(grep -c 'NOPASSWD: /Library/KillSwitch/ks state, /Library/KillSwitch/ks probe, /Library/KillSwitch/ks on, /Library/KillSwitch/ks netrestore, /Library/KillSwitch/ks core state, /Library/KillSwitch/ks core on, /Library/KillSwitch/ks core off, /Library/KillSwitch/ks core proxies, /Library/KillSwitch/ks core traffic, /Library/KillSwitch/ks core connections, /Library/KillSwitch/ks core select \*, /Library/KillSwitch/ks core delay \*, /Library/KillSwitch/ks core refresh \*$' "$tmp/sudoers")" 1
+check "the passwordless commands are exactly these (0.13: core traffic, ADR 0013: core connections, ADR 0021: diag report)" "$(grep -c 'NOPASSWD: /Library/KillSwitch/ks state, /Library/KillSwitch/ks probe, /Library/KillSwitch/ks on, /Library/KillSwitch/ks netrestore, /Library/KillSwitch/ks core state, /Library/KillSwitch/ks core on, /Library/KillSwitch/ks core off, /Library/KillSwitch/ks core proxies, /Library/KillSwitch/ks core traffic, /Library/KillSwitch/ks core connections, /Library/KillSwitch/ks core select \*, /Library/KillSwitch/ks core delay \*, /Library/KillSwitch/ks core refresh \*, /Library/KillSwitch/ks diag report \*$' "$tmp/sudoers")" 1
 
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

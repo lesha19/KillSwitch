@@ -190,4 +190,68 @@ set_diag 1 && [ ! -s "$tmp/applied" ] && ok "set diag with mihomo: nothing to re
 set_diag verbose 2>/dev/null && bad "set diag verbose taken" || ok "set diag: 0 or 1 only"
 rm -f "$SETTINGS"
 
+# --- «Собрать отчёт»: ks diag report <dir>, one redacted archive
+rm -rf "$DIAG"; diag_dir
+INVALIDF="$tmp/invalid"; FLAG="$tmp/disabled"
+printf 'core=xray\nxrayserver=🇱🇹Литва\ndiag=1\n' > "$SETTINGS"
+printf '203.0.113.10\n203.0.113.41\n' > "$SERVERS"; printf '203.0.113.10\n203.0.113.41\n' > "$SERVERS_CORE"; : > "$SERVERS_MANUAL"
+printf 'lt.example.com\t203.0.113.41\n' > "$PINS"; echo lt.example.com > "$APPROVED_HOSTS"
+cat > "$EVENTS" <<'XEOF'
+2026-10-11 14:00:00 server addresses changed: lt.example.com 203.0.113.40 -> 203.0.113.41
+2026-10-11 14:01:00 fetched https://sub.example.org/api/sub/Zx81kq0 for 00000000-0000-4000-8000-000000000001
+2026-10-11 14:02:00 core on
+XEOF
+printf 'dial tcp 203.0.113.10:443 via sni.hidden.example: key Z84J2Iel0123abcdQWERTYxyz9\n' > "$CORE_DIR/core.log"
+printf '[{"remarks":"LT","outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"lt.example.com"}]},
+  "streamSettings":{"security":"reality","realitySettings":{"serverName":"sni.hidden.example"}}}]}]\n' > "$CORE_DIR/profile-xray.json"
+for f in xray.json config.yaml profile.json; do echo secret > "$CORE_DIR/$f"; done
+echo '{"version":1,"added":[{"kind":"pinning","items":[{"host":"lt.example.com","address":"203.0.113.41"}]}]}' > "$REPORT"
+echo '{"t":"x","ev":"wake","after":120}' > "$DIAG/events-2026-10-11.jsonl"
+echo '{"t":"x","v":"0","server":"🇱🇹Литва"}' > "$DIAG/metrics-2026-10-11.jsonl"
+echo '2026/10/11 14:38:44 from 127.0.0.1:59995 accepted tcp:www.youtube.com:443 [ks-tun >> LT_1]' > "$DIAG/access.log"
+mkdir -p "$tmp/crash"
+echo '{"procName":"xray"}' > "$tmp/crash/xray-2026-10-10-120000.ips"
+echo '{"procName":"KillSwitch"}' > "$tmp/crash/KillSwitch-2026-10-10-120000.ips"
+echo '{"procName":"Safari"}' > "$tmp/crash/Safari-2026-10-10-120000.ips"
+echo '{"procName":"mihomo"}' > "$tmp/crash/mihomo-2026-09-01-120000.ips"; touch -t "$(date -r $(($(date +%s) - 10 * 86400)) +%Y%m%d%H%M)" "$tmp/crash/mihomo-2026-09-01-120000.ips"
+diag_crash_dirs() { echo "$tmp/crash"; echo "$tmp/no-such-dir"; }
+launchctl() { return 1; }; pfctl() { return 1; }
+core_job() { CORE_RUN=0; CORE_PID=""; }
+mkdir -m 755 "$tmp/out"
+out=$(diag_report "$tmp/out" 2>"$tmp/err") || bad "report failed: $(cat "$tmp/err")"
+[[ "$out" =~ ^$tmp/out/KillSwitch-report-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}\.tar\.gz$ ]] && [ -f "$out" ] &&
+  ok "report: KillSwitch-report-YYYY-MM-DD-HHMM.tar.gz in the folder, path printed" || bad "report path: $out $(cat "$tmp/err")"
+mkdir "$tmp/x"; tar -xzf "$out" -C "$tmp/x" 2>/dev/null
+r=$(echo "$tmp"/x/KillSwitch-report-*)
+names=$(cd "$r" && find . -type f | sed 's|^\./||' | sort | paste -sd' ' -)
+for f in events.log settings core.log routing.json status.txt versions.txt network.txt diag/access.log diag/events-2026-10-11.jsonl \
+         diag/metrics-2026-10-11.jsonl crash/xray-2026-10-10-120000.ips crash/KillSwitch-2026-10-10-120000.ips; do
+  [ -f "$r/$f" ] || bad "report lacks $f ($names)"
+done
+ok "report: journal, logs, settings, state, versions, network, crash reports"
+[[ " $names " == *Safari* || " $names " == *mihomo-2026-09-01* ]] && bad "report: other programs' or old crash reports: $names" ||
+  ok "report: only our programs' crash reports of the last 7 days"
+[[ " $names " =~ (profile|xray\.json|config\.yaml|pins) ]] && bad "report holds the profile, config or pins: $names" ||
+  ok "report: no profile, config or pins"
+grep -rqE '203\.0\.113|lt\.example\.com|sni\.hidden\.example' "$r" && bad "report holds a server address: $(grep -rE '203\.0\.113|example\.com|hidden' "$r" | head -3)" ||
+  ok "report: server addresses and names masked"
+grep -rq 'server-1' "$r/events.log" && grep -q 'server-1' "$r/routing.json" && [ "$(grep -o 'server-[0-9]*' "$r/events.log" | sort -u | wc -l | tr -d ' ')" -ge 1 ] &&
+  ok "report: masked as stable placeholders (server-N)" || bad "placeholders: $(cat "$r/events.log")"
+grep -rqE 'sub\.example\.org|00000000-0000-4000|Z84J2Iel' "$r" && bad "report holds a link, uuid or key: $(grep -rE 'sub\.example|00000000|Z84J' "$r" | head -3)" ||
+  ok "report: links, uuids and keys masked"
+grep -q 'www.youtube.com' "$r/diag/access.log" && ok "report: visited domains kept (only recorded with diag=1)" || bad "access log: $(cat "$r/diag/access.log")"
+grep -q '🇱🇹Литва' "$r/settings" && ok "report: server names (not addresses) kept" || bad "settings: $(cat "$r/settings")"
+grep -q "$KS_VERSION" "$r/versions.txt" && ok "report: versions" || bad "versions: $(cat "$r/versions.txt")"
+chmod 777 "$tmp/out"
+diag_report "$tmp/out" >/dev/null 2>&1 && bad "report into a folder others can write" || ok "report: refuses a folder others can write (root would write there)"
+diag_report relative >/dev/null 2>&1 && bad "report into a relative path" || ok "report: absolute folders only"
+rm -f "$SETTINGS"
+
+# --- passwordless: the app's button, from the daemon or sudo
+passwordless_args_ok diag report /Users/me/Desktop && ok "args: diag report <dir>" || bad "args: diag report refused"
+passwordless_args_ok diag report relative && bad "args: relative dir" || ok "args: refuses a relative dir"
+passwordless_args_ok diag report /a /b && bad "args: two dirs" || ok "args: refuses extra arguments"
+passwordless_args_ok diag report $'/a\nb' && bad "args: newline" || ok "args: refuses control characters"
+passwordless_args_ok diag && bad "args: diag alone" || ok "args: refuses diag without report"
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
