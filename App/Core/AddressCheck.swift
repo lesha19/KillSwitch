@@ -133,6 +133,124 @@ enum AddressCheck {
         }
     }
 
+    // MARK: Xray (ADR 0027)
+
+    /// With Xray: the report's rule objects in order, for the same ordinary visit (TCP to 443 from
+    /// some program, into our TUN, sniffed as TLS). All conditions of a rule must hold; a list
+    /// holds when one entry does. What no rule takes goes to Xray's first outbound (`fallback`).
+    static func check(_ target: Target, report: RoutingReport, context: Context) -> Result {
+        var caveats: [Caveat] = []
+        for (position, rule) in report.rules.enumerated() {
+            guard let object = rule.xray else { continue }
+            switch evaluate(xray: object, target, context) {
+            case .no: continue
+            case .unknown(let reason): caveats.append(Caveat(position: position, rule: rule.rule, reason: reason))
+            case .yes:
+                let tag = object["outboundTag"]?.strings.first ?? object["balancerTag"]?.strings.first ?? ""
+                if case .string = object["balancerTag"] ?? .null,
+                   report.groups.first(where: { $0.name == tag })?.proxies.contains(where: { report.xrayRoute($0) == .direct }) == true {
+                    caveats.append(Caveat(position: position, rule: rule.rule,
+                                          reason: String(localized: "этот балансировщик может выбрать и «напрямую»")))
+                }
+                return Result(position: position, rule: rule.rule, route: report.xrayRoute(tag), caveats: caveats)
+            }
+        }
+        return Result(position: nil, rule: nil, route: report.xrayRoute(report.fallback ?? ""), caveats: caveats)
+    }
+
+    static func evaluate(xray rule: [String: JSONValue], _ target: Target, _ context: Context) -> Verdict {
+        var unknown: Verdict?
+        for key in rule.keys.sorted() {
+            let value = rule[key]!
+            let verdict: Verdict
+            switch key {
+            case "outboundTag", "balancerTag", "ruleTag", "type", "domainMatcher":
+                continue
+            case "domain", "domains":
+                verdict = any(value.strings) { xrayDomain($0, target, context) }
+            case "ip":
+                verdict = any(value.strings) { xrayIP($0, target, context) }
+            case "port":
+                verdict = ports(value.text.replacingOccurrences(of: " ", with: ""), contain: 443) ? .yes : .no
+            case "network":
+                verdict = value.text.lowercased().split(separator: ",").contains { $0.trimmingCharacters(in: .whitespaces) == "tcp" } ? .yes : .no
+            case "inboundTag":
+                verdict = value.strings.contains("ks-tun") ? .yes : .no
+            case "protocol":
+                verdict = value.strings.contains("tls") ? .yes : .no
+            case "user":
+                verdict = .no   // our TUN has no users
+            case "process":
+                verdict = .unknown(String(localized: "зависит от программы"))
+            default:
+                verdict = .unknown(String(localized: "правило зависит от подробностей соединения"))
+            }
+            if verdict == .no { return .no }
+            if case .unknown = verdict { unknown = unknown ?? verdict }
+        }
+        return unknown ?? .yes
+    }
+
+    private static func any(_ entries: [String], _ match: (String) -> Verdict) -> Verdict {
+        var unknown: Verdict?
+        for entry in entries {
+            switch match(entry) {
+            case .yes: return .yes
+            case .no: continue
+            case .unknown(let reason): unknown = unknown ?? .unknown(reason)
+            }
+        }
+        return unknown ?? .no
+    }
+
+    /// `domain:` (and below), `full:`, `keyword:` or a bare word (a part of the name), `regexp:`,
+    /// `geosite:`; a list from a file (`ext:`) is not visible here.
+    static func xrayDomain(_ entry: String, _ target: Target, _ context: Context) -> Verdict {
+        guard let host = target.host else { return .no }
+        let (kind, value) = prefixed(entry)
+        switch kind {
+        case "domain": return domain("DOMAIN-SUFFIX", value.lowercased(), host) ? .yes : .no
+        case "full": return host == value.lowercased() ? .yes : .no
+        case "keyword", "": return host.contains(value.lowercased()) ? .yes : .no
+        case "regexp": return host.range(of: value, options: .regularExpression) != nil ? .yes : .no
+        case "dotless": return !host.contains(".") && host.contains(value.lowercased()) ? .yes : .no
+        case "geosite":
+            guard !value.hasPrefix("!"), let found = context.geosite(value, host) else {
+                return .unknown(String(localized: "категорию сайтов здесь не проверить"))
+            }
+            return found ? .yes : .no
+        default: return .unknown(String(localized: "список сайтов из файла здесь не проверить"))
+        }
+    }
+
+    /// An address or network, `geoip:<country>`, `geoip:!<country>`, `geoip:private`; a name is
+    /// sent to the address it resolves to, which is not known here.
+    static func xrayIP(_ entry: String, _ target: Target, _ context: Context) -> Verdict {
+        guard let ip = target.ip else { return .unknown(String(localized: "ядро узнает адрес сайта и сверит его с этим правилом")) }
+        let (kind, value) = prefixed(entry)
+        switch kind {
+        case "":
+            guard let inside = cidr(value, contains: ip) else { return .unknown(String(localized: "адрес IPv6 здесь не проверить")) }
+            return inside ? .yes : .no
+        case "geoip":
+            let negated = value.hasPrefix("!")
+            let country = negated ? String(value.dropFirst()) : value
+            let found: Bool?
+            if country.lowercased() == "private" { found = IPv4(ip).map(\.isPrivate) } else { found = context.geoip(ip, country) }
+            guard let found else { return .unknown(String(localized: "страну адреса здесь не проверить")) }
+            return found != negated ? .yes : .no
+        default: return .unknown(String(localized: "список адресов из файла здесь не проверить"))
+        }
+    }
+
+    /// `kind:value`; a bare value has kind "" (an IPv6 address is bare too).
+    private static func prefixed(_ entry: String) -> (String, String) {
+        guard let colon = entry.firstIndex(of: ":") else { return ("", entry) }
+        let kind = entry[..<colon].lowercased()
+        guard ["domain", "full", "keyword", "regexp", "geosite", "geoip", "ext", "dotless"].contains(kind) else { return ("", entry) }
+        return (kind, String(entry[entry.index(after: colon)...]))
+    }
+
     // MARK: matching
 
     static func domain(_ type: String, _ value: String, _ host: String) -> Bool {

@@ -300,3 +300,108 @@ final class GeoDataTests: XCTestCase {
         XCTAssertNil(geo.ip("77.88.8.8", inCountry: "RU"))
     }
 }
+
+/// «Проверить адрес» with Xray (#33, ADR 0027): the rules of routing.json as Xray objects.
+final class XrayAddressCheckTests: XCTestCase {
+    /// Trimmed from what Helper/ks writes for Helper/tests/fixtures/xray-panel.json.
+    static let sample = Data("""
+    {"version":1,"core":"xray",
+     "rules":[{"rule":"inboundTag=ks-dns → dns-out","from":"killswitch","xray":{"inboundTag":["ks-dns"],"outboundTag":"dns-out"}},
+              {"rule":"inboundTag=ks-fetch → LT_1","from":"killswitch","xray":{"inboundTag":["ks-fetch"],"outboundTag":"LT_1"}},
+              {"rule":"inboundTag=direct-dns → direct","from":"subscription","index":0,"xray":{"inboundTag":["direct-dns"],"outboundTag":"direct","type":"field"}},
+              {"rule":"port=53 → dns-out","from":"subscription","index":2,"xray":{"port":"53","outboundTag":"dns-out"}},
+              {"rule":"network=udp port=443 → block","from":"subscription","index":3,"xray":{"network":"udp","port":"443","outboundTag":"block"}},
+              {"rule":"domain=domain:doubleclick.net → block","from":"subscription","index":4,"xray":{"domain":["domain:doubleclick.net"],"outboundTag":"block"}},
+              {"rule":"ip=10.0.0.0/8,geoip:private → direct","from":"subscription","index":6,"xray":{"ip":["10.0.0.0/8","geoip:private"],"outboundTag":"direct"}},
+              {"rule":"domain=geosite:youtube → балансировщик country-lb","from":"subscription","index":8,"xray":{"domain":["geosite:youtube"],"balancerTag":"country-lb"}},
+              {"rule":"domain=full:ivi.ru,keyword:okko,regexp:^kino → direct","from":"subscription","index":15,"xray":{"domain":["full:ivi.ru","keyword:okko","regexp:^kino[.]"],"outboundTag":"direct"}},
+              {"rule":"process=Telegram → direct","from":"subscription","index":16,"xray":{"process":["Telegram"],"outboundTag":"direct"}},
+              {"rule":"ip=geoip:ru → direct","from":"subscription","index":17,"xray":{"ip":["geoip:ru"],"outboundTag":"direct"}},
+              {"rule":"port=0-65535 → балансировщик country-lb","from":"subscription","index":18,"xray":{"port":"0-65535","balancerTag":"country-lb"}}],
+     "dropped":[],"providers":[],
+     "groups":[{"name":"country-lb","type":"balancer","proxies":["LT_1","LT_1_FB"],"from":"subscription"},
+               {"name":"mixed-lb","type":"balancer","proxies":["LT_1","direct"],"from":"subscription"}],
+     "proxies":[{"name":"LT_1","type":"vless"},{"name":"LT_1_FB","type":"vless"}],
+     "added":[],"sniffer":{"from":"subscription","value":{"enabled":true}},
+     "dns":{"servers":["77.88.8.8"],"taken":{}},"egress":["rules","dns"],
+     "targets":{"LT_1":"vpn","LT_1_FB":"vpn","direct":"direct","block":"block","dns-out":"dns"},"fallback":"LT_1"}
+    """.utf8)
+
+    private let report = try! RoutingReport(data: XrayAddressCheckTests.sample)
+    private func check(_ text: String, rules: [RoutingReport.Rule]? = nil, geoip: [String: String] = [:]) -> AddressCheck.Result {
+        var report = self.report
+        if let rules { report.rules = rules }
+        let context = AddressCheck.Context(providers: [],
+                                           geosite: { category, host in category == "youtube" ? host.hasSuffix("youtube.com") : nil },
+                                           geoip: { ip, country in geoip[ip].map { $0.caseInsensitiveCompare(country) == .orderedSame } })
+        return AddressCheck.check(AddressCheck.Target(text)!, report: report, context: context)
+    }
+
+    func testTheReportSaysItIsXray() throws {
+        XCTAssertTrue(report.isXray)
+        XCTAssertFalse(try RoutingReport(data: RoutingReportTests.sample).isXray)
+        XCTAssertEqual(report.rules[4].xray?["network"], .string("udp"))
+    }
+
+    func testOurInboundRulesAndUDPDoNotTakeAVisit() {
+        // ks-dns, ks-fetch, the DNS servers' inbound, port 53 and UDP 443 are not a site opened over TCP 443
+        let result = check("www.youtube.com")
+        XCTAssertEqual(result.position, 7)
+        XCTAssertEqual(result.route, .vpn("country-lb"))
+        XCTAssertEqual(result.caveats.map(\.position), [6], "the address the name gets")
+    }
+
+    func testDomainForms() {
+        XCTAssertEqual(check("ads.doubleclick.net").route, .block, "domain: takes subdomains")
+        XCTAssertEqual(check("ivi.ru").route, .direct, "full: the name itself")
+        XCTAssertEqual(check("www.ivi.ru").position, 11, "full: not a subdomain")
+        XCTAssertEqual(check("okko.tv").position, 8, "keyword: a part of the name")
+        XCTAssertEqual(check("kino.example").position, 8, "regexp:")
+    }
+
+    func testProgramsAndNamesMeetingAddressRulesAreCaveats() {
+        let result = check("example.com")
+        XCTAssertEqual(result.position, 11)
+        XCTAssertEqual(result.route, .vpn("country-lb"))
+        XCTAssertEqual(result.caveats.map(\.position), [6, 9, 10], "the address a name gets, the program")
+        XCTAssertEqual(result.caveats[1].reason, "зависит от программы")
+    }
+
+    func testAddresses() {
+        XCTAssertEqual(check("10.1.2.3").position, 6)
+        XCTAssertEqual(check("192.168.1.1").route, .direct, "geoip:private")
+        let ru = check("77.88.8.8", geoip: ["77.88.8.8": "RU"])
+        XCTAssertEqual(ru.position, 10)
+        XCTAssertEqual(ru.route, .direct)
+        XCTAssertEqual(check("8.8.8.8", geoip: ["8.8.8.8": "US"]).position, 11)
+        let negated = [RoutingReport.Rule(rule: "ip=geoip:!ru → direct", from: .subscription, index: 0,
+                                          xray: ["ip": .array([.string("geoip:!ru")]), "outboundTag": .string("direct")])]
+        XCTAssertEqual(check("8.8.8.8", rules: negated, geoip: ["8.8.8.8": "US"]).route, .direct)
+        XCTAssertNil(check("77.88.8.8", rules: negated, geoip: ["77.88.8.8": "RU"]).position)
+    }
+
+    func testNoRuleGoesToTheFirstOutbound() {
+        let result = check("a.example", rules: [])
+        XCTAssertNil(result.position)
+        XCTAssertEqual(result.route, .vpn("LT_1"), "Xray's default is the first outbound, not direct")
+    }
+
+    func testABalancerThatMayGoDirectIsACaveat() {
+        let rules = [RoutingReport.Rule(rule: "domain=domain:a.example → балансировщик mixed-lb", from: .subscription, index: 0,
+                                        xray: ["domain": .array([.string("domain:a.example")]), "balancerTag": .string("mixed-lb")])]
+        let result = check("a.example", rules: rules)
+        XCTAssertEqual(result.position, 0)
+        XCTAssertEqual(result.route, .vpn("mixed-lb"))
+        XCTAssertFalse(result.isExact)
+    }
+
+    func testWhatCannotBeToldHere() {
+        let rules = [RoutingReport.Rule(rule: "domain=ext:x.dat:y → direct", from: .subscription, index: 0,
+                                        xray: ["domain": .array([.string("ext:x.dat:y")]), "outboundTag": .string("direct")]),
+                     RoutingReport.Rule(rule: "sourcePort=1000 → direct", from: .subscription, index: 1,
+                                        xray: ["sourcePort": .string("1000"), "outboundTag": .string("direct")])]
+        let result = check("a.example", rules: rules)
+        XCTAssertNil(result.position)
+        XCTAssertEqual(result.caveats.map(\.position), [0, 1])
+    }
+}

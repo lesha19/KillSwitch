@@ -300,7 +300,7 @@ private struct CoreChoiceSection: View {
             .disabled(control.busy || client.updating || control.state == .notInstalled
                       || !FileManager.default.fileExists(atPath: CoreChoice.xray.binary))
             Footnote(text: String(localized: "Если сайты открываются через раз, попробуй другой способ. Смена спросит пароль и заново возьмёт подписку."),
-                     more: String(localized: "Основной способ работает так же, как Happ. Запасной умеет показывать соединения в окне «Трафик» и двойной VPN, но у некоторых сайты в нём открываются хуже."))
+                     more: String(localized: "Основной способ работает так же, как Happ. Запасной умеет показывать соединения в окне «Трафик», но у некоторых сайты в нём открываются хуже."))
             if control.coreChoice == .xray {
                 Toggle(isOn: Binding(get: { control.autoSwitch }, set: { control.set("failover", $0) })) {
                     Text("Переключать сервер, если он перестал отвечать")
@@ -367,11 +367,8 @@ private struct MultihopRows: View {
             Text("Двойной VPN")
             Text("Через два сервера: вход видит твой адрес, выход — сайты. Медленнее.")
         }
-        .disabled(entry == nil && (candidates.isEmpty || !control.coreChoice.canTurnOnMultihop))
-        if entry == nil && !control.coreChoice.canTurnOnMultihop {
-            Text("С основным способом подключения двойного VPN нет — он есть у запасного")
-                .font(.caption).foregroundStyle(.secondary)
-        } else if candidates.isEmpty && entry == nil {
+        .disabled(entry == nil && candidates.isEmpty)
+        if candidates.isEmpty && entry == nil {
             Text(control.coreRunning ? String(localized: "Нужно хотя бы два сервера.") : String(localized: "Подключись, чтобы выбрать сервер входа."))
                 .font(.caption).foregroundStyle(.secondary)
         } else {
