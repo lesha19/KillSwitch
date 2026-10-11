@@ -22,6 +22,8 @@ struct CoreProxies: Equatable {
     private var delays: [String: Int] = [:]
     /// The core's last health check of each proxy; true until the first one.
     private var aliveByName: [String: Bool] = [:]
+    /// Each server's type as given (mihomo's «Vless», the profile's «vless»), for the filter.
+    private var types: [String: String] = [:]
 
     static let helperDNSGroup = "KS-DNS"
     /// The one selector Helper/ks offers with Xray (XRAY_GROUP): the subscription's hosts.
@@ -42,7 +44,10 @@ struct CoreProxies: Equatable {
                 delays[name] = last
             }
             if let alive = info["alive"] as? Bool { aliveByName[name] = alive }
-            guard Self.groupTypes.contains(type) else { continue }
+            guard Self.groupTypes.contains(type) else {
+                types[name] = type
+                continue
+            }
             let now = info["now"] as? String
             if let now { nowByName[name] = now }
             if name == "GLOBAL" { continue }   // mihomo's built-in group, used only in global mode
@@ -70,6 +75,9 @@ struct CoreProxies: Equatable {
     init(profile: Profile) {
         let types = ["select": "Selector", "url-test": "URLTest", "fallback": "Fallback", "load-balance": "LoadBalance",
                      "relay": "Relay"]
+        for proxy in profile["proxies"] as? [[String: Any]] ?? [] {
+            if let name = proxy["name"] as? String, let type = proxy["type"] as? String { self.types[name] = type }
+        }
         for group in profile["proxy-groups"] as? [[String: Any]] ?? [] {
             guard let name = group["name"] as? String, let type = types[(group["type"] as? String ?? "").lowercased()],
                   name != Self.helperDNSGroup, group["hidden"] as? Bool != true else { continue }
@@ -84,6 +92,19 @@ struct CoreProxies: Equatable {
     }
 
     func delay(_ name: String) -> Int? { delays[name] }
+
+    /// «VLESS», «Shadowsocks»…: the server's protocol as people know it; nil for unknown names.
+    func protocolName(of name: String) -> String? {
+        guard let type = types[name], !type.isEmpty else { return nil }
+        return Self.protocolNames[type.lowercased()] ?? type
+    }
+
+    private static let protocolNames = [
+        "vless": "VLESS", "vmess": "VMess", "trojan": "Trojan", "ss": "Shadowsocks", "shadowsocks": "Shadowsocks",
+        "ssr": "ShadowsocksR", "shadowsocksr": "ShadowsocksR", "hysteria": "Hysteria", "hysteria2": "Hysteria2",
+        "tuic": "TUIC", "wireguard": "WireGuard", "socks5": "SOCKS5", "http": "HTTP", "anytls": "AnyTLS",
+        "snell": "Snell", "ssh": "SSH", "mieru": "Mieru", "openvpn": "OpenVPN",
+    ]
 
     /// False once the core's health check found the proxy dead; nil for unknown names.
     func alive(_ name: String) -> Bool? { aliveByName[name] }

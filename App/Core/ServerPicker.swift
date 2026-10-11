@@ -83,6 +83,50 @@ enum ServerPicker {
         }
     }
 
+    /// «Фильтр» of the list: by country, protocol and the subscription's group; nil = any.
+    struct Filter: Equatable {
+        var country: String?
+        var protocolName: String?
+        var group: String?
+
+        var isOn: Bool { country != nil || protocolName != nil || group != nil }
+    }
+
+    /// What the filter offers: each kind only when the list has two or more of it.
+    struct FilterOptions: Equatable {
+        var countries: [String]
+        var protocols: [String]
+        var groups: [String]
+
+        var isEmpty: Bool { countries.isEmpty && protocols.isEmpty && groups.isEmpty }
+    }
+
+    static func filterOptions(_ entries: [Entry], proxies: CoreProxies) -> FilterOptions {
+        let servers = entries.filter { !$0.isFastest }
+        func distinct(_ values: [String?]) -> [String] {
+            var result: [String] = []
+            for value in values.compactMap({ $0 }) where !result.contains(value) { result.append(value) }
+            return result.count > 1 ? result : []
+        }
+        let russian = Locale(identifier: "ru_RU")
+        return FilterOptions(
+            countries: distinct(servers.map { ServerName($0.name).country })
+                .sorted { $0.compare($1, locale: russian) == .orderedAscending },
+            protocols: distinct(servers.map { proxies.protocolName(of: $0.name) }).sorted(),
+            groups: distinct(servers.map(\.path.first?.group)))
+    }
+
+    /// The servers the filter lets through; with it on, «Самый быстрый» is not one of them.
+    static func filtered(_ entries: [Entry], _ filter: Filter, proxies: CoreProxies) -> [Entry] {
+        guard filter.isOn else { return entries }
+        return entries.filter { entry in
+            !entry.isFastest
+                && (filter.country == nil || ServerName(entry.name).country == filter.country)
+                && (filter.protocolName == nil || proxies.protocolName(of: entry.name) == filter.protocolName)
+                && (filter.group == nil || entry.path.first?.group == filter.group)
+        }
+    }
+
     struct Sections: Equatable {
         var fastest: Entry?
         /// The last chosen servers (ServerRecents), also listed in their own section.

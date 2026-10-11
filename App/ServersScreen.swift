@@ -16,6 +16,8 @@ struct ServersScreen: View {
     @AppStorage(VPNClient.favouritesKey) private var favouritesText = ""
     @AppStorage(ServerRecents.key) private var recentsText = ""
     @State private var query = ""
+    /// «Фильтр»: for this visit of the list only, so a forgotten filter never hides servers later.
+    @State private var filter = ServerPicker.Filter()
     @State private var highlighted: String?
     @State private var choosingEntry = false
     @FocusState private var searchFocused: Bool
@@ -39,13 +41,19 @@ struct ServersScreen: View {
                     .focused($searchFocused)
                     .accessibilityLabel("Поиск сервера")
                 list
-                Picker("Порядок", selection: $sort) {
-                    ForEach(ServerPicker.Sort.allCases, id: \.self) { Text($0.title).tag($0) }
+                HStack {
+                    Picker("Порядок", selection: $sort) {
+                        ForEach(ServerPicker.Sort.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .fixedSize()
+                    .help("Порядок серверов: как в подписке, быстрые сверху или по имени")
+                    Spacer()
+                    if let proxies {
+                        let options = ServerPicker.filterOptions(entries(proxies), proxies: proxies)
+                        if !options.isEmpty { filterMenu(options) }
+                    }
                 }
-                .pickerStyle(.menu)
-                .fixedSize()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help("Порядок серверов: как в подписке, быстрые сверху или по имени")
             }
         }
         .padding(12)
@@ -95,11 +103,11 @@ struct ServersScreen: View {
     @ViewBuilder private var list: some View {
         if let proxies {
             let all = entries(proxies)
-            let sections = ServerPicker.sections(all, favourites: favourites, recents: recents, query: query, sort: sort,
+            let sections = ServerPicker.sections(ServerPicker.filtered(all, filter, proxies: proxies), favourites: favourites, recents: recents, query: query, sort: sort,
                                                  delays: delays(all))
             let current = choosingEntry ? control.multihopEntry : currentName(proxies)
             if sections.fastest == nil && sections.favourites.isEmpty && sections.all.isEmpty {
-                empty(query.isEmpty ? String(localized: "В подписке нет серверов.") : String(localized: "Ничего не нашлось."))
+                empty(query.isEmpty && !filter.isOn ? String(localized: "В подписке нет серверов.") : String(localized: "Ничего не нашлось."))
             } else {
                 List(selection: $highlighted) {
                     if let fastest = sections.fastest {
@@ -136,6 +144,42 @@ struct ServersScreen: View {
         } else {
             empty(String(localized: "Список появится после первого обновления подписки."))
         }
+    }
+
+    /// Country, protocol, group: each only when the list has more than one.
+    private func filterMenu(_ options: ServerPicker.FilterOptions) -> some View {
+        let summary = [filter.country, filter.protocolName, filter.group].compactMap { $0 }.joined(separator: ", ")
+        return Menu {
+            if !options.countries.isEmpty {
+                Picker("Страна", selection: $filter.country) {
+                    Text("Любая").tag(String?.none)
+                    ForEach(options.countries, id: \.self) { Text(verbatim: $0).tag(String?.some($0)) }
+                }
+            }
+            if !options.protocols.isEmpty {
+                Picker("Протокол", selection: $filter.protocolName) {
+                    Text("Любой").tag(String?.none)
+                    ForEach(options.protocols, id: \.self) { Text(verbatim: $0).tag(String?.some($0)) }
+                }
+            }
+            if !options.groups.isEmpty {
+                Picker("Группа", selection: $filter.group) {
+                    Text("Любая").tag(String?.none)
+                    ForEach(options.groups, id: \.self) { Text(verbatim: $0).tag(String?.some($0)) }
+                }
+            }
+            if filter.isOn {
+                Divider()
+                Button("Сбросить фильтр") { filter = .init() }
+            }
+        } label: {
+            Label(filter.isOn ? summary : String(localized: "Фильтр"),
+                  systemImage: filter.isOn ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Показать только серверы одной страны, протокола или группы")
+        .accessibilityLabel(filter.isOn ? String(localized: "Фильтр: \(summary)") : String(localized: "Фильтр"))
     }
 
     private func empty(_ text: String) -> some View {

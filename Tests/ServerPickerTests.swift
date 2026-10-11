@@ -161,4 +161,44 @@ final class ServerPickerTests: XCTestCase {
         XCTAssertEqual(ServerPicker.entries(proxies).map(\.name), ["Auto", "A", "B"])
         XCTAssertNil(ServerPicker.selected(proxies))
     }
+
+    // MARK: filter
+
+    func testFilterOffersOnlyWhatDiffers() throws {
+        let proxies = try proxies()
+        let options = ServerPicker.filterOptions(ServerPicker.entries(proxies), proxies: proxies)
+        XCTAssertEqual(options.countries, ["Германия", "Литва", "Польша"])   // «Дом» has none
+        XCTAssertEqual(options.protocols, ["Trojan", "VLESS", "WireGuard"])
+        XCTAssertEqual(options.groups, ["🚀 Выбор сервера", "Свои серверы"])
+        XCTAssertFalse(options.isEmpty)
+
+        let one = CoreProxies(profile: [
+            "proxies": [["name": "🇱🇹 Литва 1", "type": "vless"], ["name": "🇱🇹 Литва 2", "type": "vless"]],
+            "proxy-groups": [["name": "PROXY", "type": "select", "proxies": ["🇱🇹 Литва 1", "🇱🇹 Литва 2"]]],
+        ])
+        XCTAssertTrue(ServerPicker.filterOptions(ServerPicker.entries(one), proxies: one).isEmpty)
+    }
+
+    func testFilterByCountryProtocolAndGroup() throws {
+        let proxies = try proxies()
+        let entries = ServerPicker.entries(proxies)
+        func names(_ filter: ServerPicker.Filter) -> [String] {
+            ServerPicker.filtered(entries, filter, proxies: proxies).map(\.name)
+        }
+        XCTAssertEqual(names(.init()), entries.map(\.name))   // off: everything, «Самый быстрый» too
+        XCTAssertEqual(names(.init(country: "Литва")), ["🇱🇹 Литва", "LT-Vilnius"])
+        XCTAssertEqual(names(.init(protocolName: "VLESS")), ["🇱🇹 Литва", "🇩🇪 Германия", "🇵🇱 Варшава"])
+        XCTAssertEqual(names(.init(group: "Свои серверы")), ["🇵🇱 Варшава", "Дом"])
+        XCTAssertEqual(names(.init(country: "Литва", protocolName: "Trojan")), ["LT-Vilnius"])
+        XCTAssertFalse(ServerPicker.Filter().isOn)
+        XCTAssertTrue(ServerPicker.Filter(group: "Свои серверы").isOn)
+    }
+
+    func testProtocolsOfAProfileBeforeConnecting() {
+        let proxies = CoreProxies(profile: [
+            "proxies": [["name": "A", "type": "vless"], ["name": "B", "type": "ss"], ["name": "C", "type": "hysteria2"]],
+            "proxy-groups": [["name": "PROXY", "type": "select", "proxies": ["A", "B", "C"]]],
+        ])
+        XCTAssertEqual(["A", "B", "C", "D"].map { proxies.protocolName(of: $0) }, ["VLESS", "Shadowsocks", "Hysteria2", nil])
+    }
 }
