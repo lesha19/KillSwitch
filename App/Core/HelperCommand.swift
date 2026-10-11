@@ -29,6 +29,8 @@ enum HelperCommand: Equatable, Sendable {
     case setSplitApps([String])
     /// nil turns «Двойной VPN» off.
     case setMultihop(String?)
+    /// The own DNS-over-HTTPS server (ADR 0031), used by the core through the VPN; nil clears it.
+    case setDoH(String?)
     /// The way of connecting (ADR 0020); the subscription is imported again for it.
     case setCore(CoreChoice)
     case allow(String), unallow(String)
@@ -114,6 +116,7 @@ enum HelperCommand: Equatable, Sendable {
         case .setSwitch(let key, let on): ["set", key, on ? "1" : "0"]
         case .setSplitApps(let names): ["set", "splitapps", names.joined(separator: ",")]
         case .setMultihop(let entry): ["set", "multihop", entry ?? Self.multihopOff]
+        case .setDoH(let url): ["set", "doh", url ?? ""]
         case .setCore(let core): ["set", "core", core.rawValue]
         case .allow(let address): ["allow", address]
         case .unallow(let address): ["unallow", address]
@@ -141,6 +144,7 @@ enum HelperCommand: Equatable, Sendable {
         case .setSplitApps(let names):
             names.count <= Self.maxSplitApps && Set(names).count == names.count && names.allSatisfy(Self.isSplitApp)
         case .setMultihop(let entry): entry.map { Self.isName($0) && $0 != Self.multihopOff } ?? true
+        case .setDoH(let url): url.map(Self.isDoH) ?? true
         case .setCore: true
         case .allow(let address), .serverAdd(let address): Self.isAddress(address)
         case .unallow(let address), .serverRemove(let address): Self.isListedAddress(address)
@@ -202,6 +206,8 @@ enum HelperCommand: Equatable, Sendable {
                         .map(String.init))
                 case "multihop":
                     command = .setMultihop(arguments[2] == Self.multihopOff ? nil : arguments[2])
+                case "doh":
+                    command = .setDoH(arguments[2].isEmpty ? nil : arguments[2])
                 case "core":
                     guard let core = CoreChoice(rawValue: arguments[2]) else { return nil }
                     command = .setCore(core)
@@ -241,7 +247,33 @@ enum HelperCommand: Equatable, Sendable {
     /// `ks set <key> 0|1`; all behind the right, «Блокировать рекламу» (adblock) too: it changes
     /// what the core refuses, and only an admin turns that on or off, as with the password before.
     /// «Подробная диагностика» (diag, ADR 0021) too: it changes what the core records.
-    static let switchKeys: Set<String> = ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag", "failover"]
+    /// The blocked categories (ADR 0031) are switches too: adblock, blockadult, blocksocial, blockbetting.
+    static let switchKeys: Set<String> = ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag", "failover",
+                                          "blockadult", "blocksocial", "blockbetting"]
+
+    /// ks valid_doh (ADR 0031): https, a public host name or IPv4 address, an optional port and
+    /// path; no user, query or fragment, nothing local (the server is reached through the VPN).
+    static func isDoH(_ text: String) -> Bool {
+        guard text.utf8.count <= 256,
+              let match = text.wholeMatch(of: /https:\/\/([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?(\/[A-Za-z0-9._~%\/-]*)?/) else { return false }
+        if let port = match.2 {
+            guard let number = Int(port), (1...65535).contains(number) else { return false }
+        }
+        let host = String(match.1)
+        if host.wholeMatch(of: /[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/) != nil {
+            let octets = host.split(separator: ".").compactMap { Int($0) }
+            guard octets.count == 4, octets.allSatisfy({ $0 <= 255 }) else { return false }
+            let (a, b) = (octets[0], octets[1])
+            // this network, private, loopback, link-local, CGNAT, 198.18/15 (our TUN), multicast and up
+            return ![0, 10, 127].contains(a) && a < 224 && !(a == 169 && b == 254) && !(a == 172 && (16...31).contains(b))
+                && !(a == 192 && b == 168) && !(a == 100 && (64...127).contains(b)) && !(a == 198 && (18...19).contains(b))
+        }
+        let label = /[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?/
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard host.utf8.count <= 253, labels.count >= 2, labels.allSatisfy({ $0.wholeMatch(of: label) != nil }),
+              labels.last?.first?.isLetter == true else { return false }
+        return !["local", "localhost", "internal", "lan"].contains(String(labels.last!).lowercased()) && !host.lowercased().hasSuffix(".home.arpa")
+    }
     static let maxSplitApps = 50
     static let maxInstallServers = 512
 

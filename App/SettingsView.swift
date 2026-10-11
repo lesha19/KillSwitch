@@ -617,6 +617,7 @@ private struct AdvancedSettings: View {
     @Environment(KillSwitchControl.self) private var control
     @State private var editingExceptions = false
     @State private var editingServers = false
+    @State private var editingDoH = false
 
     var body: some View {
         SettingsForm {
@@ -645,15 +646,34 @@ private struct AdvancedSettings: View {
             }
             .disabled(control.busy || control.state == .notInstalled)
 
-            Section("Реклама и трекеры") {
+            Section("Блокировка") {
                 Toggle(isOn: Binding(get: { control.adBlock }, set: { control.set("adblock", $0) })) {
                     Text("Блокировать рекламу и трекеры")
                     Text("Только пока подключён VPN KillSwitch.")
                 }
-                .disabled(control.busy || control.state == .notInstalled)
+                Toggle("Блокировать сайты для взрослых", isOn: Binding(get: { control.blockAdult }, set: { control.set("blockadult", $0) }))
+                Toggle("Блокировать соцсети", isOn: Binding(get: { control.blockSocial }, set: { control.set("blocksocial", $0) }))
+                Toggle(isOn: Binding(get: { control.blockBetting }, set: { control.set("blockbetting", $0) })) {
+                    Text("Блокировать букмекеров")
+                    Text("Только российские букмекерские сайты.")
+                }
                 Footnote(text: String(localized: "Если какой-то сайт перестал работать, выключи и проверь снова."),
-                         more: String(localized: "Адреса рекламы и трекеров берутся из списка, который лежит в самой программе (category-ads-all), и обновляются вместе с ней: VPN ничего не скачивает сам. Заблокированное не уходит никуда — ни через VPN, ни мимо него."))
+                         more: String(localized: "Списки сайтов лежат в самой программе и обновляются вместе с ней: VPN ничего не скачивает сам. Заблокированное не уходит никуда — ни через VPN, ни мимо него. Соцсети — это ВКонтакте, Одноклассники, Facebook, Instagram, X и другие, Telegram в список не входит. Списка вредоносных сайтов в базе нет, поэтому такой блокировки тоже нет."))
             }
+            .disabled(control.busy || control.state == .notInstalled)
+
+            Section {
+                Text(control.ownDoH ?? String(localized: "Нет")).monospaced().foregroundStyle(.secondary).lineLimit(2)
+                Footnote(text: String(localized: "Спрашивается только через VPN. Не ответит — помогут обычные серверы, тоже через VPN."),
+                         more: String(localized: "Например, NextDNS или AdGuard DNS со своими настройками. Адрес вида https://сервер/путь. Запросы к нему всегда идут через сервер VPN и никогда — напрямую или к провайдеру. Если он не отвечает, KillSwitch спрашивает обычные серверы, тоже через VPN. С запасным способом подключения сайты, которые идут через VPN, узнаются на сервере VPN, поэтому свой сервер там нужен в основном для правил подписки."))
+            } header: {
+                HStack {
+                    Text("Свой сервер DNS-over-HTTPS")
+                    Spacer()
+                    Button("Изменить…") { editingDoH = true }
+                }
+            }
+            .disabled(control.busy || control.state == .notInstalled)
 
             TransportSection()
 
@@ -684,6 +704,7 @@ private struct AdvancedSettings: View {
                       placeholder: String(localized: "Адрес, например 1.2.3.46 или 10.8.0.0/24"), original: control.exceptions,
                       apply: control.setExceptions)
         }
+        .sheet(isPresented: $editingDoH) { DoHSheet() }
         .sheet(isPresented: $editingServers) {
             ListSheet(title: String(localized: "Адреса серверов для других VPN-программ"),
                       note: String(localized: "К этим адресам сможет подключиться любая программа. Серверы подписки сюда добавлять не нужно."),
@@ -881,6 +902,29 @@ private struct BatchSheet<Content: View>: View {
 }
 
 /// A list of addresses: add, remove, apply together.
+/// «Свой сервер DNS-over-HTTPS» (ADR 0031): one address, checked as Helper/ks checks it.
+private struct DoHSheet: View {
+    @Environment(KillSwitchControl.self) private var control
+    @State private var draft = ""
+
+    private var url: String { draft.trimmingCharacters(in: .whitespaces) }
+    private var valid: Bool { url.isEmpty || HelperCommand.isDoH(url) }
+
+    var body: some View {
+        BatchSheet(title: String(localized: "Свой сервер DNS-over-HTTPS"), changed: valid && url != (control.ownDoH ?? ""),
+                   apply: { control.setDoH(url.isEmpty ? nil : url) }) {
+            Text("Имена сайтов будет узнавать этот сервер — только через VPN. Пусто — обычные серверы.")
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            TextField(String(localized: "https://dns.example.com/dns-query"), text: $draft).monospaced()
+            if !valid {
+                StatusLabel(String(localized: "Нужен адрес вида https://сервер/путь: без логина, без ? и #, не адрес в домашней сети."),
+                            systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.callout)
+            }
+        }
+        .onAppear { draft = control.ownDoH ?? "" }
+    }
+}
+
 private struct ListSheet: View {
     let title: String
     let note: String

@@ -56,6 +56,8 @@ enum HelperIdentity {
     func setSwitch(key: String, on: Bool, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func setSplitApps(names: [String], authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func setMultihop(entry: String?, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
+    /// ADR 0031: the own DNS-over-HTTPS server; nil clears it (HelperCommand.setDoH).
+    func setDoH(url: String?, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func setCore(name: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func allow(address: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func unallow(address: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)

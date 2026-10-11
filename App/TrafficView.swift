@@ -438,6 +438,7 @@ private struct AddedRow: View {
         case "provider-proxy": "arrow.down.circle"
         case "sniffer": "eye"
         case "adblock": "hand.raised"
+        case "doh": "lock.shield"
         case "splitapps": "app.badge"
         case "multihop": "point.3.connected.trianglepath.dotted"
         default: "plus.circle"

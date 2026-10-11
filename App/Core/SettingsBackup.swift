@@ -4,7 +4,8 @@ import Foundation
 /// back on another Mac or after a reinstall, and «Сбросить» to the defaults through the same path.
 /// Never in the file: the subscription link, own servers and keys (Keychain), server identities
 /// (they carry a hash of the server's secret: favourites and recents go by name), per-server
-/// transport overrides and «Двойной VPN» (both name servers of one subscription).
+/// transport overrides and «Двойной VPN» (both name servers of one subscription). The own DoH
+/// server (ADR 0031) is in it: the person's setting, like the exceptions.
 /// A file is checked whole before anything changes; root settings change only through the `ks`
 /// commands the Settings screens run (`rootCommands`), behind the same authorization.
 enum SettingsBackup {
@@ -23,6 +24,8 @@ enum SettingsBackup {
         var exceptions: [String]?
         var manualServers: [String]?
         var splitApps: [String]?
+        /// The own DNS-over-HTTPS server (ADR 0031); "" = none.
+        var doh: String?
     }
 
     struct Settings: Equatable, Sendable {
@@ -48,15 +51,16 @@ enum SettingsBackup {
     /// What Settings shows, with ks's own defaults (Helper/ks `setting`, KillSwitchControl.readSettings).
     static let defaultSwitches: [String: Bool] = [
         "lan": true, "tailscale": true, "wifiguard": true, "dns": false, "direct": false, "adblock": false, "diag": false,
-        "failover": true,
+        "failover": true, "blockadult": false, "blocksocial": false, "blockbetting": false,
     ]
-    private static let switchOrder = ["lan", "dns", "tailscale", "wifiguard", "direct", "adblock", "diag", "failover"]
+    private static let switchOrder = ["lan", "dns", "tailscale", "wifiguard", "direct", "adblock", "blockadult", "blocksocial",
+                                      "blockbetting", "diag", "failover"]
 
     /// «Сбросить»: every app setting to its default; the root switches to ks's defaults and the
     /// lists emptied. The way of connecting stays (changing it imports the subscription again).
     static var reset: Settings {
         Settings(app: Dictionary(uniqueKeysWithValues: fields.map { ($0.key, $0.fallback) }),
-                 root: Root(core: nil, switches: defaultSwitches, exceptions: [], manualServers: [], splitApps: []))
+                 root: Root(core: nil, switches: defaultSwitches, exceptions: [], manualServers: [], splitApps: [], doh: ""))
     }
 
     // MARK: app settings
@@ -182,6 +186,7 @@ enum SettingsBackup {
             if let exceptions = root.exceptions { part["exceptions"] = exceptions }
             if let servers = root.manualServers { part["manualServers"] = servers }
             if let apps = root.splitApps { part["splitApps"] = apps }
+            if let doh = root.doh { part["doh"] = doh }
             object["root"] = part
         }
         return (try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])) ?? Data()
@@ -234,6 +239,10 @@ enum SettingsBackup {
         if let raw = part["splitApps"] {
             guard let list = raw as? [String], HelperCommand.setSplitApps(list).isValid else { throw Problem.damaged(String(localized: "Программы без VPN")) }
             root.splitApps = list
+        }
+        if let raw = part["doh"] {
+            guard let url = raw as? String, url.isEmpty || HelperCommand.isDoH(url) else { throw Problem.damaged(dohTitle) }
+            root.doh = url
         }
         return root
     }
@@ -399,6 +408,9 @@ enum SettingsBackup {
             ("manualServers", String(localized: "Адреса серверов для других VPN-программ"), now.manualServers, root.manualServers, true),
             ("splitApps", String(localized: "Программы без VPN"), now.splitApps, root.splitApps, false),
         ]
+        if let doh = root.doh, doh != (now.doh ?? "") {
+            result.append(Change(key: "doh", title: dohTitle, old: dohText(now.doh ?? ""), new: dohText(doh), root: true))
+        }
         for (key, title, old, new, addresses) in lists {
             // the lists are sets to ks: another order is no change
             guard let new, Set(new) != Set(old ?? []) else { continue }
@@ -416,7 +428,8 @@ enum SettingsBackup {
     static func rootCommands(helper: String, current: Root, new: Root) -> [[String]] {
         var commands: [[String]] = []
         if let switches = new.switches {
-            commands += Batch.settings(helper: helper, old: current.switches ?? defaultSwitches, new: switches)
+            // a switch the current set does not name is at its default (one added after the file was made)
+            commands += Batch.settings(helper: helper, old: defaultSwitches.merging(current.switches ?? [:]) { $1 }, new: switches)
         }
         if let list = new.exceptions {
             commands += Batch.list(helper: helper, add: "allow", remove: "unallow", old: current.exceptions ?? [], new: list)
@@ -426,6 +439,9 @@ enum SettingsBackup {
         }
         if let apps = new.splitApps, Set(apps) != Set(current.splitApps ?? []) {
             commands.append([helper, "set", "splitapps", SplitApps.argument(apps)])
+        }
+        if let doh = new.doh, doh != (current.doh ?? "") {
+            commands.append([helper, "set", "doh", doh])
         }
         return commands
     }
@@ -439,6 +455,9 @@ enum SettingsBackup {
         case .rules(let rules): listText(rules.map(\.ssid))
         }
     }
+
+    private static var dohTitle: String { String(localized: "Свой сервер DNS-over-HTTPS") }
+    private static func dohText(_ url: String) -> String { url.isEmpty ? String(localized: "нет") : url }
 
     private static func onOff(_ on: Bool) -> String { on ? String(localized: "вкл") : String(localized: "выкл") }
 
@@ -471,6 +490,9 @@ enum SettingsBackup {
         case "wifiguard": String(localized: "Отключать сеть при выключении Mac")
         case "direct": String(localized: "Пускать dropweb мимо VPN (слабее защиты)")
         case "adblock": String(localized: "Блокировать рекламу и трекеры")
+        case "blockadult": String(localized: "Блокировать сайты для взрослых")
+        case "blocksocial": String(localized: "Блокировать соцсети")
+        case "blockbetting": String(localized: "Блокировать букмекеров")
         case "diag": String(localized: "Подробная диагностика (все соединения)")
         case "failover": String(localized: "Переключать сервер, если он перестал отвечать")
         default: key

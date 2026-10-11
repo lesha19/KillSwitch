@@ -209,6 +209,47 @@ final class SettingsBackupTests: XCTestCase {
         XCTAssertEqual(removed?.new, "нет")
     }
 
+    /// ADR 0031: the blocked categories and the own DoH server travel with the file, through the
+    /// commands Settings runs; "" in the file clears the server, a bad address refuses the file.
+    func testBlockingAndOwnDoHTravel() throws {
+        var current = root
+        current.doh = ""
+        let read = try SettingsBackup.read(file(root: ["switches": ["blockadult": true, "blocksocial": false, "blockbetting": true],
+                                                       "doh": "https://dns.example.com/dns-query"]))
+        XCTAssertEqual(read.root?.switches, ["blockadult": true, "blocksocial": false, "blockbetting": true])
+        XCTAssertEqual(read.root?.doh, "https://dns.example.com/dns-query")
+        let changes = SettingsBackup.changes(from: .init(app: [:], root: current), to: read)
+        XCTAssertEqual(changes.map(\.key), ["blockadult", "blockbetting", "doh"])
+        XCTAssertEqual(changes.last?.title, "Свой сервер DNS-over-HTTPS")
+        XCTAssertEqual(changes.last?.old, "нет")
+        XCTAssertEqual(changes.last?.new, "https://dns.example.com/dns-query")
+        XCTAssertTrue(changes.allSatisfy(\.root))
+        let commands = SettingsBackup.rootCommands(helper: helper, current: current, new: read.root!)
+        XCTAssertEqual(commands, [[helper, "set", "blockadult", "1"], [helper, "set", "blockbetting", "1"],
+                                  [helper, "set", "doh", "https://dns.example.com/dns-query"]])
+        XCTAssertTrue(commands.allSatisfy { HelperCommand(command: $0, helper: helper)?.isValid == true })
+        // the file says nothing of it: left alone; "" clears it
+        XCTAssertNil(try SettingsBackup.read(file(root: ["switches": ["lan": true]])).root?.doh)
+        var withServer = root
+        withServer.doh = "https://dns.example.com/dns-query"
+        XCTAssertEqual(SettingsBackup.rootCommands(helper: helper, current: withServer, new: try SettingsBackup.read(file(root: ["doh": ""])).root!),
+                       [[helper, "set", "doh", ""]])
+        for bad: Any in ["http://dns.example.com/x", "https://192.168.1.1/x", 1] {
+            XCTAssertThrowsError(try SettingsBackup.read(file(root: ["doh": bad])), "\(bad)") {
+                guard case .damaged = $0 as? SettingsBackup.Problem else { return XCTFail("\(bad): \($0)") }
+            }
+        }
+        // export and back
+        var full = root
+        full.doh = "https://dns.example.com/dns-query"
+        full.switches?["blockadult"] = true
+        let again = try SettingsBackup.read(SettingsBackup.export(.init(app: [:], root: full), appVersion: "0.20.0", date: Date()))
+        XCTAssertEqual(again.root, full)
+        // reset: nothing blocked but ads as before (off), no own server
+        XCTAssertEqual(SettingsBackup.reset.root?.doh, "")
+        XCTAssertEqual(SettingsBackup.reset.root?.switches?["blockadult"], false)
+    }
+
     /// The same entries in another order change nothing, in the sheet and in the commands.
     func testReorderedRootListIsNoChange() {
         var new = root

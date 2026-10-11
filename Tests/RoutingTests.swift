@@ -84,8 +84,16 @@ final class RoutingReportTests: XCTestCase {
         XCTAssertEqual(report.additions[1].lines, ["de.example.com → 203.0.113.20"])
         XCTAssertEqual(report.additions[0].lines, ["LT", "DE"])
         for added in report.added { XCTAssertFalse(added.why.isEmpty, added.kind) }
-        XCTAssertEqual(report.additions[2].title, "Блокировка рекламы — твой выбор")
+        XCTAssertEqual(report.additions[2].title, "Блокировка — твой выбор")
         XCTAssertEqual(report.additions[3].title, "Защита от петли")
+    }
+
+    /// ADR 0031: the own DoH server, named by its host only (its path can hold an account id).
+    func testOwnDoHAddition() throws {
+        let added = try JSONDecoder().decode(RoutingReport.Added.self, from: Data(#"{"kind":"doh","items":["dns.example.com"]}"#.utf8))
+        XCTAssertEqual(added.title, "Свой DNS-over-HTTPS — твой выбор")
+        XCTAssertEqual(added.lines, ["dns.example.com"])
+        XCTAssertFalse(added.why.isEmpty)
     }
 
     func testDroppedReasonsInWords() throws {

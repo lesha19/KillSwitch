@@ -89,7 +89,7 @@ struct RoutingReport: Decodable, Equatable, Sendable {
     }
 
     /// One thing KillSwitch put in or changed: `kind` (dns-group, dns-servers, failover, pinning,
-    /// overrides, unbound, provider-path, provider-proxy, sniffer, adblock, splitapps, multihop,
+    /// overrides, unbound, provider-path, provider-proxy, sniffer, adblock, doh, splitapps, multihop,
     /// default-rule), a name and its items (names, rules, or host → address for pinning).
     struct Added: Decodable, Equatable, Sendable {
         var kind: String
@@ -239,7 +239,8 @@ extension RoutingReport.Added {
         case "provider-path": String(localized: "Убран свой путь к набору правил")
         case "provider-proxy": String(localized: "Наборы правил скачиваются через VPN")
         case "sniffer": String(localized: "Распознавание сайтов")
-        case "adblock": String(localized: "Блокировка рекламы — твой выбор")
+        case "adblock": String(localized: "Блокировка — твой выбор")
+        case "doh": String(localized: "Свой DNS-over-HTTPS — твой выбор")
         case "splitapps": String(localized: "Программы без VPN — твой выбор")
         case "multihop": String(localized: "Двойной VPN — твой выбор")
         case "default-rule": String(localized: "Правило по умолчанию")
@@ -271,7 +272,9 @@ extension RoutingReport.Added {
         case "sniffer":
             String(localized: "В подписке его нет. Без него правила по доменам не срабатывают для программ, которые сами узнают адреса (DNS-over-HTTPS в Firefox). Адрес соединения не меняется, имя нужно только для выбора правила.")
         case "adblock":
-            String(localized: "Включено в «Дополнительно»: реклама и трекеры из базы KillSwitch блокируются раньше правил подписки.")
+            String(localized: "Включено в «Дополнительно»: выбранные категории сайтов из базы KillSwitch блокируются раньше правил подписки.")
+        case "doh":
+            String(localized: "Выбрано в «Дополнительно»: имена сайтов сначала спрашиваются у твоего сервера, всегда через VPN. Если он не ответит — у обычных серверов, тоже через VPN, а не у провайдера.")
         case "splitapps":
             String(localized: "Выбрано в «Дополнительно»: эти программы идут мимо VPN раньше правил подписки.")
         case "multihop":
