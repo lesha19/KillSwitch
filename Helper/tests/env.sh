@@ -53,7 +53,7 @@ out=$(env -i PATH=/usr/bin:/bin /bin/bash -c 'KS_LOCKED=$$ exec /usr/bin/lockf -
 check "the lock's own re-exec (KS_LOCKED=\$\$ exec lockf … ks): held" "$out" 1
 out=$(env -i PATH=/usr/bin:/bin /bin/bash -c 'KS_LOCKED=1 exec /usr/bin/lockf -k -t 5 "$2" /bin/bash -c ". \"\$1\"; echo \$KS_LOCK_HELD" _ "$1"' _ "$KS" "$tmp/core.lock")
 check "under some lockf with a marker not its pid: not held" "$out" 0
-check "the core lock re-execs with its pid as the marker" "$(grep -c 'KS_LOCK_HELD" = 0 \] && \[ -d "\$CORE_DIR" \]; then KS_LOCKED=\$\$ exec lockf' "$KS")" 1
+check "the core lock re-execs with its pid as the marker" "$(grep 'KS_LOCK_HELD" = 0 \] && \[ -d "\$CORE_DIR" \]; then' "$KS" | grep -c 'KS_LOCKED=\$\$ exec lockf')" 1
 
 # --- BASH_ENV runs before the first line of a script; "bash -p" ignores it (and ENV, SHELLOPTS,
 # exported functions). sudoers drops it too, but ks must not rely on that alone.
