@@ -151,6 +151,16 @@ struct RoutingProfile: Codable, Equatable, Identifiable, Sendable {
         return p
     }
 
+    /// A link's fetch: ephemeral, no cache, 30 s without a byte and 60 s for the whole of it, since
+    /// it holds `updating` meanwhile (re-review F5; the default whole-fetch limit is 7 days).
+    static func fetchConfiguration() -> URLSessionConfiguration {
+        let c = URLSessionConfiguration.ephemeral
+        c.requestCachePolicy = .reloadIgnoringLocalCacheData
+        c.timeoutIntervalForRequest = 30
+        c.timeoutIntervalForResource = 60
+        return c
+    }
+
     func due(now: Date) -> Bool {
         guard url != nil else { return false }
         guard let fetched else { return true }

@@ -346,7 +346,7 @@ final class VPNClient {
     /// no cookies or cache, the redirect and size limits of a subscription fetch.
     private static func fetchRoutingProfile(_ url: URL) async throws -> String {
         let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
-        let session = URLSession(configuration: .ephemeral)
+        let session = URLSession(configuration: RoutingProfile.fetchConfiguration())
         defer { session.finishTasksAndInvalidate() }
         let (bytes, response) = try await session.bytes(for: request, delegate: SubscriptionFetch.RedirectGuard(original: url))
         let data = try await SubscriptionFetch.collect(bytes)

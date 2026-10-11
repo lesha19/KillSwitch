@@ -201,6 +201,15 @@ final class RoutingProfileTests: XCTestCase {
         XCTAssertFalse(UserNotice.profileRouting.body.contains("«напрямую» заработают"), "also when a profile is turned off")
     }
 
+    /// Re-review F5: a fetch holds `updating` (subscription updates, the picker wait for it), so
+    /// a host that answers a byte at a time must not keep it: one deadline for the whole fetch.
+    func testFetchHasAnOverallDeadline() {
+        let c = RoutingProfile.fetchConfiguration()
+        XCTAssertEqual(c.timeoutIntervalForResource, 60)
+        XCTAssertEqual(c.timeoutIntervalForRequest, 30)
+        XCTAssertEqual(c.requestCachePolicy, URLRequest.CachePolicy.reloadIgnoringLocalCacheData)
+    }
+
     func testDueForUpdate() throws {
         var p = try RoutingProfile.parse(incy)
         let now = Date(timeIntervalSince1970: 1_000_000)
