@@ -648,8 +648,8 @@ final class KillSwitchControl {
     private enum DelayOutcome { case done, failed, refused }
 
     private func runDelay(group: CoreProxies.Group) async -> DelayOutcome {
-        // no latency test with Xray yet (ADR 0020)
-        guard coreRunning, coreChoice == .mihomo, !testing.contains(group.name) else { return .failed }
+        // with Xray the observatory's last probes (ADR 0023)
+        guard coreRunning, !testing.contains(group.name) else { return .failed }
         testing.insert(group.name)
         defer { testing.remove(group.name) }
         switch await callHelper(["core", "delay", group.name], interactive: true, separateStderr: true) {
@@ -1309,7 +1309,6 @@ final class KillSwitchControl {
     /// Asks the core once a second, only while the setting is on and our VPN is connected.
     func syncSpeed() {
         let wanted = UserDefaults.standard.bool(forKey: Self.speedKey) && connection == .connected && !speedUnavailable
-            && coreChoice == .mihomo   // no traffic counters with Xray yet (ADR 0020)
         if wanted, speedTimer == nil {
             speedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.readSpeed() }

@@ -244,6 +244,7 @@ extension RoutingReport.Added {
         case "multihop": String(localized: "Двойной VPN — твой выбор")
         case "default-rule": String(localized: "Правило по умолчанию")
         case "loop-guard": String(localized: "Защита от петли")
+        case "ping": String(localized: "Проверка серверов")
         default: kind
         }
     }
@@ -279,6 +280,8 @@ extension RoutingReport.Added {
             String(localized: "В подписке нет правил: всё идёт через её первую группу, а не напрямую, как сделало бы ядро.")
         case "loop-guard":
             String(localized: "Адреса, которые VPN выдаёт программам вместо настоящих, никуда не ведут. Если программа помнит такой адрес с прошлого запуска, соединение отклоняется, а не ходит по кругу внутри VPN.")
+        case "ping":
+            String(localized: "Каждый сервер подписки проверяется в фоне: так виден пинг и есть куда переключиться, если выбранный перестанет отвечать. Сайты через эти проверки не идут.")
         default: ""
         }
     }

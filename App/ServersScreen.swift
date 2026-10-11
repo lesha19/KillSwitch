@@ -90,9 +90,8 @@ struct ServersScreen: View {
                 }
             }
             .buttonStyle(.borderless)
-            .disabled(!control.coreRunning || control.proxies == nil || !control.testing.isEmpty || control.coreChoice == .xray)
-            .help(control.coreChoice == .xray ? String(localized: "С основным способом подключения пинг пока не проверяется")
-                  : control.coreRunning ? String(localized: "Проверить пинг всех серверов (⇧⌘P)") : String(localized: "Пинг проверяется при подключённом VPN"))
+            .disabled(!control.coreRunning || control.proxies == nil || !control.testing.isEmpty)
+            .help(control.coreRunning ? String(localized: "Проверить пинг всех серверов (⇧⌘P)") : String(localized: "Пинг проверяется при подключённом VPN"))
             .accessibilityLabel("Проверить пинг всех серверов")
             .frame(width: 60, alignment: .trailing)
         }
@@ -317,8 +316,8 @@ private struct ServerPickerRow: View {
 }
 
 /// «37 мс» with signal bars: three when fast, one when slow, none without an answer — the shape
-/// carries the meaning, the colour only helps (spec §9.3). Without a test result (and with Xray,
-/// which has no latency test yet) nothing is drawn. VoiceOver reads the number, not the bars.
+/// carries the meaning, the colour only helps (spec §9.3). Without a test result nothing is drawn
+/// (with Xray the result is the observatory's last probe, ADR 0023). VoiceOver reads the number, not the bars.
 struct PingView: View {
     let ping: ServerPicker.Ping
 
