@@ -51,6 +51,8 @@ refuses diag status
 # the rest needs the admin password and is checked further on
 takes set lan 0
 takes set adblock 1
+takes set blockadult 1
+takes set doh https://dns.example.com/dns-query
 takes core import /x.json
 
 # --- install.sh: the user it writes into sudoers
@@ -65,7 +67,7 @@ done
 
 # every command that writes the core's config runs under the core lock (rotation, refresh and
 # import write the same files): ks's own dispatch asks core_lock_wanted (ADR 0023)
-for c in "core import /f" "core refresh /f" "set splitapps x" "set multihop off" "set diag 1" "_regen" "repair" "core select Сервер DE"; do
+for c in "core import /f" "core refresh /f" "set splitapps x" "set multihop off" "set diag 1" "set adblock 1" "set blockadult 1" "set blocksocial 0" "set blockbetting 1" "set doh https://dns.example.com/q" "_regen" "repair" "core select Сервер DE"; do
   # shellcheck disable=SC2086 # the command's words
   core_lock_wanted $c && ok "under the core lock: ks $c" || bad "not under the core lock: ks $c"
 done
