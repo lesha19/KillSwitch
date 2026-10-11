@@ -63,5 +63,15 @@ for u in ALL root daemon %admin '#0' 'a b' $'me\nx' "$me ALL" "$me,root" nosuchu
   valid_user "$u" && bad "install.sh: took user $(printf '%q' "$u")" || ok "install.sh: refuses user $(printf '%q' "$u")"
 done
 
+# every command that writes the core's config runs under the core lock (rotation, refresh and
+# import write the same files): ks's own dispatch, with exec stubbed
+lock_case=$(sed -n '/^case "\${1:-}:\${2:-}" in$/,/^esac$/p' "$here/../ks")
+locks() { ( CORE_DIR=$(mktemp -d); trap 'rmdir "$CORE_DIR"' EXIT; KS_LOCKED=""; exec() { echo locked; }; set -- "$@"; eval "$lock_case" ) }
+for c in "core import /f" "core refresh /f" "set splitapps x" "set multihop off" "set diag 1" "_regen" "repair" "core select Сервер DE"; do
+  # shellcheck disable=SC2086 # the command's words
+  [ "$(locks $c)" = locked ] && ok "under the core lock: ks $c" || bad "not under the core lock: ks $c"
+done
+[ -z "$(locks core state)" ] && ok "not under the core lock: ks core state" || bad "ks core state waits for the core lock"
+
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }
