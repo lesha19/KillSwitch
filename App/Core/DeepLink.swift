@@ -108,6 +108,7 @@ enum DeepLink: Equatable {
         guard value.count <= maxURLLength, value.unicodeScalars.allSatisfy({ (0x21...0x7E).contains($0.value) }),
               let components = URLComponents(string: value), components.scheme?.lowercased() == "https",
               components.user == nil, components.password == nil,
+              components.port.map({ (1...65535).contains($0) }) ?? true,
               let host = components.encodedHost.flatMap(displayHost) else { return nil }
         let port = components.port.flatMap { $0 == 443 ? nil : $0 }
         return Subscription(url: value, host: host + (port.map { ":\($0)" } ?? ""))
@@ -148,44 +149,57 @@ enum DeepLink: Equatable {
 
     /// A question of a link in the window, one at a time (Router.linkRequest). Dropped when nobody
     /// saw it before the app lost the front, or after `timeout`, so it never pops up later out of
-    /// context or blocks the next link (or an update's quit) for good.
+    /// context or blocks the next link (or an update's quit) for good. Times are seconds of system
+    /// uptime (`ProcessInfo.systemUptime`): a clock change moves neither the timeout nor the pace.
     struct Request: Equatable, Identifiable {
         let id = UUID()
         let confirmation: Confirmation
-        let created: Date
+        let created: TimeInterval
         /// The sheet appeared.
         var shown = false
+        /// The masked link of the subscription an `add` would replace, as the sheet shows it: read
+        /// when the link came, read again on «Добавить» (`needsSecondLook`).
+        var replacing: String?
 
         static let timeout: TimeInterval = 120
 
-        /// The masked link of the subscription an `add` would replace, as it was when the link
-        /// came: the sheet keeps saying «Заменить» while the new one is fetched.
-        let replacing: String?
-
-        init(_ confirmation: Confirmation, at created: Date, replacing: String? = nil) {
+        init(_ confirmation: Confirmation, at created: TimeInterval, replacing: String? = nil) {
             self.confirmation = confirmation
             self.created = created
             self.replacing = replacing
         }
 
         /// `busy`: a subscription it confirmed is being fetched; the sheet stays until it answers.
-        func isStale(now: Date, resignedActive: Bool, busy: Bool) -> Bool {
+        func isStale(now: TimeInterval, resignedActive: Bool, busy: Bool) -> Bool {
             guard !busy else { return false }
-            return now.timeIntervalSince(created) > Self.timeout || (resignedActive && !shown)
+            return now - created > Self.timeout || (resignedActive && !shown)
+        }
+
+        /// An `add` whose kept subscription changed since the sheet was drawn (added, replaced or
+        /// removed elsewhere): «Добавить» would not do what the sheet says.
+        func needsSecondLook(current: String?) -> Bool {
+            guard case .add = confirmation else { return false }
+            return current != replacing
         }
     }
 
-    /// One link every `interval`: a page that opens them in a loop cannot keep taking the front,
-    /// stack questions or keep the app from ever being idle for an update.
+    /// One acting link every `interval`: a page that opens them in a loop cannot keep taking the
+    /// front, stack questions or keep the app from ever being idle for an update.
     struct Throttle {
         static let interval: TimeInterval = 2
-        private var last: Date?
+        private var last: TimeInterval?
 
-        mutating func allows(at now: Date) -> Bool {
-            if let last, now.timeIntervalSince(last) < Self.interval { return false }
+        mutating func allows(at now: TimeInterval) -> Bool {
+            if let last, now >= last, now - last < Self.interval { return false }
             last = now
             return true
         }
+    }
+
+    /// Sections change nothing (the widget opens `killswitch://home`): only the rest is paced.
+    var isPaced: Bool {
+        if case .show = self { return false }
+        return true
     }
 
     enum Plan: Equatable {

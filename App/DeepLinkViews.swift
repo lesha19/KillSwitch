@@ -19,7 +19,7 @@ enum DeepLinks {
             // the link itself is not logged: it may carry a subscription key
             log.notice("killswitch:// link ignored: \(String(describing: rejection), privacy: .public)")
         case .success(let link):
-            guard throttle.allows(at: Date()) else {
+            guard !link.isPaced || throttle.allows(at: ProcessInfo.processInfo.systemUptime) else {
                 log.notice("killswitch:// link ignored: \(link.logName, privacy: .private) came less than 2 s after the last one")
                 return
             }
@@ -46,6 +46,7 @@ enum DeepLinks {
         dropIfStale(resignedActive: false)
         guard router.linkRequest == nil else {
             log.notice("killswitch:// link ignored: another one waits for an answer")
+            router.go(.window)   // where that question is
             return
         }
         perform(DeepLink.plan(link, status: control.status(client), busy: control.busy, coreConfigured: control.coreConfigured,
@@ -92,7 +93,7 @@ enum DeepLinks {
             return
         }
         watchActivity()
-        let request = DeepLink.Request(confirmation, at: Date(), replacing: replacing)
+        let request = DeepLink.Request(confirmation, at: ProcessInfo.processInfo.systemUptime, replacing: replacing)
         router.linkRequest = request
         router.go(.window)
         Task {
@@ -105,7 +106,7 @@ enum DeepLinks {
     static func dropIfStale(resignedActive: Bool) {
         let router = Router.shared
         guard let request = router.linkRequest,
-              request.isStale(now: Date(), resignedActive: resignedActive, busy: router.linkBusy) else { return }
+              request.isStale(now: ProcessInfo.processInfo.systemUptime, resignedActive: resignedActive, busy: router.linkBusy) else { return }
         log.notice("killswitch:// link question dropped: not answered")
         router.linkRequest = nil
     }
@@ -125,7 +126,11 @@ struct LinkRequestSheet: ViewModifier {
     @Bindable private var router = Router.shared
 
     func body(content: Content) -> some View {
-        content.sheet(isPresented: Binding(get: { router.linkRequest != nil }, set: { if !$0 { router.linkRequest = nil } })) {
+        // while its subscription is fetched the sheet is not dismissed (Esc): a person who thinks
+        // they cancelled must not get a replace; only an update's quit (dropSheets) takes it away,
+        // and then the fetch is not kept (setURL's stillWanted)
+        content.sheet(isPresented: Binding(get: { router.linkRequest != nil },
+                                           set: { if !$0, !router.linkBusy { router.linkRequest = nil } })) {
             if let request = router.linkRequest { LinkRequestView(request: request) }
         }
     }
@@ -139,8 +144,10 @@ private struct LinkRequestView: View {
     @State private var adding = false
     /// The client's error is shown only for an «Добавить» from this sheet, not an older one.
     @State private var tried = false
+    /// Kept but not applied (the password was cancelled): said, and the sheet only closes.
+    @State private var notice: String?
 
-    /// The subscription it replaces, as it was when the link came (masked).
+    /// The subscription it replaces (masked), as the sheet shows it.
     private var current: String? { request.replacing }
 
     var body: some View {
@@ -151,17 +158,28 @@ private struct LinkRequestView: View {
             }
             Text("Об этом попросила ссылка killswitch:// с сайта или из другой программы. Если это не ты, нажми «Отмена».")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if tried, let error = client.lastError { InlineError(error: error) }
+            if let notice {
+                Label(notice, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout).fixedSize(horizontal: false, vertical: true)
+            } else if tried, let error = client.lastError {
+                InlineError(error: error)
+            }
             HStack {
                 if adding { ProgressView().controlSize(.small) }
                 Spacer()
-                // no cancelling halfway: the new link is either kept whole or not at all
-                Button("Отмена") { close() }.keyboardShortcut(.cancelAction).disabled(adding)
-                confirmButton
+                if notice != nil {
+                    Button("Готово") { close() }.keyboardShortcut(.cancelAction)
+                } else {
+                    // not while the new link is fetched: it is kept only if it answers, and
+                    // then the import may still ask for the password (see `notice`)
+                    Button("Отмена") { close() }.keyboardShortcut(.cancelAction).disabled(adding)
+                    confirmButton
+                }
             }
         }
         .padding(20)
         .frame(width: 460)
+        .interactiveDismissDisabled(adding)
         .onAppear {
             if Router.shared.linkRequest?.id == request.id { Router.shared.linkRequest?.shown = true }
         }
@@ -182,6 +200,9 @@ private struct LinkRequestView: View {
             .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         if current != nil {
             Text("Текущая подписка останется, если новая не ответит.").font(.callout).foregroundStyle(.secondary)
+            if client.maskedBackupURL != nil {
+                Text("Резервная ссылка текущей подписки будет удалена.").font(.callout).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -202,6 +223,11 @@ private struct LinkRequestView: View {
     }
 
     private func confirm() {
+        // the kept subscription changed since the sheet was drawn: show that, ask for a second click
+        if request.needsSecondLook(current: client.maskedURL) {
+            if Router.shared.linkRequest?.id == request.id { Router.shared.linkRequest?.replacing = client.maskedURL }
+            return
+        }
         let plan = DeepLink.confirmed(request.confirmation, status: control.status(client), busy: control.busy,
                                       protectionOn: DeepLinks.protectionOn(control))
         guard case .add(let subscription) = plan else {
@@ -213,11 +239,16 @@ private struct LinkRequestView: View {
         adding = true
         tried = true
         Router.shared.linkBusy = true
+        let id = request.id
         Task {
-            await client.setURL(subscription.url)
+            let outcome = await client.setURL(subscription.url) { Router.shared.linkRequest?.id == id }
             Router.shared.linkBusy = false
             adding = false
-            if client.lastError == nil { close() }
+            switch outcome {
+            case .applied: close()
+            case .keptNotApplied: notice = outcome.notice
+            case .notKept: if client.lastError == nil { close() }
+            }
         }
     }
 

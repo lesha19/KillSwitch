@@ -203,10 +203,11 @@ final class DeepLinkTests: XCTestCase {
 
     // MARK: pacing
 
-    /// A page that opens links in a loop gets one through every 2 seconds.
+    /// A page that opens links in a loop gets one through every 2 seconds. Times are seconds of
+    /// system uptime, which a clock change does not move.
     func testOneLinkEveryTwoSeconds() {
         var throttle = DeepLink.Throttle()
-        let start = Date(timeIntervalSince1970: 1_000)
+        let start: TimeInterval = 1_000
         XCTAssertTrue(throttle.allows(at: start))
         XCTAssertFalse(throttle.allows(at: start + 1))
         XCTAssertFalse(throttle.allows(at: start + 1.9))
@@ -215,9 +216,18 @@ final class DeepLinkTests: XCTestCase {
         XCTAssertTrue(throttle.allows(at: start + 4.2))
     }
 
+    /// Opening a section changes nothing: only acting links are paced.
+    func testOnlyActingLinksArePaced() {
+        XCTAssertFalse(DeepLink.show(.section(.home)).isPaced)
+        XCTAssertFalse(DeepLink.show(.window).isPaced)
+        XCTAssertTrue(DeepLink.connect.isPaced)
+        XCTAssertTrue(DeepLink.toggle.isPaced)
+        XCTAssertTrue(DeepLink.add(.init(url: "https://a.co/s", host: "a.co")).isPaced)
+    }
+
     /// A question nobody saw does not pop up later out of context, and none waits forever.
     func testAWaitingQuestionIsDropped() {
-        let start = Date(timeIntervalSince1970: 1_000)
+        let start: TimeInterval = 1_000
         var request = DeepLink.Request(.disconnect, at: start)
         XCTAssertFalse(request.isStale(now: start + 60, resignedActive: false, busy: false))
         XCTAssertTrue(request.isStale(now: start + 121, resignedActive: false, busy: false))
@@ -228,5 +238,27 @@ final class DeepLinkTests: XCTestCase {
         // never while a subscription it confirmed is being fetched
         XCTAssertFalse(request.isStale(now: start + 500, resignedActive: true, busy: true))
         XCTAssertNotEqual(DeepLink.Request(.disconnect, at: start).id, DeepLink.Request(.disconnect, at: start).id)
+    }
+
+    /// «Добавить» / «Заменить» was read when the link came; if the kept subscription changed since,
+    /// the sheet shows the new state and wants a second click.
+    func testAnAddWhoseSubjectChangedWantsASecondLook() {
+        let subscription = DeepLink.Subscription(url: "https://a.co/s", host: "a.co")
+        let first = DeepLink.Request(.add(subscription), at: 0, replacing: nil)
+        XCTAssertFalse(first.needsSecondLook(current: nil))
+        XCTAssertTrue(first.needsSecondLook(current: "https://old.co/•••••"))
+        let replace = DeepLink.Request(.add(subscription), at: 0, replacing: "https://old.co/•••••")
+        XCTAssertFalse(replace.needsSecondLook(current: "https://old.co/•••••"))
+        XCTAssertTrue(replace.needsSecondLook(current: nil))
+        XCTAssertTrue(replace.needsSecondLook(current: "https://other.co/•••••"))
+        XCTAssertFalse(DeepLink.Request(.disconnect, at: 0).needsSecondLook(current: "https://old.co/•••••"))
+    }
+
+    func testAddRefusesImpossiblePorts() {
+        for port in ["0", "65536", "99999"] {
+            XCTAssertEqual(parse("killswitch://add?url=https://a.co:\(port)/s"), .failure(.badParameters), port)
+        }
+        XCTAssertEqual(parse("killswitch://add?url=https://a.co:65535/s"),
+                       .success(.add(.init(url: "https://a.co:65535/s", host: "a.co:65535"))))
     }
 }

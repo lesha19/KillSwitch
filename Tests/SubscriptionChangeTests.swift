@@ -25,6 +25,26 @@ final class SubscriptionChangeTests: XCTestCase {
         XCTAssertTrue(SubscriptionChange.same.recordsFailure)
     }
 
+    /// A new link that was kept but not applied (the password was cancelled or refused) is said:
+    /// the core still runs the old servers, the next update takes the new link.
+    func testKeptButNotAppliedIsSaid() {
+        XCTAssertNil(SubscriptionChange.Outcome.applied.notice)
+        XCTAssertNil(SubscriptionChange.Outcome.notKept.notice)
+        XCTAssertEqual(SubscriptionChange.Outcome.keptNotApplied.notice,
+                       "Новая подписка сохранена, но не применена: VPN пока работает со старыми серверами. Нажми «Обновить» в настройках VPN, чтобы применить (спросит пароль).")
+    }
+
+    /// Replacing while the main way is Xray with a service that has no Xray config: the advice of
+    /// a refresh («выбери запасной») would fetch the old link again, so the replace says what to do.
+    func testReplaceWithoutXrayConfigSaysWhatToDo() {
+        let expected = UserError(title: "Эта подписка не для основного способа подключения",
+                                 message: "Переключи способ подключения на запасной в настройках VPN, затем добавь ссылку снова. Текущая подписка осталась.")
+        XCTAssertEqual(SubscriptionChange.replace.xrayFailure(raw: XrayProfile.Failure.notXray.errorDescription!), expected)
+        XCTAssertEqual(SubscriptionChange.replace.xrayFailure(raw: "HTTP 404"), expected)
+        XCTAssertNil(SubscriptionChange.replace.xrayFailure(raw: "offline: timed out"))
+        XCTAssertNil(SubscriptionChange.same.xrayFailure(raw: XrayProfile.Failure.notXray.errorDescription!))
+    }
+
     /// The backup link belongs to the old subscription: a new link is never fetched through it.
     func testANewLinkIsNotFetchedThroughTheOldBackup() {
         XCTAssertEqual(SubscriptionChange.replace.sources(hasBackup: true, vpnRunning: true), [.primary, .primaryViaVPN])
