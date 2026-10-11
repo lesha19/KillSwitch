@@ -82,19 +82,27 @@ gen && bad "more than 20 MB: accepted" || ok "more than 20 MB: refused"
 refused "201 configs" '@$a = ($c) x 201' "Слишком много"
 
 # --- the protocol allow-list (vless vmess trojan shadowsocks freedom blackhole dns loopback)
+# (a host with another one is left out, the others stay: 0.19.1 review 2)
 for p in wireguard socks http hysteria hysteria2 tuic VLESS " vless" "vless " "vless\n" ""; do
-  refused "protocol «$p»" '$c->{outbounds}[0]{protocol} = "'"$p"'"' "незнакомый тип сервера"
+  perhost "protocol «${p}»" '$b->{outbounds}[0]{protocol} = "'"$p"'"'
 done
-refused "protocol as a list" '$c->{outbounds}[0]{protocol} = ["vless"]' "незнакомый тип сервера"
-refused "protocol missing" 'delete $c->{outbounds}[0]{protocol}' "незнакомый тип сервера"
+perhost "protocol as a list" '$b->{outbounds}[0]{protocol} = ["vless"]'
+perhost "protocol missing" 'delete $b->{outbounds}[0]{protocol}'
 refused "an outbound that is a string" 'push @{$c->{outbounds}}, "freedom"' "не объект"
 refused "two outbounds with one tag" 'push @{$c->{outbounds}}, { tag => "LT_1", protocol => "blackhole" }' "два outbound"
 refused "no server at all" '@{$c->{outbounds}} = grep { $_->{protocol} !~ /vless/ } @{$c->{outbounds}}; delete $c->{routing}{balancers}' "нет ни одного сервера"
 
-# --- server addresses: IPv4 or a host name we pin, nothing else
-for h in "a b.example.com" "a.example.com;id" 'a.example.com$(id)' "a.example.com/x" "-a.example.com" "a..b" "2001:db8::1" "::ffff:1.2.3.4" \
-         "[2001:db8::1]" "localhost" "é.example.com" "١.٢.٣.٤" "1.2.3.٤"; do
-  refused "server address «$h»" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = "'"$h"'"'
+# --- server addresses: IPv4 or a host name we pin, nothing else (a host with another one is
+# left out, the others stay: 0.19.1 review 2)
+for h in "a b.example.com" "a.example.com;id" 'a.example.com$(id)' "a.example.com/x" "-a.example.com" "2001:db8::1" "::ffff:1.2.3.4" \
+         "[2001:db8::1]" "env:HOME" "é.example.com" "١.٢.٣.٤" "1.2.3.٤"; do
+  perhost "server address «${h}»" '$b->{outbounds}[0]{settings}{vnext}[0]{address} = "'"$h"'"'
+done
+# a name that does not resolve still refuses the subscription: on an import that may be a network
+# hiccup, and a host left out at the import would come back with a refresh as a server nobody
+# approved (a refresh that then asks for the password)
+for h in localhost a..b; do
+  refused "server address «${h}» (cannot be pinned)" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = "'"$h"'"' "Не удалось узнать адрес"
 done
 # panels put placeholder hosts at 0.0.0.0 or 127.0.0.1 («подписка истекла», days left): such a
 # host is dropped and named in the report, the others stay; refused only when none is left
@@ -103,8 +111,9 @@ for h in 0.0.0.0 127.0.0.1 224.0.0.1 255.255.255.255 999.1.1.1 1.2.3.256 01.2.3.
 done
 refused "server address with a newline" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = "a.example.com\nb"'
 refused "server address a number" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = 16909060'
-refused "server address a list" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = ["1.2.3.4"]' "нет адреса"
-refused "server address empty" '$c->{outbounds}[0]{settings}{vnext}[0]{address} = ""' "нет адреса"
+perhost "server address a list" '$b->{outbounds}[0]{settings}{vnext}[0]{address} = ["1.2.3.4"]'
+perhost "server address empty" '$b->{outbounds}[0]{settings}{vnext}[0]{address} = ""'
+perhost "server address missing" 'delete $b->{outbounds}[0]{settings}{vnext}[0]{address}'
 for v in "1e30" "-1" '"443-500"'; do
   edit '$c->{outbounds}[0]{settings}{vnext}[0]{port} = '"$v"
   if gen && [ -x "$XRAY" ] && XRAY_LOCATION_ASSET=$(dirname "$XRAY") "$XRAY" run -test -format json -c "$tmp/c" >/dev/null 2>&1; then
@@ -135,8 +144,8 @@ if accepted "XHTTP downloadSettings inside extra" '$c->{outbounds}[0]{streamSett
       xhttpSettings => { path => "/x", extra => { downloadSettings => { address => "198.51.100.8", port => 443, network => "xhttp", xhttpSettings => { path => "/y" } } } } }'; then
   grep -qx 198.51.100.8 "$tmp/s" && ok "  its address is a server for pf too" || bad "  servers: $(paste -sd' ' "$tmp/s")"
 fi
-refused "XHTTP download address not a server address" '$c->{outbounds}[0]{streamSettings} = { network => "xhttp",
-      xhttpSettings => { downloadSettings => { address => "a.example.com;id", port => 443 } } }' "не похоже на адрес"
+perhost "XHTTP download address not a server address" '$b->{outbounds}[0]{streamSettings} = { network => "xhttp",
+      xhttpSettings => { downloadSettings => { address => "a.example.com;id", port => 443 } } }'
 # the older name of XHTTP (splithttp, still read by Xray) the same way
 if accepted "SplitHTTP downloadSettings" '$c->{outbounds}[0]{streamSettings} = { network => "splithttp", security => "tls",
       splithttpSettings => { path => "/x", downloadSettings => { address => "sh.example.com", port => 443, network => "splithttp", security => "tls",
