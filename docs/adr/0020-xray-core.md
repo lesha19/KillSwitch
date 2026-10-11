@@ -63,6 +63,14 @@ clients the full Xray config (an array of configs, one per host).
   `Сервер` of the subscription's hosts. Delay, traffic and connections answer «С ядром Xray это
   недоступно»; the app hides the connections list. A server switch or a setting restarts the core
   (about a second; pf blocks meanwhile).
+- **Addendum 0.19.1 (#37): per host.** A host the generator cannot take safely is left out, named
+  in the report's `dropped` (section `servers`: `address`, `tag`, `selector`, `fallback`,
+  `download`, `case`), and the others stay; the subscription is refused only when none is left.
+  Panels add placeholder hosts (0.0.0.0, 127.0.0.1) for «подписка истекла», and one must not stop
+  the rest, nor a rebuild of a stored profile. Xray reads JSON keys in any case and some lists as
+  one string, so a key that folds to one the generator reads without being it, and a selector
+  that is not a list, make a host unusable. XHTTP/splithttp download servers are servers like the
+  outbound's own (checked, pinned, approved); observatories never probe through freedom.
 
 ## Consequences
 

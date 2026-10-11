@@ -18,10 +18,20 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
     VPN;
   - give a server address such as 999.1.1.1, which pf refuses, so everything was blocked;
   - set raw socket options (`customSockopt`) on its connections;
-  - put line breaks in a server's name, which turned one name into two in the server list.
+  - put line breaks in a server's name, which turned one name into two in the server list;
+  - spell a key in another case (`Selector`, `Address`, `fallbacktag`) or give a balancer's
+    selector as one string: Xray reads both, the checks did not, so a whole subscription could
+    be sent past the VPN with the signature unchanged;
+  - probe through its direct outbound (an observatory selector picking it), to an address of its
+    choice outside the tunnel;
+  - open a reverse portal through a server (VLESS `settings.reverse`), now removed.
 - A host of the subscription that cannot be used (for example a 0.0.0.0 or 127.0.0.1 placeholder
   for «подписка истекла») is left out and named in «Трафик»; the rest of the subscription is kept.
-  The subscription is refused only when no host is left.
+  The subscription is refused only when no host is left. A host picked by hand that is left out
+  is noted in Журнал защиты; the first host runs instead.
+- After the update, a subscription whose XHTTP connection downloads from a server given by name
+  needs one import with the password (Settings › Обновить подписку): until then switching
+  servers and the automatic switch say the config cannot be built, and the running config stays.
 
 ### Fixed
 - Xray servers given by name and reached over plain HTTP (WebSocket, HTTPUpgrade, XHTTP without
