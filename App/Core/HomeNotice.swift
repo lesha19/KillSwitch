@@ -13,6 +13,8 @@ enum HomeNotice: Equatable {
     case newServers
     /// KS-12: the update changes what goes past the VPN (DIRECT rules, DNS), not the servers.
     case routingChanged
+    /// The same, but from the person's routing profile (ADR 0034): named, not the provider's.
+    case profileRouting(RoutingChangeSource)
     /// «Защита неполная»: the macOS filter is not working (skipped in the wizard, removed, failed).
     case filterOff
     /// The bundled filter waits for the switch in System Settings; the old one keeps working.
@@ -27,6 +29,8 @@ enum HomeNotice: Equatable {
         var newServers: Bool
         /// The waiting update changes what goes past the VPN (RefreshOutcome.routingChanged).
         var routingChanged = false
+        /// Where that change comes from (RoutingProfiles.changeSource).
+        var routingSource: RoutingChangeSource = .subscription
         var filterIncomplete: Bool
         /// «Не напоминать» on the filter notice.
         var filterDismissed: Bool
@@ -54,7 +58,10 @@ enum HomeNotice: Equatable {
         if let usage = input.usage, let total = usage.total, total > 0, Double(usage.used) >= Double(total) * trafficShare {
             return .trafficLow(used: usage.used, total: total)
         }
-        if input.newServers { return input.routingChanged ? .routingChanged : .newServers }
+        if input.newServers {
+            guard input.routingChanged else { return .newServers }
+            return input.routingSource == .subscription ? .routingChanged : .profileRouting(input.routingSource)
+        }
         if input.filterIncomplete && !input.filterDismissed { return .filterOff }
         if input.filterUpdateWaiting { return .filterUpdateWaiting }
         if input.helperApproval { return .helperApproval }
@@ -71,6 +78,8 @@ enum HomeNotice: Equatable {
         case .trafficLow(let used, let total): String(localized: "Трафик почти закончился: \(Russian.traffic(used: used, total: total)).")
         case .newServers: String(localized: "В подписке новые серверы.")
         case .routingChanged: String(localized: "Подписка меняет правила «напрямую».")
+        case .profileRouting(.profile(let name)): String(localized: "Профиль «\(name)» пускает часть сайтов мимо VPN.")
+        case .profileRouting: String(localized: "Смена профиля маршрутизации ждёт пароля.")
         case .filterOff: String(localized: "Защита неполная.")
         case .filterUpdateWaiting: String(localized: "Разреши обновление фильтра KillSwitch.")
         case .helperApproval: String(localized: "Разреши KillSwitch в Объектах входа, чтобы не вводить пароль каждый раз.")
@@ -86,6 +95,8 @@ enum HomeNotice: Equatable {
         case .ending, .trafficLow: ""
         case .newServers: String(localized: "Разреши им работать при включённой защите.")
         case .routingChanged: String(localized: "Часть трафика пойдёт мимо VPN. Разреши, только если доверяешь провайдеру.")
+        case .profileRouting(.profile): String(localized: "Его правила «напрямую» заработают после пароля администратора, до этого действуют прежние.")
+        case .profileRouting: String(localized: "До пароля администратора действуют правила прежнего профиля.")
         case .filterOff: String(localized: "Защита macOS выключена. Рекомендуем включить второй уровень.")
         case .filterUpdateWaiting: String(localized: "Системные настройки › Основные › Объекты входа и расширения › Сетевые расширения. Пока работает прежняя версия.")
         case .helperApproval: ""

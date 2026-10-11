@@ -718,6 +718,15 @@ private struct RoutingProfilesSection: View {
                 ForEach(client.routingProfiles) { profile in Text(profile.name).tag(UUID?.some(profile.id)) }
             }
             .disabled(client.updating)
+            if client.needsConfirmation, client.routingChanged, client.routingSource != .subscription {
+                HStack {
+                    Label { Text("Ждёт пароля администратора: до этого действуют прежние правила.") } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }.font(.caption)
+                    Spacer()
+                    Button("Подтвердить…") { Task { await client.confirmNewServers() } }.controlSize(.small).disabled(client.updating)
+                }
+            }
             if let id = client.activeRoutingProfile, let profile = client.routingProfiles.first(where: { $0.id == id }) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Блокировать: \(profile.block.sites.count + profile.block.ips.count) · через VPN: \(profile.proxy.sites.count + profile.proxy.ips.count) · напрямую: \(profile.direct.sites.count + profile.direct.ips.count)")
@@ -742,7 +751,7 @@ private struct RoutingProfilesSection: View {
             }
             Button("Добавить профиль…") { adding = true }
             Footnote(text: String(localized: "Правила профиля идут раньше правил подписки. Если профиль пускает сайты мимо VPN, KillSwitch попросит пароль администратора."),
-                     more: String(localized: "Профиль маршрутизации — списки сайтов и адресов: что блокировать, что пускать через VPN и что напрямую, в формате Happ и INCY. Всё, чего нет в профиле, идёт так, как решает подписка. Свои DNS, ссылки на базы стран и «всё остальное напрямую» из профиля не берутся. Профиль по ссылке обновляется раз в сутки; если он начнёт пускать мимо VPN что-то новое, это снова подтверждается паролем. Какие правила пришли из профиля, видно в «Трафик» › «Правила»."))
+                     more: String(localized: "Профиль маршрутизации — списки сайтов и адресов: что блокировать, что пускать через VPN и что напрямую, в формате Happ и INCY. Всё, чего нет в профиле, идёт так, как решает подписка. Свои DNS, ссылки на базы стран и «всё остальное напрямую» из профиля не берутся. Профиль по ссылке обновляется раз в сутки; если он начнёт пускать мимо VPN что-то новое, это снова подтверждается паролем. Пока пароль не введён, действуют прежние правила. Выключить профиль можно без пароля, если подписка за это время не поменяла свои правила «напрямую». Какие правила пришли из профиля, видно в «Трафик» › «Правила»."))
         }
         .sheet(isPresented: $adding) { AddRoutingProfileSheet(isPresented: $adding) }
     }

@@ -282,7 +282,13 @@ struct SubscriptionSummary: View {
             }
             if client.needsConfirmation {
                 HStack {
-                    if client.routingChanged {
+                    if client.routingChanged, case .profile(let name) = client.routingSource {
+                        StatusLabel("Нужно подтверждение: профиль «\(name)» пускает часть сайтов мимо VPN, до него действуют прежние правила",
+                                    systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.caption)
+                    } else if client.routingChanged, client.routingSource == .profileOff {
+                        StatusLabel("Нужно подтверждение: смена профиля маршрутизации, до него действуют правила прежнего профиля",
+                                    systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.caption)
+                    } else if client.routingChanged {
                         StatusLabel("Нужно подтверждение: подписка меняет правила «напрямую», часть трафика пойдёт мимо VPN",
                                     systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.caption)
                     } else {
@@ -292,8 +298,9 @@ struct SubscriptionSummary: View {
                     Button("Подтвердить…") { Task { await client.confirmNewServers() } }
                         .controlSize(.small)
                         .disabled(client.updating)
-                        .help(client.routingChanged ? "Разрешить новые правила «напрямую» подписки (спросит пароль)"
-                                                    : "Разрешить новые серверы подписки (спросит пароль)")
+                        .help(!client.routingChanged ? "Разрешить новые серверы подписки (спросит пароль)"
+                              : client.routingSource == .subscription ? "Разрешить новые правила «напрямую» подписки (спросит пароль)"
+                              : "Применить профиль маршрутизации (спросит пароль)")
                 }
             }
             if client.needsPassword {

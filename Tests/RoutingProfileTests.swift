@@ -137,6 +137,47 @@ final class RoutingProfileTests: XCTestCase {
         XCTAssertEqual(RoutingProfiles.changing(b.id, in: [a, c]) { $0.name = "B2" }, [a, c])
     }
 
+    /// Review S5: a change that waits for the admin is named after where it comes from. The
+    /// profile applied last is kept (RoutingProfiles.recordApplied); the one chosen now differs.
+    func testWhereAWaitingChangeComesFrom() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "RoutingProfileTests-\(UUID().uuidString)"))
+        let direct = try RoutingProfile.parse(incy)
+        let safe = try RoutingProfile.parse("{\"Name\":\"Без рекламы\",\"BlockSites\":[\"domain:ads.example\"]}")
+        // nothing applied yet («Как в подписке»)
+        XCTAssertEqual(RoutingProfiles.changeSource(active: nil, defaults), .subscription)
+        XCTAssertEqual(RoutingProfiles.changeSource(active: direct, defaults), .profile(name: "RU напрямую"))
+        XCTAssertEqual(RoutingProfiles.changeSource(active: safe, defaults), .subscription, "it sends nothing direct: the subscription does")
+        RoutingProfiles.recordApplied(direct, defaults)
+        XCTAssertEqual(RoutingProfiles.changeSource(active: direct, defaults), .subscription, "the same profile: the subscription changed")
+        XCTAssertEqual(RoutingProfiles.changeSource(active: nil, defaults), .profileOff, "turned off: its rules stay until the password")
+        XCTAssertEqual(RoutingProfiles.changeSource(active: safe, defaults), .profileOff)
+        var narrower = direct
+        narrower.direct.ips = []
+        XCTAssertEqual(RoutingProfiles.changeSource(active: narrower, defaults), .profile(name: "RU напрямую"), "updated from its link")
+        RoutingProfiles.recordApplied(nil, defaults)
+        XCTAssertEqual(RoutingProfiles.changeSource(active: nil, defaults), .subscription)
+    }
+
+    func testNoticesNameTheProfile() {
+        var input = HomeNotice.Input(otherVPN: false, usage: nil, newServers: true, filterIncomplete: false, filterDismissed: false, now: Date())
+        input.routingChanged = true
+        input.routingSource = .profile(name: "RU напрямую")
+        let notice = HomeNotice.pick(input)
+        XCTAssertEqual(notice, .profileRouting(.profile(name: "RU напрямую")))
+        XCTAssertTrue(notice?.title.contains("«RU напрямую»") == true, notice?.title ?? "")
+        XCTAssertFalse(notice?.message.contains("провайдер") == true, "not the provider's doing")
+        XCTAssertTrue(notice?.message.contains("прежние") == true, "the old rules stay until the password")
+        input.routingSource = .profileOff
+        XCTAssertTrue(HomeNotice.pick(input)?.message.contains("прежнего профиля") == true)
+        input.routingSource = .subscription
+        XCTAssertEqual(HomeNotice.pick(input), .routingChanged)
+
+        XCTAssertEqual(UserNotice.profileRouting.action, .approve)
+        XCTAssertEqual(UserNotice.profileRouting.setting, .subscription)
+        XCTAssertNotEqual(UserNotice.profileRouting.key, UserNotice.routingChanged.key)
+        XCTAssertFalse(UserNotice.profileRouting.title.contains("Подписка"))
+    }
+
     func testDueForUpdate() throws {
         var p = try RoutingProfile.parse(incy)
         let now = Date(timeIntervalSince1970: 1_000_000)
