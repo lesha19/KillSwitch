@@ -133,8 +133,24 @@ upgrade() {  # upgrade [args]: runs main of install.sh in the bundle directory o
     sync() { echo "sync" >> "$root/calls"; }
     launchctl() {
       echo "launchctl $*" >> "$root/calls"
+      # the core's job: loaded, unloaded, or unloading:<prints left> after a slow bootout (SLOW_BOOTOUT=1:
+      # launchd returns from bootout before the job is gone, and refuses a bootstrap meanwhile)
+      local st n
+      if [ -f "$root/core-job" ]; then st=$(cat "$root/core-job"); elif [ "${CORE_LOADED:-1}" = 1 ]; then st=loaded; else st=unloaded; fi
       case "$1" in
-        print) [[ "$2" == *core ]] && { [ "${CORE_LOADED:-1}" = 1 ] || return 1; echo 'state = running'; }; return 0 ;;
+        print) [[ "$2" == *core ]] || return 0
+               case "$st" in
+                 loaded) echo 'state = running' ;;
+                 unloading:*) n=${st#unloading:}
+                              if [ "$n" -gt 0 ]; then echo "unloading:$((n - 1))" > "$root/core-job"; echo 'state = running'
+                              else echo unloaded > "$root/core-job"; return 1; fi ;;
+                 *) return 1 ;;
+               esac ;;
+        bootout) [[ "$2" == *core ]] || return 0
+                 if [ "${SLOW_BOOTOUT:-0}" = 1 ]; then echo unloading:2 > "$root/core-job"; else echo unloaded > "$root/core-job"; fi ;;
+        bootstrap) [[ "$3" == *core* ]] || return 0
+                   case "$st" in unloading:0|unloaded) echo loaded > "$root/core-job" ;;
+                     *) echo "Bootstrap failed: 37: Operation already in progress" >&2; return 37 ;; esac ;;
         print-disabled) return 0 ;;
       esac
     }
@@ -282,6 +298,16 @@ echo '<!-- changed -->' >> "$root/bundle/local.killswitch.plist"
 upgrade --upgrade >/dev/null 2>&1
 seq_=$(grep -E 'launchctl (disable|bootout|enable|bootstrap) .*local.killswitch(\.plist)?$' "$root/calls" | awk '{print $2}' | paste -sd, -)
 check "new watchdog plist: marked disabled around the bootout (no network-off guard)" "$seq_" "disable,bootout,enable,bootstrap"
+
+# a new core job: launchd returns from bootout before the old job is gone and refuses a bootstrap
+# until then; the core must not be left unloaded (the VPN down, and a rerun would say "kept")
+setup coreplist
+echo '<!-- changed -->' >> "$root/bundle/local.killswitch.core.plist"
+out=$(KEEP_E=1 SLOW_BOOTOUT=1 upgrade --upgrade 2>&1); rc=$?
+check "new core plist, slow bootout: upgrade succeeds" "$rc" 0
+check "  the core's job loaded again" "$(cat "$root/core-job" 2>/dev/null)" loaded
+check "  says the core restarted" "$(grep -c '^core: restarted$' <<<"$out")" 1
+check "  completion marker written" "$([ -e "$root/lib/installed" ] && echo there || echo none)" there
 
 setup downgrade
 printf '#!/bin/bash -p\nKS_VERSION="0.12.1"\necho older\n' > "$root/bundle/ks"

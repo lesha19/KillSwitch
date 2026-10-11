@@ -16,6 +16,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   went a moment before launchd reported the core stopped, the blocking rules loaded then stayed
   until the tunnels changed again. The watchdog now checks every 2 s whether standby (ADR 0018)
   still matches.
+- An upgrade that brings a new launchd job for the core could stop half-way and leave the VPN off:
+  `install.sh` started the new job right after stopping the old one, launchd refuses that until the
+  old one is gone, and `set -e` ended the install with the core unloaded (a rerun then kept it
+  unloaded). It now waits for the old job first, as it already did for the watchdog.
 
 ## [0.18.1] - 2026-10-11
 

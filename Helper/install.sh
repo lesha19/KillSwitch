@@ -120,6 +120,8 @@ ks_run() { "$DIR/ks" "$@"; }
 job_loaded() { launchctl print "$1" >/dev/null 2>&1; }
 job_running() { launchctl print "$1" 2>/dev/null | grep -q 'state = running'; }
 job_disabled() { launchctl print-disabled system 2>/dev/null | grep -qE "\"${1#system/}\" => (disabled|true)"; }
+# launchctl bootout returns before the job is gone, and bootstrap refuses it until then
+job_gone() { for _ in $(seq 1 50); do job_loaded "$1" || return 0; sleep 0.2; done; return 1; }
 
 # watchdog_update <ks changed 0|1> <plist changed 0|1>
 watchdog_update() {
@@ -209,6 +211,7 @@ core_update() {
   # stays on the core (the watchdog restores it only after 5 s), so nothing leaks meanwhile.
   if [ "$plist" = 1 ]; then
     launchctl bootout "$CORE_JOB" 2>/dev/null || true
+    job_gone "$CORE_JOB" || true
     launchctl bootstrap system "$CORE_PLIST"
   else
     launchctl kickstart -k "$CORE_JOB"
