@@ -30,6 +30,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 ### Security
 - The daemon accepts one more client, `com.lesha19.KillSwitch.cli`, signed by the same team; the
   app bundle checked before root runs install.sh must still be the app itself.
+- NetBird's daemon passes pf only for its own traffic (#44, ADR 0026): UDP (WireGuard to peers,
+  STUN, QUIC relays) and TCP to NetBird's management, signal, relay and TURN ports (80, 443, 3478,
+  5349, 10000, 33073, 33080), never DNS or DoT. Before, everything it sent went past the VPN,
+  including the DNS queries its resolver forwards when the VPN is down. A self-hosted NetBird on
+  other TCP ports cannot connect with protection on.
 
 ## [0.18.1] - 2026-10-11
 
