@@ -43,7 +43,7 @@ struct SettingsTransferSection: View {
                 Button("Сбросить…") { show(SettingsBackup.reset, title: String(localized: "Сбросить настройки?")) }
             }
             .disabled(control.busy)
-            Text("Ссылка подписки, свои серверы и ключи в файл не попадают: на новом Mac их добавляют заново.")
+            Text("Ссылка подписки, свои серверы и ключи в файл не попадают: на новом Mac их добавляют заново. Названия сетей Wi‑Fi в файле есть.")
                 .foregroundStyle(.secondary)
             if let note {
                 Label(note, systemImage: "info.circle").foregroundStyle(.secondary)
@@ -87,18 +87,24 @@ struct SettingsTransferSection: View {
         review = Review(title: title, settings: settings, changes: changes, rootSkipped: rootSkipped)
     }
 
-    /// The app's settings at once; the root ones behind the password, then the way of connecting.
+    /// The root settings behind the password first, and the app's only once they are in: a
+    /// cancelled or failed password leaves nothing half applied. Then the way of connecting.
+    /// Without root settings to change (or without the service) the app's apply at once.
     private func apply(_ settings: SettingsBackup.Settings) {
-        SettingsBackup.apply(settings.app, to: .standard)
+        guard installed, let root = settings.root else { return applyApp(settings.app) }
+        control.applySettings(root) { [client] in
+            applyApp(settings.app)
+            if let core = root.core { client.switchCore(to: core) }
+        }
+    }
+
+    private func applyApp(_ app: [String: SettingsBackup.Value]) {
+        SettingsBackup.apply(app, to: .standard)
         auto.reloadSettings()
         let interval = UserDefaults.standard.integer(forKey: "subscriptionIntervalHours")
         if client.intervalHours != interval { client.intervalHours = interval }
         if updater.betaUpdates != UpdateChannel.isBeta() { updater.betaUpdates = UpdateChannel.isBeta() }
         control.syncSpeed()
-        guard installed, let root = settings.root else { return }
-        control.applySettings(root) { [client] in
-            if let core = root.core { client.switchCore(to: core) }
-        }
     }
 }
 
