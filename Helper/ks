@@ -391,7 +391,7 @@ guard() {
     LOAD_RETRY=1
     if load "$TSIG"; then PROT=on; else PROT=off; log_event "reload failed"; fi
     LOAD_RETRY=0
-    [ -f "$INVALIDF" ] || log_event "rules pf refused before loaded on a retry"
+    [ -f "$INVALIDF" ] || log_event "rules loaded again after pf had refused them"
     return 0
   fi
   log_event "$why: reloading"
@@ -401,7 +401,8 @@ guard() {
 rules_retry_due() {
   local t
   [ "$(cat "$INVALIDF" 2>/dev/null)" = rules ] && t=$(stat -f %m "$INVALIDF" 2>/dev/null) || return 1
-  [ $(($(date +%s) - t)) -ge "$PF_RETRY" ]
+  t=$(($(date +%s) - t))
+  [ "$t" -ge "$PF_RETRY" ] || [ "$t" -lt 0 ]   # negative: the clock stepped back
 }
 # Standby (ADR 0018) also depends on whether our core runs, which the tunnel list does not show:
 # our core's TUN can go a moment before launchd says the core stopped, and rules loaded then block
@@ -1456,7 +1457,7 @@ core_generate_xray() (
       /usr/bin/perl -MJSON::PP -MStorable -MDigest::SHA -e "$KS_XRAY_PL"' approve()' > "$w/approved.all" || exit 1
     sort -u "$w/approved.all" > "$w/approved"
     # a host that cannot be built is not approved for a switch (one to it fails the same way)
-    [ ! -s "$w/e/skipped" ] || log_event "server switch approval skipped (cannot be built): $(head -c 2000 "$w/e/skipped" | paste -sd, -)"
+    [ ! -s "$w/e/skipped" ] || log_event "server switch approval skipped (cannot be built): $(head -n 20 "$w/e/skipped" | paste -sd, -)"
   fi
   rm -f "$out" "$srv_out" "$out.pins" "$out.direct" "$out.egress" "$out.report" "$out.approved"   # a leftover would keep its mode
   cp "$w/config.json" "$out" && cp "$w/servers" "$srv_out" && cp "$w/pins" "$out.pins" && cp "$w/direct" "$out.direct" &&
@@ -1713,7 +1714,9 @@ KS_XRAY_PL='
       if (eval { build(); 1 }) {
         open my $f, "<:raw", "$W/direct" or die; local $/; my $d = <$f>; close $f;
         print Digest::SHA::sha256_hex($d), "\n";
-      } else { open my $s, ">>", "$W/skipped" or die; print $s "$n\n"; close $s }
+      } else {   # the name for the log: one line, at most 64 characters, cut between characters
+        my $t = $n; utf8::decode($t); $t =~ s/[\x00-\x1f\x7f]/ /g; $t = substr($t, 0, 64); utf8::encode($t);
+        open my $s, ">>", "$W/skipped" or die; print $s "$t\n"; close $s }
     }
   }
 '
@@ -1912,10 +1915,6 @@ put_setting() {  # put_setting <key> <value> [settings-file]
   local f=${3:-$SETTINGS}
   { grep -vE "^$1=" "$f" 2>/dev/null; echo "$1=$2"; } > "$f.tmp" && chmod 644 "$f.tmp" && mv "$f.tmp" "$f"
 }
-drop_setting() {  # drop_setting <key>: back to its default
-  [ -f "$SETTINGS" ] || return 0
-  { grep -vE "^$1=" "$SETTINGS"; :; } > "$SETTINGS.tmp" && chmod 644 "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
-}
 
 core_import() {  # core_import <profile.json> [import|refresh]
   local src=${1:-} prof conf in tmp srv="$SERVERS_CORE.tmp" rc
@@ -2053,7 +2052,7 @@ core_apply_settings() {
 # restarted for it (about a second, pf keeps blocking): if it ran and does not come up again within
 # about 5 s (core_up), the previous config and its files go back and Xray is restarted with them.
 core_regen() {
-  local prof conf tmp srv="$SERVERS_CORE.tmp" was=0 pid f files
+  local prof conf tmp srv="$SERVERS_CORE.tmp" was=0 pid f files other=0
   [ "$(core_kind)" = xray ] && xray_api_check
   switch_approval_migrate
   prof=$(core_profile); conf=$(core_conf); tmp="$conf.tmp"
@@ -2068,7 +2067,10 @@ core_regen() {
   files=("$conf" "$SERVERS" "$SERVERS_CORE" "$PINS" "$CORE_EGRESS" "$REPORT" "$CORE_DIR/direct")
   if [ "$(core_kind)" = xray ]; then
     core_job
-    [ "$CORE_RUN" = 1 ] && was=1 && pid=$CORE_PID
+    # mihomo's job still loaded ("core on" swapping to Xray runs this first): Xray's config is not
+    # its own, so it is neither restarted for it nor waited for (that would roll back)
+    launchctl print "$CORE_JOB" >/dev/null 2>&1 && cmp -s "$CORE_DIR/plist.mihomo" "$CORE_PLIST" && other=1
+    [ "$CORE_RUN" = 1 ] && [ "$other" = 0 ] && was=1 && pid=$CORE_PID
     for f in "${files[@]}"; do [ -f "$f" ] && cp -p "$f" "$f.prev"; done
   fi
   if ! core_commit "$tmp" "$srv" 2>"$conf.err"; then
@@ -2078,7 +2080,7 @@ core_regen() {
     return 1
   fi
   rm -f "$conf.err"
-  reload_if_on; core_reload
+  reload_if_on; [ "$other" = 1 ] || core_reload
   if [ "$was" = 1 ] && ! core_up "$pid"; then
     for f in "${files[@]}"; do [ -f "$f.prev" ] && mv "$f.prev" "$f"; done
     reload_if_on; launchctl kickstart -k "$CORE_JOB"
@@ -2101,14 +2103,26 @@ switch_approval_migrate() {
   [ "$(core_kind)" = xray ] && [ ! -e "$CORE_DIR/approved-switch" ] || return 0
   prof=$(core_profile)
   [ -f "$prof" ] && [ ! -L "$prof" ] && [ -f "$PINS" ] && [ -f "$APPROVED_DIRECT" ] || return 0
-  if [ "$prof" -nt "$APPROVED_DIRECT" ]; then
+  # strictly older (the import writes the profile, then the approval): the same instant may be a
+  # refresh right after the import. A clock stepped back can still make a refreshed profile look
+  # older; accepted: it needs a refresh with a new host and a clock change in one upgrade window.
+  if ! mtime_older "$prof" "$APPROVED_DIRECT"; then
     log_event "server switch approval: the subscription was refreshed since the last import, the next import with the password approves its hosts"
     return 0
   fi
-  if KS_APPROVE_ALL=1 KS_PINS=$PINS core_generate "$prof" "$out" "$srv" 2>/dev/null; then
+  if KS_APPROVE_ALL=1 KS_PINS=$PINS core_generate "$prof" "$out" "$srv" 2>"$out.err"; then
     chmod 600 "$out.approved" && mv "$out.approved" "$CORE_DIR/approved-switch" && log_event "server switch approval taken from the last import"
+  else
+    log_event "server switch approval failed: $(grep -v '^$' "$out.err" | tail -1 | cut -c1-200)"
   fi
+  rm -f "$out.err"
   core_clean "$out" "$srv"
+}
+# mtime_older <a> <b>: a was last written strictly before b (fractional seconds)
+mtime_older() {
+  local a b
+  a=$(stat -f %Fm "$1" 2>/dev/null) && b=$(stat -f %Fm "$2" 2>/dev/null) || return 1
+  awk -v a="$a" -v b="$b" 'BEGIN { exit !(a + 0 < b + 0) }'
 }
 
 # core_up <pid before the restart>: the restarted Xray runs (another pid) and listens on its
@@ -2264,11 +2278,16 @@ core_plist_sync() {
 # import and goes ("ks core on" waits for a new one), except when it is the one already chosen or
 # its job is the loaded one (back before the other core's import worked): that core runs on it.
 set_core() {
-  local keep=0
+  local keep=0 mine other
   [[ "$1" =~ ^(xray|mihomo)$ ]] || { echo "usage: ks set core xray|mihomo" >&2; return 1; }
   [ -x "$CORE_DIR/$1" ] || { echo "Ядро $1 не установлено" >&2; return 1; }
   [ "$(core_kind)" = "$1" ] && keep=1
   launchctl print "$CORE_JOB" >/dev/null 2>&1 && cmp -s "$CORE_DIR/plist.$1" "$CORE_PLIST" && keep=1
+  # its import is the last one (that of the other core failed or never came): the servers, pins
+  # and approvals in place are that config's, so it stays even with the core off
+  mine=$CORE_PROFILE; other="$CORE_DIR/profile-xray.json"
+  [ "$1" = xray ] && { mine=$other; other=$CORE_PROFILE; }
+  [ -f "$mine" ] && { [ ! -e "$other" ] || mtime_older "$other" "$mine"; } && keep=1
   put_setting core "$1" || return 1
   [ "$keep" = 1 ] || rm -f "$(core_conf)"
   log_event "core: $1 (waits for the subscription)"
@@ -2585,17 +2604,24 @@ core_proxies() {
 xray_select() {
   grep -qxF -- "$1" <(/usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); print "$_->{name}\n" for @{ $r->{servers} || [] }' < "$REPORT" 2>/dev/null) ||
     { echo "В подписке нет сервера «$1»" >&2; return 1; }
-  local old
-  old=$(setting xrayserver "")
-  local rc=0
-  put_setting xrayserver "$1" || return 1
-  core_rebuild "$PINS" switch || rc=$?
+  # a name the settings would call damaged (control characters, too long) would block everything;
+  # failover takes names from the subscription, not through passwordless_args_ok
+  valid_name "$1" || { echo "Плохое имя сервера" >&2; return 1; }
+  # Built and gated with the pick in a copy of the settings; the pick itself is written only after
+  # the gate and the commit passed. A ks killed in between leaves the pick that the running config
+  # was approved for, never one the gate refused, for the next rebuild without a gate (rotation,
+  # a setting, _regen) to commit: those rebuild the pick the settings name.
+  local d rc=0
+  d=$(mktemp -d) || return 1   # a directory: put_setting also writes <file>.tmp
+  cp "$SETTINGS" "$d/settings" 2>/dev/null
+  put_setting xrayserver "$1" "$d/settings"
+  SETTINGS=$d/settings core_rebuild "$PINS" switch || rc=$?
+  rm -rf "$d"
   if [ "$rc" != 0 ]; then
-    # none before (the first host): no line, an empty one is no valid server name
-    if [ -n "$old" ]; then put_setting xrayserver "$old"; else drop_setting xrayserver; fi
     [ "$rc" = 3 ] && log_event "server switch to $1 refused: it sends other traffic past the VPN than approved"
     return "$rc"
   fi
+  put_setting xrayserver "$1" || return 1
   reload_if_on; core_reload
 }
 # Automatic failover with Xray (ADR 0023; the default decision of #43). Every 20 s the watchdog
@@ -2638,7 +2664,7 @@ KS_FAILOVER_PL='
     my %p = map { my @f = split /\t/; ($f[0] => [ $f[1], $f[2] ]) } split /\n/, $ENV{P} // "";
     my $country = $flag->($cur);
     my ($best) = sort { $p{$a}[1] <=> $p{$b}[1] }
-      grep { $_ ne $cur && length $country && $flag->($_) eq $country && $p{$_} && $p{$_}[0] && ($why ne "slow" || $p{$_}[1] * 2 < $ms) } @names;
+      grep { $_ ne $cur && length $_ <= 256 && !/[\x00-\x1f\x7f]/ && length $country && $flag->($_) eq $country && $p{$_} && $p{$_}[0] && ($why ne "slow" || $p{$_}[1] * 2 < $ms) } @names;
     if (defined $best) { $out = join "\t", "switch", $cur, $best, $why, $ms, $usual; %s = (server => $best, last => $now, manual => "") }
     elsif (!$s{told}) { $out = join "\t", "stay", $cur, "-", $why, $ms, $usual; $s{told} = 1 }
   }
