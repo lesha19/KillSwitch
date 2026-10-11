@@ -7,7 +7,10 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=../ks
 . "$here/../ks"
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+# under /private/tmp (world-writable, sticky) as on a machine whose TMPDIR is there: nb_trusted
+# walks the ancestors only up to the test folder (NB_TRUST_ROOT), never weakened for the real one
+tmp=$(mktemp -d /private/tmp/ks-netbird.XXXXXX); trap 'rm -rf "$tmp"' EXIT
+NB_TRUST_ROOT=$(cd "$tmp" && pwd -P)
 SETTINGS="$tmp/settings"; EVENTS="$tmp/events.log"; NB_PLIST="$tmp/netbird.plist"
 NB_SIGF="$tmp/netbird-sig"; NB_RETRYF="$tmp/netbird-retry"; NB_UPF="$tmp/netbird-up"; DIR=$tmp
 SIGNED=1; GROUP=1; BOOT_FAIL=0; CONSOLE=1
@@ -184,5 +187,12 @@ rm -f "$NB_PLIST"; : > "$tmp/calls"; netbird_bg; wait
 check "no NetBird: nothing started" [ ! -s "$tmp/calls" ]
 : > "$tmp/calls"; netbird_sync
 check "no NetBird: nothing done" [ ! -s "$tmp/calls" ]
+
+# the real walk goes up to / (ks sets it, the environment cannot): /private/tmp, writable by
+# anyone, makes a binary below it untrusted
+check "ks walks the ancestors up to /" [ "$(sed -n 's/^NB_TRUST_ROOT=\([^ ]*\).*/\1/p' "$here/../ks")" = / ]
+echo x > "$tmp/nb"; NB_TRUST_ROOT=/
+untrusted() { ! nb_trusted "$1" >/dev/null; }
+check "a binary under a world-writable folder (/private/tmp): not trusted" untrusted "$tmp/nb"
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

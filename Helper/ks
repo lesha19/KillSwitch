@@ -495,17 +495,18 @@ nb_group() { /usr/libexec/PlistBuddy -c 'Print :GroupName' "$NB_PLIST" 2>/dev/nu
 # run it anyway; its daemon's socket is srw-rw-rw-), never while nobody is logged in, and only a
 # binary that only root can change and that is signed by NetBird's team right before the run.
 NB_OWNER=0
+NB_TRUST_ROOT=/   # the walk goes up to here; set by ks itself, a test points it at its own folder
 nb_user() { local u; u=$(stat -f %u /dev/console 2>/dev/null) && [[ "$u" =~ ^[0-9]+$ ]] && [ "$u" != 0 ] && echo "$u"; }
 # nb_trusted <path>: the real path (links resolved) when the file and every folder above it belong
 # to root and nobody else can write them; a folder only the admin group may write (/Applications)
 # is accepted. Anything else could be swapped by a user: not NetBird.
 nb_trusted() {
-  perl -MCwd=abs_path -e 'my ($o, $p) = @ARGV; my $r = abs_path($p) // exit 1;
+  perl -MCwd=abs_path -e 'my ($o, $p, $top) = @ARGV; my $r = abs_path($p) // exit 1;
     my @s = stat $r or exit 1; -f _ && ($s[4] == 0 || $s[4] == $o) && !($s[2] & 022) or exit 1;
-    for (my $d = $r; $d ne "/";) { $d =~ s{/[^/]*$}{}; $d = "/" if $d eq "";
+    for (my $d = $r; $d ne "/" && $d ne $top;) { $d =~ s{/[^/]*$}{}; $d = "/" if $d eq "";
       @s = stat $d or exit 1; ($s[4] == 0 || $s[4] == $o) && !($s[2] & 02) or exit 1;
       !($s[2] & 020) || $s[5] == 80 || $s[5] == 0 or exit 1 }
-    print "$r\n"' "$NB_OWNER" "$1"
+    print "$r\n"' "$NB_OWNER" "$1" "$NB_TRUST_ROOT"
 }
 nb_signed() { codesign -v -R="anchor apple generic and certificate leaf[subject.OU] = \"$NB_TEAM\"" "$1" 2>/dev/null; }
 nb_want() {
@@ -2673,7 +2674,7 @@ KS_FAILOVER_PL='
     my $country = $flag->($cur);
     my ($best) = sort { $p{$a}[1] <=> $p{$b}[1] }
       grep { $_ ne $cur && length $_ <= 256 && !/[\x00-\x1f\x7f]/ && length $country && $flag->($_) eq $country && $p{$_} && $p{$_}[0] && ($why ne "slow" || $p{$_}[1] * 2 < $ms) } @names;
-    if (defined $best) { $out = join "\t", "switch", $cur, $best, $why, $ms, $usual; %s = (server => $best, last => $now, manual => "") }
+    if (defined $best) { $out = join "\t", "switch", $cur, $best, $why, $ms, $usual; $s{last} = $now }   # the rest follows once the switch happened (failover_pass)
     elsif (!$s{told}) { $out = join "\t", "stay", $cur, "-", $why, $ms, $usual; $s{told} = 1 }
   }
   $s{hist} = join ",", @h if ($s{server} eq $cur);
@@ -2696,6 +2697,9 @@ failover_pass() {  # failover_pass [epoch]
   if [ "$why" = slow ]; then text=slow; else text="no answer"; fi
   if [ "$act" = switch ]; then
     if xray_select "$to" 2>/dev/null; then
+      # only now the new host in the state, failover's and not a pick by hand. A refused switch
+      # (KS-10) keeps the running server's state, a pick by hand stays one, and waits the cooldown
+      printf 'server=%s\nlast=%s\nmanual=\n' "$to" "$now" > "$CORE_DIR/failover.tmp" && mv "$CORE_DIR/failover.tmp" "$CORE_DIR/failover"
       log_event "failover ($text): $from -> $to"
       if [ "$why" = slow ]; then diag_event failover from="$from" to="$to" reason="$why" ms="$ms" usual="$usual"
       else diag_event failover from="$from" to="$to" reason="$why"; fi

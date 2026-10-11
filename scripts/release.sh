@@ -143,7 +143,7 @@ build_problem() {
 ks_version_problem() {
   local ks
   ks=$(sed -nE 's/^KS_VERSION="([^"]*)".*/\1/p' "$1")
-  [ "$ks" = "$2" ] || echo "$1: KS_VERSION «$ks», а версия программы «$2» (project.yml, MARKETING_VERSION): поменяй KS_VERSION."
+  [ "$ks" = "$2" ] || echo "$1: KS_VERSION «${ks}», а версия программы «$2» (project.yml, MARKETING_VERSION): поменяй KS_VERSION."
 }
 
 # runtime_signed <file>: <file> is signed with the hardened runtime and nothing else in its flags
@@ -216,7 +216,7 @@ IDENTITY=$(security find-identity -v -p codesigning | sed -nE "s/^ *[0-9]+\) ([0
 if [ "$MODE" != --sign-only ] &&
    ! security find-generic-password -s com.apple.gke.notary.tool -a "com.apple.gke.notary.tool.saved-creds.$NOTARY_PROFILE" >/dev/null 2>&1 &&
    ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
-  problem "Нет профиля нотаризации «$NOTARY_PROFILE» в связке ключей.
+  problem "Нет профиля нотаризации «${NOTARY_PROFILE}» в связке ключей.
     Создать: xcrun notarytool store-credentials $NOTARY_PROFILE --apple-id <Apple ID> --team-id $TEAM
     (пароль приложения с appleid.apple.com вводится в ответ на запрос, не в командной строке)."
 fi
@@ -260,7 +260,7 @@ security find-generic-password -s https://sparkle-project.org -a ed25519 >/dev/n
 case "$CHANNEL" in
   "") ;;
   beta) [ "$MODE" = --publish ] || [ "$MODE" = --check ] || problem "KS_CHANNEL=beta выпускается только с --publish." ;;
-  *) problem "KS_CHANNEL: только beta (или не задан), а не «$CHANNEL»." ;;
+  *) problem "KS_CHANNEL: только beta (или не задан), а не «${CHANNEL}»." ;;
 esac
 
 MARKETING_VERSION=$(sed -nE 's/^ *MARKETING_VERSION: "?([^"]+)"?$/\1/p' project.yml | head -1)
@@ -294,7 +294,7 @@ if [ "$MODE" = --publish ]; then
     [ -s "$NOTES" ] || NOTES=
   fi
   [ -n "$NOTES" ] && [ -s "$NOTES" ] ||
-    problem "Нет описания выпуска $MARKETING_VERSION: раздел «## $MARKETING_VERSION» в CHANGELOG.md или файл в KS_RELEASE_NOTES."
+    problem "Нет описания выпуска $MARKETING_VERSION: раздел «## ${MARKETING_VERSION}» в CHANGELOG.md или файл в KS_RELEASE_NOTES."
 fi
 
 if [ ${#problems[@]} -gt 0 ]; then
