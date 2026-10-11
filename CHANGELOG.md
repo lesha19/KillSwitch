@@ -6,6 +6,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 
 ## [Unreleased]
 
+### Added
+- Settings › Дополнительно «Перенос настроек» (#15, ADR 0024): «Сохранить в файл…» writes the app
+  and protection settings to a JSON file, «Загрузить из файла…» reads one back, «Сбросить…» returns
+  them to the defaults. Both show every change first; protection settings go through the usual
+  commands and password. The file never contains the subscription link, own servers or keys.
+
 ### Fixed
 - Accessibility (#41): no more orange or red text in the light theme, where it read at 1.9–3.6:1.
   The split-apps and geodata warnings, «Действует до …» in the last 3 days and the report error

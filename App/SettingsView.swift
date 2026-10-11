@@ -666,6 +666,7 @@ private struct AdvancedSettings: View {
                          more: String(localized: "dropweb сможет выходить на любые адреса, и любая программа может этим воспользоваться. Защита macOS ему не доверяет: пока его VPN не поднят, он доходит только до серверов VPN. Встроенному VPN это не нужно."))
             }
 
+            SettingsTransferSection()
             ServiceSection()
         }
         .sheet(isPresented: $editingExceptions) {

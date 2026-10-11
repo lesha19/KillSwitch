@@ -290,6 +290,18 @@ final class KillSwitchControl {
         runAsAdmin(batch: Batch.list(helper: helper, add: "server-add", remove: "server-remove", old: manualServers, new: list))
     }
 
+    /// «Перенос настроек» (SettingsBackup, ADR 0024): the root settings as Settings shows them.
+    var rootSettings: SettingsBackup.Root {
+        .init(core: coreChoice, switches: switches.merging(["direct": allowDirect, "adblock": adBlock, "diag": diagVerbose]) { $1 },
+              exceptions: exceptions, manualServers: manualServers, splitApps: splitApps)
+    }
+    /// A loaded or reset set of root settings: the commands of their own screens, one password;
+    /// `done` after they went through (nothing to run: at once).
+    func applySettings(_ new: SettingsBackup.Root, then done: @escaping @MainActor () async -> Void) {
+        let commands = SettingsBackup.rootCommands(helper: helper, current: rootSettings, new: new)
+        if commands.isEmpty { Task { await done() } } else { runAsAdmin(batch: commands, then: done) }
+    }
+
     /// Starting and stopping never widen the rules, so they go without a password.
     /// Connects, then applies the server chosen while disconnected.
     func coreOn() {

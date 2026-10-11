@@ -55,7 +55,7 @@ final class AdminGateTests: XCTestCase {
         "authorization.obtain", "turnOn(", "turnOff(", "pause(minutes", "coreOn()", "restartCore(", "install()", "setUp(",
         "coreImport(", "select(group", "runDelay(", "testDelay(", "testAllDelays(", "selectBest(", "setSwitches(",
         "setExceptions(", "setSplitApps(", "setMultihop(", "setManualServers(", "uninstall(", "restoreNetwork(",
-        "prepareHelper(", "confirmNewServers(", "setCore(", "switchCore(",
+        "prepareHelper(", "confirmNewServers(", "setCore(", "switchCore(", "applySettings(",
     ]
 
     private func assertNoPrompt(_ code: String, _ label: String, file: StaticString = #filePath, line: UInt = #line) {
