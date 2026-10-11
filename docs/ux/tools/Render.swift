@@ -34,7 +34,7 @@ func proxies(selected: String = "⚡ Авто", auto: String = "🇱🇹 Лит�
 
     @MainActor init() {
         client = VPNClient(control: control)
-        auto = AutoConnector(control: control)
+        auto = AutoConnector(control: control, client: client)
         control.state = .on
         control.coreInstalled = true
         control.coreConfigured = true
@@ -626,12 +626,11 @@ func main() {
     do {
         let w = World()
         w.control.manualServers = ["1.2.3.10"]
-        w.control.foundServers = ["1.2.3.10", "1.2.3.14"]
         sheet("46-settings-sheet-addresses", w) {
             ListSheet(title: "Адреса серверов для других VPN-программ",
                       note: "К этим адресам сможет подключиться любая программа. Серверы подписки сюда добавлять не нужно.",
                       placeholder: "Адрес сервера", original: w.control.manualServers,
-                      suggestions: w.control.foundServers, apply: { _ in })
+                      apply: { _ in })
         }
         sheet("47-settings-sheet-access", w) { AccessSheet() }
     }

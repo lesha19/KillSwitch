@@ -3,10 +3,11 @@
 # Builds a throwaway SwiftPM package from patched copies of App/ (prepare.py) in $TMPDIR; the app
 # target and its sources are not touched. Needs Xcode and a resolved Yams checkout (any earlier
 # xcodebuild of the project leaves one in DerivedData) or network access for SwiftPM.
-# Usage: docs/ux/tools/render.sh
+# Usage: docs/ux/tools/render.sh [out-dir]   (default: docs/ux/screens)
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/../../.." && pwd)
 work=${UX_RENDER_DIR:-${TMPDIR:-/tmp}/ks-ux-render}
+out=${1:-$repo/docs/ux/screens}
 python3 "$repo/docs/ux/tools/prepare.py" "$repo" "$work"
 
 yams=$(ls -d "$HOME"/Library/Developer/Xcode/DerivedData/KillSwitch-*/SourcePackages/checkouts/Yams 2>/dev/null | head -1 || true)
@@ -29,4 +30,5 @@ for set in "$repo"/Assets.xcassets/MenuBar*.imageset; do
 done
 
 swift build --package-path "$work" -c debug 2>&1 | grep -E "error|warning: unre|Compiling|Build complete" | grep -v "^.*warning" | tail -20
-"$work/.build/debug/UXRender" "$repo/docs/ux/screens" "$icons"
+mkdir -p "$out"
+"$work/.build/debug/UXRender" "$out" "$icons"
