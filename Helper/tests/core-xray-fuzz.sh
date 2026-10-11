@@ -319,7 +319,7 @@ fi
 echo 'xrayserver=Плохой' > "$SETTINGS"; : > "$EVENTS"
 edit 'my $b = JSON::PP->new->decode(JSON::PP->new->encode($c)); $b->{remarks} = "Плохой"; $b->{outbounds}[0]{settings}{vnext}[0]{address} = "0.0.0.0"; push @$a, $b'
 if gen; then
-  [ "$(j '$c->{selected}' "$tmp/c.report")" = "🇱🇹Литва" ] && grep -q 'xray: server «Плохой» left out of the subscription (address), «🇱🇹Литва» runs' "$EVENTS" &&
+  [ "$(j '$c->{selected}' "$tmp/c.report")" = "🇱🇹Литва" ] && grep -q 'xray: server «Плохой» left out of the subscription (its server address is unusable), «🇱🇹Литва» runs' "$EVENTS" &&
     ok "a picked host left out: the first runs, logged" || bad "picked host: $(j '$c->{selected}' "$tmp/c.report") events: $(cat "$EVENTS")"
 else bad "picked host left out: refused: $(cat "$tmp/err")"; fi
 : > "$SETTINGS"

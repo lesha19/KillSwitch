@@ -1454,7 +1454,16 @@ core_generate_xray() (
     left=$(PICK=$pick /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>);
       my ($d) = grep { $_->{section} eq "servers" && $_->{item} eq $ENV{PICK} } @{ $r->{dropped} || [] };
       print "$d->{reason}\t$r->{selected}" if $d && $r->{selected} ne $ENV{PICK}' < "$w/report.json" 2>/dev/null)
-    [ -z "$left" ] || log_event "xray: server «${pick}» left out of the subscription (${left%%	*}), «${left#*	}» runs"
+    if [ -n "$left" ]; then
+      case ${left%%	*} in
+        address) why="its server address is unusable" ;; protocol) why="a server type KillSwitch does not take" ;;
+        tag) why="a ks-… tag is KillSwitch's" ;; selector) why="a selector picks KillSwitch's or the direct outbound" ;;
+        fallback) why="the balancer falls back to an outbound not its own" ;; download) why="its transport names an address KillSwitch does not pin" ;;
+        transport) why="its transport talks to other addresses than the server" ;; case) why="a key Xray reads in another spelling" ;;
+        *) why=${left%%	*} ;;
+      esac
+      log_event "xray: server «${pick}» left out of the subscription ($why), «${left#*	}» runs"
+    fi
   fi
   # an import (KS_APPROVE_ALL): the DIRECT signature of every host, which the admin approves
   # with it, so a passwordless switch can be measured against it (KS-10)
@@ -1538,7 +1547,7 @@ KS_XRAY_PL='
   # the others stay: panels add placeholder hosts at 0.0.0.0 or 127.0.0.1 («подписка истекла»),
   # and one of them must not refuse the whole subscription, or a stored one its rebuilds.
   %UNUSABLE = (address => "адрес сервера не годится", tag => "тег ks-… занят KillSwitch",
-    selector => "выбирает outbound KillSwitch (ks-…) или прямой", case => "ключ в другом регистре", fallback => "запасной outbound не свой или ks-…",
+    selector => "выбирает outbound KillSwitch (ks-…) или прямой", case => "ключ записан необычно (другой регистр или не латинские буквы)", fallback => "запасной outbound не свой или ks-…",
     download => "адрес в настройках транспорта, которого KillSwitch не закрепляет", protocol => "тип сервера, который KillSwitch не берёт",
     transport => "транспорт ходит к адресам помимо сервера (ECH через DNS, realm, xdns, xicmp, udphop, xdrive)");
   # Xray reads JSON keys in any case (Go): «Selector», «Address» or «TAG» are the keys below to it,
