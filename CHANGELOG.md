@@ -32,6 +32,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   is now refused like any damaged settings file (everything blocked until «Сбросить настройки»);
   `Helper/update-tsrelays.sh` stops on any failed step and replaces the list only with host
   addresses, at least 50 of them.
+- Provider texts and links (KS-20): `profile-title`, shown as the sender of announcements and in
+  notifications, is cleaned like the announcement (one line, no control or bidi characters, at most
+  64 characters). Provider links are kept only as https, `mailto:` and a Telegram chat
+  (`tg://resolve?domain=…`); plain http and other `tg:` links (log-in, proxy) are dropped.
 
 ## [0.18.1] - 2026-10-11
 

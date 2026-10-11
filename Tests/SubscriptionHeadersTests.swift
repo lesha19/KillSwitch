@@ -84,12 +84,21 @@ final class SubscriptionHeadersTests: XCTestCase {
         XCTAssertEqual(SubscriptionHeaders.updateInterval("x"), 12 * 3600)
     }
 
-    func testTitle() {
+    func testTitle() throws {
         XCTAssertEqual(SubscriptionHeaders.title("StorkVPN"), "StorkVPN")
         let encoded = "base64:" + Data("Сторк VPN".utf8).base64EncodedString()
         XCTAssertEqual(SubscriptionHeaders.title(encoded), "Сторк VPN")
         XCTAssertNil(SubscriptionHeaders.title("  "))
         XCTAssertNil(SubscriptionHeaders.title(nil))
+        // KS-20: shown as the sender of announcements and in notifications, cleaned like them
+        XCTAssertEqual(SubscriptionHeaders.title("Stork\u{202E}NPV\u{200B}"), "StorkNPV")
+        XCTAssertEqual(SubscriptionHeaders.title("Stork VPN\nВаш банк: срочно"), "Stork VPN")
+        let dirty = "base64:" + Data("\n\u{202E}Сторк\u{0007}\tVPN\r\nвторая строка".utf8).base64EncodedString()
+        XCTAssertEqual(SubscriptionHeaders.title(dirty), "Сторк VPN")
+        let long = try XCTUnwrap(SubscriptionHeaders.title(String(repeating: "Я", count: 500)))
+        XCTAssertEqual(long.count, SubscriptionHeaders.maxTitleLength)
+        XCTAssertTrue(long.hasSuffix("…"))
+        XCTAssertNil(SubscriptionHeaders.title("\u{202E}\u{200B}"))
     }
 
     func testMaskedURL() {

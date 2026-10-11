@@ -5,7 +5,7 @@ import Foundation
 /// Header names as Remnawave (`ISubscriptionHeaders`) and Happ/INCY document them; text values
 /// are plain or `base64:<UTF-8>`. Body `#announce:` lines are not read (KillSwitch gets YAML/JSON).
 /// Everything here is untrusted text: it is shown with `Text(String)` (no Markdown, no HTML) and
-/// only http(s), tg and mailto links are kept.
+/// only https, Telegram chat (tg://resolve) and mailto links are kept (KS-20).
 struct ProviderInfo: Codable, Equatable {
     var announcement: String?
     var announcementURL: URL?
@@ -16,7 +16,7 @@ struct ProviderInfo: Codable, Equatable {
 
     static let maxAnnouncementLength = 300
     static let maxAnnouncementLines = 5
-    static let linkSchemes: Set<String> = ["https", "http", "tg", "mailto"]
+    static let linkSchemes: Set<String> = ["https", "tg", "mailto"]
 
     init(headers: [String: String]) {
         announcement = Self.text(headers["announce"])
@@ -35,8 +35,8 @@ struct ProviderInfo: Codable, Equatable {
     }
 
     /// Decoded, without control and invisible format characters (bidi overrides), at most
-    /// `maxAnnouncementLines` non-empty lines and `maxAnnouncementLength` characters.
-    private static func text(_ header: String?) -> String? {
+    /// `maxLines` non-empty lines and `maxLength` characters (also `profile-title`, KS-20).
+    static func text(_ header: String?, maxLines: Int = maxAnnouncementLines, maxLength: Int = maxAnnouncementLength) -> String? {
         guard var text = header?.trimmingCharacters(in: .whitespaces), !text.isEmpty else { return nil }
         if text.hasPrefix("base64:"), let decoded = Base64.decode(String(text.dropFirst(7))) { text = decoded }
         let lines = text.replacingOccurrences(of: "\r\n", with: "\n").split(whereSeparator: \.isNewline).map { line in
@@ -48,10 +48,10 @@ struct ProviderInfo: Codable, Equatable {
                 }
             })).trimmingCharacters(in: .whitespaces)
         }
-        text = lines.filter { !$0.isEmpty }.prefix(maxAnnouncementLines).joined(separator: "\n")
+        text = lines.filter { !$0.isEmpty }.prefix(maxLines).joined(separator: "\n")
         guard !text.isEmpty else { return nil }
-        if text.count > maxAnnouncementLength {
-            text = String(text.prefix(maxAnnouncementLength - 1)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+        if text.count > maxLength {
+            text = String(text.prefix(maxLength - 1)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
         }
         return text
     }
@@ -61,9 +61,11 @@ struct ProviderInfo: Codable, Equatable {
               let components = URLComponents(string: text), let scheme = components.scheme?.lowercased(),
               linkSchemes.contains(scheme) else { return nil }
         switch scheme {
-        case "https", "http": guard components.host?.isEmpty == false else { return nil }
+        case "https": guard components.host?.isEmpty == false else { return nil }
         case "mailto": guard email(components.path) != nil else { return nil }
-        default: guard components.host?.isEmpty == false || !components.path.isEmpty else { return nil }
+        // KS-20: a chat only; tg://login, proxy, socks and the like ask once and then act
+        case "tg": guard text.wholeMatch(of: /tg:\/\/resolve\?domain=[A-Za-z0-9_]{4,32}/.ignoresCase()) != nil else { return nil }
+        default: return nil
         }
         return URL(string: text)
     }

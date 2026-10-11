@@ -48,8 +48,16 @@ final class ProviderInfoTests: XCTestCase {
     func testLinksOnlyWebTelegramMail() {
         func link(_ value: String) -> URL? { ProviderInfo(headers: ["support-url": value]).supportURL }
         XCTAssertEqual(link("https://t.me/stork_support"), URL(string: "https://t.me/stork_support"))
-        XCTAssertEqual(link(" http://example.com/help "), URL(string: "http://example.com/help"))
+        XCTAssertEqual(link(" https://example.com/help "), URL(string: "https://example.com/help"))
         XCTAssertEqual(link("tg://resolve?domain=stork_support"), URL(string: "tg://resolve?domain=stork_support"))
+        // KS-20: plain http can be rewritten on the way; tg: only opens a chat, never a log-in,
+        // a proxy or a socks setting (Telegram asks once and then trusts it)
+        XCTAssertNil(link("http://example.com/help"))
+        XCTAssertNil(link("tg://login?token=abc"))
+        XCTAssertNil(link("tg://proxy?server=203.0.113.1&port=443&secret=00"))
+        XCTAssertNil(link("tg://socks?server=203.0.113.1&port=1080"))
+        XCTAssertNil(link("tg://resolve?domain=stork_support&start=x&phone=1"))
+        XCTAssertNil(link("tg:resolve?domain=stork_support"))
         XCTAssertEqual(link("mailto:help@example.com"), URL(string: "mailto:help@example.com"))
         XCTAssertNil(link("javascript:alert(1)"))
         XCTAssertNil(link("file:///etc/passwd"))

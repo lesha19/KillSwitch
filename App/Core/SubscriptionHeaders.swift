@@ -95,11 +95,12 @@ enum SubscriptionHeaders {
         return hours * 3600
     }
 
-    /// `profile-title`, plain or `base64:…`.
+    static let maxTitleLength = 64
+
+    /// `profile-title`, plain or `base64:…`: the sender of announcements and notifications, so
+    /// cleaned like them (KS-20): one line, no control or bidi characters, at most 64 characters.
     static func title(_ header: String?) -> String? {
-        guard var text = header?.trimmingCharacters(in: .whitespaces), !text.isEmpty else { return nil }
-        if text.hasPrefix("base64:"), let decoded = Base64.decode(String(text.dropFirst(7))) { text = decoded }
-        return text
+        ProviderInfo.text(header, maxLines: 1, maxLength: maxTitleLength)
     }
 
     /// The URL is a secret: only the host and the last four characters are shown.
