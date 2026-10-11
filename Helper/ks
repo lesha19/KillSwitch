@@ -2055,6 +2055,7 @@ core_apply_settings() {
 core_regen() {
   local prof conf tmp srv="$SERVERS_CORE.tmp" was=0 pid f files
   [ "$(core_kind)" = xray ] && xray_api_check
+  switch_approval_migrate
   prof=$(core_profile); conf=$(core_conf); tmp="$conf.tmp"
   [ -f "$prof" ] && [ -f "$PINS" ] && [ -f "$conf" ] || { echo "core config: none"; return 0; }
   KS_PINS=$PINS core_generate "$prof" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; return 1; }
@@ -2088,6 +2089,26 @@ core_regen() {
   for f in "${files[@]}"; do rm -f "$f.prev"; done
   log_event "core config rebuilt by the new helper"
   echo "core config: reloaded"
+}
+
+# Before 0.19 an import kept no approval of every host's DIRECT (approved-switch, KS-10), so a
+# passwordless switch to a host whose DIRECT differs from the running one was refused until the next
+# import. "ks _regen" (the upgrade) builds it the way the import does, from the kept root-only
+# profile, but only while that profile is the one the admin imported (not newer than
+# approved-direct): a refresh since then may have added hosts whose DIRECT nobody approved.
+switch_approval_migrate() {
+  local prof out="$CORE_DIR/approve.tmp" srv="$CORE_DIR/approve-servers.tmp"
+  [ "$(core_kind)" = xray ] && [ ! -e "$CORE_DIR/approved-switch" ] || return 0
+  prof=$(core_profile)
+  [ -f "$prof" ] && [ ! -L "$prof" ] && [ -f "$PINS" ] && [ -f "$APPROVED_DIRECT" ] || return 0
+  if [ "$prof" -nt "$APPROVED_DIRECT" ]; then
+    log_event "server switch approval: the subscription was refreshed since the last import, the next import with the password approves its hosts"
+    return 0
+  fi
+  if KS_APPROVE_ALL=1 KS_PINS=$PINS core_generate "$prof" "$out" "$srv" 2>/dev/null; then
+    chmod 600 "$out.approved" && mv "$out.approved" "$CORE_DIR/approved-switch" && log_event "server switch approval taken from the last import"
+  fi
+  core_clean "$out" "$srv"
 }
 
 # core_up <pid before the restart>: the restarted Xray runs (another pid) and listens on its

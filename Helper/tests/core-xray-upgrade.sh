@@ -67,6 +67,24 @@ KS_PINS="$T/pins" core_import "$fx/xray-panel.json" import 2>"$T/err" >/dev/null
 unset KS_PINS
 [ -s "$CORE_DIR/xray.json" ] && ok "setup: imported with Xray" || bad "setup: no xray.json"
 
+# --- an upgrade from 0.18 (no approved-switch, KS-10): built from the kept profile, but only while
+# it is the one the admin imported; a refresh since then may have added hosts nobody approved
+RUN=0; rm -f "$CORE_DIR/approved-switch"; : > "$EVENTS"
+touch -t 202601010000 "$CORE_DIR/profile-xray.json"   # older than approved-direct: as the import left it
+core_regen >/dev/null 2>&1
+[ -s "$CORE_DIR/approved-switch" ] && [ "$(stat -f %Lp "$CORE_DIR/approved-switch")" = 600 ] &&
+  grep -qxF "$(shasum -a 256 < "$CORE_DIR/direct" | cut -d' ' -f1)" "$CORE_DIR/approved-switch" &&
+  ok "upgrade from 0.18: the switch approval built from the imported profile, root-only" || bad "approval: $(ls -l "$CORE_DIR") $(cat "$EVENTS")"
+grep -q 'server switch approval taken from the last import' "$EVENTS" && ok "  logged" || bad "  events: $(cat "$EVENTS")"
+rm -f "$CORE_DIR/approved-switch"; : > "$EVENTS"
+touch -t 203001010000 "$CORE_DIR/profile-xray.json"   # replaced by a refresh after the import
+core_regen >/dev/null 2>&1
+[ ! -e "$CORE_DIR/approved-switch" ] && grep -q 'refreshed since the last import' "$EVENTS" &&
+  ok "  a profile refreshed since the import: nothing approved without the password, logged" || bad "  refreshed: $(ls "$CORE_DIR") $(cat "$EVENTS")"
+put_setting core mihomo; touch -t 202601010000 "$CORE_DIR/profile-xray.json"; core_regen >/dev/null 2>&1; put_setting core xray
+[ ! -e "$CORE_DIR/approved-switch" ] && ok "  mihomo: none (switches are Xray's)" || bad "  mihomo approval"
+touch -t 202601010000 "$CORE_DIR/profile-xray.json"; core_regen >/dev/null 2>&1
+
 # --- (a) the new config is checked before it replaces the running one
 old_config; RUN=1; : > "$T/launchd"; : > "$EVENTS"; touch "$T/xray-fails"
 core_regen >/dev/null 2>&1 && bad "_regen took a config xray run -test refused" || ok "_regen: a config Xray refuses fails"
