@@ -207,6 +207,9 @@ targets:
     settings:
       base:
         PRODUCT_NAME: killswitch
+        # the app's module is KillSwitch: on a case-insensitive volume a module named killswitch
+        # overwrites its .swiftmodule in Build/Products and the tests' import fails
+        PRODUCT_MODULE_NAME: KillSwitchCLI
         PRODUCT_BUNDLE_IDENTIFIER: com.lesha19.KillSwitch.cli
         # the identifier codesign gives the tool comes from its embedded Info.plist
         GENERATE_INFOPLIST_FILE: YES
