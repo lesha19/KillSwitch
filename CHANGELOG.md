@@ -7,6 +7,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 ## [Unreleased]
 
 ### Added
+- Xray: transport escalation (#20, ADR 0030). When the running server stops answering, before
+  another server KillSwitch tries the same one another way, only what the subscription offers and
+  only when Xray's own probe of that way answers: another TLS fingerprint, then another transport
+  of that server (xHTTP instead of TCP), then another host at the same address, then another
+  server of the country as before. Each step once per outage, never two within 3 minutes, never
+  for being slow; a server picked by hand stays picked. What worked is remembered per server until
+  the network changes. Nothing new goes past the VPN (the same servers and DIRECT); the protection
+  stays on (about a second of restart, pf blocks). Журнал защиты tells each step. Settings ›
+  Способ подключения «Пробовать другой отпечаток и транспорт, если сервер не отвечает», on by
+  default (`ks set escalate 0|1`).
 - Xray: «Двойной VPN» works with the main way of connecting (#33, ADR 0027). The entry is another
   server of the subscription; the running server is reached through it. Nothing new goes past the
   VPN; an entry that is gone refuses the config instead of quietly going one hop. Failover never
