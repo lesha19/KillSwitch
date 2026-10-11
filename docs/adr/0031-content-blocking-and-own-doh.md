@@ -39,10 +39,11 @@ line blocks everything, ADR 0015) and the app (`HelperCommand.isDoH`).
 
 - mihomo: `nameserver: [<url>#KS-DNS]`, alone. mihomo asks `fallback` at the same time as the
   nameservers, not after a failure (review of #14, reproduced), so a fallback would overrule the
-  own server (its NXDOMAIN included): none. Its name is resolved by `default-nameserver` (our DoH
-  through KS-DNS). With fake-ip, sites that go through a VPN server are resolved by that server;
-  the own DoH answers what the core resolves itself (address rules, DIRECT, `fake-ip-filter`). When
-  it does not answer, those names fail — nothing else is asked.
+  own server (its NXDOMAIN included): none. With fake-ip, ordinary names get a fake-ip answer
+  without any upstream query and sites that go through a VPN server are resolved by that server;
+  the own DoH answers only what the core resolves itself (`fake-ip-filter`, DIRECT, names that
+  address rules need). The subscription's approved `nameserver-policy` takes its domains first.
+  When the own server does not answer, those names fail — nothing else is asked.
 - Xray: `dns.servers` = the own server `{address: <url>, tag: ks-doh}`, then Cloudflare's DoH
   (also tagged `ks-doh`), which Xray asks when the first gives no answer. Template servers with
   `domains` stay for those domains only (`skipFallback: true`, e.g. Yandex for `category-ru`, the
@@ -52,12 +53,19 @@ line blocks everything, ADR 0015) and the app (`HelperCommand.isDoH`).
   DNS outside the VPN that nobody approved; now no template server is ever a fallback, and the
   template's `disableFallback` is kept (then the own server alone). Two of our rules, before the
   subscription's, send `inboundTag ks-doh` and the host (`full:<host>` or its address) to a VPN
-  server.
+  server. Names the template gives to one of its own servers (`domains`) never reach the own one.
+- The DoH server's own host name (review of #28, measured with both cores): the core sends it to
+  the VPN server as a domain, so it is resolved at the VPN exit; `default-nameserver` got no query,
+  and own addresses of sites (ADR 0033, `hosts`) do not apply to it. No bootstrap address is
+  offered.
+- An IPv4 host is taken without leading zeros only (as `host_addr_ok`): Xray refuses
+  `001.001.001.001` in the generated rule, which would fail every rebuild after a switch to Xray.
 - Both: added after the DIRECT signature; no address enters pf; refresh asks nothing new. The
   world-readable report, events.log and the report's DNS list show only the host (a DoH path can
   hold an account id). An invalid stored value is ignored by the generator (our resolvers).
 - `ks set doh` writes the value, rebuilds the config and puts the old value back when the core
-  does not take it (otherwise every later rebuild would fail). The path takes `%` only as `%XX`.
+  does not take it (otherwise every later rebuild would fail); when the new config was already put
+  in place but the core was not reloaded with it, the config is built again with the old value. The path takes `%` only as `%XX`.
 - The full URL stays in `settings` (644, read by the app to show it): an account id in a DoH path
   (NextDNS) only lets someone on this Mac use that profile; it is not a password. Accepted.
 

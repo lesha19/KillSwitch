@@ -5,8 +5,10 @@ Status: accepted — decided by the agent, the owner may change it (#28, 2026-10
 ## Context
 
 #28: a small `domain → IP` table answered by the core's own DNS (the one the system asks on
-127.0.0.1:53 while our VPN runs), never by the system resolver; for a home server, a DoH server's
-bootstrap address, a service the provider's DNS gets wrong. It must not open anything: no DIRECT
+127.0.0.1:53 while our VPN runs), never by the system resolver; for a home server or a service
+the provider's DNS gets wrong. Not for a DoH server's bootstrap address (#28 asked for it): both
+cores send the own DoH server's name to the VPN server as a domain, resolved at the VPN exit, and
+`hosts` never applies to it (measured, review of #28). It must not open anything: no DIRECT
 path, no pf address, nothing that breaks the VPN itself (ADR 0013, 0017, 0031).
 
 ## Decision
@@ -31,15 +33,23 @@ administrator and the core lock like every setting the generator reads.
   everything, ADR 0015) and in the app (`HelperCommand.isHostsEntry`).
 
 Configs: mihomo top-level `hosts` with `dns.use-hosts: true` (answered before fake-ip, so the
-program gets the real address); Xray `dns.hosts` with `full:<name>`, replacing the template's
-entry for the same exact name, keeping its others. Both are added after the DIRECT signature.
+program gets the real address); Xray `dns.hosts` with `full:<name>`. Xray answers with every
+matching entry at once (measured, 26.9.30), so a template entry that also matches the name — `full:`,
+plain, `domain:`, `keyword:` (compared lower-cased, as Xray does) or `regexp:` — is left out and
+reported as `own-hosts`; the template's other entries stay. `geosite:` and `ext:` entries are not
+looked into (accepted: a template that maps a whole category to an address is unusual). Both are added after the DIRECT signature.
 
 **What an answer changes**: only the address a program connects to. The rules decide where that
 connection goes, exactly as for any address: through the VPN, or DIRECT only if the
 subscription's rules (already approved by the admin and listed in egress) send that address or
-name there. The table adds no rule, no pf address, nothing to the DIRECT signature or egress, so
+name there. Except home and Tailscale addresses: mihomo's TUN leaves 10/8, 172.16/12, 192.168/16
+and 100.64/10 out of its routes, and with Xray the home network's own subnet keeps its more
+specific route, so those go straight out, past the core — allowed only by pf's «Доступ к домашней
+сети» / «Tailscale, NetBird» switches, and unseen by category blocking. The table adds no rule, no pf address, nothing to the DIRECT signature or egress, so
 `ks core refresh` asks nothing new. An address in the home network is reached only if pf allows
-the home network. The report names each entry as the person's choice; events.log only the count.
+the home network. The report names each entry as the person's choice; events.log only the count. `ks set hosts`
+puts the old list back when the core does not take the config, and builds the config again with
+it when the new one was in place but the core was not reloaded.
 
 ## Consequences
 
