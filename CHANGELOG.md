@@ -58,6 +58,28 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   `install.sh` started the new job right after stopping the old one, launchd refuses that until the
   old one is gone, and `set -e` ended the install with the core unloaded (a rerun then kept it
   unloaded). It now waits for the old job first, as it already did for the watchdog.
+- Xray: a server switch that failed or was refused, on a Mac where no server had been picked yet
+  (by hand, the CLI, and since this release automatic failover), blocked everything with
+  «Настройки защиты повреждены»: the helper wrote the previous choice back as an empty value, which
+  it then took for damaged settings. Since 0.17. The switch now just stays on the running server,
+  and a settings file left empty that way is accepted.
+- After pf refused the rules three times in a row (another load under way), everything stayed
+  blocked until «Сбросить настройки». The watchdog now loads the rules again every 10 s until pf
+  takes them; damaged settings files still keep everything blocked.
+- Going back to the way of connecting that was running (Основной → Запасной after the Xray import
+  failed) deleted the config that core was running on, so its next restart (sleep, crash,
+  upgrade) left the VPN off with «Нет конфига».
+- Automatic failover no longer counts the running server as dead while the Mac itself has no
+  network, so a hand-picked server is not left after a Wi‑Fi outage.
+- `ks core on` checks Xray's statistics port before stopping mihomo, so a port held by another
+  program no longer leaves no core running.
+- Журнал защиты crashed on every open when a server's name began with «refused: » or «-> ».
+- Provider titles and announcements keep emoji made of several characters (the zero-width joiner);
+  a text of joiners alone counts as empty.
+- «Загрузить из файла…»: when the password prompt for the protection settings is cancelled, the
+  app settings from the file are not applied either.
+- Taking a subscription with many servers: approving what every server sends past the VPN parses
+  the profile once (200 servers: about 14 s instead of about 2 minutes).
 
 ### Security
 - The daemon accepts one more client, `com.lesha19.KillSwitch.cli`, signed by the same team; the
@@ -106,6 +128,20 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 - Subscription fetch (KS-21): the body is read only up to 20 MB (what the helper takes), a
   redirect is followed only to https and the device headers (HWID, model) go only to the link's
   own host, and YAML whose aliases expand to millions of nodes is refused before it is expanded.
+- Settings file import and reset (#15): the confirmation lists every address and program a
+  protection list gains or loses (before: the first three and «и ещё N», so a file could hide
+  `0.0.0.0/1` and `128.0.0.0/1` among them), and warns when an address, or all the added ones
+  together, cover a huge part of the internet that would go past the VPN. A list that is only
+  reordered is no change.
+- Subscription update interval (`profile-update-interval`): a huge or `inf` value crashed Settings ›
+  Подписка on every open. It is now kept between 1 hour and 30 days, a saved one too.
+- Subscription refresh that brings new servers and changes what goes past the VPN at once (KS-12)
+  now says both, so the password is asked for the DIRECT change knowingly. A refresh after a
+  passwordless switch to another approved server no longer asks for the password each time.
+- Upgrade from 0.18: the approval of what each server of the subscription sends past the VPN
+  (needed for passwordless switches and failover) is built from the imported profile when no
+  refresh changed it since the import; otherwise the next import with the password builds it.
+- `ks repair` keeps only host addresses in the Tailscale relay list (KS-19), as the check does.
 
 ## [0.18.1] - 2026-10-11
 
