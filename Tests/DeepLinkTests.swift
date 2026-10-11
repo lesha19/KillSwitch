@@ -46,6 +46,17 @@ final class DeepLinkTests: XCTestCase {
         XCTAssertFalse(DeepLink.commands.contains(.pause(minutes: 5)))
     }
 
+    /// The app runs a command of a link only through `action`: exactly the link commands have one.
+    func testActionsAreExactlyTheLinkCommands() {
+        XCTAssertEqual(DeepLink.action(for: .connect), .connectAutomatically)
+        XCTAssertEqual(DeepLink.action(for: .disconnect), .disconnect)
+        for command: CLI.Command in [.help, .version, .status(json: false), .protection(on: true), .protection(on: false),
+                                     .pause(minutes: 5), .serverList(json: false), .serverSelect("x")] {
+            XCTAssertNil(DeepLink.action(for: command), "\(command)")
+        }
+        XCTAssertTrue(DeepLink.commands.allSatisfy { DeepLink.action(for: $0) != nil })
+    }
+
     // MARK: VPN
 
     func testVPNCommands() {
@@ -56,42 +67,56 @@ final class DeepLinkTests: XCTestCase {
         XCTAssertEqual(parse("killswitch://toggle/1"), .failure(.badParameters))
     }
 
-    private func plan(_ link: DeepLink, _ status: Status, busy: Bool = false, configured: Bool = true) -> DeepLink.Plan {
-        DeepLink.plan(link, status: status, busy: busy, coreConfigured: configured)
+    private func plan(_ link: DeepLink, _ status: Status, busy: Bool = false, configured: Bool = true,
+                      protectionOn: Bool = true) -> DeepLink.Plan {
+        DeepLink.plan(link, status: status, busy: busy, coreConfigured: configured, protectionOn: protectionOn)
     }
 
     /// Connecting only adds the tunnel (protection stays as it is), so it runs at once, like the
     /// shortcut; it never brings up the password prompt (the app runs it as an automatic connect).
     func testConnectRunsWithoutAsking() {
         XCTAssertEqual(plan(.connect, .blocked), .run(.connect))
-        XCTAssertEqual(plan(.connect, .unprotected(pausedUntil: nil)), .run(.connect))
+        XCTAssertEqual(plan(.connect, .unprotected(pausedUntil: nil), protectionOn: false), .run(.connect))
         XCTAssertEqual(plan(.connect, .protected), .done("VPN уже подключён"))
         XCTAssertEqual(plan(.connect, .needsSetup, configured: false), .refused("Не подключилось: Добавь подписку. Открой KillSwitch."))
         XCTAssertEqual(plan(.connect, .blocked, busy: true), .refused("KillSwitch занят. Попробуй через минуту."))
     }
 
-    /// Disconnecting cuts the internet (protection on) or lets it out without the VPN (protection
-    /// off or paused): the window asks first.
-    func testDisconnectAsks() {
+    /// With protection on, disconnecting cuts the internet: the window asks first.
+    func testDisconnectAsksWhileProtectionIsOn() {
         XCTAssertEqual(plan(.disconnect, .protected), .confirm(.disconnect))
         XCTAssertEqual(plan(.disconnect, .connecting), .confirm(.disconnect))
-        XCTAssertEqual(plan(.disconnect, .connectedUnprotected), .confirm(.disconnect))
+        XCTAssertEqual(plan(.disconnect, .stuck), .confirm(.disconnect))
         XCTAssertEqual(plan(.disconnect, .blocked), .done("VPN и так не подключён"))
         XCTAssertEqual(plan(.disconnect, .protected, busy: true), .refused("KillSwitch занят. Попробуй через минуту."))
+    }
+
+    /// With protection off or paused, disconnecting would let the traffic out without the VPN —
+    /// the same as turning protection off, which no link may do. Refused, even with a question.
+    func testNoDisconnectWhileProtectionIsOffOrPaused() {
+        let refusal = DeepLink.Plan.refused("Ссылка не отключает VPN, пока защита выключена или на паузе.")
+        XCTAssertEqual(plan(.disconnect, .connectedUnprotected, protectionOn: false), refusal)
+        XCTAssertEqual(plan(.disconnect, .connecting, protectionOn: false), refusal)
+        XCTAssertEqual(plan(.disconnect, .stuck, protectionOn: false), refusal)
+        XCTAssertEqual(plan(.toggle, .connectedUnprotected, protectionOn: false), refusal)
+        // whatever the summary says, the protection state decides
+        XCTAssertEqual(plan(.disconnect, .connectedUnprotected, protectionOn: true), .confirm(.disconnect))
     }
 
     func testToggleConnectsAtOnceButAsksToDisconnect() {
         XCTAssertEqual(plan(.toggle, .blocked), .run(.connect))
         XCTAssertEqual(plan(.toggle, .protected), .confirm(.disconnect))
         XCTAssertEqual(plan(.toggle, .stuck), .confirm(.disconnect))
-        XCTAssertEqual(plan(.toggle, .otherVPN(blocksDirect: false), configured: true),
+        XCTAssertEqual(plan(.toggle, .otherVPN(blocksDirect: false)),
                        .refused("Не подключилось: Работает другой VPN. Открой KillSwitch."))
     }
 
     /// A disconnect confirmed later is checked again against the state then.
     func testConfirmedDisconnectIsCheckedAgain() {
-        XCTAssertEqual(DeepLink.confirmed(.disconnect, status: .protected, busy: false), .run(.disconnect))
-        XCTAssertEqual(DeepLink.confirmed(.disconnect, status: .blocked, busy: false), .done("VPN и так не подключён"))
+        XCTAssertEqual(DeepLink.confirmed(.disconnect, status: .protected, busy: false, protectionOn: true), .run(.disconnect))
+        XCTAssertEqual(DeepLink.confirmed(.disconnect, status: .blocked, busy: false, protectionOn: true), .done("VPN и так не подключён"))
+        XCTAssertEqual(DeepLink.confirmed(.disconnect, status: .protected, busy: false, protectionOn: false),
+                       .refused("Ссылка не отключает VPN, пока защита выключена или на паузе."))
     }
 
     // MARK: add
@@ -110,8 +135,23 @@ final class DeepLinkTests: XCTestCase {
         XCTAssertEqual(DeepLink.Subscription(url: "https://xn--pple-43d.com/s/abcdefgh", host: "xn--pple-43d.com").masked,
                        "https://xn--pple-43d.com/•••••efgh")
         // unencoded, as many sites write it
-        XCTAssertEqual(parse("killswitch://add?url=https://sub.example.com:8443/s/abc"),
-                       .success(.add(.init(url: "https://sub.example.com:8443/s/abc", host: "sub.example.com"))))
+        XCTAssertEqual(parse("killswitch://add?url=https://sub.example.com/s/abc"),
+                       .success(.add(.init(url: "https://sub.example.com/s/abc", host: "sub.example.com"))))
+    }
+
+    /// The host shown is where the app will connect: with its port unless it is 443, and an
+    /// address literal as it is.
+    func testAddShowsThePortAndAddresses() {
+        XCTAssertEqual(parse("killswitch://add?url=https://trusted.com:8443/s"),
+                       .success(.add(.init(url: "https://trusted.com:8443/s", host: "trusted.com:8443"))))
+        XCTAssertEqual(parse("killswitch://add?url=https://trusted.com:443/s"),
+                       .success(.add(.init(url: "https://trusted.com:443/s", host: "trusted.com"))))
+        XCTAssertEqual(parse("killswitch://add?url=https://203.0.113.7/s"),
+                       .success(.add(.init(url: "https://203.0.113.7/s", host: "203.0.113.7"))))
+        XCTAssertEqual(parse("killswitch://add?url=https://[2001:db8::1]:8443/s"),
+                       .success(.add(.init(url: "https://[2001:db8::1]:8443/s", host: "[2001:db8::1]:8443"))))
+        XCTAssertEqual(DeepLink.Subscription(url: "https://trusted.com:8443/s/abcdefgh", host: "trusted.com:8443").masked,
+                       "https://trusted.com:8443/•••••efgh")
     }
 
     func testAddTakesOnlyAPlainHTTPSLink() {
@@ -137,14 +177,20 @@ final class DeepLinkTests: XCTestCase {
                        .success(.add(.init(url: "https://xn--pple-43d.com/s", host: "xn--pple-43d.com"))))
     }
 
-    /// The question before a link's disconnect says what happens to the traffic.
-    func testDisconnectWarning() {
-        XCTAssertEqual(DeepLink.disconnectWarning(status: .protected),
-                       "Защита останется включённой: интернет будет закрыт, пока VPN не подключится снова.")
-        XCTAssertEqual(DeepLink.disconnectWarning(status: .connectedUnprotected),
-                       "Защита выключена: после отключения трафик пойдёт мимо VPN.")
-        XCTAssertEqual(DeepLink.disconnectWarning(status: .connecting),
-                       "Если защита включена, интернет будет закрыт; если выключена, трафик пойдёт мимо VPN.")
+    /// A DNS name (labels of letters, digits and hyphens, a TLD of letters) or an address literal;
+    /// nothing a resolver could read as a number, nothing too long to show.
+    func testAddTakesOnlyARealHostName() {
+        let long = String(repeating: "a", count: 60)
+        for host in [".", "...", "-", "a..b", "localhost", "0x7f.1", "2130706433", "0x7f000001", "127.1", "1.2.3",
+                     "01.2.3.4", "1.2.3.256", "-a.com", "a-.com", "a_b.com", "example.123", "example.0x1",
+                     String(repeating: "a", count: 64) + ".com",
+                     [long, long, long, long, long].joined(separator: ".") + ".com",   // 300 characters
+                     "[2001:db8::zz]", "[1.2.3.4]"] {
+            XCTAssertEqual(parse("killswitch://add?url=https://\(host)/s"), .failure(.badParameters), host)
+        }
+        for host in ["a.co", "sub-1.example.com", "xn--80ak6aa92e.xn--p1ai", "[::1]", "10.0.0.1"] {
+            XCTAssertNotNil(try? parse("killswitch://add?url=https://\(host)/s").get(), host)
+        }
     }
 
     /// Logs name the command, never the link: a subscription link is a key.
@@ -153,5 +199,34 @@ final class DeepLinkTests: XCTestCase {
         XCTAssertEqual(DeepLink.add(subscription).logName, "add (sub.example.com)")
         XCTAssertEqual(DeepLink.toggle.logName, "toggle")
         XCTAssertEqual(DeepLink.show(.section(.settings(.vpn))).logName, "show settings.vpn")
+    }
+
+    // MARK: pacing
+
+    /// A page that opens links in a loop gets one through every 2 seconds.
+    func testOneLinkEveryTwoSeconds() {
+        var throttle = DeepLink.Throttle()
+        let start = Date(timeIntervalSince1970: 1_000)
+        XCTAssertTrue(throttle.allows(at: start))
+        XCTAssertFalse(throttle.allows(at: start + 1))
+        XCTAssertFalse(throttle.allows(at: start + 1.9))
+        XCTAssertTrue(throttle.allows(at: start + 2.1))
+        XCTAssertFalse(throttle.allows(at: start + 3))   // counted from the last one let through
+        XCTAssertTrue(throttle.allows(at: start + 4.2))
+    }
+
+    /// A question nobody saw does not pop up later out of context, and none waits forever.
+    func testAWaitingQuestionIsDropped() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        var request = DeepLink.Request(.disconnect, at: start)
+        XCTAssertFalse(request.isStale(now: start + 60, resignedActive: false, busy: false))
+        XCTAssertTrue(request.isStale(now: start + 121, resignedActive: false, busy: false))
+        XCTAssertTrue(request.isStale(now: start + 5, resignedActive: true, busy: false))
+        request.shown = true
+        XCTAssertFalse(request.isStale(now: start + 5, resignedActive: true, busy: false))
+        XCTAssertTrue(request.isStale(now: start + 121, resignedActive: false, busy: false))
+        // never while a subscription it confirmed is being fetched
+        XCTAssertFalse(request.isStale(now: start + 500, resignedActive: true, busy: true))
+        XCTAssertNotEqual(DeepLink.Request(.disconnect, at: start).id, DeepLink.Request(.disconnect, at: start).id)
     }
 }

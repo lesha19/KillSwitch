@@ -62,6 +62,7 @@ final class Updater {
             do { try opener.run() } catch { return }
             self.opener = opener
         }
+        Router.shared.dropSheets()   // first: a sheet whose binding is still true comes back
         UpdateRelaunch.closeSheets(NSApp.windows)
         NSApp.terminate(nil)
     }
@@ -113,7 +114,10 @@ final class QuietInstaller: NSObject, SPUUpdaterDelegate {
     /// window has a sheet («Начало работы» opens by itself without the helper), so they are closed.
     /// Called on the main thread once per install that relaunches: the button and the quiet one.
     func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
-        MainActor.assumeIsolated { _ = UpdateRelaunch.closeSheets(NSApp.windows) }
+        MainActor.assumeIsolated {
+            Router.shared.dropSheets()   // first: a sheet whose binding is still true comes back
+            _ = UpdateRelaunch.closeSheets(NSApp.windows)
+        }
     }
 
     func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem,

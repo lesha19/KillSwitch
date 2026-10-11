@@ -1,10 +1,11 @@
+import Darwin
 import Foundation
 
 /// `killswitch://` links (#23, ADR 0029). Any web page or program can open one, so a link is
 /// input from a stranger: it is parsed strictly, it reaches only the CLI's commands that need no
 /// administrator (`commands`), it never turns protection off or pauses it, and the only thing it
-/// does without asking is connecting. Adding a subscription and disconnecting wait for the person
-/// in the window.
+/// does without asking is connecting. Adding a subscription, and disconnecting while protection
+/// is on, wait for the person in the window; disconnecting while protection is off is refused.
 enum DeepLink: Equatable {
     /// A section of the window, «Начало работы» or the window as it is (ADR 0008).
     case show(Route)
@@ -14,7 +15,8 @@ enum DeepLink: Equatable {
     /// A subscription link from `killswitch://add?url=…`: a key to the person's subscription.
     struct Subscription: Equatable {
         let url: String
-        /// Lower case, ASCII (an international name in its xn-- form): what the window shows.
+        /// Where the app will connect, as the window shows it: the host in lower case ASCII (an
+        /// international name in its xn-- form, an address as it is) and the port unless 443.
         let host: String
 
         /// For the confirmation: the host and the last characters, never the secret part.
@@ -29,6 +31,8 @@ enum DeepLink: Equatable {
     enum Rejection: Error, Equatable {
         /// Another scheme.
         case notOurs
+        /// `killswitch:` that is not a URL Foundation can take apart.
+        case malformed
         case unknownCommand
         /// A known command with a parameter it does not take, or a bad value.
         case badParameters
@@ -38,12 +42,27 @@ enum DeepLink: Equatable {
     /// and Shortcuts; `protection off` and `pause` are deliberately not reachable from a link.
     static let commands: [CLI.Command] = [.connect, .disconnect]
 
+    /// How the app runs a link command; nil for every other CLI command.
+    enum Action: Equatable {
+        /// `KillSwitchControl.coreOnAutomatically`: never the password prompt.
+        case connectAutomatically
+        case disconnect
+    }
+
+    static func action(for command: CLI.Command) -> Action? {
+        switch command {
+        case .connect: .connectAutomatically
+        case .disconnect: .disconnect
+        default: nil
+        }
+    }
+
     /// The longest subscription link taken from a link.
     static let maxURLLength = 2048
 
     static func parse(_ url: URL) -> Result<DeepLink, Rejection> {
-        guard url.scheme?.lowercased() == "killswitch",
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return .failure(.notOurs) }
+        guard url.scheme?.lowercased() == "killswitch" else { return .failure(.notOurs) }
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return .failure(.malformed) }
         let host = (components.host ?? "").lowercased()
         let path = components.path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
         let hasQuery = !(components.percentEncodedQuery ?? "").isEmpty
@@ -82,16 +101,41 @@ enum DeepLink: Equatable {
         ["", "setup", "connect", "disconnect", "toggle", "settings", "add"].contains(host) || sectionHost(host) != nil
     }
 
-    /// A plain https link: printable ASCII only (no lookalike letters, no line breaks), with a host
-    /// and without a user name, which would make `https://bank.com@other.host` read as bank.com.
+    /// A plain https link: printable ASCII only (no lookalike letters, no line breaks), a host
+    /// name or address (`displayHost`), and no user name, which would make
+    /// `https://bank.com@other.host` read as bank.com.
     private static func subscription(_ value: String) -> Subscription? {
         guard value.count <= maxURLLength, value.unicodeScalars.allSatisfy({ (0x21...0x7E).contains($0.value) }),
               let components = URLComponents(string: value), components.scheme?.lowercased() == "https",
               components.user == nil, components.password == nil,
-              let host = components.encodedHost?.lowercased(), !host.isEmpty,
-              host.unicodeScalars.allSatisfy({ CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789.-:[]").contains($0) })
-        else { return nil }
-        return Subscription(url: value, host: host)
+              let host = components.encodedHost.flatMap(displayHost) else { return nil }
+        let port = components.port.flatMap { $0 == 443 ? nil : $0 }
+        return Subscription(url: value, host: host + (port.map { ":\($0)" } ?? ""))
+    }
+
+    /// A DNS name (at most 253 characters, labels of 1–63 letters, digits and inner hyphens, at
+    /// least two, the last of letters or xn--), a dotted-quad IPv4 address without leading zeros,
+    /// or a bracketed IPv6 address. Not `0x7f.1`, `2130706433`, `127.1`: resolvers read those as
+    /// addresses the person would not recognise.
+    private static func displayHost(_ encoded: String) -> String? {
+        let host = encoded.lowercased()
+        if host.hasPrefix("[") {
+            guard host.hasSuffix("]"), host.count > 2 else { return nil }
+            var address = in6_addr()
+            return inet_pton(AF_INET6, String(host.dropFirst().dropLast()), &address) == 1 ? host : nil
+        }
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        if labels.count == 4, labels.allSatisfy({ !$0.isEmpty && $0.allSatisfy { ("0"..."9").contains($0) } }) {
+            let valid = labels.allSatisfy { ($0 == "0" || $0.first != "0") && $0.count <= 3 && Int($0)! <= 255 }
+            return valid ? host : nil
+        }
+        guard host.count <= 253, labels.count >= 2, let top = labels.last,
+              top.hasPrefix("xn--") || top.allSatisfy({ $0.isASCII && $0.isLetter }) else { return nil }
+        let isLabel: (Substring) -> Bool = { label in
+            (1...63).contains(label.count) && label.first != "-" && label.last != "-"
+                && label.allSatisfy { ("0"..."9").contains($0) || ("a"..."z").contains($0) || $0 == "-" }
+        }
+        return labels.allSatisfy(isLabel) ? host : nil
     }
 
     // MARK: what the app does
@@ -100,6 +144,48 @@ enum DeepLink: Equatable {
     enum Confirmation: Equatable {
         case add(Subscription)
         case disconnect
+    }
+
+    /// A question of a link in the window, one at a time (Router.linkRequest). Dropped when nobody
+    /// saw it before the app lost the front, or after `timeout`, so it never pops up later out of
+    /// context or blocks the next link (or an update's quit) for good.
+    struct Request: Equatable, Identifiable {
+        let id = UUID()
+        let confirmation: Confirmation
+        let created: Date
+        /// The sheet appeared.
+        var shown = false
+
+        static let timeout: TimeInterval = 120
+
+        /// The masked link of the subscription an `add` would replace, as it was when the link
+        /// came: the sheet keeps saying «Заменить» while the new one is fetched.
+        let replacing: String?
+
+        init(_ confirmation: Confirmation, at created: Date, replacing: String? = nil) {
+            self.confirmation = confirmation
+            self.created = created
+            self.replacing = replacing
+        }
+
+        /// `busy`: a subscription it confirmed is being fetched; the sheet stays until it answers.
+        func isStale(now: Date, resignedActive: Bool, busy: Bool) -> Bool {
+            guard !busy else { return false }
+            return now.timeIntervalSince(created) > Self.timeout || (resignedActive && !shown)
+        }
+    }
+
+    /// One link every `interval`: a page that opens them in a loop cannot keep taking the front,
+    /// stack questions or keep the app from ever being idle for an update.
+    struct Throttle {
+        static let interval: TimeInterval = 2
+        private var last: Date?
+
+        mutating func allows(at now: Date) -> Bool {
+            if let last, now.timeIntervalSince(last) < Self.interval { return false }
+            last = now
+            return true
+        }
     }
 
     enum Plan: Equatable {
@@ -111,31 +197,31 @@ enum DeepLink: Equatable {
         case confirm(Confirmation)
         /// Nothing to do.
         case done(String)
-        /// Not possible now: the window shows why.
+        /// Not possible now: the main screen shows the state.
         case refused(String)
     }
 
     /// A subscription always asks, in any state. Connecting runs as the shortcut «Подключить VPN»
-    /// does: it only adds the tunnel, protection stays as it is. Disconnecting asks: with
-    /// protection on it cuts the internet, with protection off or paused the traffic goes out
-    /// without the VPN.
-    static func plan(_ link: DeepLink, status: Status, busy: Bool, coreConfigured: Bool) -> Plan {
+    /// does: it only adds the tunnel, protection stays as it is. Disconnecting asks while
+    /// protection is on (it cuts the internet) and is refused while protection is off or paused:
+    /// the traffic would go out without the VPN, as if the link had turned protection off.
+    static func plan(_ link: DeepLink, status: Status, busy: Bool, coreConfigured: Bool, protectionOn: Bool) -> Plan {
         switch link {
         case .show(let route): .show(route)
         case .add(let subscription): .confirm(.add(subscription))
         case .connect: connect(status: status, busy: busy, coreConfigured: coreConfigured)
-        case .disconnect: disconnect(status: status, busy: busy, confirmed: false)
+        case .disconnect: disconnect(status: status, busy: busy, protectionOn: protectionOn, confirmed: false)
         case .toggle:
-            vpnRuns(status) ? disconnect(status: status, busy: busy, confirmed: false)
+            vpnRuns(status) ? disconnect(status: status, busy: busy, protectionOn: protectionOn, confirmed: false)
                             : connect(status: status, busy: busy, coreConfigured: coreConfigured)
         }
     }
 
     /// After «Отключить» / «Добавить» in the window: the state is checked again, it may have changed.
-    static func confirmed(_ confirmation: Confirmation, status: Status, busy: Bool) -> Plan {
+    static func confirmed(_ confirmation: Confirmation, status: Status, busy: Bool, protectionOn: Bool) -> Plan {
         switch confirmation {
         case .add(let subscription): .add(subscription)
-        case .disconnect: disconnect(status: status, busy: busy, confirmed: true)
+        case .disconnect: disconnect(status: status, busy: busy, protectionOn: protectionOn, confirmed: true)
         }
     }
 
@@ -147,8 +233,9 @@ enum DeepLink: Equatable {
         }
     }
 
-    private static func disconnect(status: Status, busy: Bool, confirmed: Bool) -> Plan {
+    private static func disconnect(status: Status, busy: Bool, protectionOn: Bool, confirmed: Bool) -> Plan {
         guard vpnRuns(status) else { return .done(String(localized: "VPN и так не подключён")) }
+        guard protectionOn else { return .refused(String(localized: "Ссылка не отключает VPN, пока защита выключена или на паузе.")) }
         if busy { return .refused(Shortcuts.busy) }
         return confirmed ? .run(.disconnect) : .confirm(.disconnect)
     }
@@ -156,15 +243,6 @@ enum DeepLink: Equatable {
     /// Our core runs: connected, connecting, or stuck on a server that does not answer.
     private static func vpnRuns(_ status: Status) -> Bool {
         status.primary == .disconnect || status.primary == .cancel || status.secondary == .disconnect
-    }
-
-    /// The line under «Отключить VPN?»: what happens to the traffic without the tunnel.
-    static func disconnectWarning(status: Status) -> String {
-        switch status {
-        case .protected: String(localized: "Защита останется включённой: интернет будет закрыт, пока VPN не подключится снова.")
-        case .connectedUnprotected: String(localized: "Защита выключена: после отключения трафик пойдёт мимо VPN.")
-        default: String(localized: "Если защита включена, интернет будет закрыт; если выключена, трафик пойдёт мимо VPN.")
-        }
     }
 
     /// For the log: the command, and for a subscription only its host.

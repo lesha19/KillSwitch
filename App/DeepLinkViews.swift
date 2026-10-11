@@ -1,3 +1,4 @@
+import AppKit
 import OSLog
 import SwiftUI
 
@@ -7,6 +8,8 @@ import SwiftUI
 @MainActor
 enum DeepLinks {
     static let log = Logger(subsystem: "com.lesha19.KillSwitch", category: "link")
+    private static var throttle = DeepLink.Throttle()
+    private static var watchingActivity = false
 
     static func open(_ url: URL) {
         switch DeepLink.parse(url) {
@@ -16,6 +19,10 @@ enum DeepLinks {
             // the link itself is not logged: it may carry a subscription key
             log.notice("killswitch:// link ignored: \(String(describing: rejection), privacy: .public)")
         case .success(let link):
+            guard throttle.allows(at: Date()) else {
+                log.notice("killswitch:// link ignored: \(link.logName, privacy: .private) came less than 2 s after the last one")
+                return
+            }
             if case .add = link {
                 log.notice("killswitch:// link: \(link.logName, privacy: .private)")   // the host
             } else {
@@ -35,34 +42,79 @@ enum DeepLinks {
             return
         }
         let (control, client) = objects
-        guard Router.shared.linkRequest == nil else {
+        let router = Router.shared
+        dropIfStale(resignedActive: false)
+        guard router.linkRequest == nil else {
             log.notice("killswitch:// link ignored: another one waits for an answer")
             return
         }
-        perform(DeepLink.plan(link, status: control.status(client), busy: control.busy, coreConfigured: control.coreConfigured),
-                control: control, client: client)
+        perform(DeepLink.plan(link, status: control.status(client), busy: control.busy, coreConfigured: control.coreConfigured,
+                              protectionOn: protectionOn(control)),
+                control: control, replacing: client.maskedURL)
     }
 
-    static func perform(_ plan: DeepLink.Plan, control: KillSwitchControl, client: VPNClient) {
+    /// Protection blocks now: on, not paused, not standing by next to another VPN (ADR 0018).
+    static func protectionOn(_ control: KillSwitchControl) -> Bool {
+        control.state == .on && !control.protectionStandby
+    }
+
+    static func perform(_ plan: DeepLink.Plan, control: KillSwitchControl, replacing: String? = nil) {
         switch plan {
         case .show(let route):
             Router.shared.go(route)
         case .run(let command):
-            switch command {
-            case .connect: Task { _ = await control.coreOnAutomatically() }
+            switch DeepLink.action(for: command) {
+            case .connectAutomatically: Task { _ = await control.coreOnAutomatically() }
             case .disconnect: control.coreOff()
-            default: log.fault("killswitch:// link: \(String(describing: command), privacy: .public) is not a link command")
+            case nil: log.fault("killswitch:// link: \(String(describing: command), privacy: .public) is not a link command")
             }
-        case .add(let subscription):
-            Task { await client.setURL(subscription.url) }
+        case .add:
+            // only LinkRequestView stores a subscription, after «Добавить»
+            assertionFailure("a link's subscription is added only from its sheet")
+            log.fault("killswitch:// link: a subscription reached perform")
         case .confirm(let confirmation):
-            Router.shared.linkRequest = confirmation
-            Router.shared.go(.window)
-        case .done:
-            break
-        case .refused:
-            // the main screen says what stands in the way
+            ask(confirmation, replacing: replacing)
+        case .done(let text):
+            log.notice("killswitch:// link done: \(text, privacy: .public)")
+        case .refused(let text):
+            log.notice("killswitch:// link refused: \(text, privacy: .public)")
+            // the main screen shows the state that stands in the way
             Router.shared.go(.section(.home))
+        }
+    }
+
+    private static func ask(_ confirmation: DeepLink.Confirmation, replacing: String?) {
+        let router = Router.shared
+        guard !router.onboarding else {
+            // a sheet cannot show over «Начало работы»: it would pop up later, out of context
+            log.notice("killswitch:// link ignored: «Начало работы» is open")
+            router.go(.window)
+            return
+        }
+        watchActivity()
+        let request = DeepLink.Request(confirmation, at: Date(), replacing: replacing)
+        router.linkRequest = request
+        router.go(.window)
+        Task {
+            try? await Task.sleep(for: .seconds(DeepLink.Request.timeout + 1))
+            dropIfStale(resignedActive: false)
+        }
+    }
+
+    /// A question nobody saw before the app lost the front, or older than its timeout, is dropped.
+    static func dropIfStale(resignedActive: Bool) {
+        let router = Router.shared
+        guard let request = router.linkRequest,
+              request.isStale(now: Date(), resignedActive: resignedActive, busy: router.linkBusy) else { return }
+        log.notice("killswitch:// link question dropped: not answered")
+        router.linkRequest = nil
+    }
+
+    private static func watchActivity() {
+        guard !watchingActivity else { return }
+        watchingActivity = true
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { dropIfStale(resignedActive: true) }
         }
     }
 }
@@ -80,7 +132,7 @@ struct LinkRequestSheet: ViewModifier {
 }
 
 private struct LinkRequestView: View {
-    let request: DeepLink.Confirmation
+    let request: DeepLink.Request
 
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
@@ -88,9 +140,12 @@ private struct LinkRequestView: View {
     /// The client's error is shown only for an «Добавить» from this sheet, not an older one.
     @State private var tried = false
 
+    /// The subscription it replaces, as it was when the link came (masked).
+    private var current: String? { request.replacing }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            switch request {
+            switch request.confirmation {
             case .add(let subscription): add(subscription)
             case .disconnect: disconnect
             }
@@ -98,36 +153,48 @@ private struct LinkRequestView: View {
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if tried, let error = client.lastError { InlineError(error: error) }
             HStack {
+                if adding { ProgressView().controlSize(.small) }
                 Spacer()
-                Button("Отмена") { close() }.keyboardShortcut(.cancelAction)
+                // no cancelling halfway: the new link is either kept whole or not at all
+                Button("Отмена") { close() }.keyboardShortcut(.cancelAction).disabled(adding)
                 confirmButton
             }
         }
         .padding(20)
         .frame(width: 460)
+        .onAppear {
+            if Router.shared.linkRequest?.id == request.id { Router.shared.linkRequest?.shown = true }
+        }
     }
 
     @ViewBuilder private func add(_ subscription: DeepLink.Subscription) -> some View {
-        Text("Добавить подписку?").font(.headline).accessibilityAddTraits(.isHeader)
-        LabeledContent("Адрес") { Text(subscription.host).font(.title3.bold()).textSelection(.enabled) }
-        LabeledContent("Ссылка") { Text(subscription.masked).monospaced().lineLimit(1) }
+        Text(current == nil ? String(localized: "Добавить подписку?") : String(localized: "Заменить подписку?")).font(.headline).accessibilityAddTraits(.isHeader)
+        LabeledContent("Адрес") {
+            Text(subscription.host).font(.title3.bold()).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+        }
+        LabeledContent("Ссылка") { Text(subscription.masked).monospaced().lineLimit(1).truncationMode(.middle) }
+        if let current {
+            LabeledContent("Сейчас") { Text(current).monospaced().lineLimit(1).truncationMode(.middle) }
+        }
         Text("Добавляй, только если этот адрес — твоего провайдера.")
             .font(.callout).fixedSize(horizontal: false, vertical: true)
-        if client.hasURL {
-            Text("Она заменит текущую подписку.").font(.callout).foregroundStyle(.secondary)
+        Text("KillSwitch сразу обратится к этому адресу: его владелец увидит IP-адрес и идентификатор этого Mac.")
+            .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        if current != nil {
+            Text("Текущая подписка останется, если новая не ответит.").font(.callout).foregroundStyle(.secondary)
         }
     }
 
     @ViewBuilder private var disconnect: some View {
         Text("Отключить VPN?").font(.headline).accessibilityAddTraits(.isHeader)
-        Text(DeepLink.disconnectWarning(status: control.status(client)))
+        Text("Защита останется включённой: интернет будет закрыт, пока VPN не подключится снова.")
             .font(.callout).fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder private var confirmButton: some View {
-        switch request {
+        switch request.confirmation {
         case .add:
-            Button(client.hasURL ? String(localized: "Заменить подписку") : String(localized: "Добавить"), action: confirm)
+            Button(current == nil ? String(localized: "Добавить") : String(localized: "Заменить подписку"), action: confirm)
                 .disabled(adding)
         case .disconnect:
             Button("Отключить", role: .destructive, action: confirm)
@@ -135,21 +202,27 @@ private struct LinkRequestView: View {
     }
 
     private func confirm() {
-        let plan = DeepLink.confirmed(request, status: control.status(client), busy: control.busy)
+        let plan = DeepLink.confirmed(request.confirmation, status: control.status(client), busy: control.busy,
+                                      protectionOn: DeepLinks.protectionOn(control))
         guard case .add(let subscription) = plan else {
-            DeepLinks.perform(plan, control: control, client: client)
+            DeepLinks.perform(plan, control: control)
             close()
             return
         }
         // through the same checks as a link typed in Settings; the sheet stays for an error
         adding = true
         tried = true
+        Router.shared.linkBusy = true
         Task {
             await client.setURL(subscription.url)
+            Router.shared.linkBusy = false
             adding = false
             if client.lastError == nil { close() }
         }
     }
 
-    private func close() { Router.shared.linkRequest = nil }
+    /// Only this request's sheet: a late answer must not close a newer question.
+    private func close() {
+        if Router.shared.linkRequest?.id == request.id { Router.shared.linkRequest = nil }
+    }
 }

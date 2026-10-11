@@ -115,9 +115,18 @@ final class VPNClient {
 
     var urlHidden: Bool { status.provider?.hidesURL == true }
 
+    /// Settings, a QR code and `killswitch://add`: a first link is kept at once; another one only
+    /// once it answered, so a link that fails leaves the working one, its status and its servers
+    /// (SubscriptionChange).
     func setURL(_ text: String) async {
-        guard store(text.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
-        await update(interactive: true)
+        let url = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Self.isSubscriptionLink(url) else {
+            lastError = Self.notALink
+            return
+        }
+        let change = SubscriptionChange.of(url, current: Self.storedURL())
+        if change.storesBeforeFetch { guard store(url) else { return } }
+        await update(interactive: true, link: url, change: change)
     }
 
     /// Shown only on request in Settings; never logged.
@@ -250,49 +259,65 @@ final class VPNClient {
 
     /// Fetches the subscription and applies it. On any failure the core keeps its old config.
     /// «Обновлено» moves only when the profile reached the core; otherwise again in an hour.
-    func update(interactive: Bool) async {
-        guard let url = Self.storedURL().flatMap(URL.init(string:)) else {
+    /// `link` and `change`: a link given by the person (setURL); otherwise the kept one is updated.
+    func update(interactive: Bool, link: String? = nil, change: SubscriptionChange = .same) async {
+        guard let url = (link ?? Self.storedURL()).flatMap(URL.init(string:)) else {
             if !manual.isEmpty { await apply(subscription: nil, interactive: interactive) }
             return
         }
-        guard !updating else { return }
+        guard !updating else {
+            // the kept link is being fetched: a new one would be dropped without a word
+            if change == .replace {
+                lastError = UserError(title: String(localized: "Подписка сейчас обновляется"),
+                                      message: String(localized: "Попробуй ещё раз через минуту."))
+            }
+            return
+        }
         updating = true
         defer { updating = false }
+        let commit = change == .replace ? link : nil
         if usesXray {
-            guard let xray = await fetchXray(url) else { return }
+            guard let xray = await fetchXray(url, change: change, commit: commit) else { return }
             let applied = await applyXray(xray.data, interactive: interactive)
             schedule.record(applied ? .applied : .notApplied, now: Date())
             return
         }
-        guard let profile = await fetchProfile(url) else { return }
+        guard let profile = await fetchProfile(url, change: change, commit: commit) else { return }
         let applied = await apply(subscription: profile, interactive: interactive)
         schedule.record(applied ? .applied : .notApplied, now: Date())
     }
+
+    /// A new link answered but could not be kept in the keychain (`store` said why).
+    private struct NotKept: Error {}
 
     /// Downloads and caches the subscription, without handing it to the helper. The cache is what
     /// «Разрешить…» (confirmNewServers) and manual servers build on, so it is the last fetched
     /// profile, applied or not. A failed fetch, or one without servers, leaves the cache and the
     /// core's config alone. #11: tried in SubscriptionSource.order; the first error is shown.
-    private func fetchProfile(_ url: URL) async -> Profile? {
+    /// `commit`: a replacing link, kept (and the status started over) only once it answered.
+    private func fetchProfile(_ url: URL, change: SubscriptionChange = .same, commit: String? = nil) async -> Profile? {
         let backup = Self.storedBackupURL().flatMap(URL.init(string:))
         var firstError: String?
-        for source in SubscriptionSource.order(hasBackup: backup != nil, vpnRunning: control.coreRunning) {
+        for source in change.sources(hasBackup: backup != nil, vpnRunning: control.coreRunning) {
             guard let link = source.usesBackup ? backup : url else { continue }
             do {
-                return try await fetchProfile(link, source: source, title: url.host)
+                return try await fetchProfile(link, source: source, title: url.host, commit: commit)
+            } catch is NotKept {
+                return nil
             } catch {
                 firstError = firstError ?? Self.describe(error)
             }
         }
         let raw = firstError ?? "empty"
-        schedule.record(.fetchFailed(offline: raw.hasPrefix("offline")), now: Date())
+        if change.recordsFailure { schedule.record(.fetchFailed(offline: raw.hasPrefix("offline")), now: Date()) }
         lastError = UserError.from(raw: raw, context: .subscription)
         return nil
     }
 
-    private func fetchProfile(_ url: URL, source: SubscriptionSource, title: String?) async throws -> Profile {
+    private func fetchProfile(_ url: URL, source: SubscriptionSource, title: String?, commit: String?) async throws -> Profile {
         let (body, headers) = try await Self.fetch(url, viaVPN: source.viaVPN)
         let (profile, leftOut) = try ProfileConverter.read(subscription: body)
+        if let commit, !store(commit) { throw NotKept() }
         UserDefaults.standard.set(leftOut, forKey: RoutingReport.leftOutKey)
         Self.cache(profile)
         took(headers, source: source, title: title)
@@ -305,27 +330,30 @@ final class VPNClient {
     private var usesXray: Bool { control.coreChoice == .xray }
 
     /// The same sources and order as fetchProfile; the link plus XrayProfile.pathComponent.
-    private func fetchXray(_ url: URL) async -> XrayProfile? {
+    private func fetchXray(_ url: URL, change: SubscriptionChange = .same, commit: String? = nil) async -> XrayProfile? {
         let backup = Self.storedBackupURL().flatMap(URL.init(string:))
         var firstError: String?
-        for source in SubscriptionSource.order(hasBackup: backup != nil, vpnRunning: control.coreRunning) {
+        for source in change.sources(hasBackup: backup != nil, vpnRunning: control.coreRunning) {
             guard let link = source.usesBackup ? backup : url else { continue }
             do {
-                return try await fetchXray(link, source: source, title: url.host)
+                return try await fetchXray(link, source: source, title: url.host, commit: commit)
+            } catch is NotKept {
+                return nil
             } catch {
                 firstError = firstError ?? Self.describe(error)
             }
         }
         let raw = firstError ?? "empty"
         lastXrayFailure = raw
-        schedule.record(.fetchFailed(offline: raw.hasPrefix("offline")), now: Date())
+        if change.recordsFailure { schedule.record(.fetchFailed(offline: raw.hasPrefix("offline")), now: Date()) }
         lastError = UserError.from(raw: raw, context: .subscription)
         return nil
     }
 
-    private func fetchXray(_ url: URL, source: SubscriptionSource, title: String?) async throws -> XrayProfile {
+    private func fetchXray(_ url: URL, source: SubscriptionSource, title: String?, commit: String?) async throws -> XrayProfile {
         let (body, headers) = try await Self.fetch(XrayProfile.url(for: url), viaVPN: source.viaVPN)
         let profile = try XrayProfile(body: body)
+        if let commit, !store(commit) { throw NotKept() }
         UserDefaults.standard.set([String](), forKey: RoutingReport.leftOutKey)
         Self.cacheXray(profile.data)
         took(headers, source: source, title: title)
