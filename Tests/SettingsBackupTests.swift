@@ -152,12 +152,12 @@ final class SettingsBackupTests: XCTestCase {
         XCTAssertEqual(exceptions.added, ["1.1.1.1", "2.2.2.2", "3.3.3.3", "0.0.0.0/1", "128.0.0.0/1"])
         XCTAssertEqual(exceptions.removed, [])
         XCTAssertEqual(exceptions.warnings, [
-            "⚠ 0.0.0.0/1 — это огромная часть интернета: всё, что туда идёт, пойдёт мимо VPN.",
-            "⚠ 128.0.0.0/1 — это огромная часть интернета: всё, что туда идёт, пойдёт мимо VPN.",
+            "0.0.0.0/1 — это огромная часть интернета: всё, что туда идёт, пойдёт мимо VPN.",
+            "128.0.0.0/1 — это огромная часть интернета: всё, что туда идёт, пойдёт мимо VPN.",
         ])
         let servers = try XCTUnwrap(changes.first { $0.key == "manualServers" })
         XCTAssertEqual(servers.added, ["5.6.7.8", "6.6.6.6", "7.7.7.7", "8.8.8.8", "::/0"])
-        XCTAssertEqual(servers.warnings, ["⚠ ::/0 — это весь интернет: всё пойдёт мимо VPN."])
+        XCTAssertEqual(servers.warnings, ["::/0 — это весь интернет: всё пойдёт мимо VPN."])
         let apps = try XCTUnwrap(changes.first { $0.key == "splitApps" })
         XCTAssertEqual(apps.added, ["Safari", "Mail", "Notes", "Music", "/Applications/Evil.app"])
         XCTAssertEqual(apps.removed, ["Telegram"])

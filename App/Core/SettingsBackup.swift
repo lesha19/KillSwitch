@@ -295,8 +295,8 @@ enum SettingsBackup {
         let parts = entry.split(separator: "/", maxSplits: 1)
         guard parts.count == 2, let bits = Int(parts[1]) else { return nil }
         guard bits < (parts[0].contains(":") ? 16 : 8) else { return nil }
-        return bits == 0 ? String(localized: "⚠ \(entry) — это весь интернет: всё пойдёт мимо VPN.")
-            : String(localized: "⚠ \(entry) — это огромная часть интернета: всё, что туда идёт, пойдёт мимо VPN.")
+        return bits == 0 ? String(localized: "\(entry) — это весь интернет: всё пойдёт мимо VPN.")
+            : String(localized: "\(entry) — это огромная часть интернета: всё, что туда идёт, пойдёт мимо VPN.")
     }
 
     /// What applying `new` changes, app settings first; `current` is the whole of what there is.

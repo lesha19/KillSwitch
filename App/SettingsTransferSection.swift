@@ -126,7 +126,11 @@ private struct ReviewSheet: View {
             .frame(minHeight: 220)
             // outside the list, so scrolling never hides them
             ForEach(Array(review.changes.flatMap(\.warnings).enumerated()), id: \.offset) { _, warning in
-                Text(warning).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                Label {
+                    Text(warning).fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+                }
             }
             if review.rootSkipped {
                 Text("Настройки защиты не применятся: служба KillSwitch не установлена.").foregroundStyle(.secondary)
