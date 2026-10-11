@@ -139,6 +139,48 @@ final class SettingsBackupTests: XCTestCase {
         XCTAssertEqual(changes.map(\.root), [false, true])
     }
 
+    /// A file could hide 0.0.0.0/1 and 128.0.0.0/1 as the 4th and 5th entries behind «и ещё 2»,
+    /// and the admin's password would open the whole internet past the kill switch: every entry
+    /// a root list gains or loses is named, and a very broad network is called out.
+    func testRootListChangesNameEveryEntry() throws {
+        let file = file(root: ["exceptions": ["10.8.0.0/24", "1.1.1.1", "2.2.2.2", "3.3.3.3", "0.0.0.0/1", "128.0.0.0/1"],
+                               "manualServers": ["5.6.7.8", "6.6.6.6", "7.7.7.7", "8.8.8.8", "::/0"],
+                               "splitApps": ["Safari", "Mail", "Notes", "Music", "/Applications/Evil.app"]])
+        let read = try SettingsBackup.read(file)
+        let changes = SettingsBackup.changes(from: .init(app: [:], root: root), to: read)
+        let exceptions = try XCTUnwrap(changes.first { $0.key == "exceptions" })
+        XCTAssertEqual(exceptions.added, ["1.1.1.1", "2.2.2.2", "3.3.3.3", "0.0.0.0/1", "128.0.0.0/1"])
+        XCTAssertEqual(exceptions.removed, [])
+        XCTAssertEqual(exceptions.warnings, [
+            "⚠ 0.0.0.0/1 — это огромная часть интернета: всё, что туда идёт, пойдёт мимо VPN.",
+            "⚠ 128.0.0.0/1 — это огромная часть интернета: всё, что туда идёт, пойдёт мимо VPN.",
+        ])
+        let servers = try XCTUnwrap(changes.first { $0.key == "manualServers" })
+        XCTAssertEqual(servers.added, ["5.6.7.8", "6.6.6.6", "7.7.7.7", "8.8.8.8", "::/0"])
+        XCTAssertEqual(servers.warnings, ["⚠ ::/0 — это весь интернет: всё пойдёт мимо VPN."])
+        let apps = try XCTUnwrap(changes.first { $0.key == "splitApps" })
+        XCTAssertEqual(apps.added, ["Safari", "Mail", "Notes", "Music", "/Applications/Evil.app"])
+        XCTAssertEqual(apps.removed, ["Telegram"])
+        XCTAssertEqual(apps.warnings, [])
+    }
+
+    func testBroadNetworksAreCalledOut() {
+        for entry in ["0.0.0.0/0", "0.0.0.0/1", "64.0.0.0/2", "10.0.0.0/7", "::/0", "8000::/1", "2000::/3", "2001::/15"] {
+            XCTAssertNotNil(SettingsBackup.broadNetworkWarning(entry), entry)
+        }
+        for entry in ["10.0.0.0/8", "192.168.0.0/16", "1.1.1.1", "2001:db8::/16", "2001:db8::/32", "fe80::1", "::1"] {
+            XCTAssertNil(SettingsBackup.broadNetworkWarning(entry), entry)
+        }
+    }
+
+    func testResetNamesWhatItRemoves() throws {
+        let changes = SettingsBackup.changes(from: .init(app: [:], root: root), to: SettingsBackup.reset)
+        let exceptions = try XCTUnwrap(changes.first { $0.key == "exceptions" })
+        XCTAssertEqual(exceptions.removed, ["10.8.0.0/24"])
+        XCTAssertEqual(exceptions.added, [])
+        XCTAssertEqual(exceptions.warnings, [])
+    }
+
     func testRootCommandsAreTheOnesTheUIRuns() {
         var new = root
         new.switches = ["lan": false, "adblock": true]

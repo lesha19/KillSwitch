@@ -280,7 +280,23 @@ enum SettingsBackup {
         let new: String
         /// Behind the administrator's authorization.
         let root: Bool
+        /// A root list's entries the change adds and removes, every one: `old` and `new` show only
+        /// the first three, and a hidden entry could open the internet past the kill switch.
+        var added: [String] = []
+        var removed: [String] = []
+        /// Added networks so broad that most of the internet would go past the VPN.
+        var warnings: [String] = []
         var id: String { key }
+    }
+
+    /// An address shorter than /8 (IPv4) or /16 (IPv6) covers a huge part of the internet: no one
+    /// lets that past the VPN on purpose, so the sheet says it in plain words.
+    static func broadNetworkWarning(_ entry: String) -> String? {
+        let parts = entry.split(separator: "/", maxSplits: 1)
+        guard parts.count == 2, let bits = Int(parts[1]) else { return nil }
+        guard bits < (parts[0].contains(":") ? 16 : 8) else { return nil }
+        return bits == 0 ? String(localized: "⚠ \(entry) — это весь интернет: всё пойдёт мимо VPN.")
+            : String(localized: "⚠ \(entry) — это огромная часть интернета: всё, что туда идёт, пойдёт мимо VPN.")
     }
 
     /// What applying `new` changes, app settings first; `current` is the whole of what there is.
@@ -300,14 +316,18 @@ enum SettingsBackup {
             guard let on = root.switches?[key], on != (now.switches?[key] ?? defaultSwitches[key]) else { continue }
             result.append(Change(key: key, title: switchTitle(key), old: onOff(!on), new: onOff(on), root: true))
         }
-        let lists: [(String, String, [String]?, [String]?)] = [
-            ("exceptions", String(localized: "Адреса без VPN"), now.exceptions, root.exceptions),
-            ("manualServers", String(localized: "Адреса серверов для других VPN-программ"), now.manualServers, root.manualServers),
-            ("splitApps", String(localized: "Программы без VPN"), now.splitApps, root.splitApps),
+        let lists: [(String, String, [String]?, [String]?, Bool)] = [
+            ("exceptions", String(localized: "Адреса без VPN"), now.exceptions, root.exceptions, true),
+            ("manualServers", String(localized: "Адреса серверов для других VPN-программ"), now.manualServers, root.manualServers, true),
+            ("splitApps", String(localized: "Программы без VPN"), now.splitApps, root.splitApps, false),
         ]
-        for (key, title, old, new) in lists {
+        for (key, title, old, new, addresses) in lists {
             guard let new, new != (old ?? []) else { continue }
-            result.append(Change(key: key, title: title, old: listText(old ?? []), new: listText(new), root: true))
+            let old = old ?? []
+            let added = new.filter { !old.contains($0) }
+            result.append(Change(key: key, title: title, old: listText(old), new: listText(new), root: true,
+                                 added: added, removed: old.filter { !new.contains($0) },
+                                 warnings: addresses ? added.compactMap(broadNetworkWarning) : []))
         }
         return result
     }

@@ -118,6 +118,10 @@ private struct ReviewSheet: View {
                 }
             }
             .frame(minHeight: 220)
+            // outside the list, so scrolling never hides them
+            ForEach(Array(review.changes.flatMap(\.warnings).enumerated()), id: \.offset) { _, warning in
+                Text(warning).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+            }
             if review.rootSkipped {
                 Text("Настройки защиты не применятся: служба KillSwitch не установлена.").foregroundStyle(.secondary)
             }
@@ -137,8 +141,23 @@ private struct ReviewSheet: View {
 
     private func rows(_ changes: [SettingsBackup.Change]) -> some View {
         ForEach(changes) { change in
-            LabeledContent(change.title) {
-                Text("\(change.old) → \(change.new)").foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.trailing)
+            if change.added.isEmpty && change.removed.isEmpty {
+                LabeledContent(change.title) {
+                    Text("\(change.old) → \(change.new)").foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.trailing)
+                }
+            } else {
+                // a root list: every entry it gains or loses, never a shortened summary
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(change.title)
+                    if !change.added.isEmpty {
+                        Text("Добавится: \(change.added.joined(separator: ", "))").foregroundStyle(.secondary)
+                    }
+                    if !change.removed.isEmpty {
+                        Text("Уберётся: \(change.removed.joined(separator: ", "))").foregroundStyle(.secondary)
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
             }
         }
     }
