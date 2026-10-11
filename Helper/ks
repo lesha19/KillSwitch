@@ -1542,7 +1542,7 @@ KS_XRAY_PL='
   # ([0-9], not \d: after decoding JSON \d also takes other scripts'"'"' digits)
   sub ipv4 { my @p = $_[0] =~ /\A([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\z/ or return 0; !grep { $_ > 255 || /\A0[0-9]/ } @p }
   sub host { $_[0] =~ /\A[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\z/ }
-  my $LOADED; our (@ORIG, @DROPPED, %UNUSABLE);  # parsed and checked once per run; later loads (approve) get copies, build edits its own
+  my $LOADED; our (@ORIG, @DROPPED, %UNUSABLE, $DETAIL);  # parsed and checked once per run; later loads (approve) get copies, build edits its own
   # with PINS (a rebuild): the names pinned before, the only addresses it may use
   our %PINNED = length($ENV{PINS} // "") ? (map { chomp; my ($h, $a) = split /\t/; ($h => $a // "") } do { open my $f, "<", $ENV{PINS} or die "$ENV{PINS}\n"; <$f> }) : ();
   sub load {
@@ -1558,10 +1558,12 @@ KS_XRAY_PL='
     $walk->($a);
     my @keep;
     for my $i (0 .. $#$a) {
-      my $why = unusable($a->[$i]);
-      if (length $why) { push @DROPPED, { section => "servers", item => name_of($a->[$i], $i), reason => $why } } else { push @keep, $i }
+      $DETAIL = undef; my $why = unusable($a->[$i]);
+      # (the refusal names an unknown server type, the report only the reason)
+      if (length $why) { push @DROPPED, { section => "servers", item => name_of($a->[$i], $i), reason => $why }; $DROPPED[-1]{detail} = $DETAIL if defined $DETAIL }
+      else { push @keep, $i }
     }
-    die "В подписке нет ни одного годного сервера (" . join("; ", map { "$_->{item}: $UNUSABLE{ $_->{reason} }" } @DROPPED[0 .. ($#DROPPED < 2 ? $#DROPPED : 2)]) . ")\n"
+    die "В подписке нет ни одного годного сервера (" . join("; ", map { "$_->{item}: $UNUSABLE{ $_->{reason} }" . (defined $_->{detail} ? " «$_->{detail}»" : "") } @DROPPED[0 .. ($#DROPPED < 2 ? $#DROPPED : 2)]) . ")\n"
       unless @keep;
     @ORIG = @keep;
     $a = [ @$a[@keep] ];
@@ -1650,7 +1652,7 @@ KS_XRAY_PL='
       # a server type KillSwitch does not take (hysteria2, wireguard…), or no usable address:
       # missing, IPv6 (pf lets the core out to IPv4 servers only), not a host name (NEW-5 of the
       # 0.19.1 review: these refused the whole subscription)
-      return "protocol" unless ($o->{protocol} // "") =~ /\A($ENV{PROTOS})\z/;
+      unless (($o->{protocol} // "") =~ /\A($ENV{PROTOS})\z/) { $DETAIL = ref $o->{protocol} ? "?" : $o->{protocol} // ""; return "protocol" }
       for my $r (addrs($o)) { my $h = $$r;
         return "address" if !defined $h || ref $h || !length $h;
         return "address" if ipv4($h) ? $h =~ /\A(0|127|22[4-9]|2[3-5][0-9])\./ : $h =~ /\A[0-9.]+\z/ || !host($h);   # good_server_ip
@@ -1745,7 +1747,7 @@ KS_XRAY_PL='
     }
     my $c = $a->[$ci];
     my (@dropped, @added, %unbound);
-    push @dropped, @DROPPED;   # hosts load() left out
+    push @dropped, map { { %$_{qw(section item reason)} } } @DROPPED;   # hosts load() left out
     my %keep = map { $_ => 1 } qw(dns routing outbounds policy observatory burstObservatory);
     my %managed = map { $_ => 1 } qw(inbounds log remarks meta);
     for (sort keys %$c) { next if $keep{$_}; push @dropped, { section => "profile", item => $_, reason => $managed{$_} ? "managed" : "not-allowed" } }
