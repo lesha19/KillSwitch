@@ -100,7 +100,7 @@ enum Runner {
             PrivateDirectory.remove(dir)
             return .failure(.copy(error.localizedDescription))
         }
-        guard BundleSignature.isValid(copy, requirement: HelperIdentity.clientRequirement) else {
+        guard BundleSignature.isValid(copy, requirement: HelperIdentity.appRequirement) else {
             PrivateDirectory.remove(dir)
             return .failure(.signature)
         }

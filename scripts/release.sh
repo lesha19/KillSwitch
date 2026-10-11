@@ -40,6 +40,8 @@
 # The privileged daemon (ADR 0010) is Contents/MacOS/KillSwitchHelper, signed as
 # com.lesha19.KillSwitch.helper with the hardened runtime before the app; the app and the daemon
 # check each other's designated requirement, so both are verified against it at the end.
+# `killswitch` (ADR 0025) is Contents/Helpers/killswitch, signed as com.lesha19.KillSwitch.cli with
+# the hardened runtime: the daemon lets it in by that identifier, so it is verified the same way.
 
 # geodata_pinned <dir> <file>: <dir>/<file> (geosite.dat, geoip.metadb, geoip.dat) has the sha256 pinned in
 # <dir>/fetch-geodata.sh. Root installs them as they are: only the pinned files ship.
@@ -110,6 +112,15 @@ sums_replace() {
   awk -v n="$2" -v h="$hash" '$2 == n { $0 = h "  " n } { print }' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
 }
 
+# runtime_signed <file>: <file> is signed with the hardened runtime and nothing else in its flags
+# (no ad hoc signature). The daemon and the CLI are trusted by their signature (ADR 0010, 0025).
+runtime_signed() {
+  case "$(codesign -d --verbose "$1" 2>&1)" in   # not `| grep -q`: pipefail and SIGPIPE
+    *'flags=0x10000(runtime)'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 [ "${BASH_SOURCE[0]}" = "$0" ] || return 0   # sourced by Helper/tests
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -120,6 +131,7 @@ APP_ID=com.lesha19.KillSwitch
 FILTER_ID=com.lesha19.KillSwitch.Filter
 HELPER_ID=com.lesha19.KillSwitch.helper
 HELPER_PLIST=HelperDaemon/LaunchDaemons/$HELPER_ID.plist
+CLI_ID=com.lesha19.KillSwitch.cli
 # what the daemon asks of the app and the app of the daemon (App/Core/HelperProtocol.swift)
 requirement() { echo "anchor apple generic and identifier \"$1\" and certificate leaf[subject.OU] = \"$TEAM\""; }
 NE_VALUE=content-filter-provider-systemextension   # Developer ID form of content-filter-provider
@@ -264,6 +276,8 @@ WIDGET="$APP/Contents/PlugIns/KillSwitchWidget.appex"
 HELPER="$APP/Contents/MacOS/KillSwitchHelper"
 [ -f "$HELPER" ] && [ -f "$APP/Contents/Library/LaunchDaemons/$HELPER_ID.plist" ] ||
   { echo "В приложении нет службы $HELPER_ID (Contents/MacOS, Contents/Library/LaunchDaemons)" >&2; exit 1; }
+CLI="$APP/Contents/Helpers/killswitch"
+[ -f "$CLI" ] || { echo "В приложении нет $CLI" >&2; exit 1; }
 VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist")
 for f in mihomo xray geosite.dat geoip.metadb geoip.dat; do
   cmp -s "Helper/$f" "$APP/Contents/Resources/Helper/$f" || { echo "В приложении нет Helper/$f" >&2; exit 1; }
@@ -292,6 +306,7 @@ echo "Подпись…"
 scripts/sign-core.sh "$APP/Contents/Resources/Helper/mihomo" "$IDENTITY"
 scripts/sign-core.sh "$APP/Contents/Resources/Helper/xray" "$IDENTITY"
 sign --identifier "$HELPER_ID" "$HELPER"
+sign --identifier "$CLI_ID" "$CLI"
 sign --entitlements Widget/KillSwitchWidget.entitlements "$WIDGET"
 entitlements Filter/KillSwitchFilter.entitlements "$PROFILE_FILTER" "$OUT/filter.entitlements"
 cp "$PROFILE_FILTER" "$SYSEXT/Contents/embedded.provisionprofile"
@@ -310,11 +325,11 @@ sign --entitlements "$OUT/app.entitlements" "$APP"
 codesign --verify --deep --strict "$APP"
 # each side only talks to the other if these hold (and the daemon runs with the hardened runtime)
 codesign --verify --strict -R="$(requirement "$HELPER_ID")" "$HELPER"
+codesign --verify --strict -R="$(requirement "$CLI_ID")" "$CLI"
 codesign --verify --strict -R="$(requirement "$APP_ID")" "$APP"
-case "$(codesign -d --verbose "$HELPER" 2>&1)" in   # not `| grep -q`: pipefail and SIGPIPE
-  *'flags=0x10000(runtime)'*) ;;
-  *) echo "$HELPER подписан без hardened runtime" >&2; exit 1 ;;
-esac
+for f in "$HELPER" "$CLI"; do
+  runtime_signed "$f" || { echo "$f подписан без hardened runtime" >&2; exit 1; }
+done
 [ "$MODE" = --sign-only ] && { echo "Подписано (без нотаризации): $APP"; exit 0; }
 
 # Fails with notarytool's log unless Apple accepts the file.

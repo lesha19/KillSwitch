@@ -48,6 +48,13 @@ Rules are loaded at boot, before login.
   «Двойной VPN» (`ks set multihop <entry>|off`, chain shown in the window).
 - `App/Core/` — pure parsers (no AppKit), unit-tested by the `KillSwitchTests` target:
   `xcodegen generate && xcodebuild -scheme KillSwitch test CODE_SIGNING_ALLOWED=NO`.
+- `CLI/` — `killswitch`, the command line over the daemon (ADR 0025), shipped at
+  `KillSwitch.app/Contents/Helpers/killswitch`: `status [--json]`, `connect`, `disconnect`,
+  `protection on|off`, `pause <min>`, `server list [--json]`, `server select <name>`. The same
+  authorization as the app: `protection off` and `pause` ask for an administrator in macOS's dialog.
+  The app does not put it on PATH; to call it as `killswitch`, link it yourself, e.g.
+  `mkdir -p ~/bin && ln -s /Applications/KillSwitch.app/Contents/Helpers/killswitch ~/bin/killswitch`
+  (with `~/bin` on PATH).
 - `Widget/` — WidgetKit widget with on/off button. It is sandboxed, so its button posts a Darwin
   notification and the running app performs the switch; state reaches it via app group `YR58655PJ7.killswitch`.
 

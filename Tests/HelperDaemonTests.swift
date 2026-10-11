@@ -9,7 +9,7 @@ final class HelperDaemonTests: XCTestCase {
     // MARK: code-signing requirements
 
     func testRequirementsCompileAndPinTeamAndIdentifier() throws {
-        for (text, identifier) in [(HelperIdentity.clientRequirement, "com.lesha19.KillSwitch"),
+        for (text, identifier) in [(HelperIdentity.appRequirement, "com.lesha19.KillSwitch"),
                                    (HelperIdentity.daemonRequirement, "com.lesha19.KillSwitch.helper")] {
             var requirement: SecRequirement?
             XCTAssertEqual(SecRequirementCreateWithString(text as CFString, [], &requirement), errSecSuccess, text)
@@ -17,6 +17,24 @@ final class HelperDaemonTests: XCTestCase {
             XCTAssertTrue(text.contains("identifier \"\(identifier)\" and"), text)
             XCTAssertTrue(text.hasSuffix("certificate leaf[subject.OU] = \"YR58655PJ7\""), text)
         }
+    }
+
+    /// ADR 0025: the daemon takes our app or our `killswitch` tool, same anchor and team, nothing else.
+    func testClientRequirementIsTheAppOrTheCLI() throws {
+        let text = HelperIdentity.clientRequirement
+        var requirement: SecRequirement?
+        XCTAssertEqual(SecRequirementCreateWithString(text as CFString, [], &requirement), errSecSuccess, text)
+        XCTAssertEqual(text, "anchor apple generic and (identifier \"com.lesha19.KillSwitch\" or identifier "
+                           + "\"com.lesha19.KillSwitch.cli\") and certificate leaf[subject.OU] = \"YR58655PJ7\"")
+        XCTAssertEqual(HelperIdentity.cliIdentifier, "com.lesha19.KillSwitch.cli")
+    }
+
+    /// Before root runs install.sh the bundle must be the app itself: a bundle signed as the CLI is not.
+    func testBundleCheckKeepsTheAppOnlyRequirement() throws {
+        let runner = try String(contentsOf: repo.appendingPathComponent("HelperDaemon/Runner.swift"), encoding: .utf8)
+        XCTAssertTrue(runner.contains("requirement: HelperIdentity.appRequirement"))
+        XCTAssertFalse(runner.contains("clientRequirement"))
+        XCTAssertFalse(HelperIdentity.appRequirement.contains(HelperIdentity.cliIdentifier))
     }
 
     /// A program that is not ours, signed by anyone (here: the test runner, Apple-signed), is refused.

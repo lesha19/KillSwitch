@@ -84,4 +84,18 @@ for f in fetch-mihomo.sh fetch-xray.sh; do
   check "$f pins the source tarball" "$(grep -cE '^SOURCE_SHA256=[0-9a-f]{64}( |$)' "$here/../$f")" 1
 done
 
+# ADR 0010, 0025: the daemon and killswitch are trusted by their signature, so release.sh refuses
+# either without the hardened runtime or with an ad hoc signature. codesign's answer is faked here.
+signed_as() { flags=$1; codesign() { printf 'CodeDirectory v=20500 size=1 flags=%s hashes=1\n' "$flags"; }; }
+runtime() { runtime_signed "$tmp/tool" && echo yes || echo no; }
+signed_as '0x10000(runtime)'
+check "hardened runtime, Developer ID: taken" "$(runtime)" yes
+signed_as '0x10002(adhoc,runtime)'
+check "ad hoc with the runtime: refused" "$(runtime)" no
+signed_as '0x0(none)'
+check "without the runtime: refused" "$(runtime)" no
+unset -f codesign
+printf 'not code\n' > "$tmp/tool"
+check "not signed at all: refused" "$(runtime)" no
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

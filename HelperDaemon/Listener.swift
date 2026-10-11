@@ -5,7 +5,7 @@ enum Log {
     static let daemon = Logger(subsystem: HelperIdentity.helperIdentifier, category: "daemon")
 }
 
-/// Accepts a connection only for our app: the system checks every message against the
+/// Accepts a connection only for our app or our `killswitch` tool (ADR 0025): the system checks every message against the
 /// requirement with the peer's audit token (not its PID) and invalidates the connection otherwise.
 final class ListenerDelegate: NSObject, NSXPCListenerDelegate {
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {

@@ -11,6 +11,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   and protection settings to a JSON file, «Загрузить из файла…» reads one back, «Сбросить…» returns
   them to the defaults. Both show every change first; protection settings go through the usual
   commands and password. The file never contains the subscription link, own servers or keys.
+- `killswitch`, a command line for scripts (#12, ADR 0025), in the app at
+  `Contents/Helpers/killswitch`: `status [--json]`, `connect`, `disconnect`, `protection on|off`,
+  `pause <min>`, `server list [--json]`, `server select <name>`. It talks to the same daemon with the
+  same rules as the app: turning protection off or pausing it asks for an administrator. Not put on
+  PATH; README shows the link to make.
 
 ### Fixed
 - Accessibility (#41): no more orange or red text in the light theme, where it read at 1.9–3.6:1.
@@ -19,6 +24,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   (it still asks first). Sheet and leak test titles are VoiceOver headings.
 - «Проверка утечек» no longer tells you to turn protection off to learn your usual address: it is
   learnt in the first setup, or by a check during a pause.
+
+### Security
+- The daemon accepts one more client, `com.lesha19.KillSwitch.cli`, signed by the same team; the
+  app bundle checked before root runs install.sh must still be the app itself.
 
 ## [0.18.1] - 2026-10-11
 
