@@ -64,7 +64,8 @@ The links (`App/Core/DeepLink.swift`, unit-tested; the app side is `App/DeepLink
   status over and replaces the cache. A failed fetch leaves the old link, its status and its
   servers, and is not recorded as a failed update of the old one. A first link is still kept
   before its fetch, so the timer tries it again. «Отмена» is disabled while the fetch runs: the
-  change happens whole or not at all. (The setup wizard's own check still keeps the link first.)
+  change happens whole or not at all. The check of «Начало работы» (`VPNClient.check`) follows
+  the same order.
 - **The address shown.** `add` takes exactly one `url` item: at most 2048 characters, printable
   ASCII only (no lookalike letters, no line breaks), `https` only, no user name or password
   (`https://bank.com@other.host` would read as bank.com). The host must be a DNS name (≤ 253

@@ -451,12 +451,20 @@ final class VPNClient {
         guard !trimmed.isEmpty, !updating else { return nil }
         lastError = nil
         if trimmed.lowercased().hasPrefix("http") {
-            guard store(trimmed), let url = URL(string: trimmed) else { return nil }
+            // as setURL: another link replaces the kept one only once it answered (SubscriptionChange)
+            guard Self.isSubscriptionLink(trimmed), let url = URL(string: trimmed) else {
+                lastError = Self.notALink
+                return nil
+            }
+            let change = SubscriptionChange.of(trimmed, current: Self.storedURL())
+            if change.storesBeforeFetch { guard store(trimmed) else { return nil } }
+            let commit = change == .replace ? trimmed : nil
             updating = true
             defer { updating = false }
             setupCore = nil
+            lastXrayFailure = nil
             if usesXray {
-                if let xray = await fetchXray(url) {
+                if let xray = await fetchXray(url, change: change, commit: commit) {
                     setupCore = .xray
                     return Onboarding.Found(title: status.title, servers: xray.servers.count, expire: status.usage?.expire)
                 }
@@ -466,7 +474,7 @@ final class VPNClient {
                       failure == XrayProfile.Failure.notXray.errorDescription || failure.hasPrefix("HTTP 404") else { return nil }
                 lastError = nil
             }
-            guard let profile = await fetchProfile(url) else { return nil }
+            guard let profile = await fetchProfile(url, change: change, commit: commit) else { return nil }
             setupCore = usesXray ? .mihomo : nil
             let found = Onboarding.Found(title: status.title, servers: (profile["proxies"] as? [Any])?.count ?? 0,
                                          expire: status.usage?.expire)

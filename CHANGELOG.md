@@ -37,15 +37,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   перестал отвечать», on by default (`ks set failover 0|1`).
 
 ### Changed
-- Replacing the subscription link (Settings, QR, a `killswitch://` link) keeps the old one until the
-  new one answered: a link that fails no longer costs the working subscription, its status or
-  servers (#23, ADR 0029).
+- Replacing the subscription link (Settings, QR, a `killswitch://` link, «Начало работы») keeps the
+  old one until the new one answered: a link that fails no longer costs the working subscription,
+  its status or servers (#23, ADR 0029).
 - The generated Xray config gets a probe-only outbound per host, the probes in its observatory and
   the read-only `ObservatoryService` in the stats API (127.0.0.1:47891). The upgrade rebuilds the
   config, so **Xray restarts once on upgrade** (about a second, pf blocks meanwhile; the previous
   config comes back if it does not start, as in 0.18.0). mihomo's config does not change.
 
 ### Fixed
+- The shortcut «Отключить VPN» stopped the VPN while it was stuck on a server that does not answer;
+  it used to say «VPN и так не подключён» and leave the core running (#23).
 - Accessibility (#41): no more orange or red text in the light theme, where it read at 1.9–3.6:1.
   The split-apps and geodata warnings, «Действует до …» in the last 3 days and the report error
   are a primary text with a coloured icon; «Удалить KillSwitch из системы…» is no longer red text
