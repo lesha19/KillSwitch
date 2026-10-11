@@ -120,6 +120,8 @@ ks_run() { "$DIR/ks" "$@"; }
 job_loaded() { launchctl print "$1" >/dev/null 2>&1; }
 job_running() { launchctl print "$1" 2>/dev/null | grep -q 'state = running'; }
 job_disabled() { launchctl print-disabled system 2>/dev/null | grep -qE "\"${1#system/}\" => (disabled|true)"; }
+# launchctl bootout returns before the job is gone, and bootstrap refuses it until then
+job_gone() { for _ in $(seq 1 50); do job_loaded "$1" || return 0; sleep 0.2; done; return 1; }
 
 # watchdog_update <ks changed 0|1> <plist changed 0|1>
 watchdog_update() {
@@ -170,15 +172,23 @@ geodata_put() {
 # mihomo config or subscription keeps mihomo (ks reads a missing line as mihomo); a new one gets
 # Xray when the bundle has it.
 core_update() {
-  local restart=0 plist=0 kind
+  local restart=0 plist=0 kind run
   if [ -f xray ] && ! grep -q '^core=' "$DIR/settings" 2>/dev/null &&
      [ ! -e "$DIR/core/config.yaml" ] && [ ! -e "$DIR/core/profile.json" ]; then
     echo core=xray >> "$DIR/settings"; chmod 644 "$DIR/settings"
   fi
   kind=$(sed -n 's/^core=//p' "$DIR/settings" 2>/dev/null | tail -1)
   [ "$kind" = xray ] || kind=mihomo
-  if [ -f mihomo ] && put_file mihomo "$DIR/core/mihomo" 755 && [ "$kind" = mihomo ]; then restart=1; fi
-  if [ -f xray ] && put_file xray "$DIR/core/xray" 755 && [ "$kind" = xray ]; then restart=1; fi
+  # the core the job runs: the chosen one, unless "ks set core" chose the other one and its
+  # subscription is not imported yet; then the running job keeps the VPN until "ks core on" swaps it
+  # (the chosen core would not start without its config)
+  run=$kind
+  if job_loaded "$CORE_JOB" && [ ! -s "$DIR/core/$([ "$kind" = xray ] && echo xray.json || echo config.yaml)" ]; then
+    if [ "$kind" = xray ] && [ -s "$DIR/core/config.yaml" ]; then run=mihomo; fi
+    if [ "$kind" = mihomo ] && [ -s "$DIR/core/xray.json" ]; then run=xray; fi
+  fi
+  if [ -f mihomo ] && put_file mihomo "$DIR/core/mihomo" 755 && [ "$run" = mihomo ]; then restart=1; fi
+  if [ -f xray ] && put_file xray "$DIR/core/xray" 755 && [ "$run" = xray ]; then restart=1; fi
   # the subscription's GEOSITE/GEOIP rules and the ad block (ADR 0013): the pinned files of the app bundle
   # (fetch-geodata.sh), never a copy from a place the user can write. A geoip.metadb that older
   # versions took from dropweb's folder is replaced, or removed if the bundle has none. The core
@@ -189,14 +199,14 @@ core_update() {
   elif [ -e "$DIR/core/geoip.metadb" ]; then
     rm -f "$DIR/core/geoip.metadb"; restart=1
   fi
-  if [ -f geoip.dat ] && geodata_put geoip.dat && [ "$kind" = xray ]; then restart=1; fi
+  if [ -f geoip.dat ] && geodata_put geoip.dat && [ "$run" = xray ]; then restart=1; fi
   printf '%s' "$GEO_STATE" > "$DIR/core/.geodata.new"; chmod 644 "$DIR/core/.geodata.new"; mv -f "$DIR/core/.geodata.new" "$DIR/core/geodata"
   # the core starts at boot only after "ks core on"; an upgrade keeps a running core running
   job_running "$CORE_JOB" || launchctl disable "$CORE_JOB"
   # both jobs stay in core/ for "ks set core"; the chosen one is the system's
   put_file local.killswitch.core.plist "$DIR/core/plist.mihomo" 644 || true
   if [ -f local.killswitch.core.xray.plist ]; then put_file local.killswitch.core.xray.plist "$DIR/core/plist.xray" 644 || true; fi
-  if [ "$kind" = xray ]; then
+  if [ "$run" = xray ]; then
     if put_file local.killswitch.core.xray.plist "$CORE_PLIST" 644; then plist=1; fi
   elif put_file local.killswitch.core.plist "$CORE_PLIST" 644; then plist=1; fi
   # a config the new generator writes differently: reloaded in place (mihomo) or restarted (Xray)
@@ -209,6 +219,7 @@ core_update() {
   # stays on the core (the watchdog restores it only after 5 s), so nothing leaks meanwhile.
   if [ "$plist" = 1 ]; then
     launchctl bootout "$CORE_JOB" 2>/dev/null || true
+    job_gone "$CORE_JOB" || true
     launchctl bootstrap system "$CORE_PLIST"
   else
     launchctl kickstart -k "$CORE_JOB"

@@ -29,10 +29,13 @@ clients the full Xray config (an array of configs, one per host).
   subscription in Xray's format, fetched by the app and imported with the admin password, and a
   subscription that is not a Remnawave one may not have it. The app offers the switch in
   Settings (one password).
-- **Switching** stops the core, swaps the launchd job (both plists are kept in `core/`, the job
-  label stays `local.killswitch.core`, so ks, the watchdog, sudoers and uninstall are unchanged)
-  and removes the other core's config; the app then imports the subscription for the new core and
-  starts it. pf keeps blocking meanwhile.
+- **Switching** (`ks set core`) stores the choice and removes the chosen core's config of an older
+  import; the app then imports the subscription for it, and `ks core on` swaps the launchd job (both
+  plists are kept in `core/`, the job label stays `local.killswitch.core`, so ks, the watchdog,
+  sudoers and uninstall are unchanged). A running core keeps running until that swap: with
+  protection on, the subscription in the new format can only be fetched, and its server names
+  resolved, through it (addendum 2026-10-11: stopping it first left the Mac without any VPN).
+  `install.sh` meanwhile keeps the running job.
 - **The config** (`core_generate_xray`): the panel's array; every element is checked and all
   their servers approved at import (servers, pins, direct signature), so switching between the
   subscription's hosts (`ks core select Сервер <remarks>`, stored as `xrayserver=`) needs no

@@ -140,14 +140,45 @@ core_plist_sync && [ "$(cat "$CORE_PLIST")" = '<plist>xray</plist>' ] && ok "pli
 core_plist_sync && bad "plist already right: reported as changed" || ok "plist already right: nothing to do"
 LOADED=0; : > "$tmp/launchd"
 set_core mihomo 2>"$tmp/err"
-[ "$(setting core "")" = mihomo ] && [ "$(cat "$CORE_PLIST")" = '<plist>mihomo</plist>' ] && ok "set core mihomo: stored, plist swapped" ||
-  bad "set core: $(cat "$tmp/err") $(cat "$CORE_PLIST")"
+[ "$(setting core "")" = mihomo ] && grep -q 'подписку' "$tmp/err" && ok "set core mihomo: stored, the subscription asked for" ||
+  bad "set core: $(cat "$tmp/err")"
+# Switching while connected, protection on: the app fetches the subscription for the new core and
+# "ks core import" resolves its server names after "ks set core". With the running core stopped
+# nothing could leave (pf) and the Mac stayed without a VPN; the running one stays until "core on".
+echo '<plist>mihomo</plist>' > "$CORE_PLIST"; echo cfg > "$CORE_DIR/config.yaml"; echo stale > "$CORE_DIR/xray.json"
 LOADED=1; : > "$tmp/launchd"
 set_core xray 2>"$tmp/err"
-grep -q 'bootout' "$tmp/launchd" && ! grep -q 'bootstrap' "$tmp/launchd" && grep -q 'подписку' "$tmp/err" &&
-  [ "$(cat "$CORE_PLIST")" = '<plist>xray</plist>' ] &&
-  ok "set core while running: stopped (pf keeps blocking) until the subscription is imported for it" || bad "set core running: $(cat "$tmp/launchd") / $(cat "$tmp/err")"
+! grep -qE 'bootout|bootstrap|kickstart|disable' "$tmp/launchd" && [ "$(cat "$CORE_PLIST")" = '<plist>mihomo</plist>' ] &&
+  [ -s "$CORE_DIR/config.yaml" ] && [ ! -e "$CORE_DIR/xray.json" ] && [ "$(setting core "")" = xray ] && grep -q 'подписку' "$tmp/err" &&
+  ok "set core while running: stored, the running core keeps the VPN up until core on, a stale config of the new one gone" ||
+  bad "set core running: $(cat "$tmp/launchd") / $(cat "$CORE_PLIST") / $(ls "$CORE_DIR") / $(cat "$tmp/err")"
 set_core sing-box 2>/dev/null && bad "set core sing-box accepted" || ok "set core: only xray or mihomo"
+
+# "ks core on" then swaps the job: launchd returns from bootout before the old job is gone and
+# refuses a bootstrap until then
+DIAG="$tmp/diag"; pgrep() { return 1; }; dns_locked() { echo "dns $1" >> "$tmp/launchd"; }; sleep() { :; }
+launchctl() {
+  local st; st=$(cat "$tmp/job")
+  echo "launchctl $*" >> "$tmp/launchd"
+  case "$1" in
+    print) case "$st" in loaded) echo 'state = running' ;; unloading:0) echo unloaded > "$tmp/job"; return 1 ;;
+                         unloading:*) echo "unloading:$((${st#unloading:} - 1))" > "$tmp/job"; echo 'state = running' ;; *) return 1 ;; esac ;;
+    bootout) echo unloading:2 > "$tmp/job" ;;
+    bootstrap) case "$st" in unloaded|unloading:0) echo loaded > "$tmp/job" ;; *) return 37 ;; esac ;;
+    kickstart) [ "$st" = loaded ] ;;
+  esac
+}
+echo '{}' > "$CORE_DIR/xray.json"   # the subscription imported for Xray meanwhile
+echo loaded > "$tmp/job"; : > "$tmp/launchd"
+core_on 2>"$tmp/err" && rc=0 || rc=$?
+[ "$rc" = 0 ] && [ "$(cat "$tmp/job")" = loaded ] && [ "$(cat "$CORE_PLIST")" = '<plist>xray</plist>' ] &&
+  [ "$(grep -oE 'launchctl (bootout|bootstrap)' "$tmp/launchd" | paste -sd, -)" = "launchctl bootout,launchctl bootstrap" ] && grep -q '^dns apply$' "$tmp/launchd" &&
+  ok "core on after the switch: the old job out, the new one in once it is gone, DNS to it" ||
+  bad "core on switch: rc $rc $(cat "$tmp/err") / $(cat "$tmp/job") / $(paste -sd'|' "$tmp/launchd")"
+rm -f "$CORE_DIR/xray.json"; echo '<plist>mihomo</plist>' > "$CORE_PLIST"; echo loaded > "$tmp/job"; : > "$tmp/launchd"
+core_on 2>/dev/null && bad "core on without the new core's config accepted" ||
+  { grep -q bootout "$tmp/launchd" && bad "core on without a config stopped the running core" || ok "core on before the import: refused, the running core kept"; }
+unset -f pgrep dns_locked sleep
 put_setting core xray
 set_multihop LT_1_FB 2>"$tmp/err" && bad "double VPN accepted with Xray" || ok "double VPN: refused with Xray (not yet)"
 

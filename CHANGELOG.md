@@ -45,6 +45,19 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 - With «Основной» (Xray) «Двойной VPN» on the main screen and in Settings › VPN can no longer be
   turned on only to fail with an error: it is greyed out with a hint that it works with «Запасной»
   (turning it off still works).
+- Everything, the VPN included, could stay blocked with «Настройки защиты повреждены» after pf
+  refused one load of the rules because another load of them was under way (the watchdog and a
+  subscription refresh, an import, a setting or a server address change reloading at the same
+  moment): such a load is tried again, and «Сбросить настройки» now loads the rules again when the
+  files themselves are fine.
+- Another VPN (Happ) could stay cut after our VPN was switched off next to it: when our core's tunnel
+  went a moment before launchd reported the core stopped, the blocking rules loaded then stayed
+  until the tunnels changed again. The watchdog now checks every 2 s whether standby (ADR 0018)
+  still matches.
+- An upgrade that brings a new launchd job for the core could stop half-way and leave the VPN off:
+  `install.sh` started the new job right after stopping the old one, launchd refuses that until the
+  old one is gone, and `set -e` ended the install with the core unloaded (a rerun then kept it
+  unloaded). It now waits for the old job first, as it already did for the watchdog.
 
 ### Security
 - The daemon accepts one more client, `com.lesha19.KillSwitch.cli`, signed by the same team; the

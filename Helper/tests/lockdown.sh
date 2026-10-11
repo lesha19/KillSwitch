@@ -135,6 +135,43 @@ grep -q 'invalid rules: everything blocked' "$EVENTS" && ok "  logged" || bad " 
 rm -f "$ALLOW"; passes 18 19
 grep -q utun9 "$tmp/anchor" && ok "  fixed: rules back" || bad "  still: $(cat "$tmp/anchor")"
 
+# --- pf refusing a load once (another load of the anchor under way, "Device busy": the watchdog and
+# "ks core refresh" reloading together) is not rules pf will not take: no lockdown of the VPN
+echo 1 > "$tmp/busy"   # a file: pfctl runs in a pipeline
+pfctl() {
+  case "$*" in
+    "-s info") echo "Status: Enabled" ;;
+    "-s rules") echo 'anchor "com.apple/*" all' ;;
+    "-a $ANCHOR -s rules") cat "$tmp/anchor" ;;
+    "-a $ANCHOR -f -") cat > "$tmp/anchor.in"
+      if [ "$(cat "$tmp/busy")" -gt 0 ]; then echo $(($(cat "$tmp/busy") - 1)) > "$tmp/busy"; echo "pfctl: DIOCXCOMMIT: Device busy" >&2; return 1; fi
+      mv "$tmp/anchor.in" "$tmp/anchor" ;;
+    "-a $ANCHOR -F rules") : > "$tmp/anchor" ;;
+    *) return 0 ;;
+  esac
+}
+sleep() { :; }
+: > "$EVENTS"; load
+grep -q utun9 "$tmp/anchor" && [ ! -e "$INVALIDF" ] && ok "pf busy once: the rules loaded on the next try, nothing named invalid" ||
+  bad "pf busy once: $(cat "$tmp/anchor"), invalid: $(cat "$INVALIDF" 2>&1)"
+grep -q 'invalid' "$EVENTS" && bad "  logged as invalid: $(cat "$EVENTS")" || ok "  not logged as invalid"
+# a lockdown left by such a refusal (an older ks): «Сбросить настройки» loads the rules again
+lockdown > "$tmp/anchor"; echo rules > "$INVALIDF"; : > "$EVENTS"
+repair >/dev/null
+grep -q utun9 "$tmp/anchor" && [ ! -e "$INVALIDF" ] && ok "repair after pf refused the rules once: rules back" ||
+  bad "repair with only pf's refusal: $(cat "$tmp/anchor"), invalid: $(cat "$INVALIDF" 2>&1)"
+unset -f sleep
+pfctl() {
+  case "$*" in
+    "-s info") echo "Status: Enabled" ;;
+    "-s rules") echo 'anchor "com.apple/*" all' ;;
+    "-a $ANCHOR -s rules") cat "$tmp/anchor" ;;
+    "-a $ANCHOR -f -") cat > "$tmp/anchor" ;;
+    "-a $ANCHOR -F rules") : > "$tmp/anchor" ;;
+    *) return 0 ;;
+  esac
+}
+
 # --- a damaged off/pause flag must not keep protection off forever
 echo garbage > "$FLAG"; : > "$EVENTS"
 passes 10 11
