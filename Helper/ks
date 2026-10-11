@@ -2073,6 +2073,7 @@ core_regen() {
     [ "$CORE_RUN" = 1 ] && [ "$other" = 0 ] && was=1 && pid=$CORE_PID
     for f in "${files[@]}"; do [ -f "$f" ] && cp -p "$f" "$f.prev"; done
   fi
+  rm -f "$conf.err"; ( umask 077; : > "$conf.err" )   # the core's errors may name servers: root-only
   if ! core_commit "$tmp" "$srv" 2>"$conf.err"; then
     log_event "core config: the new one refused by the core, the running one kept: $(grep -v '^$' "$conf.err" | tail -1 | cut -c1-200)"
     cat "$conf.err" >&2; rm -f "$conf.err"
@@ -2110,6 +2111,7 @@ switch_approval_migrate() {
     log_event "server switch approval: the subscription was refreshed since the last import, the next import with the password approves its hosts"
     return 0
   fi
+  rm -f "$out.err"; ( umask 077; : > "$out.err" )   # the generator's errors name hosts: root-only
   if KS_APPROVE_ALL=1 KS_PINS=$PINS core_generate "$prof" "$out" "$srv" 2>"$out.err"; then
     chmod 600 "$out.approved" && mv "$out.approved" "$CORE_DIR/approved-switch" && log_event "server switch approval taken from the last import"
   else
@@ -2613,10 +2615,16 @@ xray_select() {
   # a setting, _regen) to commit: those rebuild the pick the settings name.
   local d rc=0
   d=$(mktemp -d) || return 1   # a directory: put_setting also writes <file>.tmp
-  cp "$SETTINGS" "$d/settings" 2>/dev/null
-  put_setting xrayserver "$1" "$d/settings"
-  SETTINGS=$d/settings core_rebuild "$PINS" switch || rc=$?
-  rm -rf "$d"
+  # In a subshell whose traps remove the copy also on a signal (the caller's traps untouched). A
+  # copy that does not name the new pick (a full disk) would build the old one, pass the gate and
+  # get the new pick written ungated: refused.
+  (
+    trap 'rm -rf "$d"' EXIT
+    trap 'exit 1' HUP INT TERM
+    { [ ! -e "$SETTINGS" ] || cp "$SETTINGS" "$d/settings"; } && put_setting xrayserver "$1" "$d/settings" &&
+      [ "$(SETTINGS=$d/settings setting xrayserver "")" = "$1" ] || { echo "Не удалось записать выбор сервера" >&2; exit 1; }
+    SETTINGS=$d/settings core_rebuild "$PINS" switch
+  ) || rc=$?
   if [ "$rc" != 0 ]; then
     [ "$rc" = 3 ] && log_event "server switch to $1 refused: it sends other traffic past the VPN than approved"
     return "$rc"

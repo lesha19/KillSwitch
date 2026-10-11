@@ -150,6 +150,24 @@ core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>/dev/null
 eval "$(declare -f real_core_rebuild | sed '1s/real_core_rebuild/core_rebuild/')"
 # KS-10 / fail closed: a host name the settings would call damaged is never written (failover
 # takes names from the subscription without the passwordless filter)
+# the copy the candidate is built from cannot be written (a full disk): the old pick would be
+# built and pass the gate, and the new one written ungated; refused instead, nothing written
+eval "$(declare -f put_setting | sed '1s/put_setting/real_put_setting/')"
+put_setting() { [ -z "${3:-}" ] || return 1; real_put_setting "$@"; }
+cp "$SETTINGS" "$tmp/set-before"; cp "$CORE_DIR/xray.json" "$tmp/before"
+rc=0; core_select "$XRAY_GROUP" DE 2>/dev/null || rc=$?
+[ "$rc" != 0 ] && cmp -s "$SETTINGS" "$tmp/set-before" && cmp -s "$CORE_DIR/xray.json" "$tmp/before" &&
+  ok "  the settings copy not written: switch refused, settings and config untouched" || bad "  copy failed: rc $rc $(cat "$SETTINGS")"
+eval "$(declare -f real_put_setting | sed '1s/real_put_setting/put_setting/')"
+# killed while the candidate is built: the settings copy goes too, the pick is not written
+eval "$(declare -f core_rebuild | sed '1s/core_rebuild/real_core_rebuild/')"
+core_rebuild() { /bin/sh -c 'kill -TERM $PPID'; /bin/sleep 0.2; }
+mkdir "$tmp/td"; TMPDIR="$tmp/td"
+rc=0; core_select "$XRAY_GROUP" DE 2>/dev/null || rc=$?
+TMPDIR=/private/tmp
+[ "$rc" != 0 ] && [ -z "$(ls -A "$tmp/td")" ] && cmp -s "$SETTINGS" "$tmp/set-before" &&
+  ok "  a signal while the candidate is built: the copy removed, nothing written" || bad "  signal: rc $rc, left: $(ls -A "$tmp/td")"
+eval "$(declare -f real_core_rebuild | sed '1s/real_core_rebuild/core_rebuild/')"
 cp "$SETTINGS" "$tmp/set-before"; cp "$REPORT" "$tmp/report-before"
 /usr/bin/perl -MJSON::PP -i -0pe '$r = JSON::PP->new->decode($_); push @{ $r->{servers} }, { name => "DE\tX" }; $_ = JSON::PP->new->encode($r)' "$REPORT"
 rc=0; xray_select $'DE\tX' 2>/dev/null || rc=$?

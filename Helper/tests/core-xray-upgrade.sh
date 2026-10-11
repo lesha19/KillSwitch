@@ -86,10 +86,11 @@ core_regen >/dev/null 2>&1
 [ ! -e "$CORE_DIR/approved-switch" ] && grep -q 'refreshed since the last import' "$EVENTS" &&
   ok "  a profile as new as the approval: not taken for the imported one" || bad "  same time: $(ls "$CORE_DIR") $(cat "$EVENTS")"
 eval "$(declare -f core_generate | sed '1s/core_generate/real_core_generate/')"
-core_generate() { [ -z "${KS_APPROVE_ALL:-}" ] || { echo "no luck" >&2; return 1; }; real_core_generate "$@"; }
+core_generate() { [ -z "${KS_APPROVE_ALL:-}" ] || { echo "no luck" >&2; stat -L -f %Lp /dev/fd/2 > "$T/errmode"; return 1; }; real_core_generate "$@"; }
 : > "$EVENTS"; touch -t 202601010000 "$CORE_DIR/profile-xray.json"; core_regen >/dev/null 2>&1
 [ ! -e "$CORE_DIR/approved-switch" ] && grep -q 'server switch approval failed: no luck' "$EVENTS" &&
   ok "  a failed build of the approval: logged with the reason" || bad "  failed: $(cat "$EVENTS")"
+[ "$(cat "$T/errmode")" = 600 ] && ok "  its error output (host names) root-only" || bad "  error output mode $(cat "$T/errmode")"
 eval "$(declare -f real_core_generate | sed '1s/real_core_generate/core_generate/')"
 put_setting core mihomo; touch -t 202601010000 "$CORE_DIR/profile-xray.json"; core_regen >/dev/null 2>&1; put_setting core xray
 [ ! -e "$CORE_DIR/approved-switch" ] && ok "  mihomo: none (switches are Xray's)" || bad "  mihomo approval"
@@ -97,7 +98,11 @@ touch -t 202601010000 "$CORE_DIR/profile-xray.json"; core_regen >/dev/null 2>&1
 
 # --- (a) the new config is checked before it replaces the running one
 old_config; RUN=1; : > "$T/launchd"; : > "$EVENTS"; touch "$T/xray-fails"
+eval "$(declare -f core_commit | sed '1s/core_commit/real_core_commit/')"
+core_commit() { stat -L -f %Lp /dev/fd/2 > "$T/errmode"; real_core_commit "$@"; }
 core_regen >/dev/null 2>&1 && bad "_regen took a config xray run -test refused" || ok "_regen: a config Xray refuses fails"
+eval "$(declare -f real_core_commit | sed '1s/real_core_commit/core_commit/')"
+[ "$(cat "$T/errmode")" = 600 ] && ok "_regen: the core's error output root-only" || bad "_regen: error output mode $(cat "$T/errmode")"
 cmp -s "$CORE_DIR/xray.json" "$T/old.json" && ok "_regen refused: the running config stays" || bad "_regen refused: config replaced"
 [ "$(restarts)" = 0 ] && ok "_regen refused: Xray not restarted" || bad "_regen refused: restarted ($(cat "$T/launchd"))"
 grep -q 'core config: the new one refused by the core, the running one kept' "$EVENTS" && ok "_regen refused: the reason in events.log" ||
