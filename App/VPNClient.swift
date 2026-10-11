@@ -23,6 +23,8 @@ final class VPNClient {
         var accountURL: URL?
         /// Which link and way the last fetched profile came from (#11); nil before 0.16.
         var source: SubscriptionSource?
+        /// Announcement, support contacts and `hide-url` from the last fetch (#22, #26).
+        var provider: ProviderInfo?
     }
 
     private(set) var hasURL = false
@@ -118,8 +120,10 @@ final class VPNClient {
 
     // MARK: subscription URL
 
-    /// Shown only on request in Settings; never logged.
-    func revealURL() -> String? { Self.storedURL() }
+    /// Shown only on request in Settings, never when the provider sent `hide-url` (#26); never logged.
+    func revealURL() -> String? { urlHidden ? nil : Self.storedURL() }
+
+    var urlHidden: Bool { status.provider?.hidesURL == true }
 
     func setURL(_ text: String) async {
         guard store(text.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
@@ -391,6 +395,7 @@ final class VPNClient {
         status.source = source
         status.usage = SubscriptionUsage(header: headers["subscription-userinfo"])
         status.serverInterval = SubscriptionHeaders.updateInterval(headers["profile-update-interval"])
+        status.provider = ProviderInfo(headers: headers)
         status.accountURL = [headers["profile-web-page-url"], headers["support-url"]].lazy
             .compactMap { $0.flatMap(URL.init(string:)) }.first { $0.scheme == "https" }
         saveStatus()

@@ -382,6 +382,8 @@ private struct NoticeBanner: View {
                     Button("Открыть Объекты входа") { HelperClient.openLoginItems() }
                 }
             }
+        } else {
+            ProviderAnnouncementBanner()
         }
     }
 }

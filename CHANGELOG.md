@@ -4,6 +4,17 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Added
+- The provider's announcement (`announce`, `announce-url` headers, plain or `base64:`) on the main
+  screen until ✕, again when the text changes; support link and e-mail (`support-url`,
+  `support-email`) in «О программе» (#22). Plain text only, links only http(s)/tg/mailto.
+- `hide-url` header: «Показать» of the subscription link is off and the link is never revealed (#26).
+
+### Fixed
+- Diagnostics also drop the port and path of a link without its scheme (`host/token`) (#26).
+
 ## [0.17.0] - 2026-10-11
 
 ### Added
