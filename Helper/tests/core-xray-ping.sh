@@ -127,6 +127,7 @@ OBS=""
 core_job() { CORE_RUN=1; CORE_PID=100; }
 PROBE="90 1"
 diag_probe() { echo "$PROBE"; }
+NET=en0; primary_iface() { echo "$NET"; }
 xray_select() {
   echo "$1" >> "$T/selected"; put_setting xrayserver "$1"
   /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); $r->{selected} = $ARGV[0]; print JSON::PP->new->encode($r)' "$1" < "$REPORT" > "$REPORT.n" &&
@@ -212,6 +213,7 @@ cat > "$T/run.sh" <<'EOF'
 DIR=$T; CORE_DIR=$T/core; SETTINGS=$T/settings; EVENTS=$T/events.log; REPORT=$T/core/routing.json; DIAG=$T/diag
 core_job() { CORE_RUN=1; CORE_PID=100; }
 diag_probe() { echo "0 0"; }
+primary_iface() { echo en0; }
 xray_observe() { printf 'ks-ping-0\t0\t0\nks-ping-1\t1\t110\nks-ping-2\t1\t30\n'; }
 xray_select() { echo "start $1" >> "$T/order"; sleep 1; put_setting xrayserver "$1"
   /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); $r->{selected} = $ARGV[0]; print JSON::PP->new->encode($r)' "$1" < "$REPORT" > "$REPORT.n" &&
@@ -237,6 +239,17 @@ both failover select
 both select failover
 [ "$(paste -sd, - < "$T/order")" = "start 🇩🇪Германия,end 🇩🇪Германия" ] && [ "$(setting xrayserver "")" = "🇩🇪Германия" ] &&
   ok "a pick by hand switching, then the failover pass: skipped, the pick stays" || bad "order: $(cat "$T/order")"
+
+# --- the Mac without a network (no primary interface): the probe fails for that reason, not the
+# server's; nothing counted, so a local outage does not abandon a server picked by hand
+OBS=$'ks-ping-0\t0\t0\nks-ping-1\t1\t120\nks-ping-2\t1\t30'
+reset_fo; PROBE="0 0"; NET=""
+for _ in $(seq 1 10); do pass; done
+[ ! -e "$T/selected" ] && [ ! -s "$EVENTS" ] && ok "no network: no switch, nothing logged" || bad "offline: $(cat "$T/selected" 2>&1) $(cat "$EVENTS")"
+NET=en0; pass; pass
+[ ! -e "$T/selected" ] && ok "  back online: failures while offline not counted" || bad "  counted offline: $(cat "$T/selected")"
+pass
+[ "$(cat "$T/selected" 2>/dev/null)" = "🇱🇹Литва 2" ] && ok "  then 3 failures online: moved" || bad "  online: $(cat "$T/selected" 2>&1)"
 
 OBS=$'ks-ping-0\t0\t0\nks-ping-1\t1\t120\nks-ping-2\t1\t30'
 reset_fo; put_setting failover 0; PROBE="0 0"

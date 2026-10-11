@@ -2649,6 +2649,8 @@ failover_pass() {  # failover_pass [epoch]
   [ "$(core_kind)" = xray ] && [ "$(setting failover 1)" = 1 ] && [ -s "$REPORT" ] || return 0
   core_job
   [ "$CORE_RUN" = 1 ] || return 0
+  # no network at all (no primary interface): a failed probe says nothing of the server
+  [ -n "$(primary_iface)" ] || return 0
   read -r probe ok <<<"$(diag_probe)"
   out=$(PROBE_MS=$probe PROBE_OK=$ok NOW=$now PICK=$(setting xrayserver "") P=$(xray_pings 2>/dev/null) ST="$CORE_DIR/failover" \
     /usr/bin/perl -MJSON::PP -e "$KS_FAILOVER_PL" < "$REPORT") || return 0
