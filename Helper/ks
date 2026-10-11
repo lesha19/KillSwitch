@@ -1955,7 +1955,7 @@ core_publish() {
 # yet nor the address of an approved name, or DIRECT rules/groups other than those approved.
 # Installs from before 0.7 have no record: only addresses are compared, DIRECT needs an import.
 refresh_check() {
-  local names="" ok="$1.ok" h a new
+  local names="" ok="$1.ok" h a new rc=0
   if [ -f "$APPROVED_HOSTS" ]; then
     names=$(cut -f1 "$2" | grep -vxF -f "$APPROVED_HOSTS")
   fi
@@ -1966,12 +1966,17 @@ refresh_check() {
   new=$(grep -vxF -f "$ok" "$1"); rm -f "$ok"
   if [ -n "$names$new" ]; then
     echo "В профиле новые серверы ($(printf '%s\n%s\n' "$names" "$new" | grep -v '^$' | paste -sd' ' -)): нужно подтверждение паролем администратора" >&2
-    return 3
+    rc=3
   fi
-  if { [ -s "$3" ] || [ -s "$APPROVED_DIRECT" ]; } && ! cmp -s "$3" "$APPROVED_DIRECT"; then
+  # both reasons are told: the app shows a DIRECT change («(DIRECT)», KS-12) before new servers.
+  # Approved: the import's DIRECT, the running one, or one the import approved for a switch
+  # (direct_unapproved); with no record of an import at all, only an import
+  if { [ -s "$3" ] || [ -s "$APPROVED_DIRECT" ]; } && ! cmp -s "$3" "$APPROVED_DIRECT" &&
+     { [ ! -f "$APPROVED_DIRECT" ] || direct_unapproved "$3"; }; then
     echo "Профиль меняет, что идёт мимо VPN (DIRECT): нужно подтверждение паролем администратора" >&2
-    return 3
+    rc=3
   fi
+  return "$rc"
 }
 
 # core_commit <config.tmp> <servers.tmp>: checks a generated config and puts it in place with

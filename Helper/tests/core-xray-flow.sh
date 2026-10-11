@@ -82,6 +82,11 @@ run "$tmp/new.json" refresh
   print JSON::PP->new->encode($a)' < "$fx/xray-panel.json" > "$tmp/direct.json"
 run "$tmp/direct.json" refresh
 [ "$rc" = 3 ] && ok "refresh with a new direct rule: needs the admin (exit 3)" || bad "refresh new direct: $rc"
+/usr/bin/perl -MJSON::PP -e 'local $/; my $a = JSON::PP->new->decode(<STDIN>); $a->[0]{outbounds}[1]{settings}{vnext}[0]{address} = "203.0.113.99";
+  print JSON::PP->new->encode($a)' < "$tmp/direct.json" > "$tmp/both.json"
+run "$tmp/both.json" refresh
+[ "$rc" = 3 ] && grep -q '(DIRECT)' "$tmp/err" && grep -q 'новые серверы' "$tmp/err" &&
+  ok "refresh with a new server and a new direct rule: exit 3 naming both, «(DIRECT)» for the app (KS-12)" || bad "refresh both: $rc $(cat "$tmp/err")"
 
 # --- regen after an upgrade, rebuild for a setting
 : > "$tmp/launchd"
@@ -140,6 +145,8 @@ run "$tmp/three.json" import
 core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>"$tmp/err" && [ "$(setting xrayserver "")" = "🇱🇹Литва 2" ] && [ "$(paste -sd, - < "$CORE_EGRESS")" = rules,dns ] &&
   ok "  after an import with the password (approving every host) it switches" || bad "  approved: $(cat "$tmp/err")"
 [ "$(stat -f %Lp "$CORE_DIR/approved-switch")" = 600 ] && ok "  the approval root-only" || bad "  approved-switch mode"
+run "$tmp/three.json" refresh
+[ "$rc" = 0 ] && ok "  a refresh while on a host whose approved DIRECT differs from the first one's: taken" || bad "  refresh after switch: $rc $(cat "$tmp/err")"
 core_select "$XRAY_GROUP" "🇱🇹Литва" 2>/dev/null
 put_setting splitapps Telegram; core_apply_settings 2>/dev/null
 core_select "$XRAY_GROUP" DE 2>"$tmp/err" && ok "  after the admin changed apps outside the VPN, a switch to a host like the running one works" || bad "  splitapps: $(cat "$tmp/err")"
