@@ -84,9 +84,9 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_CFBundleDisplayName: KillSwitch
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
-        # CoreWLAN gives the Wi-Fi name only with Location access (trusted networks of auto-connect)
-        INFOPLIST_KEY_NSLocationUsageDescription: KillSwitch узнаёт имя сети Wi-Fi, чтобы не подключать VPN в доверенных сетях. Местоположение не используется и никуда не отправляется.
-        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: KillSwitch узнаёт имя сети Wi-Fi, чтобы не подключать VPN в доверенных сетях. Местоположение не используется и никуда не отправляется.
+        # CoreWLAN gives the Wi-Fi name only with Location access (trusted networks, «Сети Wi‑Fi» rules)
+        INFOPLIST_KEY_NSLocationUsageDescription: KillSwitch узнаёт имя сети Wi-Fi для правил сетей — где VPN подключается сам и какой сервер выбрать. Местоположение не используется и никуда не отправляется.
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: KillSwitch узнаёт имя сети Wi-Fi для правил сетей — где VPN подключается сам и какой сервер выбрать. Местоположение не используется и никуда не отправляется.
   KillSwitchWidget:
     type: app-extension
     platform: macOS

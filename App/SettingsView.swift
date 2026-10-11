@@ -62,6 +62,7 @@ private struct GeneralSettings: View {
     var body: some View {
         SettingsForm {
             LaunchSection(control: control)
+            WiFiRulesSection()
             Section("Уведомления") {
                 Toggle("VPN оборвался и снова подключился", isOn: $notifyVPNDropped)
                 Toggle("Подписка кончается или нужен ответ", isOn: $notifySubscription)

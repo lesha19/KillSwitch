@@ -4,6 +4,15 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Added
+- Settings › Общие «Сети Wi‑Fi» (#39): per network «Подключаться автоматически» (connects there even
+  with the general switch off) and «Предпочитаемый сервер» (picked when the Mac joins it). Nothing
+  turns protection off for a network. Location access is asked for on the first «Добавить текущую
+  сеть», after an explanation; the names stay on this Mac. Auto-connect now also applies a server
+  picked while disconnected.
+
 ## [0.17.0] - 2026-10-11
 
 ### Added

@@ -16,7 +16,7 @@ struct KillSwitchApp: App {
         _control = State(initialValue: control)
         _client = State(initialValue: client)
         _updater = State(initialValue: updater)
-        _autoConnector = State(initialValue: AutoConnector(control: control))
+        _autoConnector = State(initialValue: AutoConnector(control: control, client: client))
         Notifier.shared.control = control
         Notifier.shared.client = client
         ShortcutTarget.control = control
