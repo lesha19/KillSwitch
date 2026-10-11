@@ -112,6 +112,26 @@ sums_replace() {
   awk -v n="$2" -v h="$hash" '$2 == n { $0 = h "  " n } { print }' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
 }
 
+# appcast_max_build <appcast.xml>: the highest build (sparkle:version) of its items, beta ones too;
+# nothing when it has none. Sparkle offers only a build greater than the installed one.
+appcast_max_build() {
+  { grep -oE 'sparkle:version(>|=")[0-9]+' "$1" || true; } | sed -E 's/.*[^0-9]//' | sort -n | tail -1
+}
+
+# build_problem <build> <last published build>: why <build> cannot be published, or nothing.
+build_problem() {
+  case "$1" in ''|*[!0-9]*) echo "CURRENT_PROJECT_VERSION «$1» в project.yml — не целое число."; return ;; esac
+  [ -z "$2" ] || [ "$1" -gt "$2" ] ||
+    echo "CURRENT_PROJECT_VERSION $1 (project.yml) не больше последней опубликованной сборки $2: Sparkle не предложит такое обновление. Поставь $(($2 + 1))."
+}
+
+# ks_version_problem <Helper/ks> <MARKETING_VERSION>: nothing when KS_VERSION in ks is the app's version.
+ks_version_problem() {
+  local ks
+  ks=$(sed -nE 's/^KS_VERSION="([^"]*)".*/\1/p' "$1")
+  [ "$ks" = "$2" ] || echo "$1: KS_VERSION «$ks», а версия программы «$2» (project.yml, MARKETING_VERSION): поменяй KS_VERSION."
+}
+
 # runtime_signed <file>: <file> is signed with the hardened runtime and nothing else in its flags
 # (no ad hoc signature). The daemon and the CLI are trusted by their signature (ADR 0010, 0025).
 runtime_signed() {
@@ -229,11 +249,27 @@ case "$CHANNEL" in
   *) problem "KS_CHANNEL: только beta (или не задан), а не «$CHANNEL»." ;;
 esac
 
+MARKETING_VERSION=$(sed -nE 's/^ *MARKETING_VERSION: "?([^"]+)"?$/\1/p' project.yml | head -1)
+BUILD=$(sed -nE 's/^ *CURRENT_PROJECT_VERSION: "?([^"]+)"?$/\1/p' project.yml | head -1)
+version_problem=$(ks_version_problem Helper/ks "$MARKETING_VERSION")
+[ -z "$version_problem" ] || problem "$version_problem"
+
 NOTES=${KS_RELEASE_NOTES:-}
 if [ "$MODE" = --publish ]; then
-  command -v gh >/dev/null || problem "Нет gh в PATH (brew install gh)."
-  gh auth status >/dev/null 2>&1 || problem "gh не авторизован: gh auth login."
-  MARKETING_VERSION=$(sed -nE 's/^ *MARKETING_VERSION: "?([^"]+)"?$/\1/p' project.yml | head -1)
+  if ! command -v gh >/dev/null; then
+    problem "Нет gh в PATH (brew install gh)."
+  elif ! gh auth status >/dev/null 2>&1; then
+    problem "gh не авторизован: gh auth login."
+  else
+    # The latest stable release's appcast is the feed every app reads; betas are added to it.
+    rm -rf build/published && mkdir -p build/published
+    if gh release download --repo "$RELEASES_REPO" --dir build/published --pattern appcast.xml >/dev/null 2>&1; then
+      build_problem=$(build_problem "$BUILD" "$(appcast_max_build build/published/appcast.xml)")
+      [ -z "$build_problem" ] || problem "$build_problem"
+    else
+      problem "Не скачался appcast.xml последнего выпуска $RELEASES_REPO: номер сборки не проверить."
+    fi
+  fi
   if [ -z "$NOTES" ] && [ -f CHANGELOG.md ]; then
     NOTES=build/release-notes.md
     mkdir -p build
