@@ -4,6 +4,25 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [0.19.1] - 2026-10-11
+
+### Security
+- Xray subscriptions are checked harder before the helper builds the config (#37). Before, a
+  subscription could:
+  - name a second server for XHTTP (or its older name, splithttp) downloads that was neither
+    pinned to an address, nor approved with the password, nor let out by pf;
+  - add DNS servers that resolve outside the tunnel (`udp+local`, `h2c+local` and other `+local`
+    forms, `fakedns+…`, ` localhost`);
+  - pick KillSwitch's own direct outbound through a balancer or observatory selector or a
+    balancer's `fallbackTag`, so a passwordless subscription refresh could send traffic past the
+    VPN;
+  - give a server address such as 999.1.1.1, which pf refuses, so everything was blocked;
+  - set raw socket options (`customSockopt`) on its connections;
+  - put line breaks in a server's name, which turned one name into two in the server list.
+- A host of the subscription that cannot be used (for example a 0.0.0.0 or 127.0.0.1 placeholder
+  for «подписка истекла») is left out and named in «Трафик»; the rest of the subscription is kept.
+  The subscription is refused only when no host is left.
+
 ## [0.19.0] - 2026-10-11
 
 ### Added
