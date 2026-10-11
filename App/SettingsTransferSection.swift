@@ -124,13 +124,18 @@ private struct ReviewSheet: View {
                 }
             }
             .frame(minHeight: 220)
-            // outside the list, so scrolling never hides them
-            ForEach(Array(review.changes.flatMap(\.warnings).enumerated()), id: \.offset) { _, warning in
+            // outside the list, so scrolling never hides them; at most three, so they never push the
+            // buttons off the sheet (every entry is listed above)
+            let warnings = review.changes.flatMap(\.warnings).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+            ForEach(warnings.prefix(3), id: \.self) { warning in
                 Label {
                     Text(warning).fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
                 }
+            }
+            if warnings.count > 3 {
+                Text("и ещё \(warnings.count - 3)").foregroundStyle(.secondary)
             }
             if review.rootSkipped {
                 Text("Настройки защиты не применятся: служба KillSwitch не установлена.").foregroundStyle(.secondary)

@@ -291,12 +291,82 @@ enum SettingsBackup {
 
     /// An address shorter than /8 (IPv4) or /16 (IPv6) covers a huge part of the internet: no one
     /// lets that past the VPN on purpose, so the sheet says it in plain words.
+    /// IPv4 written as IPv6 (::ffff:0:0/96) counts as IPv4; private, local and multicast blocks
+    /// (a home network) are not the internet and are not counted.
     static func broadNetworkWarning(_ entry: String) -> String? {
-        let parts = entry.split(separator: "/", maxSplits: 1)
-        guard parts.count == 2, let bits = Int(parts[1]) else { return nil }
-        guard bits < (parts[0].contains(":") ? 16 : 8) else { return nil }
-        return bits == 0 ? String(localized: "\(entry) — это весь интернет: всё пойдёт мимо VPN.")
+        guard let network = Network(entry), network.prefix < (network.isV6 ? 16 : 8), network.internetSize > 0 else { return nil }
+        return network.prefix == 0 ? String(localized: "\(entry) — это весь интернет: всё пойдёт мимо VPN.")
             : String(localized: "\(entry) — это огромная часть интернета: всё, что туда идёт, пойдёт мимо VPN.")
+    }
+
+    /// Each broad entry; or, when there is none, one warning if the entries together cover more
+    /// of the internet than a /8 (IPv4) or a /16 (IPv6) — 256 entries of /8 are all of it.
+    static func broadNetworkWarnings(_ entries: [String]) -> [String] {
+        let single = entries.compactMap(broadNetworkWarning)
+        guard single.isEmpty else { return single }
+        let networks = entries.compactMap(Network.init)
+        let v4 = networks.filter { !$0.isV6 }.map(\.internetSize).reduce(0, +)
+        let v6 = networks.filter(\.isV6).map(\.internetSize).reduce(0, +)
+        guard v4 > pow(2, 24) || v6 > pow(2, 112) else { return [] }
+        return [String(localized: "Вместе эти адреса — огромная часть интернета: всё, что туда идёт, пойдёт мимо VPN.")]
+    }
+
+    /// An address entry of the root lists as a network (a bare address is /32 or /128).
+    private struct Network {
+        let bytes: [UInt8]
+        let prefix: Int
+        var isV6: Bool { bytes.count == 16 }
+
+        init(bytes: [UInt8], prefix: Int) {
+            self.bytes = bytes
+            self.prefix = prefix
+        }
+
+        init?(_ entry: String) {
+            let parts = entry.split(separator: "/", maxSplits: 1)
+            let address = String(parts[0])
+            let v6 = address.contains(":")
+            guard let prefix = parts.count == 2 ? Int(parts[1]) : (v6 ? 128 : 32), prefix >= 0, prefix <= (v6 ? 128 : 32) else { return nil }
+            guard v6 else {
+                var raw = in_addr()
+                guard inet_pton(AF_INET, address, &raw) == 1 else { return nil }
+                self.init(bytes: withUnsafeBytes(of: raw) { Array($0) }, prefix: prefix)
+                return
+            }
+            var raw = in6_addr()
+            guard inet_pton(AF_INET6, address, &raw) == 1 else { return nil }
+            let bytes = withUnsafeBytes(of: raw) { Array($0) }
+            let mapped = Network(bytes: Array(repeating: 0, count: 10) + [0xff, 0xff, 0, 0, 0, 0], prefix: 96)
+            if prefix >= 96, mapped.contains(bytes) {
+                self.init(bytes: Array(bytes[12...]), prefix: prefix - 96)
+            } else if Network(bytes: bytes, prefix: prefix).contains(mapped.bytes) {
+                self.init(bytes: [0, 0, 0, 0], prefix: 0)   // it holds all of IPv4
+            } else {
+                self.init(bytes: bytes, prefix: prefix)
+            }
+        }
+
+        /// The first `prefix` bits are the same.
+        func contains(_ address: [UInt8]) -> Bool {
+            guard address.count == bytes.count else { return false }
+            for bit in 0..<prefix where (bytes[bit / 8] ^ address[bit / 8]) & (0x80 >> UInt8(bit % 8)) != 0 { return false }
+            return true
+        }
+
+        func contains(_ other: Network) -> Bool { other.prefix >= prefix && contains(other.bytes) }
+
+        var size: Double { pow(2, Double(bytes.count * 8 - prefix)) }
+
+        /// Its addresses outside the blocks that are not the internet (they do not overlap).
+        var internetSize: Double {
+            if Self.notInternet.contains(where: { $0.contains(self) }) { return 0 }
+            return size - Self.notInternet.filter { contains($0) }.map(\.size).reduce(0, +)
+        }
+
+        private static let notInternet: [Network] = [
+            "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16",
+            "224.0.0.0/3", "::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8",
+        ].compactMap(Network.init)
     }
 
     /// What applying `new` changes, app settings first; `current` is the whole of what there is.
@@ -322,12 +392,13 @@ enum SettingsBackup {
             ("splitApps", String(localized: "Программы без VPN"), now.splitApps, root.splitApps, false),
         ]
         for (key, title, old, new, addresses) in lists {
-            guard let new, new != (old ?? []) else { continue }
+            // the lists are sets to ks: another order is no change
+            guard let new, Set(new) != Set(old ?? []) else { continue }
             let old = old ?? []
             let added = new.filter { !old.contains($0) }
             result.append(Change(key: key, title: title, old: listText(old), new: listText(new), root: true,
                                  added: added, removed: old.filter { !new.contains($0) },
-                                 warnings: addresses ? added.compactMap(broadNetworkWarning) : []))
+                                 warnings: addresses ? broadNetworkWarnings(added) : []))
         }
         return result
     }
@@ -345,7 +416,7 @@ enum SettingsBackup {
         if let list = new.manualServers {
             commands += Batch.list(helper: helper, add: "server-add", remove: "server-remove", old: current.manualServers ?? [], new: list)
         }
-        if let apps = new.splitApps, apps != current.splitApps ?? [] {
+        if let apps = new.splitApps, Set(apps) != Set(current.splitApps ?? []) {
             commands.append([helper, "set", "splitapps", SplitApps.argument(apps)])
         }
         return commands

@@ -171,6 +171,41 @@ final class SettingsBackupTests: XCTestCase {
         for entry in ["10.0.0.0/8", "192.168.0.0/16", "1.1.1.1", "2001:db8::/16", "2001:db8::/32", "fe80::1", "::1"] {
             XCTAssertNil(SettingsBackup.broadNetworkWarning(entry), entry)
         }
+        // IPv4 written as IPv6 (::ffff:0:0/96) is the IPv4 internet
+        for entry in ["::ffff:0:0/96", "::ffff:0.0.0.0/97", "::ffff:64.0.0.0/98", "::/80", "::/64"] {
+            XCTAssertNotNil(SettingsBackup.broadNetworkWarning(entry), entry)
+        }
+        for entry in ["::ffff:10.0.0.0/104", "::ffff:1.2.3.4", "::ffff:1.0.0.0/104", "fc00::/7", "fe80::/10", "224.0.0.0/3"] {
+            XCTAssertNil(SettingsBackup.broadNetworkWarning(entry), entry)
+        }
+    }
+
+    /// 256 entries of /8 are the whole internet one /8 at a time: the sum is called out once.
+    func testManyNetworksTogetherAreCalledOut() {
+        let together = "Вместе эти адреса — огромная часть интернета: всё, что туда идёт, пойдёт мимо VPN."
+        XCTAssertEqual(SettingsBackup.broadNetworkWarnings((0...255).map { "\($0).0.0.0/8" }), [together])
+        XCTAssertEqual(SettingsBackup.broadNetworkWarnings(["1.0.0.0/8", "2.0.0.0/8"]), [together])
+        XCTAssertEqual(SettingsBackup.broadNetworkWarnings((0...255).map { "2\(String(format: "%03x", $0))::/16" }), [together])
+        XCTAssertEqual(SettingsBackup.broadNetworkWarnings(["::ffff:1.0.0.0/104", "::ffff:2.0.0.0/104"]), [together])
+        // a home network's private ranges are not the internet
+        XCTAssertEqual(SettingsBackup.broadNetworkWarnings(["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7"]), [])
+        XCTAssertEqual(SettingsBackup.broadNetworkWarnings(["1.0.0.0/8", "10.0.0.0/8", "192.168.1.0/24"]), [], "exactly a /8 of the internet")
+        // one broad entry already says it; no second, summed warning
+        XCTAssertEqual(SettingsBackup.broadNetworkWarnings(["0.0.0.0/1", "128.0.0.0/8"]).count, 1)
+    }
+
+    /// The same entries in another order change nothing, in the sheet and in the commands.
+    func testReorderedRootListIsNoChange() {
+        var new = root
+        new.exceptions = ["10.8.0.0/24"]
+        new.splitApps = ["Telegram"]
+        var current = root
+        current.exceptions = ["10.8.0.0/24", "1.1.1.1"]
+        current.splitApps = ["Safari", "Telegram"]
+        new.exceptions = ["1.1.1.1", "10.8.0.0/24"]
+        new.splitApps = ["Telegram", "Safari"]
+        XCTAssertEqual(SettingsBackup.changes(from: .init(app: [:], root: current), to: .init(app: [:], root: new)), [])
+        XCTAssertEqual(SettingsBackup.rootCommands(helper: helper, current: current, new: new), [])
     }
 
     func testResetNamesWhatItRemoves() throws {
