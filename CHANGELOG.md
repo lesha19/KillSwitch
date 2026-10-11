@@ -4,6 +4,19 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Added
+- `killswitch`, a command line for scripts (#12, ADR 0025), in the app at
+  `Contents/Helpers/killswitch`: `status [--json]`, `connect`, `disconnect`, `protection on|off`,
+  `pause <min>`, `server list [--json]`, `server select <name>`. It talks to the same daemon with the
+  same rules as the app: turning protection off or pausing it asks for an administrator. Not put on
+  PATH; README shows the link to make.
+
+### Security
+- The daemon accepts one more client, `com.lesha19.KillSwitch.cli`, signed by the same team; the
+  app bundle checked before root runs install.sh must still be the app itself.
+
 ## [0.18.1] - 2026-10-11
 
 ### Added

@@ -10,15 +10,20 @@ enum HelperIdentity {
     static let team = "YR58655PJ7"
     static let appIdentifier = "com.lesha19.KillSwitch"
     static let helperIdentifier = "com.lesha19.KillSwitch.helper"
+    /// `killswitch` in the app at Contents/Helpers (ADR 0025).
+    static let cliIdentifier = "com.lesha19.KillSwitch.cli"
 
-    /// Who may connect to the daemon: our app, signed by our team through Apple's CA (Developer ID
-    /// or Apple Development). Checked by the system against the peer's audit token.
-    static let clientRequirement = requirement(appIdentifier)
-    /// Who the app talks to: our daemon, not something else that took the Mach name.
-    static let daemonRequirement = requirement(helperIdentifier)
+    /// Our app, signed by our team through Apple's CA (Developer ID or Apple Development). The
+    /// bundle root runs install.sh from must be this, never the CLI.
+    static let appRequirement = requirement("identifier \"\(appIdentifier)\"")
+    /// Who may connect to the daemon: our app or our `killswitch` tool, same anchor and team.
+    /// Checked by the system against the peer's audit token.
+    static let clientRequirement = requirement("(identifier \"\(appIdentifier)\" or identifier \"\(cliIdentifier)\")")
+    /// Who the app and the CLI talk to: our daemon, not something else that took the Mach name.
+    static let daemonRequirement = requirement("identifier \"\(helperIdentifier)\"")
 
-    private static func requirement(_ identifier: String) -> String {
-        "anchor apple generic and identifier \"\(identifier)\" and certificate leaf[subject.OU] = \"\(team)\""
+    private static func requirement(_ identity: String) -> String {
+        "anchor apple generic and \(identity) and certificate leaf[subject.OU] = \"\(team)\""
     }
 }
 

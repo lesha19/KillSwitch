@@ -60,6 +60,12 @@ targets:
       - target: KillSwitchHelper
         copy:
           destination: executables
+      # Contents/Helpers/killswitch (ADR 0025); not Contents/MacOS, where on a case-insensitive
+      # volume it would be the app's own KillSwitch
+      - target: KillSwitchCLI
+        copy:
+          destination: wrapper
+          subpath: Contents/Helpers
       - package: Yams
       - package: Sparkle
     info:
@@ -167,6 +173,41 @@ targets:
       base:
         PRODUCT_NAME: KillSwitchHelper
         PRODUCT_BUNDLE_IDENTIFIER: com.lesha19.KillSwitch.helper
+        # the identifier codesign gives the tool comes from its embedded Info.plist
+        GENERATE_INFOPLIST_FILE: YES
+        CREATE_INFOPLIST_SECTION_IN_BINARY: YES
+        SKIP_INSTALL: YES
+  KillSwitchCLI:
+    # `killswitch` (ADR 0025): the person's command line over the daemon's XPC interface, with the
+    # app's authorization. The daemon lets it in by this identifier and our team.
+    type: tool
+    platform: macOS
+    sources:
+      - CLI
+      - App/Core/CLI.swift
+      - App/AppAuthorization.swift
+      - App/Core/HelperCommand.swift
+      - App/Core/CoreChoice.swift
+      - App/Core/HelperProtocol.swift
+      - App/Core/HelperRight.swift
+      - App/Core/DaemonState.swift
+      - App/Core/Protection.swift
+      - App/Core/CoreProxies.swift
+      - App/Core/ServerPicker.swift
+      - App/Core/CoreDelay.swift
+      - App/Core/ServerName.swift
+      - App/Core/ServerDescription.swift
+      - App/Core/Failover.swift
+      - App/Core/ProfileMerger.swift
+      - App/Core/ProfileConverter.swift
+      - App/Core/ProxyLink.swift
+      - App/Core/WireGuard.swift
+    dependencies:
+      - package: Yams
+    settings:
+      base:
+        PRODUCT_NAME: killswitch
+        PRODUCT_BUNDLE_IDENTIFIER: com.lesha19.KillSwitch.cli
         # the identifier codesign gives the tool comes from its embedded Info.plist
         GENERATE_INFOPLIST_FILE: YES
         CREATE_INFOPLIST_SECTION_IN_BINARY: YES

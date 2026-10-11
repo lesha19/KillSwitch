@@ -42,6 +42,8 @@ not symlinks and writable by nobody else.
   `anchor apple generic and identifier "com.lesha19.KillSwitch" and certificate leaf[subject.OU] = "YR58655PJ7"`
   (macOS 13+). The system checks it against the peer's audit token, not its PID, and invalidates
   the connection otherwise. A user process that is not our signed app cannot send a single command.
+  Since ADR 0025 the requirement also takes `identifier "com.lesha19.KillSwitch.cli"` (the
+  `killswitch` tool, same anchor and team); the bundle check before install.sh stays app-only.
 - App: the connection to the Mach service requires
   `… identifier "com.lesha19.KillSwitch.helper" …`, so something else holding the name gets nothing.
 - Hardened runtime is on for every target (`ENABLE_HARDENED_RUNTIME: YES`; release.sh already signed
