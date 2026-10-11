@@ -76,7 +76,7 @@ rm -f "$CORE_DIR/api-off"
 
 # --- the import approves every host's DIRECT (KS-10): one host that cannot be built does not
 # drop the hosts after it, and is logged
-hosts '$a->[1]{outbounds} = [ grep { $_->{protocol} !~ /vless/ } @{ $a->[1]{outbounds} } ];
+hosts '$a->[1]{outbounds} = [ grep { $_->{protocol} !~ /vless/ } @{ $a->[1]{outbounds} } ]; delete $a->[1]{routing}{balancers};
   unshift @{ $a->[2]{routing}{rules} }, { domain => ["domain:example.org"], outboundTag => "direct" }'
 sha() { shasum -a 256 < "$1" | cut -d' ' -f1; }
 put_setting xrayserver "🇩🇪Германия"; gen; de=$(sha "$T/c.direct")
