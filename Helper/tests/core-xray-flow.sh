@@ -82,6 +82,11 @@ run "$tmp/new.json" refresh
   print JSON::PP->new->encode($a)' < "$fx/xray-panel.json" > "$tmp/direct.json"
 run "$tmp/direct.json" refresh
 [ "$rc" = 3 ] && ok "refresh with a new direct rule: needs the admin (exit 3)" || bad "refresh new direct: $rc"
+/usr/bin/perl -MJSON::PP -e 'local $/; my $a = JSON::PP->new->decode(<STDIN>); $a->[0]{outbounds}[1]{settings}{vnext}[0]{address} = "203.0.113.99";
+  print JSON::PP->new->encode($a)' < "$tmp/direct.json" > "$tmp/both.json"
+run "$tmp/both.json" refresh
+[ "$rc" = 3 ] && grep -q '(DIRECT)' "$tmp/err" && grep -q 'новые серверы' "$tmp/err" &&
+  ok "refresh with a new server and a new direct rule: exit 3 naming both, «(DIRECT)» for the app (KS-12)" || bad "refresh both: $rc $(cat "$tmp/err")"
 
 # --- regen after an upgrade, rebuild for a setting
 : > "$tmp/launchd"
@@ -126,11 +131,22 @@ rc=0; core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>"$tmp/err" || rc=$?
 [ "$(setting xrayserver "")" = "" ] && cmp -s "$CORE_DIR/xray.json" "$tmp/before" && cmp -s "$CORE_EGRESS" "$tmp/egress-before" &&
   ok "  the running config, egress and the pick kept" || bad "  kept: $(setting xrayserver "") $(cat "$CORE_EGRESS")"
 grep -q 'Литва 2 refused' "$EVENTS" && ok "  logged" || bad "  events: $(cat "$EVENTS")"
+# a default install has no xrayserver line: the refused switch must not leave an empty one, which
+# settings_lines_ok used to call damaged, so the watchdog blocked everything (lockdown)
+grep -v '^xrayserver=' "$SETTINGS" > "$tmp/set" && cat "$tmp/set" > "$SETTINGS"
+rc=0; core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>/dev/null || rc=$?
+[ "$rc" = 3 ] && ! grep -q '^xrayserver=' "$SETTINGS" && [ -z "$(root_files_bad)" ] &&
+  ok "  a default install (no pick): refused switch leaves no xrayserver line, the rules stay as usual" ||
+  bad "  default install: rc $rc, settings $(paste -sd'|' "$SETTINGS"), bad: $(root_files_bad)"
+printf 'core=xray\nxrayserver=\n' > "$tmp/set"
+settings_lines_ok "$tmp/set" && ok "  an empty xrayserver= (left by an older ks) means no pick, not damage" || bad "  empty xrayserver= refused"
 core_select "$XRAY_GROUP" DE 2>"$tmp/err" && [ "$(setting xrayserver "")" = DE ] && ok "  a host approved at import still switches" || bad "  DE: $(cat "$tmp/err")"
 run "$tmp/three.json" import
 core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>"$tmp/err" && [ "$(setting xrayserver "")" = "🇱🇹Литва 2" ] && [ "$(paste -sd, - < "$CORE_EGRESS")" = rules,dns ] &&
   ok "  after an import with the password (approving every host) it switches" || bad "  approved: $(cat "$tmp/err")"
 [ "$(stat -f %Lp "$CORE_DIR/approved-switch")" = 600 ] && ok "  the approval root-only" || bad "  approved-switch mode"
+run "$tmp/three.json" refresh
+[ "$rc" = 0 ] && ok "  a refresh while on a host whose approved DIRECT differs from the first one's: taken" || bad "  refresh after switch: $rc $(cat "$tmp/err")"
 core_select "$XRAY_GROUP" "🇱🇹Литва" 2>/dev/null
 put_setting splitapps Telegram; core_apply_settings 2>/dev/null
 core_select "$XRAY_GROUP" DE 2>"$tmp/err" && ok "  after the admin changed apps outside the VPN, a switch to a host like the running one works" || bad "  splitapps: $(cat "$tmp/err")"
@@ -158,6 +174,15 @@ set_core xray 2>"$tmp/err"
   [ -s "$CORE_DIR/config.yaml" ] && [ ! -e "$CORE_DIR/xray.json" ] && [ "$(setting core "")" = xray ] && grep -q 'подписку' "$tmp/err" &&
   ok "set core while running: stored, the running core keeps the VPN up until core on, a stale config of the new one gone" ||
   bad "set core running: $(cat "$tmp/launchd") / $(cat "$CORE_PLIST") / $(ls "$CORE_DIR") / $(cat "$tmp/err")"
+# ...and back before the import for the new one worked: mihomo still runs on config.yaml, which
+# must stay, or its next restart has no config and no VPN
+set_core mihomo 2>/dev/null
+[ -s "$CORE_DIR/config.yaml" ] && [ "$(setting core "")" = mihomo ] &&
+  ok "set core back to the running one: its config kept" || bad "set core back: $(ls "$CORE_DIR")"
+echo '{}' > "$CORE_DIR/xray.json"; put_setting core xray
+set_core xray 2>/dev/null
+[ -s "$CORE_DIR/xray.json" ] && ok "set core to the one already chosen: its config kept" || bad "set core same: $(ls "$CORE_DIR")"
+rm -f "$CORE_DIR/xray.json"; put_setting core xray
 set_core sing-box 2>/dev/null && bad "set core sing-box accepted" || ok "set core: only xray or mihomo"
 
 # "ks core on" then swaps the job: launchd returns from bootout before the old job is gone and
@@ -184,6 +209,13 @@ core_on 2>"$tmp/err" && rc=0 || rc=$?
 rm -f "$CORE_DIR/xray.json"; echo '<plist>mihomo</plist>' > "$CORE_PLIST"; echo loaded > "$tmp/job"; : > "$tmp/launchd"
 core_on 2>/dev/null && bad "core on without the new core's config accepted" ||
   { grep -q bootout "$tmp/launchd" && bad "core on without a config stopped the running core" || ok "core on before the import: refused, the running core kept"; }
+# mihomo running, Xray to start: its stats port is checked before mihomo goes (a taken port means a
+# config without the api first, else Xray would not start and the VPN be gone)
+xray_api_check() { echo "launchctl api-check" >> "$tmp/launchd"; return 1; }
+echo '{}' > "$CORE_DIR/xray.json"; echo '<plist>mihomo</plist>' > "$CORE_PLIST"; echo loaded > "$tmp/job"; : > "$tmp/launchd"
+core_on 2>/dev/null
+[ "$(grep -oE 'api-check|bootout' "$tmp/launchd" | head -2 | paste -sd, -)" = "api-check,bootout" ] &&
+  ok "core on, mihomo to Xray: the stats port checked before the running core is stopped" || bad "api check: $(paste -sd'|' "$tmp/launchd")"
 unset -f pgrep dns_locked sleep
 put_setting core xray
 set_multihop LT_1_FB 2>"$tmp/err" && bad "double VPN accepted with Xray" || ok "double VPN: refused with Xray (not yet)"
