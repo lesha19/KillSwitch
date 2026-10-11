@@ -163,7 +163,15 @@ tagged; netbird_sync
 check "folder anyone can write: not NetBird, never run" [ -z "$(group)" ] && [ "$(ran)" = 0 ]
 ln -s "$bin" "$open/link"; /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $open/link" "$NB_PLIST"
 /usr/libexec/PlistBuddy -c 'Delete :GroupName' "$NB_PLIST" >/dev/null 2>&1; rm -f "$NB_SIGF"; netbird_sync
-check "a link to a binary only root can change: NetBird" [ "$(group)" = "$NB_GROUP" ]
+# launchd runs the link, which anyone can swap (#50): a swap gets root at NetBird's next start
+# whatever ks does, so refusing protects nothing; it is logged
+check "a link in a folder anyone can write, to a binary only root can change: NetBird" [ "$(group)" = "$NB_GROUP" ]
+grep -q "netbird: $open/link is a link in a folder others than root can write" "$EVENTS"
+check "  and in events.log" [ $? = 0 ]
+/usr/libexec/PlistBuddy -c 'Delete :GroupName' "$NB_PLIST" >/dev/null 2>&1
+mkdir -p "$tmp/links"; ln -s "$bin" "$tmp/links/link"; /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $tmp/links/link" "$NB_PLIST"
+rm -f "$NB_SIGF"; netbird_sync
+check "a link in a folder only root can change, to such a binary: NetBird" [ "$(group)" = "$NB_GROUP" ]
 /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $bin" "$NB_PLIST"
 
 tagged; CONSOLE=0; echo tailscale=0 > "$SETTINGS"; netbird_sync; CONSOLE=1
@@ -184,5 +192,32 @@ rm -f "$NB_PLIST"; : > "$tmp/calls"; netbird_bg; wait
 check "no NetBird: nothing started" [ ! -s "$tmp/calls" ]
 : > "$tmp/calls"; netbird_sync
 check "no NetBird: nothing done" [ ! -s "$tmp/calls" ]
+
+# nb_trusted (#50): launchd runs the path in NetBird's plist, not the file it resolves to, so the
+# links are followed one by one and each one's folder is checked: exit 1 when the file or a
+# folder above it can be changed by others, 2 (with the real path) when only a link's folder can
+rc() { nb_trusted "$1" > /dev/null; echo $?; }
+mkdir -p "$tmp/safe" "$tmp/open" "$tmp/real"; chmod 777 "$tmp/open"
+echo x > "$tmp/real/netbird"
+real=$(cd "$tmp/real" && pwd -P)/netbird
+check "nb_trusted: a trusted file, by its real path" [ "$(nb_trusted "$tmp/real/netbird")" = "$real" ]
+ln -s "$tmp/real/netbird" "$tmp/safe/nb"
+check "  a link in a trusted folder: 0, its target" [ "$(nb_trusted "$tmp/safe/nb")" = "$real" -a "$(rc "$tmp/safe/nb")" = 0 ]
+ln -s ../real/netbird "$tmp/safe/rel"
+check "  a relative link too" [ "$(nb_trusted "$tmp/safe/rel")" = "$real" ]
+ln -s "$tmp/real/netbird" "$tmp/open/nb"
+check "  a link in a folder anyone can write: 2, with its target" [ "$(rc "$tmp/open/nb")" = 2 -a "$(nb_trusted "$tmp/open/nb")" = "$real" ]
+ln -s "$tmp/open/nb" "$tmp/safe/chain"
+check "  a trusted link to such a link: 2 (the middle link counts)" [ "$(rc "$tmp/safe/chain")" = 2 ]
+ln -s "$tmp/open" "$tmp/safe/dir"
+check "  through a linked folder anyone can write: 2" [ "$(rc "$tmp/safe/dir/nb")" = 2 ]
+cp "$tmp/real/netbird" "$tmp/open/netbird"; ln -s "$tmp/open/netbird" "$tmp/safe/into"
+check "  a trusted link to a file in such a folder: 1" [ "$(rc "$tmp/safe/into")" = 1 ]
+check "  nb_target: the real path on 0 and 2, nothing on 1" [ "$(nb_target "$tmp/open/nb")" = "$real" -a -z "$(nb_target "$tmp/safe/into")" ]
+ln -s "$tmp/safe/loop" "$tmp/safe/loop2"; ln -s "$tmp/safe/loop2" "$tmp/safe/loop"
+check "  a link loop: 1" [ "$(rc "$tmp/safe/loop")" = 1 ]
+check "  a relative path: 1" [ "$(rc "real/netbird")" = 1 ]
+chmod 666 "$tmp/real/netbird"
+check "  a file others can write: 1" [ "$(rc "$tmp/safe/nb")" = 1 -a "$(rc "$tmp/open/nb")" = 1 ]
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

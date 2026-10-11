@@ -501,22 +501,53 @@ NB_OWNER=0
 nb_user() { local u; u=$(stat -f %u /dev/console 2>/dev/null) && [[ "$u" =~ ^[0-9]+$ ]] && [ "$u" != 0 ] && echo "$u"; }
 # nb_trusted <path>: the real path (links resolved) when the file and every folder above it belong
 # to root and nobody else can write them; a folder only the admin group may write (/Applications)
-# is accepted. Anything else could be swapped by a user: not NetBird.
+# is accepted. Anything else could be swapped by a user: not NetBird (exit 1). launchd runs the
+# path as written, so the links are followed one by one and each one's folder is checked too
+# (#50): exit 2, still with the real path, when only a link's folder fails (NetBird's installer
+# puts its link into /usr/local/bin, which some Macs give to the user). Swapped there, the link
+# makes launchd run the new file as root at NetBird's next start whatever KillSwitch does, so a
+# refusal would protect nothing and only cut NetBird off: it is logged instead (decided by the
+# agent, docs/security/hardening-0.20.md).
 nb_trusted() {
-  perl -MCwd=abs_path -e 'my ($o, $p) = @ARGV; my $r = abs_path($p) // exit 1;
-    my @s = stat $r or exit 1; -f _ && ($s[4] == 0 || $s[4] == $o) && !($s[2] & 022) or exit 1;
-    for (my $d = $r; $d ne "/";) { $d =~ s{/[^/]*$}{}; $d = "/" if $d eq "";
-      @s = stat $d or exit 1; ($s[4] == 0 || $s[4] == $o) && !($s[2] & 02) or exit 1;
-      !($s[2] & 020) || $s[5] == 80 || $s[5] == 0 or exit 1 }
-    print "$r\n"' "$NB_OWNER" "$1"
+  perl -e 'my ($o, $p) = @ARGV; $p =~ m{\A/} or exit 1;
+    sub dir_ok { my @s = stat $_[0] or return 0; -d _ && ($s[4] == 0 || $s[4] == $o) && !($s[2] & 02) &&
+      (!($s[2] & 020) || $s[5] == 80 || $s[5] == 0) }
+    my ($cur, $hops, %bad) = ("", 0);
+    my @rest = grep { length } split m{/}, $p;
+    while (@rest) {
+      my $c = shift @rest;
+      next if $c eq ".";
+      if ($c eq "..") { $cur =~ s{/[^/]*\z}{}; next }
+      my $d = $cur eq "" ? "/" : $cur;
+      $bad{$d} = 1 unless dir_ok($d);
+      if (-l "$cur/$c") {
+        ++$hops <= 40 or exit 1;
+        my $t = readlink "$cur/$c"; defined $t && length $t or exit 1;
+        $cur = "" if $t =~ m{\A/};
+        unshift @rest, grep { length } split m{/}, $t;
+      } else { $cur = "$cur/$c" }
+    }
+    my @s = stat $cur or exit 1; -f _ && ($s[4] == 0 || $s[4] == $o) && !($s[2] & 022) or exit 1;
+    for (my $d = $cur; $d ne "/";) { $d =~ s{/[^/]*\z}{}; $d = "/" if $d eq ""; exit 1 if $bad{$d} }
+    print "$cur\n"; exit(%bad ? 2 : 0)' "$NB_OWNER" "$1"
+}
+nb_target() {  # nb_target <path>: nb_trusted's real path, a link's own folder aside (its exit 2)
+  local r rc
+  r=$(nb_trusted "$1"); rc=$?
+  { [ "$rc" = 0 ] || [ "$rc" = 2 ]; } && echo "$r"
 }
 nb_signed() { codesign -v -R="anchor apple generic and certificate leaf[subject.OU] = \"$NB_TEAM\"" "$1" 2>/dev/null; }
 nb_want() {
-  local bin
+  local bin real rc
   [ "$(setting tailscale 1)" = 1 ] && dscl . -read "/Groups/$NB_GROUP" PrimaryGroupID >/dev/null 2>&1 || return 1
   bin=$(nb_bin) && [ -n "$bin" ] || return 1
-  bin=$(nb_trusted "$bin") || { log_event "netbird: its binary can be changed by others than root, not let past the VPN"; return 1; }
-  nb_signed "$bin"
+  real=$(nb_trusted "$bin"); rc=$?
+  case $rc in
+    0) ;;
+    2) log_event "netbird: $bin is a link in a folder others than root can write (launchd runs it as root); let past the VPN by the file it leads to" ;;
+    *) log_event "netbird: its binary can be changed by others than root, not let past the VPN"; return 1 ;;
+  esac
+  nb_signed "$real"
 }
 nb_addr() {  # the daemon address from the plist's --daemon-addr, NetBird's default otherwise
   local a i=1 prev=""
@@ -529,7 +560,7 @@ nb_addr() {  # the daemon address from the plist's --daemon-addr, NetBird's defa
 }
 nb_cli() {  # nb_cli <seconds> <args...>: NetBird's CLI against its daemon as the console user, killed after <seconds>
   local t=$1 u bin; shift
-  u=$(nb_user) && bin=$(nb_trusted "$(nb_bin)") && nb_signed "$bin" || return 1
+  u=$(nb_user) && bin=$(nb_target "$(nb_bin)") && nb_signed "$bin" || return 1
   perl -MPOSIX -e '$t = shift; $u = shift; @pw = getpwuid $u or exit 1; $p = fork; defined $p or exit 1;
     if (!$p) { $) = "$pw[3] $pw[3]"; POSIX::setgid($pw[3]) && POSIX::setuid($u) && $< == $u && $> == $u && $u != 0 or exit 1;
       @ENV{qw(HOME USER LOGNAME)} = @pw[7, 0, 0]; exec @ARGV; exit 127 }
