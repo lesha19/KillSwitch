@@ -73,6 +73,12 @@ for e in de.example.com=203.0.113.1 fi.example.com=203.0.113.1 nas=1.2.3.4; do
     { [ "$(setting hosts "")" = "nas.lan=192.168.1.10,dns.example.com=203.0.113.53" ] && [ -s "$tmp/err" ] && ok "set hosts: refuses $e, nothing changed" ||
       bad "set hosts $e: $(cat "$SETTINGS")"; }
 done
+core_apply_settings() { applied=$((applied + 1)); return 1; }
+set_hosts 'other.example.com=203.0.113.7' 2>/dev/null && bad "set hosts: a failed rebuild reported as done" ||
+  { [ "$(setting hosts "")" = "nas.lan=192.168.1.10,dns.example.com=203.0.113.53" ] && ok "set hosts: a failed rebuild puts the old list back" ||
+    bad "set hosts rollback: $(cat "$SETTINGS")"; }
+core_apply_settings() { applied=$((applied + 1)); }
+applied=1
 set_hosts "" && ! grep -q '^hosts' "$SETTINGS" && grep -qx lan=1 "$SETTINGS" && [ "$applied" = 2 ] && ok "set hosts \"\": the line gone" ||
   bad "set hosts clear: $(cat "$SETTINGS")"
 rm -f "$SETTINGS" "$APPROVED_HOSTS" "$PINS"

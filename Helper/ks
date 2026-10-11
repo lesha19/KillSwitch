@@ -2517,7 +2517,8 @@ doh_put() {  # doh_put <url>: the settings line, "" removes it
 # "ks set hosts <name=addr,...>" (ADR 0033): own addresses of sites, answered by the core's DNS;
 # "" clears. A name of the VPN's servers is refused (they stay pinned to what the import approved).
 set_hosts() {
-  local list e
+  local list e old
+  old=$(setting hosts "")
   list=$(hosts_parse "$1") || return 1
   while IFS= read -r e; do
     [ -n "$e" ] || continue
@@ -2525,12 +2526,15 @@ set_hosts() {
       echo "${e%%=*} — адрес сервера VPN: его менять нельзя" >&2; return 1
     fi
   done <<<"$list"
-  if [ -z "$list" ]; then
-    { grep -v '^hosts=' "$SETTINGS" 2>/dev/null || true; } > "$SETTINGS.tmp" && chmod 644 "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS" || return 1
-  else
-    put_setting hosts "$(paste -sd, - <<<"$list")" || return 1
-  fi
-  core_apply_settings
+  hosts_put "$(paste -sd, - <<<"$list")" || return 1
+  # a config the core does not take must not stay in settings: every later rebuild would fail
+  core_apply_settings && return 0
+  hosts_put "$old"
+  return 1
+}
+hosts_put() {  # hosts_put <list>: the settings line, "" removes it
+  if [ -n "$1" ]; then put_setting hosts "$1"; return; fi
+  { grep -v '^hosts=' "$SETTINGS" 2>/dev/null || true; } > "$SETTINGS.tmp" && chmod 644 "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
 }
 
 # "ks set multihop <entry proxy>|off": double VPN. The entry is checked by building the config
