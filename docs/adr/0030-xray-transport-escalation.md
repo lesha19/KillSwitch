@@ -61,6 +61,11 @@ from the observatory, so no step is a blind restart.
   picked through 1 and 2: they keep the person's choice and fix only how it is reached. «Slow»
   never triggers 1 or 2 (a fingerprint does not make a server faster). If no alternative answers
   (an address blocked outright), step 4 comes as fast as before.
+- **Double VPN (ADR 0027).** The alternatives' probes are dialed through `ks-entry` like every
+  other probe but the entry's own, so nothing dials the exit directly. While the entry's probe is
+  dead, no step at all: the entry is what is down, not the exit's fingerprint or transport. The
+  entry and own servers («(свой)») are never a new exit; names `valid_name` would refuse are
+  skipped (and never written to the memory file).
 - **Memory.** `$CORE_DIR/escalation` (root, 600): `net=<interface and router>`, then
   `<host>\tfp|lead\t<value>`. The generator builds it into every host (the running config and
   every host's probe, so ping bars and failover see what is really used), after checking it: a

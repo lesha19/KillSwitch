@@ -334,7 +334,7 @@ final class XrayAddressCheckTests: XCTestCase {
         let context = AddressCheck.Context(providers: [],
                                            geosite: { category, host in category == "youtube" ? host.hasSuffix("youtube.com") : nil },
                                            geoip: { ip, country in geoip[ip].map { $0.caseInsensitiveCompare(country) == .orderedSame } })
-        return AddressCheck.check(AddressCheck.Target(text)!, report: report, context: context)
+        return AddressCheck.check(AddressCheck.Target(text)!, report: report, context: context)!
     }
 
     func testTheReportSaysItIsXray() throws {
@@ -393,6 +393,40 @@ final class XrayAddressCheckTests: XCTestCase {
         XCTAssertEqual(result.position, 0)
         XCTAssertEqual(result.route, .vpn("mixed-lb"))
         XCTAssertFalse(result.isExact)
+    }
+
+    func testAReportOfAnOlderHelperIsNoAnswer() throws {
+        // 0.19's helper wrote Xray reports without rule objects: never «через VPN» for every site
+        var old = report
+        old.targets = nil
+        old.rules = old.rules.map { RoutingReport.Rule(rule: $0.rule, from: $0.from, index: $0.index) }
+        let context = AddressCheck.Context(providers: [], geosite: { _, _ in nil }, geoip: { _, _ in nil })
+        XCTAssertNil(AddressCheck.check(AddressCheck.Target("a.example")!, report: old, context: context))
+    }
+
+    func testARuleLeftOutOfTheReportIsACaveat() {
+        // Helper/ks leaves a rule object over 16 KB out
+        let rules = [RoutingReport.Rule(rule: "domain=domain:d1.example,… → block", from: .subscription, index: 0)]
+        let result = check("a.example", rules: rules)
+        XCTAssertEqual(result.caveats.map(\.position), [0])
+        XCTAssertEqual(result.route, .vpn("LT_1"))
+    }
+
+    func testAnUntaggedFirstOutbound() {
+        var report = self.report
+        report.rules = []
+        report.fallback = ""
+        report.targets?[""] = "direct"
+        let context = AddressCheck.Context(providers: [], geosite: { _, _ in nil }, geoip: { _, _ in nil })
+        XCTAssertEqual(AddressCheck.check(AddressCheck.Target("a.example")!, report: report, context: context)?.route, .direct,
+                       "no match goes direct when the first outbound is an untagged freedom")
+    }
+
+    func testPrivateAsXrayKnowsIt() {
+        for ip in ["0.1.2.3", "192.0.0.8", "198.18.0.1", "198.19.255.1", "192.0.2.1", "198.51.100.1", "203.0.113.9", "10.0.0.1"] {
+            XCTAssertEqual(IPv4(ip)?.isPrivate, true, ip)
+        }
+        XCTAssertEqual(IPv4("8.8.8.8")?.isPrivate, false)
     }
 
     func testWhatCannotBeToldHere() {

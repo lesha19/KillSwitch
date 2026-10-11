@@ -245,8 +245,8 @@ private struct QuickSwitches: View {
         VStack(spacing: 6) {
             row(Text(multihopTitle(exit: exit)), String(localized: "Двойной VPN"),
                 isOn: Binding(get: { control.multihopEntry != nil },
-                              set: { control.setMultihop(entry: $0 ? candidates.first : nil) }))
-                .disabled(control.multihopEntry == nil && candidates.isEmpty)
+                              set: { control.setMultihop(entry: $0 ? Multihop.preferred(candidates, alive: { control.proxies?.alive($0) }) : nil) }))
+                .disabled(control.multihopEntry == nil && Multihop.preferred(candidates, alive: { control.proxies?.alive($0) }) == nil)
                 .help(String(localized: "Через два сервера: вход видит твой адрес, выход — сайты. Спросит пароль."))
         }
         .disabled(control.busy)

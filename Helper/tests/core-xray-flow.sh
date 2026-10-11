@@ -140,6 +140,21 @@ rc=0; core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>/dev/null || rc=$?
   bad "  default install: rc $rc, settings $(paste -sd'|' "$SETTINGS"), bad: $(root_files_bad)"
 printf 'core=xray\nxrayserver=\n' > "$tmp/set"
 settings_lines_ok "$tmp/set" && ok "  an empty xrayserver= (left by an older ks) means no pick, not damage" || bad "  empty xrayserver= refused"
+# the pick is written only after the gate: a ks killed while the candidate is built leaves no
+# unapproved pick behind for the next ungated rebuild (rotation, a setting, _regen) to commit
+eval "$(declare -f core_rebuild | sed '1s/core_rebuild/real_core_rebuild/')"
+core_rebuild() { grep '^xrayserver=' "$DIR/settings" > "$tmp/seen"; real_core_rebuild "$@"; }
+core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>/dev/null
+! grep -q 'Литва 2' "$tmp/seen" && ok "  while the candidate is built and gated, the settings still name the running pick" ||
+  bad "  pick written before the gate: $(cat "$tmp/seen")"
+eval "$(declare -f real_core_rebuild | sed '1s/real_core_rebuild/core_rebuild/')"
+# KS-10 / fail closed: a host name the settings would call damaged is never written (failover
+# takes names from the subscription without the passwordless filter)
+cp "$SETTINGS" "$tmp/set-before"; cp "$REPORT" "$tmp/report-before"
+/usr/bin/perl -MJSON::PP -i -0pe '$r = JSON::PP->new->decode($_); push @{ $r->{servers} }, { name => "DE\tX" }; $_ = JSON::PP->new->encode($r)' "$REPORT"
+rc=0; xray_select $'DE\tX' 2>/dev/null || rc=$?
+cp "$tmp/report-before" "$REPORT"
+[ "$rc" != 0 ] && cmp -s "$SETTINGS" "$tmp/set-before" && ok "  a host name with a control character: refused, settings untouched" || bad "  bad name: rc $rc $(cat "$SETTINGS")"
 core_select "$XRAY_GROUP" DE 2>"$tmp/err" && [ "$(setting xrayserver "")" = DE ] && ok "  a host approved at import still switches" || bad "  DE: $(cat "$tmp/err")"
 run "$tmp/three.json" import
 core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>"$tmp/err" && [ "$(setting xrayserver "")" = "🇱🇹Литва 2" ] && [ "$(paste -sd, - < "$CORE_EGRESS")" = rules,dns ] &&
@@ -168,6 +183,7 @@ set_core mihomo 2>"$tmp/err"
 # "ks core import" resolves its server names after "ks set core". With the running core stopped
 # nothing could leave (pf) and the Mac stayed without a VPN; the running one stays until "core on".
 echo '<plist>mihomo</plist>' > "$CORE_PLIST"; echo cfg > "$CORE_DIR/config.yaml"; echo stale > "$CORE_DIR/xray.json"
+echo '{}' > "$CORE_PROFILE"   # mihomo runs: its import was the last one
 LOADED=1; : > "$tmp/launchd"
 set_core xray 2>"$tmp/err"
 ! grep -qE 'bootout|bootstrap|kickstart|disable' "$tmp/launchd" && [ "$(cat "$CORE_PLIST")" = '<plist>mihomo</plist>' ] &&
@@ -182,6 +198,16 @@ set_core mihomo 2>/dev/null
 echo '{}' > "$CORE_DIR/xray.json"; put_setting core xray
 set_core xray 2>/dev/null
 [ -s "$CORE_DIR/xray.json" ] && ok "set core to the one already chosen: its config kept" || bad "set core same: $(ls "$CORE_DIR")"
+# mihomo not running: back to the core whose import was the last one (the other's failed), its
+# config matches the servers and approvals in place and stays, no import with the password needed
+LOADED=0; put_setting core xray
+set_core mihomo 2>/dev/null
+[ -s "$CORE_DIR/config.yaml" ] && ok "set core back to the core imported last, not running: its config kept" || bad "set core back, off: $(ls "$CORE_DIR")"
+# the last import was Xray's: mihomo's config is from an older one and goes
+put_setting core xray; touch "$CORE_DIR/profile-xray.json"
+set_core mihomo 2>/dev/null
+[ ! -e "$CORE_DIR/config.yaml" ] && ok "  after an import for the other core: the older config goes" || bad "  stale kept: $(ls "$CORE_DIR")"
+LOADED=1
 rm -f "$CORE_DIR/xray.json"; put_setting core xray
 set_core sing-box 2>/dev/null && bad "set core sing-box accepted" || ok "set core: only xray or mihomo"
 

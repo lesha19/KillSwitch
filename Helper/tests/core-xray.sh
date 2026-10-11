@@ -89,6 +89,21 @@ grep -qE '00000000-0000-4000|Z84J2Iel|0123abcd|fake-path' "$tmp/c.report" && bad
   [ "$(q '$c->{fallback}')" = LT_1 ] &&
   ok "report: where each outbound leads, and the one no rule takes (the first)" || bad "report targets: $(q '$c->{targets}') $(q '$c->{fallback}')"
 grep -qE '00000000-0000-4000|Z84J2Iel|0123abcd|fake-path' "$tmp/c.report" && bad "report holds a secret after the rule objects" || ok "  still no secret in the report"
+edit 'unshift @{ $a->[0]{outbounds} }, { protocol => "freedom" };
+  unshift @{ $a->[0]{routing}{rules} }, { domain => [ map { "domain:d$_.example" } 1 .. 2000 ], outboundTag => "block" }'
+gen "$tmp/p.json" || bad "untagged first freedom refused: $(cat "$tmp/err")"
+[ "$(q '"[$c->{fallback}]:" . $c->{targets}{$c->{fallback}}')" = "[]:direct" ] &&
+  ok "  an untagged freedom first: the fallback says direct, not nothing" || bad "  fallback: $(q '$c->{fallback}') $(q '$c->{targets}')"
+[ "$(q 'exists $c->{rules}[2]{xray} ? "kept" : "left out"')" = "left out" ] && [ "$(q 'exists $c->{rules}[3]{xray} ? "kept" : "left out"')" = kept ] &&
+  [ "$(wc -c < "$tmp/c.report")" -lt 200000 ] && ok "  a rule object over 16 KB is left out of the report (the app says it cannot tell)" ||
+  bad "  big rule: $(wc -c < "$tmp/c.report")"
+# a host's name ends up in settings (xrayserver=) and the report: control characters or more than
+# 256 bytes refuse the subscription, as a damaged one
+edit '$a->[0]{remarks} = "Литва\tвход"'
+gen "$tmp/p.json" && bad "a tab in a host name accepted" || ok "a control character in a host name: refused"
+edit '$a->[0]{remarks} = "x" x 257'
+gen "$tmp/p.json" && bad "a 257-byte host name accepted" || ok "a host name over 256 bytes: refused"
+gen "$fx/xray-panel.json"
 [ "$(q 'join ",", map { "$_->{name}:$_->{type}" } @{ $c->{proxies} }')" = "LT_1:vless,LT_1_FB:vless" ] &&
   [ "$(q 'join ",", map { "$_->{name}:" . join "+", @{ $_->{proxies} } } @{ $c->{groups} }')" = "country-lb:LT_1+LT_1_FB" ] &&
   ok "report: servers and the balancer with its members" || bad "report proxies/groups: $(q '$c->{proxies}') $(q '$c->{groups}')"

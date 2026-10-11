@@ -57,15 +57,14 @@ cp "$T/c.direct" "$T/direct.single"; cp "$T/c.egress" "$T/egress.single"; cp "$T
 
 printf 'core=xray\nmultihop=🇩🇪Германия\n' > "$SETTINGS"
 gen || bad "double VPN refused: $(cat "$T/err")"
-[ "$(dialers)" = "LT_1=ks-entry,LT_1_FB=ks-entry,ks-ping-0=-,ks-ping-1=-,ks-entry=-" ] &&
-  ok "every server of the running host is dialed through ks-entry; the probes and the entry are not" || bad "chain: $(dialers)"
+[ "$(dialers)" = "LT_1=ks-entry,LT_1_FB=ks-entry,ks-ping-0=ks-entry,ks-ping-1=-,ks-entry=-" ] &&
+  ok "every server of the running host and every other host's probe go through ks-entry; the entry's own probe does not" || bad "chain: $(dialers)"
 [ "$(j 'my ($e) = grep { $_->{tag} eq "ks-entry" } @{ $c->{outbounds} }; "$e->{protocol}:$e->{settings}{vnext}[0]{address}:" . ($e->{streamSettings}{realitySettings}{serverName} // "")')" = "vless:203.0.113.20:www.example.com" ] &&
   ok "  ks-entry: the entry host's first server, its name pinned to the approved address" || bad "  entry: $(j '[grep { $_->{tag} eq "ks-entry" } @{ $c->{outbounds} }]' | head -c 400)"
 [ "$(j '$c->{outbounds}[0]{tag}')" = LT_1 ] && ok "  the running host's first outbound stays first (what no rule takes)" || bad "  first: $(j '$c->{outbounds}[0]{tag}')"
 [ "$(j 'scalar grep { ($_->{outboundTag} // "") eq "ks-entry" } @{ $c->{routing}{rules} }')" = 0 ] &&
   ok "  no rule sends traffic to the entry alone" || bad "  a rule to ks-entry"
-[ "$(j 'join ",", map { $_->{tag} } grep { ($_->{streamSettings}{sockopt}{dialerProxy} // "") eq "ks-entry" } @{ $c->{outbounds} }')" = LT_1,LT_1_FB ] &&
-  [ "$(j '$c->{routing}{rules}[1]{outboundTag}')" = LT_1 ] && ok "  the fetch inbound goes to a chained server" || bad "  fetch: $(j '$c->{routing}{rules}[1]')"
+[ "$(j '$c->{routing}{rules}[1]{outboundTag}')" = LT_1 ] && ok "  the fetch inbound goes to a chained server" || bad "  fetch: $(j '$c->{routing}{rules}[1]')"
 cmp -s "$T/c.direct" "$T/direct.single" && cmp -s "$T/c.egress" "$T/egress.single" && cmp -s "$T/s" "$T/servers.single" &&
   ok "nothing new past the VPN: servers for pf, DIRECT signature and egress as without it" || bad "differs: $(cat "$T/c.egress") $(cat "$T/s")"
 [ "$(j 'join "|", map { $_->{kind} . ":" . join(",", @{ $_->{items} }) } grep { $_->{kind} eq "multihop" } @{ $c->{added} }' "$T/c.report")" = "multihop:🇩🇪Германия" ] &&
@@ -77,16 +76,26 @@ xtest "double VPN" "$T/c"
 printf 'core=xray\nmultihop=🇩🇪Германия\nxrayserver=🇩🇪Германия\n' > "$SETTINGS"
 gen && [ "$(dialers)" = "DE_1=-,DE_1_FB=-,ks-ping-0=-,ks-ping-1=-" ] && ok "the entry is the running host: one hop" || bad "entry = exit: $(cat "$T/err") $(dialers)"
 
-# fail closed: never a silent single hop when the entry is gone, never a chain we cannot see through
-printf 'core=xray\nmultihop=🇳🇱Нидерланды\n' > "$SETTINGS"
-gen && bad "a missing entry accepted" || { grep -q 'Двойной VPN' "$T/err" && ok "an entry not in the subscription: refused" || bad "missing entry: $(cat "$T/err")"; }
-printf 'core=xray\nmultihop=🇩🇪Германия\n' > "$SETTINGS"
+# an entry the build cannot use (gone from the subscription, a mihomo name from before, chained, a
+# tag clash): double VPN goes off, logged, so a refresh or a rebuild never stays refused for it
+dropped() {  # dropped <what> [dialers]: built one hop, the setting off, the reason in events.log
+  if gen && [ "$(dialers)" = "${2:-LT_1=-,LT_1_FB=-,ks-ping-0=-,ks-ping-1=-}" ] && [ "$(setting multihop x)" = off ] &&
+     grep -q "double VPN off" "$EVENTS"; then ok "$1: one hop, double VPN turned off and logged"
+  else bad "$1: $(cat "$T/err") $(dialers) multihop=$(setting multihop x) $(tail -1 "$EVENTS" 2>/dev/null)"; fi
+  : > "$EVENTS"
+}
+hosts; printf 'core=xray\nmultihop=🇳🇱Нидерланды\n' > "$SETTINGS"; dropped "an entry not in the subscription"
+printf 'core=xray\nmultihop=NL reality\n' > "$SETTINGS"; dropped "a mihomo proxy name from before"
 hosts '$a->[1]{outbounds}[0]{proxySettings} = { tag => "DE_1_FB" }'
-gen && bad "an entry with its own chain accepted" || { grep -q 'Двойной VPN' "$T/err" && ok "an entry reached through another outbound: refused" || bad "chained entry: $(cat "$T/err")"; }
+printf 'core=xray\nmultihop=🇩🇪Германия\n' > "$SETTINGS"; dropped "an entry reached through another outbound" "LT_1=-,LT_1_FB=-,ks-ping-0=-"
 hosts '$a->[0]{outbounds}[2]{tag} = "ks-entry"; $_->{outboundTag} =~ s/\Adirect\z/ks-entry/ for grep { defined $_->{outboundTag} } @{ $a->[0]{routing}{rules} }'
-gen && bad "a subscription tag ks-entry accepted" || ok "the subscription's own «ks-entry» tag: refused, not overwritten"
+printf 'core=xray\nmultihop=🇩🇪Германия\n' > "$SETTINGS"
+gen && [ "$(setting multihop x)" = off ] && [ "$(j 'scalar grep { ($_->{streamSettings}{sockopt}{dialerProxy} // "") eq "ks-entry" } @{ $c->{outbounds} }')" = 0 ] &&
+  ok "the subscription's own «ks-entry» tag: not overwritten, double VPN off" || bad "tag clash: $(cat "$T/err")"
+: > "$EVENTS"
 hosts '$a->[0]{outbounds}[1]{proxySettings} = { tag => "LT_1" }'
-gen && [ "$(dialers)" = "LT_1=ks-entry,LT_1_FB=-,ks-ping-0=-,ks-ping-1=-,ks-entry=-" ] &&
+printf 'core=xray\nmultihop=🇩🇪Германия\n' > "$SETTINGS"
+gen && [ "$(dialers)" = "LT_1=ks-entry,LT_1_FB=-,ks-ping-0=ks-entry,ks-ping-1=-,ks-entry=-" ] &&
   ok "a server the subscription reaches through another one is chained through that one" || bad "own chain: $(cat "$T/err") $(dialers)"
 
 # --- ks set multihop with Xray: stored only when the config builds, then rebuilt and reloaded
@@ -95,15 +104,42 @@ hosts
 core_import "$T/p.json" import 2>"$T/err" || bad "import: $(cat "$T/err")"
 cfg="$CORE_DIR/xray.json"
 set_multihop "🇩🇪Германия" 2>"$T/err" && [ "$(setting multihop off)" = "🇩🇪Германия" ] &&
-  [ "$(j 'join ",", map { $_->{tag} } grep { ($_->{streamSettings}{sockopt}{dialerProxy} // "") eq "ks-entry" } @{ $c->{outbounds} }' "$cfg")" = LT_1,LT_1_FB ] &&
+  [ "$(j 'join ",", map { $_->{tag} } grep { ($_->{streamSettings}{sockopt}{dialerProxy} // "") eq "ks-entry" } @{ $c->{outbounds} }' "$cfg")" = LT_1,LT_1_FB,ks-ping-0 ] &&
   ok "ks set multihop: stored and applied with Xray" || bad "set_multihop: $(cat "$T/err")"
-grep -qx 203.0.113.10 "$SERVERS" && grep -qx 203.0.113.20 "$SERVERS" && ok "  servers for pf: the approved hosts, as before" || bad "  servers: $(cat "$SERVERS")"
+grep -qx 203.0.113.10 "$SERVERS" && grep -qx 203.0.113.20 "$SERVERS" && ok "  servers for pf: the approved hosts, as before (not narrowed: ADR 0027)" || bad "  servers: $(cat "$SERVERS")"
 cp "$cfg" "$T/cfg.before"
 set_multihop "🇳🇱Нидерланды" 2>"$T/err" && bad "a missing entry stored" ||
   { [ "$(setting multihop off)" = "🇩🇪Германия" ] && cmp -s "$cfg" "$T/cfg.before" && ok "  a missing entry refused, the old one kept" || bad "  refusal: $(cat "$T/err")"; }
+set_multihop "🇱🇹Литва" 2>"$T/err" && bad "the running host stored as the entry" ||
+  { [ "$(setting multihop off)" = "🇩🇪Германия" ] && grep -q 'выход' "$T/err" && ok "  the running host as the entry: refused (that would be one hop)" || bad "  entry = exit: $(cat "$T/err")"; }
+xray_select "🇩🇪Германия" 2>"$T/err" && bad "the entry picked as the exit" ||
+  { [ -z "$(setting xrayserver "")" ] && grep -q 'вход' "$T/err" && ok "  picking the entry as the exit: refused, said why" || bad "  select entry: $(cat "$T/err")"; }
 set_multihop off 2>"$T/err" && [ "$(setting multihop x)" = off ] &&
   [ "$(j 'scalar grep { $_->{streamSettings}{sockopt}{dialerProxy} } @{ $c->{outbounds} }' "$cfg")" = 0 ] &&
   ok "  off: one hop again" || bad "  off: $(cat "$T/err")"
+# a dead entry is refused; with the core running, the chain must answer after the restart
+xray_pings() { printf '🇱🇹Литва\t1\t50\n🇩🇪Германия\t0\t0\n'; }
+set_multihop "🇩🇪Германия" 2>"$T/err" && bad "a dead entry stored" ||
+  { [ "$(setting multihop x)" = off ] && grep -q 'не отвечает' "$T/err" && ok "  an entry the observatory finds dead: refused" || bad "  dead entry: $(cat "$T/err")"; }
+xray_pings() { printf '🇱🇹Литва\t1\t50\n🇩🇪Германия\t1\t60\n'; }
+core_job() { CORE_RUN=1; CORE_PID=100; }
+core_up() { return 0; }
+PROBE="0 0"; diag_probe() { echo "$PROBE"; }
+CHAIN_TRIES=2; CHAIN_WAIT=0
+set_multihop "🇩🇪Германия" 2>"$T/err" && bad "a chain that does not answer kept" ||
+  { [ "$(setting multihop x)" = off ] && [ "$(j 'scalar grep { $_->{streamSettings}{sockopt}{dialerProxy} } @{ $c->{outbounds} }' "$cfg")" = 0 ] &&
+    grep -q 'double VPN off: no answer through' "$EVENTS" && ok "  running, no answer through the chain: back to one hop, logged" || bad "  rollback: $(cat "$T/err") $(setting multihop x)"; }
+PROBE="90 1"
+set_multihop "🇩🇪Германия" 2>"$T/err" && [ "$(setting multihop x)" = "🇩🇪Германия" ] && ok "  running, the chain answers: kept" || bad "  verified: $(cat "$T/err")"
+core_job() { CORE_RUN=0; CORE_PID=""; }
+
+# --- the upgrade (_regen): a multihop= from the mihomo era, read by an Xray report without targets
+printf '{"version":1,"core":"xray","servers":[{"name":"🇩🇪Германия"}]}' > "$REPORT"
+put_setting multihop "🇩🇪Германия"; : > "$EVENTS"
+multihop_stale_drop && [ "$(setting multihop x)" = off ] && grep -q 'double VPN off' "$EVENTS" &&
+  ok "upgrade: a double VPN from before this helper (a mihomo name) is turned off, logged" || bad "stale: $(setting multihop x)"
+printf '{"version":1,"core":"xray","targets":{}}' > "$REPORT"; put_setting multihop "🇩🇪Германия"
+multihop_stale_drop; [ "$(setting multihop x)" = "🇩🇪Германия" ] && ok "  one this helper set is kept" || bad "  kept: $(setting multihop x)"
 
 # --- another core: the entry names a server of the other core's format, so it goes
 put_setting multihop "🇩🇪Германия"

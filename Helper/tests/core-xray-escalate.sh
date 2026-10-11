@@ -43,6 +43,7 @@ xtest() {
 tags() { j 'join ",", map { $_->{tag} } grep { $_->{tag} =~ /\Aks-ping-0-/ } @{ $c->{outbounds} }'; }
 out_of() { T1=$1 j 'my ($o) = grep { $_->{tag} eq $ENV{T1} } @{ $c->{outbounds} }; $o'; }
 sha() { shasum -a 256 < "$1" | cut -d' ' -f1; }
+drop_setting() { grep -v "^$1=" "$SETTINGS" > "$SETTINGS.d" 2>/dev/null; mv "$SETTINGS.d" "$SETTINGS"; }   # back to the default
 
 # --- the config: probes of the running host's alternatives, only what the subscription offers
 hosts
@@ -72,6 +73,13 @@ drop_setting escalate; gen || bad "escalate on refused: $(cat "$T/err")"
 cmp -s "$T/c.direct" "$T/direct.off" && cmp -s "$T/c.egress" "$T/egress.off" && cmp -s "$T/s" "$T/servers.off" &&
   ok "  the DIRECT signature, egress and the servers for pf are the same as without (KS-10)" || bad "  direct/egress/servers changed"
 xtest "the probes of alternatives" "$T/c"
+put_setting multihop "🇩🇪Германия"; gen || bad "double VPN refused: $(cat "$T/err")"
+[ "$(j 'join ",", map { $_->{tag} . "=" . ($_->{streamSettings}{sockopt}{dialerProxy} // "-") } grep { $_->{tag} =~ /\Aks-ping-0-/ } @{ $c->{outbounds} }')" = \
+  "ks-ping-0-fp-firefox=ks-entry,ks-ping-0-fp-safari=ks-entry,ks-ping-0-t1=ks-entry" ] &&
+  ok "double VPN (ADR 0027): the alternatives' probes go through the entry too, never straight to the exit" ||
+  bad "double VPN probes: $(j '[map { [$_->{tag}, $_->{streamSettings}{sockopt}{dialerProxy}] } @{ $c->{outbounds} }]')"
+xtest "the probes of alternatives through the entry" "$T/c"
+put_setting multihop off
 hosts '$_->{streamSettings}{security} = "none", delete $_->{streamSettings}{realitySettings} for @{ $a->[0]{outbounds} }[0, 1]'
 gen && [ "$(tags)" = ks-ping-0-t1 ] && ok "no TLS on the server: no fingerprint to change, the transport only" || bad "no tls: $(cat "$T/err") $(tags)"
 hosts '$a->[0]{outbounds} = [ grep { $_->{tag} ne "LT_1_FB" } @{ $a->[0]{outbounds} } ]'
@@ -190,6 +198,13 @@ reset_esc; pass; pass; pass
 PROBE="90 1"; pass
 PROBE="0 0"; for _ in $(seq 1 9); do pass; done
 [ "$(wc -l < "$T/rebuilt")" -eq 2 ] && ok "an answer in between ends the outage: the fingerprint may be tried again later" || bad "episode: $(cat "$T/rebuilt")"
+
+OBS=$'ks-ping-0\t0\t0\nks-ping-0-fp-safari\t1\t80\nks-ping-0-t1\t1\t50\nks-ping-1\t1\t30\nks-ping-3\t0\t0'
+reset_esc; put_setting multihop "🇩🇪Германия"
+for _ in 1 2 3 4 5 6; do pass; done
+[ ! -e "$T/rebuilt" ] && [ ! -e "$T/selected" ] &&
+  ok "double VPN with the entry's probe dead: neither another fingerprint nor transport for the exit, no switch" || bad "entry dead: $(cat "$T/rebuilt" 2>&1) $(cat "$T/selected" 2>&1)"
+put_setting multihop off
 
 reset_esc; REBUILD_RC=1
 printf 'net=%s\n🇱🇹Литва 2\tfp\tfirefox\n' "$NETSIG" > "$MEM"

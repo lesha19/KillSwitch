@@ -31,6 +31,11 @@ enum XrayManual {
         guard !server.contains(":") else {
             throw Unsupported(reason: String(localized: "адрес сервера IPv6, а защита пускает к серверам только IPv4"))
         }
+        // what Helper/ks takes as a server's name (host() in core_generate_xray), else the whole
+        // import would be refused for this one
+        guard server.range(of: #"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$"#, options: .regularExpression) != nil else {
+            throw Unsupported(reason: String(localized: "имя сервера с недопустимыми символами"))
+        }
         if proxy["skip-cert-verify"] as? Bool == true {
             throw Unsupported(reason: String(localized: "сервер просит не проверять его сертификат"))
         }
@@ -84,7 +89,7 @@ enum XrayManual {
         var added = 0
         for server in manual {
             guard let outbound = try? outbound(server.proxy) else { skipped.append(server.name); continue }
-            let base = server.name + mark
+            let base = cleanName(server.name) + mark
             var name = base
             var n = 2
             while names.contains(name) { name = "\(base) (\(n))"; n += 1 }
@@ -98,6 +103,15 @@ enum XrayManual {
         }
         guard let data = try? JSONSerialization.data(withJSONObject: array, options: [.sortedKeys, .withoutEscapingSlashes]) else { return nil }
         return (data, names, skipped)
+    }
+
+    /// The link's name as the helper takes it (valid_name, check()): no control characters, at most
+    /// 200 bytes, so with the mark and a number it stays under 256.
+    static func cleanName(_ name: String) -> String {
+        var clean = String(String.UnicodeScalarView(name.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }))
+            .trimmingCharacters(in: .whitespaces)
+        while clean.utf8.count > 200 { clean.removeLast() }
+        return clean.isEmpty ? String(localized: "Сервер") : clean
     }
 
     // MARK: transport

@@ -88,6 +88,11 @@ KS_APPROVE_ALL=1 gen || bad "approve all: $(cat "$T/err")"
 [ "$lt" != "$de" ] && [ "$(sort "$T/c.approved" | paste -sd, -)" = "$(printf '%s\n%s\n' "$lt" "$de" | sort | paste -sd, -)" ] &&
   ok "approval: a host with no server skipped, the hosts after it still approved" || bad "approved: $(cat "$T/c.approved") lt $lt de $de"
 grep -q 'approval skipped.*🇱🇹Литва 2' "$EVENTS" && ok "  the skipped host logged" || bad "  events: $(cat "$EVENTS")"
+hosts '$a->[1]{outbounds} = [ grep { $_->{protocol} !~ /vless/ } @{ $a->[1]{outbounds} } ]; $a->[1]{remarks} = "Ж" x 100'
+: > "$EVENTS"; KS_APPROVE_ALL=1 gen
+w64=$(printf 'Ж%.0s' $(seq 1 64))
+grep -q "skipped (cannot be built): ${w64}\$" "$EVENTS" && iconv -f UTF-8 -t UTF-8 "$EVENTS" >/dev/null 2>&1 &&
+  ok "  a long name logged cut to 64 characters, between characters" || bad "  long name: $(cat "$EVENTS")"
 
 # --- the observatory's answer (gRPC GetOutboundStatus), decoded
 grpc_frame() {  # the reply the API sends: alive ks-ping-0 at 87 ms, ks-ping-1 dead, someone else's LT_1
@@ -170,7 +175,21 @@ OBS=$'ks-ping-0\t0\t0\nks-ping-1\t1\t120\nks-ping-2\t1\t30'
 reset_fo; put_setting multihop "🇱🇹Литва 2"; PROBE="0 0"
 for _ in 1 2 3 4; do pass; done
 [ ! -e "$T/selected" ] && ok "double VPN (ADR 0027): the entry host is never failover's new exit (that would be one hop)" || bad "switched to the entry: $(cat "$T/selected")"
+# the entry dead: every exit is unreachable through it, moving the exit would only churn
+OBS=$'ks-ping-0\t0\t0\nks-ping-1\t1\t120\nks-ping-2\t0\t0'
+reset_fo; put_setting multihop "🇩🇪Германия"; PROBE="0 0"
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do pass; done
+[ ! -e "$T/selected" ] && ok "  the entry's own probe dead: no failover at all (the exit stays the person's)" || bad "churned with a dead entry: $(cat "$T/selected")"
+OBS=$'ks-ping-0\t0\t0\nks-ping-1\t1\t120\nks-ping-2\t1\t30'
+reset_fo; PROBE="0 0"
+for _ in 1 2 3 4; do pass; done
+[ "$(cat "$T/selected" 2>/dev/null)" = "🇱🇹Литва 2" ] && ok "  the entry alive: the exit still fails over" || bad "  entry alive: $(cat "$T/selected" 2>&1)"
 put_setting multihop off
+# own servers (ADR 0027) route differently from the subscription's hosts: never a failover target
+reset_fo
+/usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); $r->{servers}[1]{name} = "🇱🇹Литва 2 (свой)"; print JSON::PP->new->encode($r)' < "$REPORT" > "$REPORT.n" && mv "$REPORT.n" "$REPORT"
+PROBE="0 0"; for _ in 1 2 3 4; do pass; done
+[ ! -e "$T/selected" ] && ok "an own server («(свой)») is never failover's target" || bad "switched to an own server: $(cat "$T/selected")"
 
 OBS=$'ks-ping-0\t1\t100\nks-ping-1\t1\t110\nks-ping-2\t1\t30'
 reset_fo; put_setting xrayserver ""; PROBE="100 1"   # no server picked by hand: the first host, auto
@@ -247,6 +266,16 @@ both failover select
 both select failover
 [ "$(paste -sd, - < "$T/order")" = "start 🇩🇪Германия,end 🇩🇪Германия" ] && [ "$(setting xrayserver "")" = "🇩🇪Германия" ] &&
   ok "a pick by hand switching, then the failover pass: skipped, the pick stays" || bad "order: $(cat "$T/order")"
+
+# --- a host whose name the settings would call damaged (over 256 bytes, control characters) is
+# never a failover target: writing it would make the watchdog block everything
+OBS=$'ks-ping-0\t0\t0\nks-ping-1\t1\t120\nks-ping-2\t1\t30'
+reset_fo; PROBE="0 0"
+long="🇱🇹$(printf 'x%.0s' $(seq 1 300))"
+L=$long /usr/bin/perl -MJSON::PP -i -0pe '$r = JSON::PP->new->decode($_); $r->{servers}[1]{name} = $ENV{L}; $_ = JSON::PP->new->encode($r)' "$REPORT"
+pass; pass; pass
+[ ! -e "$T/selected" ] && grep -q 'no live server of its country' "$EVENTS" && ok "a same-country host with a name over 256 bytes: not a failover target" ||
+  bad "long name: $(cat "$T/selected" 2>&1) $(cat "$EVENTS")"
 
 # --- the Mac without a network (no primary interface): the probe fails for that reason, not the
 # server's; nothing counted, so a local outage does not abandon a server picked by hand

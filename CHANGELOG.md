@@ -18,15 +18,25 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   Способ подключения «Пробовать другой отпечаток и транспорт, если сервер не отвечает», on by
   default (`ks set escalate 0|1`).
 - Xray: «Двойной VPN» works with the main way of connecting (#33, ADR 0027). The entry is another
-  server of the subscription; the running server is reached through it. Nothing new goes past the
-  VPN; an entry that is gone refuses the config instead of quietly going one hop. Failover never
-  picks the entry as the exit; changing the way of connecting turns double VPN off.
+  server of the subscription; the running server and the other servers' ping probes are reached
+  through it, so no exit sees the Mac's address. Nothing new goes past the VPN. Turning it on
+  refuses an entry that does not answer and, with the VPN on, turns itself off again (logged) if
+  the chain does not answer after the restart. An entry that later disappears from the
+  subscription turns double VPN off with a log line, it never blocks the config. The entry is never
+  the exit (not offered, refused by the helper, never picked by failover; failover waits while the
+  entry is dead). Changing the way of connecting, and an upgrade that finds a setting left from the
+  fallback way, turn it off.
 - Xray: own servers added by link work with the main way (#33, ADR 0027): each is a server of its
-  own in the list, «<имя> (свой)», everything and DNS through it. Those the main way cannot use
-  (hysteria2, TUIC, WireGuard, a Shadowsocks plugin, IPv6, a skipped certificate check…) say so in
-  Settings and keep working with the fallback way.
+  own in the list, «<имя> (свой)», everything and DNS through it; never a failover target. Those
+  the main way cannot use (hysteria2, TUIC, WireGuard, a Shadowsocks plugin, IPv6, a server name
+  with odd characters, a skipped certificate check…) say so in Settings, keep working with the
+  fallback way and never block the import of the others. Names lose control characters and are
+  cut to 200 bytes; the helper refuses host names with control characters or over 256 bytes.
 - Xray: «Трафик» › «Проверить адрес» (#33, ADR 0027) walks Xray's rules from the routing report;
-  what cannot be told here (a program, the address a name gets) is listed as approximate.
+  what cannot be told here (a program, the address a name gets, a rule too big for the report) is
+  listed as approximate. With a service of an older version it asks to update it instead of
+  answering. «Private» addresses also cover 0/8, 192.0.0/24, 198.18/15 and the documentation
+  networks.
 - Settings › Дополнительно «Перенос настроек» (#15, ADR 0024): «Сохранить в файл…» writes the app
   and protection settings to a JSON file, «Загрузить из файла…» reads one back, «Сбросить…» returns
   them to the defaults. Both show every change first; protection settings go through the usual
@@ -82,13 +92,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   (by hand, the CLI, and since this release automatic failover), blocked everything with
   «Настройки защиты повреждены»: the helper wrote the previous choice back as an empty value, which
   it then took for damaged settings. Since 0.17. The switch now just stays on the running server,
-  and a settings file left empty that way is accepted.
+  and a settings file left empty that way is accepted. A server whose name has control characters
+  or is longer than 256 bytes is refused for a switch and skipped by failover, for the same reason.
 - After pf refused the rules three times in a row (another load under way), everything stayed
   blocked until «Сбросить настройки». The watchdog now loads the rules again every 10 s until pf
   takes them; damaged settings files still keep everything blocked.
 - Going back to the way of connecting that was running (Основной → Запасной after the Xray import
   failed) deleted the config that core was running on, so its next restart (sleep, crash,
-  upgrade) left the VPN off with «Нет конфига».
+  upgrade) left the VPN off with «Нет конфига». Switching back while that core is off keeps its
+  config too when it was the last one imported.
 - Automatic failover no longer counts the running server as dead while the Mac itself has no
   network, so a hand-picked server is not left after a Wi‑Fi outage.
 - `ks core on` checks Xray's statistics port before stopping mihomo, so a port held by another
@@ -162,6 +174,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   (needed for passwordless switches and failover) is built from the imported profile when no
   refresh changed it since the import; otherwise the next import with the password builds it.
 - `ks repair` keeps only host addresses in the Tailscale relay list (KS-19), as the check does.
+- Xray server switch (by hand, the CLI or failover): the choice is saved only after the check of
+  what that server sends past the VPN (KS-10) passed. Before, a helper stopped in the middle could
+  leave a server chosen that the check would refuse, and the next rebuild (every 30 minutes) ran it
+  without the password.
 
 ## [0.18.1] - 2026-10-11
 
