@@ -240,10 +240,7 @@ enum DeepLink: Equatable {
         return confirmed ? .run(.disconnect) : .confirm(.disconnect)
     }
 
-    /// Our core runs: connected, connecting, or stuck on a server that does not answer.
-    private static func vpnRuns(_ status: Status) -> Bool {
-        status.primary == .disconnect || status.primary == .cancel || status.secondary == .disconnect
-    }
+    private static func vpnRuns(_ status: Status) -> Bool { Shortcuts.vpnRuns(status) }
 
     /// For the log: the command, and for a subscription only its host.
     var logName: String {

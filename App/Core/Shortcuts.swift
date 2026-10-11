@@ -27,10 +27,14 @@ enum Shortcuts {
     }
 
     static func disconnect(status: Status, busy isBusy: Bool) -> Decision {
-        guard status.primary == .disconnect || status.primary == .cancel else {
-            return .done(String(localized: "VPN и так не подключён"))
-        }
+        guard vpnRuns(status) else { return .done(String(localized: "VPN и так не подключён")) }
         return isBusy ? .refused(busy) : .run
+    }
+
+    /// Our core runs: connected, connecting, or stuck on a server that does not answer (its main
+    /// button is «Выбрать другой сервер…», «Отключить» is the second one).
+    static func vpnRuns(_ status: Status) -> Bool {
+        status.primary == .disconnect || status.primary == .cancel || status.secondary == .disconnect
     }
 
     /// «Защищено, сервер LT-Vilnius»: spoken by Siri too, so without emoji.

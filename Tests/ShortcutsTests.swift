@@ -30,6 +30,8 @@ final class ShortcutsTests: XCTestCase {
     func testDisconnect() {
         XCTAssertEqual(Shortcuts.disconnect(status: .protected, busy: false), .run)
         XCTAssertEqual(Shortcuts.disconnect(status: .connecting, busy: false), .run)
+        // stuck on a server that does not answer: the core still runs and must be stopped
+        XCTAssertEqual(Shortcuts.disconnect(status: .stuck, busy: false), .run)
         XCTAssertEqual(Shortcuts.disconnect(status: .blocked, busy: false), .done("VPN и так не подключён"))
         XCTAssertEqual(Shortcuts.disconnect(status: .protected, busy: true), .refused("KillSwitch занят. Попробуй через минуту."))
     }
