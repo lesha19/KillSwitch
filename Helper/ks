@@ -1980,7 +1980,10 @@ KS_ROUTING_PL='
     die "x-ks-routing: не объект\n" unless ref $h eq "HASH";
     for (sort keys %$h) { die "x-ks-routing: незнакомый ключ «$_»\n" unless /\A(name|order|block|proxy|direct)\z/ }
     my $name = $h->{name};
-    die "x-ks-routing: имя профиля\n" unless defined $name && !ref $name && length $name && length $name <= 64 && $name !~ /[\x00-\x1f\x7f]/;
+    # up to 64 characters as the app allows, not bytes (the JSON is read as UTF-8 bytes)
+    my $chars = $name;
+    utf8::decode($chars) if defined $chars && !ref $chars && $chars !~ /[^\x00-\xff]/;
+    die "x-ks-routing: имя профиля\n" unless defined $name && !ref $name && length $name && length $chars <= 64 && $name !~ /[\x00-\x1f\x7f]/;
     my @order = qw(block proxy direct);
     if (exists $h->{order}) {
       die "x-ks-routing: order — block, proxy и direct в каком-то порядке\n"

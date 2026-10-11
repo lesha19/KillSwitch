@@ -168,4 +168,17 @@ put_setting splitapps ""
 ! cmp -s "$T/s1-plain-a.direct" "$T/s1-redir-a.direct" && grep -q '^outbound	.*redirect' "$T/s1-redir-a.direct" &&
   ok "  and the one split apps use" || bad "s1 apps: $(cat "$T/s1-redir-a.direct")"
 
+# --- a name of up to 64 characters, as the app allows, whatever the script (review S2: the
+# helper counted UTF-8 bytes, so 33 Cyrillic letters refused every import and refresh)
+s2name() { /usr/bin/perl -MJSON::PP -e 'local $/; my $p = JSON::PP->new->decode(<STDIN>);
+  my $h = { name => "я" x $ARGV[0], block => { sites => ["domain:ads.example.com"] } }; utf8::decode($h->{name});
+  if ($ARGV[1]) { $p->[0]{"x-ks-routing"} = $h } else { $p->{"x-ks-routing"} = $h } print JSON::PP->new->utf8->encode($p)' "$2" "${3:-}" < "$1"; }
+printf 'core=mihomo\n' > "$SETTINGS"
+s2name "$T/base.json" 64 > "$T/s2.json"; gm "$T/s2.json" s2-m && ok "mihomo: a name of 64 Cyrillic letters" || bad "mihomo 64 letters: $(cat "$T/err")"
+[ "$(j '$c->{rules}[1]' "$T/s2-m")" = "DOMAIN-SUFFIX,ads.example.com,REJECT" ] && ok "  its rules applied" || bad "  rules: $(j '$c->{rules}' "$T/s2-m")"
+s2name "$T/base.json" 65 > "$T/s2.json"; if gm "$T/s2.json" s2-m65; then bad "mihomo: 65 letters taken"; else ok "  65: refused"; fi
+printf 'core=xray\n' > "$SETTINGS"
+s2name "$fx/xray-panel.json" 64 1 > "$T/s2x.json"; gx "$T/s2x.json" s2-x && ok "Xray: a name of 64 Cyrillic letters" || bad "xray 64 letters: $(cat "$T/err")"
+s2name "$fx/xray-panel.json" 65 1 > "$T/s2x.json"; if gx "$T/s2x.json" s2-x65; then bad "xray: 65 letters taken"; else ok "  65: refused"; fi
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

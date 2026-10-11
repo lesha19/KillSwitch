@@ -55,6 +55,9 @@ final class RoutingProfileTests: XCTestCase {
         XCTAssertEqual(try RoutingProfile.parse("{\"Name\":\"  \",\"BlockIp\":[\"10.0.0.0/8\"]}").name, "Профиль")
         let long = String(repeating: "я", count: 100)
         XCTAssertEqual(try RoutingProfile.parse("{\"Name\":\"\(long)\",\"BlockIp\":[\"10.0.0.0/8\"]}").name.count, 64)
+        // the helper counts code points (Helper/ks routing_hint): a flag is one character of two
+        let flags = String(repeating: "🇷🇺", count: 40)
+        XCTAssertLessThanOrEqual(try RoutingProfile.parse("{\"Name\":\"\(flags)\",\"BlockIp\":[\"10.0.0.0/8\"]}").name.unicodeScalars.count, 64)
     }
 
     func testHintForTheHelper() throws {

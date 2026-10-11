@@ -66,6 +66,17 @@ struct RoutingProfile: Codable, Equatable, Identifiable, Sendable {
         return try parse(object)
     }
 
+    /// Whole characters up to `scalars` code points: the helper counts code points, and a flag
+    /// or an emoji with a skin tone is one character of several.
+    private static func capped(_ text: String, scalars: Int) -> String {
+        var out = ""
+        for ch in text {
+            guard out.unicodeScalars.count + ch.unicodeScalars.count <= scalars else { break }
+            out.append(ch)
+        }
+        return out
+    }
+
     private static func base64(_ text: String) -> Data? {
         var s = text.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         s += String(repeating: "=", count: (4 - s.count % 4) % 4)
@@ -88,7 +99,7 @@ struct RoutingProfile: Codable, Equatable, Identifiable, Sendable {
         let rawName = (o["Name"] as? String ?? "").unicodeScalars.filter { $0.properties.generalCategory != .control }
         var name = String(String.UnicodeScalarView(rawName)).trimmingCharacters(in: .whitespacesAndNewlines)
         if name.isEmpty { name = String(localized: "Профиль") }
-        var p = RoutingProfile(name: String(name.prefix(64)))
+        var p = RoutingProfile(name: capped(name, scalars: 64))
         p.block = Lists(sites: try list("BlockSites"), ips: try list("BlockIp"))
         p.proxy = Lists(sites: try list("ProxySites"), ips: try list("ProxyIp"))
         p.direct = Lists(sites: try list("DirectSites"), ips: try list("DirectIp"))
