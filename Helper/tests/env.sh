@@ -47,6 +47,12 @@ check "IFS back to space, tab, newline" "$(line 14)" "20090a"
 out=$(env -i PATH=/usr/bin:/bin KS_NOW=1 KS_APPROVE_ALL=1 KS_LOCKED=1 KS_LOCK_HELD=1 \
   /bin/bash -c '. "$1"; printf "%s|%s|%s|%s\n" "${KS_NOW-unset}" "${KS_APPROVE_ALL-unset}" "${KS_LOCKED-unset}" "$KS_LOCK_HELD"' _ "$KS")
 check "KS_NOW, KS_APPROVE_ALL, KS_LOCKED unset; the lock not taken as held" "$out" "unset|unset|unset|0"
+# 0.20.0's hooks: the escalation memory a step builds with, a strict or backing-off double VPN,
+# the chain check's tries and wait, and the generator's DIRECT_ONLY (no config written)
+out=$(env -i PATH=/usr/bin:/bin KS_ESC_FILE=/x KS_MULTIHOP_STRICT=1 KS_MULTIHOP_BACK=1 CHAIN_TRIES=0 CHAIN_WAIT=99 DIRECT_ONLY=1 \
+  /bin/bash -c '. "$1"; printf "%s|" "${KS_ESC_FILE-unset}" "${KS_MULTIHOP_STRICT-unset}" "${KS_MULTIHOP_BACK-unset}" "${CHAIN_TRIES-unset}" \
+    "${CHAIN_WAIT-unset}" "${DIRECT_ONLY-unset}"' _ "$KS")
+check "KS_ESC_FILE, KS_MULTIHOP_STRICT, KS_MULTIHOP_BACK, CHAIN_TRIES, CHAIN_WAIT, DIRECT_ONLY unset" "$out" "unset|unset|unset|unset|unset|unset|"
 out=$(env -i PATH=/usr/bin:/bin /bin/bash -c 'KS_LOCKED=$PPID exec /bin/bash -c ". \"\$1\"; echo \$KS_LOCK_HELD" _ "$1"' _ "$KS")
 check "a marker naming the parent, which is no lockf: not held" "$out" 0
 out=$(env -i PATH=/usr/bin:/bin /bin/bash -c 'KS_LOCKED=$$ exec /usr/bin/lockf -k -t 5 "$2" /bin/bash -c ". \"\$1\"; echo \$KS_LOCK_HELD" _ "$1"' _ "$KS" "$tmp/core.lock")

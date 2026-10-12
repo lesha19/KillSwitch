@@ -54,6 +54,7 @@ ks_clean_env() {
     case $(/bin/ps -o comm= -p "$PPID" 2>/dev/null) in lockf|*/lockf) KS_LOCK_HELD=1 ;; esac
   fi
   unset CURL_HOME BASH_ENV ENV CDPATH GLOBIGNORE PS4 KS_PINS KS_STRICT_DNS KS_NOW KS_APPROVE_ALL KS_LOCKED
+  unset KS_ESC_FILE KS_MULTIHOP_STRICT KS_MULTIHOP_BACK CHAIN_TRIES CHAIN_WAIT DIRECT_ONLY   # 0.20.0's hooks
   for v in $(compgen -e); do
     case "$v" in
       LANG|LC_ALL) ;;
