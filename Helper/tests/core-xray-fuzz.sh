@@ -507,6 +507,15 @@ for f in "${fields[@]}"; do
 done
 [ "$nbad" = 0 ] && ok "$n mutations of ${#fields[@]} read values: the host left out (or the subscription refused) every time"
 
+# --- messages say what is wrong in words (0.19.1 review 3)
+edit 'delete $c->{outbounds}[0]{protocol}'
+gen; grep -q '«»' "$tmp/err" && bad "protocol missing: an empty «» in: $(cat "$tmp/err")" || ok "protocol missing: no empty «» in the refusal"
+edit '$c->{outbounds}[0]{streamSettings}{sockopt}{dialerProxy} = ["x"]'
+gen; grep -q 'ARRAY(' "$tmp/err" && bad "dialerProxy a list: $(cat "$tmp/err")" || ok "dialerProxy a list: refused without a Perl reference in the text"
+if accepted "DNS servers null, without an address, empty" 'push @{$c->{dns}{servers}}, undef, { address => undef }, {}'; then
+  [ -s "$tmp/err" ] && bad "  warnings: $(head -c 200 "$tmp/err")" || ok "  no warnings"
+fi
+
 # --- names: shown, stored as xrayserver=, logged; no line breaks and no control characters
 refused "a control character in a name" '$c->{remarks} = "a\x07b"' "Управляющие символы"
 refused "a key longer than 256" '$c->{outbounds}[0]{"k" x 300} = 1'
