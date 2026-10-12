@@ -367,4 +367,16 @@ done
 SERVERS="$T/s1-redir-p.srv"; APPROVED_DIRECT="$T/s1-redir-p.direct"; : > "$T/empty.direct"
 refresh_check "$T/s1-redir-p.srv" "$T/pins" "$T/empty.direct" 2>/dev/null && ok "  nothing direct any more (the profile off): no password" || bad "p1b: empty needs the admin"
 
+# --- with 0.19.1 (#37): the first host is a panel placeholder (0.0.0.0), left out as unusable; the
+# profile rides on the first config, so it must still reach the hosts that are kept
+printf 'core=xray\n' > "$SETTINGS"
+with_routing "$fx/xray-panel.json" "$T/xph.json" '$h = { name => "x", block => { sites => ["domain:ads.example.com"] }, direct => { sites => ["domain:ru"] } };
+  my $b = JSON::PP->new->decode(JSON::PP->new->encode($p->[0])); $b->{remarks} = "#2"; delete $b->{"x-ks-routing"}; push @$p, $b;
+  $_->{settings}{vnext}[0]{address} = "0.0.0.0" for grep { $_->{settings}{vnext} } @{ $p->[0]{outbounds} }' 1
+gx "$T/xph.json" x-ph || bad "placeholder first: $(cat "$T/err")"
+[ "$(j 'join ",", map { $_->{item} . "=" . $_->{reason} } grep { $_->{section} eq "servers" } @{ $c->{dropped} }' "$T/x-ph.report")" = "🇱🇹Литва=address" ] &&
+  [ "$(j 'scalar grep { ($_->{from} // "") eq "profile" } @{ $c->{rules} }' "$T/x-ph.report")" = 2 ] && grep -q $'^profile-rule	.*domain:ru' "$T/x-ph.direct" &&
+  ok "the first host left out as a placeholder: the profile still applies to the kept ones (in the DIRECT signature too)" ||
+  bad "placeholder first: profile lost: $(j '$c->{dropped}' "$T/x-ph.report") $(cat "$T/x-ph.direct")"
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

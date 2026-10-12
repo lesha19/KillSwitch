@@ -1707,7 +1707,11 @@ KS_XRAY_PL='
     die "В подписке нет ни одного годного сервера (" . join("; ", map { "$_->{item}: $UNUSABLE{ $_->{reason} }" . (defined $_->{detail} ? " «$_->{detail}»" : "") } @DROPPED[0 .. ($#DROPPED < 2 ? $#DROPPED : 2)]) . ")\n"
       unless @keep;
     @ORIG = @keep;
+    # the routing profile (ADR 0034) rides on the first config: with that host left out it goes to
+    # the first one kept, never lost (or taken from another host)
+    my $hint = $a->[0]{"x-ks-routing"};
     $a = [ @$a[@keep] ];
+    if ($keep[0] != 0) { delete $a->[0]{"x-ks-routing"}; $a->[0]{"x-ks-routing"} = $hint if defined $hint }
     $LOADED = $a;
     $a
   }
