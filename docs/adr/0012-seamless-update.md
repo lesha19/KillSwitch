@@ -249,3 +249,6 @@ Decision:
   and with no sheet open it relaunches by itself (`/bin/sh` waits for this process to end, then
   `open`s the bundle).
 - Not done: a sheet still blocks logout and shutdown (AppKit's own rule, unrelated to updates).
+
+- The relaunch after an update keeps a closed window closed (#51): ADR 0011, addendum (#51),
+  the «Updates» item.
