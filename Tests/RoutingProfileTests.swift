@@ -207,8 +207,10 @@ final class RoutingProfileTests: XCTestCase {
         let notice = HomeNotice.pick(input)
         XCTAssertEqual(notice, .profileRouting(name: "RU напрямую", subscriptionToo: false))
         XCTAssertTrue(notice?.title.contains("«RU напрямую»") == true, notice?.title ?? "")
-        XCTAssertFalse(notice?.message.contains("провайдер") == true, "not the provider's doing")
-        XCTAssertTrue(notice?.message.contains("до подтверждения действуют прежние") == true, notice?.message ?? "")
+        // re-review 2 N-B: only the profile's lines differ, but the provider may have moved what
+        // they point to (its groups, its freedom outbounds): the text does not rule it out
+        XCTAssertTrue(notice?.message.contains("подписк") == true, notice?.message ?? "")
+        XCTAssertTrue(notice?.message.contains("До подтверждения действуют прежние") == true, notice?.message ?? "")
         input.routingSource = .both
         let both = HomeNotice.pick(input)
         XCTAssertEqual(both, .profileRouting(name: "RU напрямую", subscriptionToo: true))
@@ -224,6 +226,7 @@ final class RoutingProfileTests: XCTestCase {
         XCTAssertNotEqual(UserNotice.profileRouting.key, UserNotice.routingChanged.key)
         XCTAssertFalse(UserNotice.profileRouting.title.contains("Подписка"))
         XCTAssertFalse(UserNotice.profileRouting.body.contains("«напрямую» заработают"), "also when a profile is turned off")
+        XCTAssertTrue(UserNotice.profileRouting.body.contains("подписк"), UserNotice.profileRouting.body)
     }
 
     /// Re-review F5: a fetch holds `updating` (subscription updates, the picker wait for it), so

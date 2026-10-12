@@ -135,7 +135,7 @@ enum UserNotice: Equatable {
         case .trafficLow(let used, let total): Russian.traffic(used: used, total: total) + "."
         case .newServers: String(localized: "Разреши их, чтобы обновление применилось.")
         case .routingChanged: String(localized: "Часть трафика пойдёт мимо VPN. Проверь, прежде чем разрешать.")
-        case .profileRouting: String(localized: "Новые правила заработают после пароля администратора, до подтверждения действуют прежние.")
+        case .profileRouting: String(localized: "Изменение может прийти и от профиля, и от подписки, куда он отправляет сайты. До подтверждения действуют прежние правила.")
         case .pauseEnded: String(localized: "Пауза закончилась.")
         case .serviceOff: String(localized: "Включи её в Объектах входа.")
         case .macOSUpdated: String(localized: "Перезагрузи Mac и запусти проверку утечек.")

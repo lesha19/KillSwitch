@@ -100,7 +100,7 @@ enum HomeNotice: Equatable {
         case .ending, .trafficLow: ""
         case .newServers: String(localized: "Разреши им работать при включённой защите.")
         case .routingChanged: String(localized: "Часть трафика пойдёт мимо VPN. Разреши, только если доверяешь провайдеру.")
-        case .profileRouting(_, false): String(localized: "Новые правила заработают после пароля администратора, до подтверждения действуют прежние.")
+        case .profileRouting(_, false): String(localized: "Изменение может прийти и от профиля, и от подписки, куда он отправляет сайты. До подтверждения действуют прежние правила.")
         case .profileRouting(_, true): String(localized: "Часть изменений — от провайдера: разреши, только если доверяешь ему. До подтверждения действуют прежние правила.")
         case .filterOff: String(localized: "Защита macOS выключена. Рекомендуем включить второй уровень.")
         case .filterUpdateWaiting: String(localized: "Системные настройки › Основные › Объекты входа и расширения › Сетевые расширения. Пока работает прежняя версия.")
