@@ -11,7 +11,9 @@ Rules are loaded at boot, before login.
   `com.apple/killswitch` (`/etc/pf.conf` untouched). `status | state | on | off | pause [min] |
   set lan|tailscale|dns|direct|wifiguard|adblock|blockadult|blocksocial|blockbetting 0|1 | set doh <url> | set hosts <name=ip,…> | allow <addr> | unallow <addr> | server-add <ip> |
   server-remove <ip> | core … | apply | repair | watch`. Tests (no root, nothing on the system changes):
-  `for t in Helper/tests/*.sh; do bash "$t"; done`.
+  `for t in Helper/tests/*.sh; do bash "$t"; done`. Before a push, also as CI runs them (no
+  cores, no geodata, a copy of the tracked files): `scripts/test-helper-ci.sh /bin/bash` and
+  `scripts/test-helper-ci.sh "$(brew --prefix)/bin/bash"`.
 - `Helper/local.killswitch.plist` — LaunchDaemon: runs `ks watch` (RunAtLoad + KeepAlive), so rules
   are loaded at boot, before login, and checked every 2 s (tunnels every second). `AssociatedBundleIdentifiers` makes it
   show up under the app's name in System Settings → Login Items & Extensions.
