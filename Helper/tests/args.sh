@@ -15,7 +15,8 @@ refuses() { if passwordless_args_ok "$@"; then bad "took: ks $(printf '%q ' "$@"
 # every passwordless command of install.sh's sudoers, as written there
 eval "$(sed -n '/^sudoers_text() {/,/^}/p' "$here/../install.sh")"
 cmds=$(sudoers_text someone /k | sed -n 's/^someone ALL=(root) NOPASSWD: //p' | tr ',' '\n' | sed 's/^ *\/k //')
-[ "$(wc -l <<<"$cmds")" -eq 14 ] && ok "sudoers lists 14 passwordless commands" || bad "sudoers commands: $cmds"
+[ "$(wc -l <<<"$cmds")" -eq 15 ] && ok "sudoers lists 15 passwordless commands" || bad "sudoers commands: $cmds"
+grep -qx 'core restart' <<<"$cmds" && ok "sudoers: core restart («Перезапустить VPN», ADR 0035)" || bad "sudoers: no core restart"
 grep -qx 'core traffic' <<<"$cmds" && ok "sudoers: core traffic (the menu bar speed)" || bad "sudoers: no core traffic"
 grep -qx 'core connections' <<<"$cmds" && ok "sudoers: core connections (the «Трафик» window)" || bad "sudoers: no core connections"
 grep -qx 'diag report \*' <<<"$cmds" && ok "sudoers: diag report («Собрать отчёт», ADR 0021)" || bad "sudoers: no diag report"

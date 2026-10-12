@@ -9,6 +9,8 @@ unset CURL_HOME BASH_ENV ENV CDPATH
 # shutdown guard), so it is switched off first; then wait until the old watchdog is gone.
 if [ -x /Library/KillSwitch/ks ]; then /Library/KillSwitch/ks off >/dev/null 2>&1
 elif [ -d /Library/KillSwitch ]; then echo 0 > /Library/KillSwitch/disabled; fi
+# with the VPN on (ADR 0035) the guard would still count as protection on: the target goes first
+rm -f /Library/KillSwitch/vpn-on
 launchctl bootout system/local.killswitch 2>/dev/null
 for _ in $(seq 1 50); do launchctl print system/local.killswitch >/dev/null 2>&1 || break; sleep 0.2; done
 # stops our core and gives the network services their DNS back

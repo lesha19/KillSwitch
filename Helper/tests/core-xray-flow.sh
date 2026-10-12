@@ -14,7 +14,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 # ks core import reads only through folders only we can change (trusted_path), and the
 # checkout may sit under /tmp: the fixtures from a private copy
 cp -R "$here/fixtures" "$tmp/fixtures"; fx="$tmp/fixtures"
-DIR="$tmp"; CORE_DIR="$tmp/core"; mkdir -p "$CORE_DIR/ctl" "$tmp/ld"
+DIR="$tmp"; CORE_DIR="$tmp/core"; mkdir -p "$CORE_DIR/ctl" "$tmp/ld"; VPN_ON="$DIR/vpn-on"; GAPF="$DIR/vpn-gap"
 SETTINGS="$DIR/settings"; ALLOW="$DIR/allow"; TSRELAYS="$DIR/none"; EVENTS="$DIR/events.log"
 SERVERS="$DIR/servers"; SERVERS_MANUAL="$DIR/servers-manual"; SERVERS_CORE="$DIR/servers-core"
 CORE_CTL="$CORE_DIR/ctl/mihomo.sock"
@@ -28,7 +28,7 @@ install() { :; }
 pfctl() { cat >/dev/null; }
 dscl() { return 0; }
 vpn_ifaces() { :; }; ts_ifaces() { :; }
-loaded() { return 1; }
+loaded() { return 1; }; load() { :; }   # core on asserts the rules (ADR 0035): never the real pf files
 LOADED=0
 launchctl() { echo "launchctl $*" >> "$tmp/launchd"; case "$1" in print) [ "$LOADED" = 1 ] && echo 'state = running' ;; esac; [ "$1" != print ] || [ "$LOADED" = 1 ]; }
 resolve_host() { case "$1" in de.example.com) echo 203.0.113.20 ;; *) return 1 ;; esac; }

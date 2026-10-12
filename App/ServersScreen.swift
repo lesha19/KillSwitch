@@ -133,7 +133,8 @@ struct ServersScreen: View {
             if let error = control.coreError { InlineError(error: error) }
         } else if control.coreRunning, let error = control.proxiesError {
             InlineError(error: error)
-            Button("Перезапустить VPN") { control.restartCore() }
+            // `ks core restart` needs the VPN on (ADR 0035)
+            if control.vpnOn { Button("Перезапустить VPN") { control.restartCore() } }
         } else if control.coreRunning {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)

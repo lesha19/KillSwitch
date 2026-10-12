@@ -11,7 +11,7 @@ final class HelperCommandTests: XCTestCase {
         let cases: [(HelperCommand, [String])] = [
             (.state, ["state"]), (.probe, ["probe"]), (.protectionOn, ["on"]), (.netRestore, ["netrestore"]),
             (.coreState, ["core", "state"]), (.coreOn, ["core", "on"]), (.coreOff, ["core", "off"]),
-            (.coreProxies, ["core", "proxies"]), (.coreTraffic, ["core", "traffic"]), (.coreConnections, ["core", "connections"]),
+            (.coreRestart, ["core", "restart"]), (.coreProxies, ["core", "proxies"]), (.coreTraffic, ["core", "traffic"]), (.coreConnections, ["core", "connections"]),
             (.coreSelect(group: "🇩🇪 Germany", proxy: "de-1"), ["core", "select", "🇩🇪 Germany", "de-1"]),
             (.coreDelay("Auto"), ["core", "delay", "Auto"]),
             (.coreRefresh(profile: "/private/tmp/p.json"), ["core", "refresh", "/private/tmp/p.json"]),
@@ -112,8 +112,8 @@ final class HelperCommandTests: XCTestCase {
         let sudoers = Set(text.matches(of: /\$ks ([a-z -]+?)( \*)?[,"]/).map { String($0.1) })
         XCTAssertFalse(sudoers.isEmpty)
         let all: [HelperCommand] = [
-            .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic, .coreConnections,
-            .coreSelect(group: "g", proxy: "p"), .coreDelay("g"), .coreRefresh(profile: "/tmp/p.json"),
+            .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreRestart, .coreProxies, .coreTraffic,
+            .coreConnections, .coreSelect(group: "g", proxy: "p"), .coreDelay("g"), .coreRefresh(profile: "/tmp/p.json"),
             .protectionOff, .pause(minutes: 5), .setSwitch("lan", true), .setSwitch("adblock", true), .setSplitApps([]),
             .setMultihop(nil), .setCore(.xray), .setMTU(1400),
             .allow("192.0.2.1"), .unallow("192.0.2.1"), .serverAdd("192.0.2.1"), .serverRemove("192.0.2.1"),
@@ -141,7 +141,7 @@ final class HelperCommandTests: XCTestCase {
     /// live connections) is for root or the user at the console who installed KillSwitch.
     func testPasswordlessChangesOnlyForTheConsoleUserWhoInstalled() {
         let restricted: [HelperCommand] = [
-            .protectionOn, .netRestore, .coreOn, .coreOff, .coreSelect(group: "g", proxy: "p"),
+            .protectionOn, .netRestore, .coreOn, .coreOff, .coreRestart, .coreSelect(group: "g", proxy: "p"),
             .coreRefresh(profile: "/tmp/p.json"), .upgrade, .coreConnections,
         ]
         let open: [HelperCommand] = [.state, .probe, .coreState, .coreProxies, .coreTraffic, .coreDelay("g")]

@@ -508,7 +508,7 @@ private struct ProtectionSettings: View {
             Button("Выключить", role: .destructive) { control.turnOff() }
             Button("Отмена", role: .cancel) {}
         } message: {
-            Text("Если VPN оборвётся, программы пойдут в интернет напрямую.")
+            Text("Пока VPN включён, интернет и так идёт только через него. Без VPN программы пойдут напрямую.")
         }
     }
 

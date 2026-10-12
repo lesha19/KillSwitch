@@ -38,6 +38,7 @@ final class Endpoint: NSObject, HelperProtocol, Sendable {
     func coreState(reply: @escaping Reply) { Executor.perform(.coreState, caller: uid, reply: reply) }
     func coreOn(reply: @escaping Reply) { Executor.perform(.coreOn, caller: uid, reply: reply) }
     func coreOff(reply: @escaping Reply) { Executor.perform(.coreOff, caller: uid, reply: reply) }
+    func coreRestart(reply: @escaping Reply) { Executor.perform(.coreRestart, caller: uid, reply: reply) }
     func coreProxies(reply: @escaping Reply) { Executor.perform(.coreProxies, caller: uid, reply: reply) }
     func coreTraffic(reply: @escaping Reply) { Executor.perform(.coreTraffic, caller: uid, reply: reply) }
     func coreConnections(reply: @escaping Reply) { Executor.perform(.coreConnections, caller: uid, reply: reply) }

@@ -4,7 +4,7 @@
 #   ks state                one word for the app: on | off | paused:<epoch>
 #   ks version              "<version> <sha256 of this file>", without root
 #   ks on                   enable (also after reboot)
-#   ks off                  disable until "ks on"
+#   ks off                  disable until "ks on" (while the VPN is on it keeps blocking)
 #   ks pause [min]          disable for N minutes (default 5), e.g. for a captive Wi-Fi portal
 #   ks netrestore           network services turned off at shutdown back on (if the watchdog is gone)
 #   ks set <key> <0|1>      lan, tailscale, dns, direct (see rules() below), wifiguard, failover,
@@ -21,7 +21,10 @@
 #   ks unallow <addr[/n]>
 #   ks server-add <addr>    VPN server: reachable by any process (needed by Happ)
 #   ks server-remove <addr>
-#   ks core on|off|state    our own VPN core (Xray or mihomo, run by launchd as group _ksvpn)
+#   ks core on|off|state    our own VPN core (Xray or mihomo, run by launchd as group _ksvpn); from
+#                           "core on" to "core off" the VPN is on and pf blocks whatever on/off/pause
+#                           say (ADR 0035)
+#   ks core restart         the core again, the VPN kept on («Перезапустить VPN»)
 #   ks core import <json>   build the core's config: a mihomo profile converted to JSON, or with
 #                           core=xray the panel's Xray JSON (a list of Xray configs)
 #   ks core refresh <json>  the same, refused (exit 3) if it brings new server names or
@@ -77,6 +80,8 @@ SERVERS="$DIR/servers"   # VPN server addresses, one per line, root-owned: the t
 SERVERS_MANUAL="$DIR/servers-manual" # added by hand (server-add, install.sh)
 SERVERS_CORE="$DIR/servers-core"     # servers of the imported core profile, rewritten by import
 EVENTS="$DIR/events.log" # corrective actions of the watchdog, world-readable
+VPN_ON="$DIR/vpn-on"     # «VPN включён», world-readable: written by "ks core on", removed only by "ks core off" (ADR 0035)
+GAPF="$DIR/vpn-gap"      # the start of the current gap (VPN on, not connected): "<epoch> <boot id>"
 STATEF="$DIR/daemon-state" # the watchdog's view for the app, world-readable (publish_state)
 HASHF="$DIR/rules.sha256" # hash of the anchor as loaded by us
 FILESF="$DIR/rules.files" # the files below as they were when the rules were loaded (root_files_sig)
@@ -295,8 +300,9 @@ tunnel_sig() {
 # the core's group) and leave the Mac without any tunnel, while "ks core on" refuses to start
 # next to it. So the rules let everything out until that VPN goes (the watchdog sees the tunnel
 # list change within a second and loads the blocking rules) or our core comes up.
+# Never while our VPN is on (ADR 0035): its own restart would open everything to the other tunnel.
 vpn_standby() {
-  ! core_running &&
+  ! vpn_on && ! core_running &&
     utun_addrs | awk -v a="$CORE_TUN_ADDR" '$2 ~ /^198\.18\./ { v = 1 } $2 == a { o = 1 } END { exit !(v && !o) }'
 }
 
@@ -430,7 +436,7 @@ load_rules() {  # load_rules [lockdown]
   return 1
 }
 load() {  # load [tunnel_sig, if the caller has it]
-  [ -f "$FLAG" ] && return 0   # a switch-off raced with the watchdog
+  [ -f "$FLAG" ] && [ ! -f "$VPN_ON" ] && return 0   # a switch-off raced with the watchdog (the file itself, not the pass's read)
   pf_enabled || pfctl -E >/dev/null 2>&1   # enable first: loading can take a moment
   local sig=${1:-} files bad
   [ -n "$sig" ] || sig=$(tunnel_sig)
@@ -459,20 +465,27 @@ loaded() {
 
 reload_if_on() { if loaded; then load; fi; }
 
+# «VPN включён» (ADR 0035): while $VPN_ON is there pf blocks as with protection on, whatever the
+# switch, a pause or «выключено» say. A watchdog pass reads the file once ($VPN_PASS) for what it
+# reports, so its state file never says vpn=1 with the blocking of vpn=0; anything that would flush
+# or skip loading looks at the file itself.
+vpn_on() { if [ -n "${VPN_PASS:-}" ]; then [ "$VPN_PASS" = 1 ]; else [ -f "$VPN_ON" ]; fi; }
+
 disable() {
   # a new file moved into place: guard never reads it empty (that would end the pause, #50)
   local t
   t=$(mktemp "$FLAG.XXXXXX") && echo "$1" > "$t" && chmod 644 "$t" && mv -f "$t" "$FLAG" || { rm -f "${t:-}"; return 1; }
-  pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
+  vpn_on || pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1   # with the VPN on it keeps blocking (ADR 0035)
 }
 
 # One pass of the watchdog: respects pause / off, reloads if anything was tampered with.
 # guard [full|quick]: pause, off and the tunnels are checked every time (a file test and one
 # ifconfig); pf itself (three pfctl calls) only when full. Sets PROT (on, off, paused:<epoch>,
-# or "" while unknown) and TSIG (tunnel_sig) for the state file.
-PROT=""; TSIG=""; STANDBY=0
+# or "" while unknown), BLOCKING (1: our rules are in place) and TSIG (tunnel_sig) for the state file.
+# The switch off or paused with the VPN on (ADR 0035): PROT says so, the rules are kept as when on.
+PROT=""; TSIG=""; STANDBY=0; BLOCKING=0
 guard() {
-  local until why="" mode=${1:-full}
+  local until why="" mode=${1:-full} prot=on
   TSIG=$(tunnel_sig)
   if [ -f "$FLAG" ]; then
     until=$(cat "$FLAG" 2>/dev/null)
@@ -482,14 +495,18 @@ guard() {
     elif [ "$until" != 0 ] && [ "$(date +%s)" -ge "$until" ]; then
       rm -f "$FLAG"; log_event "pause ended"; mode=full
     else
-      if [ "$until" = 0 ]; then PROT=off; else PROT="paused:$until"; fi
-      # "ks off" flushes after writing the flag, but a reload that checked the flag just before
-      # can still land after that flush: rules loaded while off are flushed again here.
-      if [ "$mode" = full ] && [ -n "$(pfctl -a "$ANCHOR" -s rules 2>/dev/null)" ] && [ -f "$FLAG" ]; then
-        pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
-        log_event "rules found loaded while off: flushed"
+      if [ "$until" = 0 ]; then prot=off; else prot="paused:$until"; fi
+      if ! vpn_on; then
+        PROT=$prot; BLOCKING=0
+        # "ks off" flushes after writing the flag, but a reload that checked the flag just before
+        # can still land after that flush: rules loaded while off are flushed again here.
+        # the file itself, not the pass's read: «Подключить» may have loaded its rules meanwhile
+        if [ "$mode" = full ] && [ -n "$(pfctl -a "$ANCHOR" -s rules 2>/dev/null)" ] && [ -f "$FLAG" ] && [ ! -f "$VPN_ON" ]; then
+          pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
+          log_event "rules found loaded while off: flushed"
+        fi
+        return 0
       fi
-      return 0
     fi
   fi
   if [ ! -f "$HASHF" ]; then why="initial load"
@@ -504,16 +521,16 @@ guard() {
   elif standby_changed; then why="standby $([ "$STANDBY" = 1 ] && echo ended || echo began)"
   elif rules_retry_due; then why=retry
   fi
-  if [ -z "$why" ]; then PROT=on; return 0; fi
+  if [ -z "$why" ]; then PROT=$prot; BLOCKING=1; return 0; fi
   if [ "$why" = retry ]; then
     LOAD_RETRY=1
-    if load "$TSIG"; then PROT=on; else PROT=off; log_event "reload failed"; fi
+    if load "$TSIG"; then PROT=$prot; BLOCKING=1; else PROT=off; BLOCKING=0; log_event "reload failed"; fi
     LOAD_RETRY=0
     [ -f "$INVALIDF" ] || log_event "rules loaded again after pf had refused them"
     return 0
   fi
   log_event "$why: reloading"
-  if load "$TSIG"; then PROT=on; else PROT=off; log_event "reload failed"; fi
+  if load "$TSIG"; then PROT=$prot; BLOCKING=1; else PROT=off; BLOCKING=0; log_event "reload failed"; fi
 }
 # pf refused the rules (load): the lockdown holds, the rules are tried again every PF_RETRY seconds
 rules_retry_due() {
@@ -561,7 +578,8 @@ PUBLISHED=""
 publish_state() {
   local s
   [ -n "$PROT" ] || return 0
-  s=$(printf 'pid=%s\nprotection=%s\ncore=%s\ntunnels=%s\nstandby=%s' "$$" "$PROT" "${CORE_STATE:-off}" "$TSIG" "${STANDBY:-0}")
+  s=$(printf 'pid=%s\nprotection=%s\ncore=%s\ntunnels=%s\nstandby=%s\nvpn=%s\nblocking=%s' "$$" "$PROT" "${CORE_STATE:-off}" "$TSIG" "${STANDBY:-0}" \
+    "$(vpn_on && echo 1 || echo 0)" "$BLOCKING")
   [ "$s" = "$PUBLISHED" ] && return 0
   printf '%s\n' "$s" > "$STATEF.tmp" && chmod 644 "$STATEF.tmp" && mv "$STATEF.tmp" "$STATEF" && PUBLISHED=$s
 }
@@ -570,14 +588,17 @@ publish_state() {
 # within 2 s), at once when off/pause just ended; the core every second pass.
 LAST_FLAG=""
 watch_pass() {
-  local mode=quick flag=0
+  local mode=quick flag=0 VPN_PASS=0
+  [ -f "$VPN_ON" ] && VPN_PASS=1
   [ -f "$FLAG" ] && flag=1
+  vpn_on && flag="$flag+vpn"   # the VPN on or off changes what blocks (ADR 0035): a full pass at once
   if [ $(($1 % 2)) = 0 ] || [ "$flag" != "$LAST_FLAG" ]; then mode=full; fi
   LAST_FLAG=$flag
   guard "$mode"
   [ $(($1 % 2)) = 0 ] && core_guard
+  gap_track
   [ $(($1 % 10)) = 5 ] && netbird_bg
-  if [ -f "$WIFI_MARK" ] && { [ -f "$FLAG" ] || [ "$PROT" = on ]; }; then
+  if [ -f "$WIFI_MARK" ] && { { [ -f "$FLAG" ] && ! vpn_on; } || [ "$BLOCKING" = 1 ]; }; then
     while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" on; done < "$WIFI_MARK"
     rm -f "$WIFI_MARK"; log_event "rules up: network on"
   fi
@@ -585,7 +606,32 @@ watch_pass() {
   diag_tick
   [ $(($1 % 10)) = 5 ] && diag_bg
   # Xray: the running host still answers? (ADR 0023)
-  [ $(($1 % 20)) = 15 ] && [ "$CORE_STATE" = on ] && [ "$PROT" = on ] && [ "${STANDBY:-0}" != 1 ] && failover_bg
+  [ $(($1 % 20)) = 15 ] && [ "$CORE_STATE" = on ] && [ "$BLOCKING" = 1 ] && [ "${STANDBY:-0}" != 1 ] && failover_bg
+}
+
+# A gap (ADR 0035): the VPN on and not connected, so the internet closed. Its start is kept in
+# $GAPF ("<epoch> <boot id>"), so a watchdog restarting in place (an update) goes on with it.
+# When it ends, one line for «Журнал защиты»: how long, and why from what the log says about the
+# time around it: an update (the new helper), a server switch, «Отключить VPN», else a reconnect.
+# A gap from before a reboot has no length anyone could trust: dropped.
+gap_track() {
+  local start boot now why since
+  if vpn_on && { [ "$CORE_STATE" != on ] || [[ "$TSIG" != vpn:utun* ]]; }; then
+    [ -f "$GAPF" ] || echo "$(date +%s) $(boot_id)" > "$GAPF"
+    return 0
+  fi
+  [ -f "$GAPF" ] || return 0
+  read -r start boot < "$GAPF"; rm -f "$GAPF"
+  [[ "$start" =~ ^[0-9]+$ ]] && [ "$boot" = "$(boot_id)" ] || return 0
+  now=$(date +%s)
+  # the last thing KillSwitch did from 30 s before the gap began (an update's restart follows its HUP)
+  since=$(date -r $((start - 30)) '+%Y-%m-%d %H:%M:%S')
+  if vpn_on; then
+    why=$(awk -v s="$since" '($1 " " $2) < s { next } /new helper/ { w = "update" }
+      /failover \(|escalate \(|core: .* -> / { w = "server switch" } END { print w ? w : "reconnect" }' "$EVENTS" 2>/dev/null)
+  else why="VPN off"
+  fi
+  log_event "internet closed for $((now - start)) s: $why"
 }
 
 # NetBird binds its sockets (WireGuard, STUN, relays, management) to the physical interface, past
@@ -760,7 +806,8 @@ watch_disabled() { launchctl print-disabled system 2>/dev/null | grep -qE "\"${W
 shutdown_guard() {
   local svc
   # damaged settings saying wifiguard=0 are not believed
-  [ ! -f "$FLAG" ] && { [ "$(setting wifiguard 1)" = 1 ] || ! root_file_ok "$SETTINGS" settings; } || return 0
+  # off by hand blocks nothing at boot, unless the VPN is on (ADR 0035)
+  { [ ! -f "$FLAG" ] || vpn_on; } && { [ "$(setting wifiguard 1)" = 1 ] || ! root_file_ok "$SETTINGS" settings; } || return 0
   if watch_disabled; then
     log_event "watchdog switched off (Login Items): network left on"
     return 0
@@ -776,7 +823,7 @@ shutdown_guard() {
 net_restore() {
   local svc
   [ -f "$WIFI_MARK" ] || return 0
-  if launchctl print "$WATCH_JOB" >/dev/null 2>&1 && [ ! -f "$FLAG" ] && ! loaded; then
+  if launchctl print "$WATCH_JOB" >/dev/null 2>&1 && { [ ! -f "$FLAG" ] || vpn_on; } && ! loaded; then
     echo "Сеть включит служба защиты, как только загрузит правила" >&2
     return 1
   fi
@@ -3204,19 +3251,44 @@ set_core() {
 # launchctl bootout returns before the job is gone, and bootstrap refuses it until then
 job_gone() { for _ in $(seq 1 50); do launchctl print "$1" >/dev/null 2>&1 || return 0; sleep 0.2; done; return 1; }
 
+# The watchdog running is older than this ks (0.19 during an upgrade, before install.sh's HUP: its
+# state file has no vpn= line) and flushes our rules while protection is off. With the VPN on, hand
+# over to this ks (HUP, as install.sh does) and wait, ~30 s at most, until the new one has the rules
+# loaded (vpn=1 blocking=1); the core is not started or restarted otherwise.
+watchdog_handover() {
+  [ -f "$STATEF" ] && ! grep -q '^vpn=' "$STATEF" 2>/dev/null || return 0
+  launchctl kill HUP "$WATCH_JOB" 2>/dev/null
+  for _ in $(seq 1 150); do
+    grep -qx 'vpn=1' "$STATEF" 2>/dev/null && grep -qx 'blocking=1' "$STATEF" && return 0
+    sleep 0.2
+  done
+  echo "the new watchdog did not take over with the rules loaded: the VPN not started" >&2
+  return 1
+}
+
 # "ks core on" (passwordless)
 core_on() {
+  local t wrote=0
   [ -x "$CORE_DIR/$(core_kind)" ] || { echo "Ядро не установлено" >&2; return 1; }
   [ -s "$(core_conf)" ] || { echo "Нет конфига ядра: сначала возьми подписку" >&2; return 1; }
   # two TUNs fight over routes and DNS: the other VPN has to be off first
   if ! core_running && { pgrep -x DropwebCore >/dev/null || [ -n "$(vpn_ifaces)" ]; }; then
     echo "Сначала отключи VPN в dropweb или Happ" >&2; return 1
   fi
+  # from here until "ks core off" pf blocks whatever the protection switch says (ADR 0035)
+  if ! vpn_on; then
+    t=$(mktemp "$VPN_ON.XXXXXX") && date +%s > "$t" && chmod 644 "$t" && mv -f "$t" "$VPN_ON" || { rm -f "${t:-}"; return 1; }
+    wrote=1
+  fi
+  loaded || load || return 1
+  # nothing started yet: a failed handover undoes the target this call wrote
+  watchdog_handover || { [ "$wrote" = 0 ] || rm -f "$VPN_ON"; return 1; }
+  loaded || load || return 1
   core_log_tidy
   diag_dir   # a config with the access log names it (ADR 0021)
   # the stats port taken by another program (or free again): the config follows first, before the
   # loaded job of the other core (mihomo to Xray) goes; not while Xray itself runs (a restart)
-  if { ! core_running || ! cmp -s "$CORE_DIR/plist.xray" "$CORE_PLIST"; } && xray_api_check; then "$0" _regen >/dev/null 2>&1 || true; fi
+  if { ! core_running || ! cmp -s "$CORE_DIR/plist.xray" "$CORE_PLIST"; } && xray_api_check; then ( core_regen ) >/dev/null 2>&1 || true; fi   # under the core lock already
   launchctl enable "$CORE_JOB"
   # the job of the chosen core (ADR 0020); a loaded job of the other one goes first
   if core_plist_sync 2>/dev/null; then launchctl bootout "$CORE_JOB" 2>/dev/null; job_gone "$CORE_JOB"; fi
@@ -3227,6 +3299,30 @@ core_on() {
   core_running || { echo "Ядро не запустилось" >&2; return 1; }
   dns_locked apply >/dev/null
   log_event "core on"
+}
+
+# "ks core off" (passwordless): the only way the VPN target goes (ADR 0035)
+core_off() {
+  launchctl bootout "$CORE_JOB" 2>/dev/null
+  # a core still there keeps the VPN on, the rules, its DNS and its job enabled (so it runs after
+  # a reboot, as the VPN target says): «Отключить VPN» can be pressed again
+  job_gone "$CORE_JOB" || { echo "Ядро не остановилось" >&2; return 1; }
+  launchctl disable "$CORE_JOB"
+  rm -f "$VPN_ON"
+  # protection off or paused: open only now that the core has stopped
+  [ -f "$FLAG" ] && pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
+  dns_locked restore
+  log_event "core off"
+}
+
+# "ks core restart" (passwordless, «Перезапустить VPN»): the core again with the VPN kept on and pf
+# blocking throughout (ADR 0035); "core off" then "core on" would open pf in between.
+core_vpn_restart() {
+  vpn_on || { echo "VPN не включён" >&2; return 1; }
+  loaded || load || return 1
+  watchdog_handover || return 1
+  loaded || load || return 1
+  if launchctl print "$CORE_JOB" >/dev/null 2>&1; then launchctl kickstart -k "$CORE_JOB"; else core_on; fi
 }
 
 # The TUN's MTU (ADR 0032, #18): 1280 (IPv6's minimum) to 1500, a plain number; none = «Авто», each
@@ -4469,7 +4565,7 @@ passwordless_args_ok() {
     state|probe|on|netrestore) [ $# -eq 1 ] ;;
     core)
       case "${2:-}" in
-        state|on|off|proxies|traffic|connections) [ $# -eq 2 ] ;;
+        state|on|off|restart|proxies|traffic|connections) [ $# -eq 2 ] ;;
         select) [ $# -eq 4 ] && valid_name "$3" && valid_name "$4" ;;
         delay) [ $# -eq 3 ] && valid_name "$3" ;;
         # the app's own temporary file, read with the caller's rights (core_import)
@@ -4487,9 +4583,10 @@ passwordless_args_ok() {
 # Everything that writes the core's config or restarts it runs under one lock: the person's server
 # pick (core select) included, so it never overlaps the failover pass (ADR 0023), which never waits
 # (core_lock_exec 0); the watchdog's rotation skips its turn while it is held.
+# «Подключить», «Отключить» and «Перезапустить VPN» too: a Disconnect never lands inside a Connect (ADR 0035).
 core_lock_wanted() {
   case "${1:-}:${2:-}" in
-    core:import|core:refresh|core:select|set:splitapps|set:multihop|set:adblock|set:blockadult|set:blocksocial|set:blockbetting|set:doh|set:hosts|set:diag|set:escalate|set:mtu|_regen:|repair:) return 0 ;;
+    core:on|core:off|core:restart|core:import|core:refresh|core:select|set:splitapps|set:multihop|set:adblock|set:blockadult|set:blocksocial|set:blockbetting|set:doh|set:hosts|set:diag|set:escalate|set:mtu|_regen:|repair:) return 0 ;;
   esac
   return 1
 }
@@ -4498,7 +4595,8 @@ core_lock_exec() { lock_ready "$CORE_DIR/core.lock" 2>/dev/null; lockf -k -t "$1
 # the command list at the top of this file, up to its first empty line
 ks_usage() { sed -n '2,/^$/{/./p;}' "${BASH_SOURCE[0]}"; }
 
-[ "${BASH_SOURCE[0]}" = "$0" ] || return 0   # sourced by Helper/tests
+# sourced by Helper/tests: this Mac's VPN target and gap never steer a test (those that need them set their own)
+[ "${BASH_SOURCE[0]}" = "$0" ] || { VPN_ON=/nonexistent/vpn-on; GAPF=/nonexistent/vpn-gap; STATEF=/nonexistent/daemon-state; return 0; }
 # reads nothing but this file: no root needed
 [ "${1:-}" = version ] && { ks_version "$0"; exit 0; }
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
@@ -4606,11 +4704,8 @@ case "${1:-status}" in
   core)
     case "${2:-state}" in
       on) core_on || exit 1 ;;
-      off)
-        launchctl bootout "$CORE_JOB" 2>/dev/null
-        launchctl disable "$CORE_JOB"
-        dns_locked restore
-        log_event "core off" ;;
+      off) core_off || exit 1 ;;
+      restart) core_vpn_restart || exit 1 ;;
       import|refresh)
         [ $# -eq 3 ] || { echo "usage: ks core $2 <json>" >&2; exit 1; }
         core_import "$3" "$2" || exit $?
@@ -4635,7 +4730,7 @@ case "${1:-status}" in
       connections)
         [ $# -eq 2 ] || { echo "usage: ks core connections" >&2; exit 1; }
         core_connections || exit 1 ;;
-      *) echo "usage: ks core on|off|state|import <json>|refresh <json>|proxies|select <group> <proxy>|delay <name>|traffic|connections" >&2; exit 1 ;;
+      *) echo "usage: ks core on|off|restart|state|import <json>|refresh <json>|proxies|select <group> <proxy>|delay <name>|traffic|connections" >&2; exit 1 ;;
     esac
     ;;
   probe) net_probe ;;

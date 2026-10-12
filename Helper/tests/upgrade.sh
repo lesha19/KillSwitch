@@ -112,7 +112,10 @@ setup() {  # setup <name>: a fresh installed system and bundle
   cp "$here/../local.killswitch.plist" "$root/ld/local.killswitch.plist"
   cp "$here/../local.killswitch.core.plist" "$root/ld/local.killswitch.core.plist"
   printf 'lan=0\ncoredirect=1\nadblock=1\n' > "$root/lib/settings"
-  : > "$root/calls"
+  # the running watchdog is a 0.19 one (no vpn= line), protection off: our anchor is empty
+  printf 'pid=1\nprotection=off\ncore=on\ntunnels=vpn:utun9 ts:\nstandby=0\n' > "$root/lib/daemon-state"
+  : > "$root/anchor"
+  : > "$root/calls"; : > "$root/restarts"
 }
 upgrade() {  # upgrade [args]: runs main of install.sh in the bundle directory on the fakes
   (
@@ -131,8 +134,32 @@ upgrade() {  # upgrade [args]: runs main of install.sh in the bundle directory o
       if [ "$d" = 1 ]; then mkdir -p "${a[@]: -1}"; else /usr/bin/install "${a[@]}"; fi
     }
     sync() { echo "sync" >> "$root/calls"; }
+    # The watchdog: the HUP'd (or new) one is the new helper's once TAKEOVER (default 0) sleeps have
+    # passed; until then it is the 0.19 one, which flushes our rules while protection is off.
+    # "never": it never takes over. The new one loads the rules and says so in daemon-state.
+    watchdog_new() {
+      echo rules > "$root/anchor"; rm -f "$root/takeover"
+      printf 'pid=1\nprotection=off\ncore=on\ntunnels=vpn:utun9 ts:\nstandby=0\nvpn=%s\nblocking=1\n' \
+        "$([ -e "$root/lib/vpn-on" ] && echo 1 || echo 0)" > "$root/lib/daemon-state"
+      echo "watchdog: new" >> "$root/calls"
+    }
+    watchdog_start() { if [ "${TAKEOVER:-0}" = 0 ]; then watchdog_new; else echo "$TAKEOVER" > "$root/takeover"; fi; }
+    sleep() {
+      local n
+      [ -f "$root/takeover" ] || return 0
+      n=$(cat "$root/takeover"); : > "$root/anchor"
+      [ "$n" = never ] && return 0
+      if [ "$n" -le 1 ]; then watchdog_new; else echo $((n - 1)) > "$root/takeover"; fi
+    }
+    pf_now() { if [ -s "$root/anchor" ]; then echo rules; else echo empty; fi; }
     launchctl() {
       echo "launchctl $*" >> "$root/calls"
+      case "$*" in
+        "kill HUP system/local.killswitch") watchdog_start ;;
+        "bootstrap system $WATCH_PLIST") watchdog_start ;;
+        "bootout system/local.killswitch") rm -f "$root/lib/daemon-state" ;;
+        kickstart*core|"bootout system/local.killswitch.core"|"bootstrap system $CORE_PLIST") echo "launchctl $1 anchor=$(pf_now)" >> "$root/restarts" ;;
+      esac
       # the core's job: loaded, unloaded, or unloading:<prints left> after a slow bootout (SLOW_BOOTOUT=1:
       # launchd returns from bootout before the job is gone, and refuses a bootstrap meanwhile)
       local st n
@@ -141,6 +168,7 @@ upgrade() {  # upgrade [args]: runs main of install.sh in the bundle directory o
         print) [[ "$2" == *core ]] || return 0
                case "$st" in
                  loaded) echo 'state = running' ;;
+                 waiting) echo 'state = waiting' ;;
                  unloading:*) n=${st#unloading:}
                               if [ "$n" -gt 0 ]; then echo "unloading:$((n - 1))" > "$root/core-job"; echo 'state = running'
                               else echo unloaded > "$root/core-job"; return 1; fi ;;
@@ -151,10 +179,13 @@ upgrade() {  # upgrade [args]: runs main of install.sh in the bundle directory o
         bootstrap) [[ "$3" == *core* ]] || return 0
                    case "$st" in unloading:0|unloaded) echo loaded > "$root/core-job" ;;
                      *) echo "Bootstrap failed: 37: Operation already in progress" >&2; return 37 ;; esac ;;
-        print-disabled) return 0 ;;
+        print-disabled) [ "${CORE_DISABLED:-0}" = 1 ] && printf '\t"local.killswitch.core" => disabled\n'; return 0 ;;
       esac
     }
-    ks_run() { echo "ks $*" >> "$root/calls"; [ "$1" = state ] && echo on; [ "$1" = _regen ] && echo "core config: kept"; return 0; }
+    ks_run() {
+      echo "ks $*" >> "$root/calls"; [ "$1" = state ] && echo on
+      [ "$1" = _regen ] && echo "ks _regen anchor=$(pf_now)" >> "$root/restarts" && echo "core config: kept"; return 0
+    }
     lockf() { echo "lockf $*" >> "$root/calls"; }
     dscl() { return 0; }
     sudo() { echo "sudo $*" >> "$root/calls"; [ "${SUDO_FAILS:-0}" = 0 ]; }
@@ -163,7 +194,6 @@ upgrade() {  # upgrade [args]: runs main of install.sh in the bundle directory o
     id() { if [ "$1" = -u ] && [ -n "${2:-}" ]; then echo 501; else /usr/bin/id "$@"; fi; }
     pfctl() { echo "pfctl $*" >> "$root/calls"; }
     networksetup() { echo "networksetup $*" >> "$root/calls"; }
-    sleep() { :; }
     main "$@"
   )
 }
@@ -318,6 +348,55 @@ check "new core plist, slow bootout: upgrade succeeds" "$rc" 0
 check "  the core's job loaded again" "$(cat "$root/core-job" 2>/dev/null)" loaded
 check "  says the core restarted" "$(grep -c '^core: restarted$' <<<"$out")" 1
 check "  completion marker written" "$([ -e "$root/lib/installed" ] && echo there || echo none)" there
+
+# ===== ADR 0035: the VPN on (a running 0.19 core counts) keeps pf blocking through the upgrade =====
+restarts_open() { grep -c 'anchor=empty' "$root/restarts"; }
+setup vpnmigrate
+echo core-2 > "$root/bundle/mihomo"
+out=$(KEEP_E=1 upgrade --upgrade 2>&1); rc=$?
+check "VPN on (0.19, core loaded): upgrade succeeds" "$rc" 0
+check "  the VPN target written (migration)" "$([ -e "$root/lib/vpn-on" ] && echo there || echo none)" there
+check "  the new watchdog took over before the config rebuild and the core restart" \
+  "$(grep -E '^(watchdog: new|ks _regen|launchctl kickstart -k system/local.killswitch.core)$' "$root/calls" | paste -sd, -)" \
+  "watchdog: new,ks _regen,launchctl kickstart -k system/local.killswitch.core"
+check "  no core restart while pf had nothing loaded" "$(restarts_open) $(wc -l < "$root/restarts" | tr -d ' ')" "0 2"
+check "  protection left alone (no ks on/off)" "$(grep -cE '^ks (on|off|pause)' "$root/calls")" 0
+
+setup vpndisabled
+out=$(KEEP_E=1 CORE_DISABLED=1 upgrade --upgrade 2>&1); rc=$?
+check "core job loaded but disabled (would not start after a reboot): no VPN target" \
+  "$rc $([ -e "$root/lib/vpn-on" ] && echo there || echo none)" "0 none"
+
+setup vpnrace
+echo core-2 > "$root/bundle/mihomo"
+out=$(KEEP_E=1 TAKEOVER=4 upgrade --upgrade 2>&1); rc=$?
+check "the 0.19 watchdog flushes for 4 polls after the HUP: upgrade succeeds" "$rc" 0
+check "  no core restart before the new watchdog has the rules loaded" "$(restarts_open) $(grep -c . "$root/restarts")" "0 2"
+
+setup vpnstuck
+echo core-2 > "$root/bundle/mihomo"
+out=$(KEEP_E=1 TAKEOVER=never upgrade --upgrade 2>&1); rc=$?
+check "the new watchdog never takes over: the install fails" "$([ "$rc" != 0 ] && echo failed || echo ok)" failed
+check "  the core neither rebuilt nor restarted" "$(grep -c . "$root/restarts")" 0
+check "  says why" "$(grep -c 'watchdog did not take over' <<<"$out")" 1
+check "  no completion marker (the app runs it again)" "$([ -e "$root/lib/installed" ] && echo there || echo none)" none
+
+setup vpnhalf
+cp "$root/bundle/ks" "$root/lib/ks"   # an install that stopped after the rename: the 0.19 watchdog still runs
+out=$(KEEP_E=1 upgrade --upgrade 2>&1); rc=$?
+check "ks already in place, the watchdog still the old one, VPN on: HUP all the same" "$rc $(grep -c '^launchctl kill HUP system/local.killswitch$' "$root/calls")" "0 1"
+
+setup vpnwaiting
+echo waiting > "$root/core-job"; : > "$root/lib/vpn-on"
+out=$(KEEP_E=1 upgrade --upgrade 2>&1); rc=$?
+check "VPN on, the core momentarily not running: its job not disabled" "$rc $(grep -c 'launchctl disable system/local.killswitch.core' "$root/calls")" "0 0"
+
+setup vpnoff
+echo core-2 > "$root/bundle/mihomo"
+out=$(KEEP_E=1 CORE_LOADED=0 upgrade --upgrade 2>&1); rc=$?
+check "VPN off (core not loaded), protection off: no target, nothing waited for" \
+  "$rc $([ -e "$root/lib/vpn-on" ] && echo there || echo none) $(grep -c 'watchdog: new' "$root/calls")" "0 none 1"
+check "  the core still disabled as before" "$(grep -c 'launchctl disable system/local.killswitch.core' "$root/calls")" 1
 
 setup downgrade
 printf '#!/bin/bash -p\nKS_VERSION="0.12.1"\necho older\n' > "$root/bundle/ks"

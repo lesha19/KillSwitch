@@ -69,22 +69,128 @@ final class StatusTests: XCTestCase {
     }
 
     func testConnecting() {
-        XCTAssertEqual(Status.summary(input { $0.connection = .connecting; $0.connectingSince = now.addingTimeInterval(-5) }), .connecting)
-        XCTAssertEqual(Status.summary(input { $0.connection = .connecting }), .connecting)
+        XCTAssertEqual(Status.summary(input { $0.connection = .connecting; $0.connectingSince = now.addingTimeInterval(-5) }), .connecting())
+        XCTAssertEqual(Status.summary(input { $0.connection = .connecting }), .connecting())
     }
 
     func testStuckAfterFifteenSeconds() {
-        XCTAssertEqual(Status.summary(input { $0.connection = .connecting; $0.connectingSince = now.addingTimeInterval(-15) }), .connecting)
-        XCTAssertEqual(Status.summary(input { $0.connection = .connecting; $0.connectingSince = now.addingTimeInterval(-16) }), .stuck)
+        XCTAssertEqual(Status.summary(input { $0.connection = .connecting; $0.connectingSince = now.addingTimeInterval(-15) }), .connecting())
+        XCTAssertEqual(Status.summary(input { $0.connection = .connecting; $0.connectingSince = now.addingTimeInterval(-16) }), .stuck())
     }
 
     func testProtected() {
         XCTAssertEqual(Status.summary(input { $0.connection = .connected }), .protected)
     }
 
-    func testConnectedUnprotected() {
-        XCTAssertEqual(Status.summary(input { $0.connection = .connected; $0.protection = .off }), .connectedUnprotected)
-        XCTAssertEqual(Status.summary(input { $0.connection = .connected; $0.protection = .paused(until: now + 600) }), .connectedUnprotected)
+    /// ADR 0035: while the VPN is on nothing leaks whatever the protection switch says.
+    func testConnectedIsProtectedWhateverTheSwitch() {
+        XCTAssertEqual(Status.summary(input { $0.connection = .connected; $0.protection = .off; $0.vpnOn = true }), .protected)
+        XCTAssertEqual(Status.summary(input { $0.connection = .connected; $0.protection = .paused(until: now + 600); $0.vpnOn = true }), .protected)
+    }
+
+    /// The core runs and its tunnel is up but the VPN target is gone and protection is off (a helper
+    /// before 0.20, or a Disconnect that raced a Connect): nothing blocks, so not «Защищено».
+    func testConnectedWithoutTheVPNTargetIsNotProtected() {
+        let status = Status.summary(input { $0.connection = .connected; $0.protection = .off })
+        XCTAssertEqual(status, .unblocked())
+        XCTAssertEqual(Status.summary(input { $0.connection = .connected; $0.protection = .paused(until: now + 60) }), .unblocked())
+        XCTAssertEqual(Status.summary(input { $0.connection = .connected }), .protected, "protection on blocks by itself")
+        XCTAssertEqual(status.title, "Трафик может идти мимо VPN")
+        XCTAssertEqual(status.line(Status.Detail()), "VPN подключён, но правила защиты не загружены.")
+        XCTAssertEqual(status.tone, .warning)
+        XCTAssertEqual(status.primary, .enableProtection, "the fix is the main button")
+        XCTAssertEqual(status.secondary, .disconnect)
+        XCTAssertNotEqual(status.icon, Status.protected.icon)
+    }
+
+    /// ADR 0035: the VPN on, its tunnel was up since «Подключить» and is gone (an update, a crash, a
+    /// restart, a server switch): the internet is closed until it is back or «Отключить VPN», whatever
+    /// the protection switch says.
+    func testReconnecting() {
+        func on(_ change: (inout Status.Input) -> Void = { _ in }) -> Status.Input {
+            input { $0.vpnOn = true; $0.tunnelWasUp = true; change(&$0) }
+        }
+        XCTAssertEqual(Status.summary(on()), .reconnecting)
+        XCTAssertEqual(Status.summary(on { $0.protection = .off }), .reconnecting)
+        XCTAssertEqual(Status.summary(on { $0.protection = .paused(until: now + 600) }), .reconnecting)
+        XCTAssertEqual(Status.summary(on { $0.connection = .connecting }), .reconnecting, "the core is up, the tunnel not yet")
+        XCTAssertEqual(Status.summary(on { $0.connection = .connecting; $0.connectingSince = now - 60 }), .reconnecting)
+        XCTAssertEqual(Status.reconnecting.title, "Интернет закрыт: VPN переподключается")
+        XCTAssertEqual(Status.reconnecting.line(Status.Detail()), "Ничего не утекает: интернет откроется, когда VPN подключится.")
+        XCTAssertEqual(Status.reconnecting.primary, .disconnectVPN)
+        XCTAssertEqual(Status.Action.disconnectVPN.title, "Отключить VPN")
+        XCTAssertNil(Status.reconnecting.secondary)
+        XCTAssertEqual(Status.reconnecting.tone, .neutral)
+        XCTAssertEqual(Status.reconnecting.icon, Status.blocked.icon)
+    }
+
+    /// ADR 0035, like Mullvad: a first connect (no tunnel yet since «Подключить») is «Подключение…»
+    /// then «Подключение затянулось» as before, saying the internet is closed meanwhile, with
+    /// «Отключить VPN»; a core that did not start counts as connecting too.
+    func testFirstConnectWithTheVPNOn() {
+        for protection in [Protection.on, .off, .paused(until: now + 600)] {
+            for connection in [Connection.connecting, .disconnected] {
+                func at(_ since: TimeInterval) -> Status {
+                    Status.summary(input { $0.vpnOn = true; $0.protection = protection; $0.connection = connection; $0.connectingSince = now - since })
+                }
+                XCTAssertEqual(at(5), .connecting(closed: true), "\(protection) \(connection)")
+                XCTAssertEqual(at(16), .stuck(closed: true), "\(protection) \(connection)")
+            }
+        }
+        XCTAssertEqual(Status.summary(input { $0.vpnOn = true }), .connecting(closed: true), "not tracked yet")
+        let connecting = Status.connecting(closed: true), stuck = Status.stuck(closed: true)
+        XCTAssertEqual(connecting.title, "Подключение…")
+        XCTAssertEqual(stuck.title, "Подключение затянулось")
+        XCTAssertEqual(connecting.line(Status.Detail(server: "🇱🇹 Литва")), "Интернет закрыт, пока VPN подключается")
+        XCTAssertEqual(connecting.homeLine(Status.Detail()), "Интернет закрыт, пока VPN подключается")
+        XCTAssertEqual(stuck.line(Status.Detail()), "Сервер не отвечает, интернет закрыт. Попробуй другой.")
+        XCTAssertEqual(connecting.primary, .disconnectVPN)
+        XCTAssertNil(connecting.secondary)
+        XCTAssertEqual(stuck.primary, .chooseServer)
+        XCTAssertEqual(stuck.secondary, .disconnectVPN)
+        XCTAssertEqual(connecting.icon, Status.connecting().icon)
+        XCTAssertEqual(stuck.tone, .warning)
+    }
+
+    /// ADR 0035: the VPN on and the watchdog says our rules do not block (pf refused them at
+    /// «Подключить», say): the leak outranks connecting, stuck, reconnecting and connected — never
+    /// «Ничего не утекает» or «Защищено» then. The fix is «Восстановить службу…», the way out
+    /// «Отключить VPN».
+    func testRulesMissingOutranksTheVPNStates() {
+        for connection in [Connection.connecting, .disconnected, .connected, .otherApp] {
+            for since in [5.0, 60] {
+                for tunnelWasUp in [false, true] {
+                    let status = Status.summary(input {
+                        $0.vpnOn = true; $0.rulesMissing = true; $0.connection = connection
+                        $0.connectingSince = now - since; $0.tunnelWasUp = tunnelWasUp; $0.protection = .off
+                    })
+                    XCTAssertEqual(status, .unblocked(vpnOn: true), "\(connection) \(since) \(tunnelWasUp)")
+                }
+            }
+        }
+        XCTAssertEqual(Status.summary(input { $0.rulesMissing = true; $0.connection = .connecting }), .connecting(),
+                       "only with the VPN on (a helper before 0.20 says nothing about it)")
+        let status = Status.unblocked(vpnOn: true)
+        XCTAssertEqual(status.title, "Трафик может идти мимо VPN")
+        XCTAssertEqual(status.line(Status.Detail()), "VPN включён, но правила защиты не загружены.")
+        XCTAssertEqual(status.primary, .repair)
+        XCTAssertEqual(status.secondary, .disconnectVPN)
+        XCTAssertEqual(status.tone, .warning)
+        XCTAssertEqual(Shortcuts.connect(status: status, busy: false, coreConfigured: true),
+                       .refused("Не подключилось: Трафик может идти мимо VPN. Открой KillSwitch."))
+    }
+
+    /// The VPN on and another program's VPN up: that state, with «Отключить VPN» as the way out
+    /// (ours blocks everything around it).
+    func testOtherVPNWhileOursIsOn() {
+        let status = Status.summary(input { $0.vpnOn = true; $0.connection = .otherApp })
+        XCTAssertEqual(status, .otherVPN(blocksDirect: true, vpnOn: true))
+        XCTAssertEqual(Status.summary(input { $0.vpnOn = true; $0.tunnelWasUp = true; $0.connection = .otherApp; $0.protection = .off }),
+                       .otherVPN(blocksDirect: true, vpnOn: true))
+        XCTAssertEqual(status.primary, .replaceOtherVPN)
+        XCTAssertEqual(status.secondary, .disconnectVPN)
+        XCTAssertNil(Status.otherVPN(blocksDirect: true).secondary)
+        XCTAssertEqual(status.line(Status.Detail()), "KillSwitch включён, поэтому интернет мимо него закрыт. Отключи один из двух VPN.")
     }
 
     func testBlocked() {
@@ -129,7 +235,7 @@ final class StatusTests: XCTestCase {
     }
 
     func testProtectedAndUnprotectedStatesDifferInShape() {
-        let icons = [Status.protected, .connectedUnprotected, .blocked, .unprotected(pausedUntil: nil)].map(\.icon)
+        let icons = [Status.protected, .unblocked(), .blocked, .unprotected(pausedUntil: nil)].map(\.icon)
         XCTAssertEqual(Set(icons).count, 4)
         XCTAssertNotEqual(Status.unprotected(pausedUntil: now).icon, Status.blocked.icon)
     }
@@ -145,10 +251,9 @@ final class StatusTests: XCTestCase {
         XCTAssertEqual(Status.broken(.serviceOff).title, "Нужна починка")
         XCTAssertEqual(Status.needsSetup.title, "Добавь подписку")
         XCTAssertEqual(Status.otherVPN(blocksDirect: true).title, "Работает другой VPN")
-        XCTAssertEqual(Status.connecting.title, "Подключение…")
-        XCTAssertEqual(Status.stuck.title, "Подключение затянулось")
+        XCTAssertEqual(Status.connecting().title, "Подключение…")
+        XCTAssertEqual(Status.stuck().title, "Подключение затянулось")
         XCTAssertEqual(Status.protected.title, "Защищено")
-        XCTAssertEqual(Status.connectedUnprotected.title, "Подключено без защиты")
         XCTAssertEqual(Status.blocked.title, "Интернет заблокирован")
         XCTAssertEqual(Status.unprotected(pausedUntil: nil).title, "Без VPN и без защиты")
     }
@@ -160,7 +265,6 @@ final class StatusTests: XCTestCase {
     func testBlockedIsNotAlarming() {
         XCTAssertEqual(Status.blocked.tone, .neutral)
         XCTAssertEqual(Status.protected.tone, .good)
-        XCTAssertEqual(Status.connectedUnprotected.tone, .warning)
         XCTAssertEqual(Status.unprotected(pausedUntil: nil).tone, .warning)
     }
 
@@ -168,7 +272,7 @@ final class StatusTests: XCTestCase {
         let server = Status.Detail(server: "🇱🇹 Литва", ping: 37)
         XCTAssertEqual(Status.protected.line(server), "🇱🇹 Литва · 37 мс")
         XCTAssertEqual(Status.protected.line(Status.Detail(server: "🇱🇹 Литва")), "🇱🇹 Литва")
-        XCTAssertEqual(Status.connecting.line(server), "🇱🇹 Литва")
+        XCTAssertEqual(Status.connecting().line(server), "🇱🇹 Литва")
         XCTAssertEqual(Status.blocked.line(server), "VPN не подключён, поэтому интернет закрыт. Ничего не утекает.")
         XCTAssertEqual(Status.otherVPN(blocksDirect: true).line(server),
                        "KillSwitch не подключён. Сайты, которые тот VPN пускает напрямую (часто российские), защита блокирует.")
@@ -182,7 +286,7 @@ final class StatusTests: XCTestCase {
     func testHomeLineLeavesTheServerToItsRow() {
         let server = Status.Detail(server: "🇱🇹 Литва", ping: 37)
         XCTAssertEqual(Status.protected.homeLine(server), "Интернет только через VPN")
-        XCTAssertFalse(Status.connecting.homeLine(server).contains("Литва"))
+        XCTAssertFalse(Status.connecting().homeLine(server).contains("Литва"))
         XCTAssertEqual(Status.blocked.homeLine(server), Status.blocked.line(server))
     }
 
@@ -205,13 +309,11 @@ final class StatusTests: XCTestCase {
         XCTAssertEqual(Status.needsSetup.primary, .addSubscription)
         XCTAssertEqual(Status.otherVPN(blocksDirect: true).primary, .replaceOtherVPN)
         XCTAssertTrue(Status.otherVPN(blocksDirect: true).primaryEnabled)
-        XCTAssertEqual(Status.connecting.primary, .cancel)
-        XCTAssertEqual(Status.stuck.primary, .chooseServer)
-        XCTAssertEqual(Status.stuck.secondary, .disconnect)
+        XCTAssertEqual(Status.connecting().primary, .cancel)
+        XCTAssertEqual(Status.stuck().primary, .chooseServer)
+        XCTAssertEqual(Status.stuck().secondary, .disconnect)
         XCTAssertEqual(Status.protected.primary, .disconnect)
         XCTAssertNil(Status.protected.secondary)
-        XCTAssertEqual(Status.connectedUnprotected.primary, .disconnect)
-        XCTAssertEqual(Status.connectedUnprotected.secondary, .enableProtection)
         XCTAssertEqual(Status.blocked.primary, .connect)
         XCTAssertEqual(Status.unprotected(pausedUntil: nil).secondary, .enableProtection)
         XCTAssertEqual(Status.unprotected(pausedUntil: now).secondary, .resumeProtection)

@@ -198,11 +198,17 @@ what transport escalation remembered per server, ADR 0030).
   GmbH, TA739QLA7A) and restarts it; pf lets that group out, the filter trusts the same signature.
   NetBird's network (100.64.0.0/10) passes on its utun like the tailnet.
 - DNS to LAN resolvers is blocked by default (setting `dns`), so names do not leak via the router.
+- The VPN on blocks like protection on (0.20.0, ADR 0035): from «Подключить» (`ks core on`) to
+  «Отключить» (`ks core off`) `/Library/KillSwitch/vpn-on` exists, and pf blocks everything outside
+  the tunnel whatever the protection switch or a pause say: a core restart (an update, a server
+  switch, a crash, a reboot) never goes out directly. `/Library/KillSwitch/vpn-gap` holds the start
+  of the current gap (the VPN on, not connected) for «Журнал защиты». Protection («защита») adds the
+  same blocking while the VPN is off.
 - Rules and settings are root-owned. Passwordless sudo covers only `ks state`, `ks on`, `ks core
-  state|on|off|proxies`, `ks core select|delay …` and `ks core refresh …` (refused if it brings new
+  state|on|off|restart|proxies`, `ks core select|delay …` and `ks core refresh …` (refused if it brings new
   server names or addresses or changes what goes DIRECT), none of which can widen the rules; turning off, pausing, `ks core import` and
   every setting change ask for the admin password.
-- Watchdog (`ks watch`, pf every 2 s and tunnels every second, honours off / pause): checks that pf is enabled, that the main
+- Watchdog (`ks watch`, pf every 2 s and tunnels every second, honours off / pause while the VPN is off): checks that pf is enabled, that the main
   ruleset still references the `com.apple/*` anchor (otherwise reloads `/etc/pf.conf`), that the
   sha256 of the loaded anchor equals the hash saved right after our load, and that the set of tunnel
   interfaces did not change. Any mismatch reloads the rules and is written to `events.log`.

@@ -264,12 +264,16 @@ func main() {
         w.control.multihopEntry = "🇱🇹 Литва"
         window("07-window-double-vpn", height: 680, w)
     }
-    do { // 08 protection off while connected
+    do { // 08 the VPN on, protection off, the core restarting (ADR 0035): the internet closed
         let w = World()
         w.subscribe()
         w.connect()
+        w.control.coreRunning = false
+        w.control.ownTunnelUp = false
+        w.control.vpnUp = false
+        w.control.vpnOn = true
         w.control.state = .off
-        window("08-window-connected-protection-off", height: 1000, w)
+        window("08-window-reconnecting", height: 1000, w)
     }
     do { // 09 paused, disconnected
         let w = World()

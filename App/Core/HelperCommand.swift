@@ -9,6 +9,8 @@ enum HelperCommand: Equatable, Sendable {
     // Never widen the rules: what the sudoers line of Helper/install.sh allows without a password.
     case state, probe, protectionOn, netRestore
     case coreState, coreOn, coreOff, coreProxies
+    /// «Перезапустить VPN»: the core again with the VPN kept on and pf blocking (ADR 0035).
+    case coreRestart
     /// Two byte totals of the core for the menu bar speed (`ks core traffic`).
     case coreTraffic
     /// The core's connections and rule provider sizes for «Трафик» (`ks core connections`).
@@ -63,8 +65,8 @@ enum HelperCommand: Equatable, Sendable {
 
     var needsAuthorization: Bool {
         switch self {
-        case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic, .coreConnections,
-             .coreSelect, .coreDelay, .coreRefresh, .diagReport, .upgrade:
+        case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreRestart, .coreProxies, .coreTraffic,
+             .coreConnections, .coreSelect, .coreDelay, .coreRefresh, .diagReport, .upgrade:
             false
         default:
             true
@@ -77,7 +79,7 @@ enum HelperCommand: Equatable, Sendable {
     /// the state stays open. Commands behind the right are authorized by the admin's password.
     var onlyForConsoleUser: Bool {
         switch self {
-        case .protectionOn, .netRestore, .coreOn, .coreOff, .coreSelect, .coreRefresh, .upgrade, .coreConnections: true
+        case .protectionOn, .netRestore, .coreOn, .coreOff, .coreRestart, .coreSelect, .coreRefresh, .upgrade, .coreConnections: true
         default: false
         }
     }
@@ -108,6 +110,7 @@ enum HelperCommand: Equatable, Sendable {
         case .coreState: ["core", "state"]
         case .coreOn: ["core", "on"]
         case .coreOff: ["core", "off"]
+        case .coreRestart: ["core", "restart"]
         case .coreProxies: ["core", "proxies"]
         case .coreTraffic: ["core", "traffic"]
         case .coreConnections: ["core", "connections"]
@@ -138,8 +141,8 @@ enum HelperCommand: Equatable, Sendable {
 
     var isValid: Bool {
         switch self {
-        case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic, .coreConnections,
-             .protectionOff, .uninstall, .upgrade, .repair:
+        case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreRestart, .coreProxies, .coreTraffic,
+             .coreConnections, .protectionOff, .uninstall, .upgrade, .repair:
             true
         case .coreSelect(let group, let proxy): Self.isName(group) && Self.isName(proxy)
         case .coreDelay(let name): Self.isName(name)
@@ -200,6 +203,7 @@ enum HelperCommand: Equatable, Sendable {
         case ["core", "state"]: command = .coreState
         case ["core", "on"]: command = .coreOn
         case ["core", "off"]: command = .coreOff
+        case ["core", "restart"]: command = .coreRestart
         case ["core", "proxies"]: command = .coreProxies
         case ["core", "traffic"]: command = .coreTraffic
         case ["core", "connections"]: command = .coreConnections

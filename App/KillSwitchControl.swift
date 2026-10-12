@@ -106,6 +106,17 @@ final class KillSwitchControl {
     private(set) var foreignVPN: String?
     /// Protection stands by while another VPN is up and ours is not (ADR 0018, the watchdog's file).
     private(set) var protectionStandby = false
+    /// The VPN is on, from «Подключить» to «Отключить» (ADR 0035): pf blocks whatever the switch says.
+    private(set) var vpnOn = false
+    /// Our tunnel has been up since this «Подключить» (ADR 0035): its going is a reconnect, not the
+    /// first connect. Kept across launches by the VPN target's content (the epoch of «Подключить»).
+    private(set) var tunnelWasUp = false
+    private static let tunnelSeenKey = "tunnelSeenForVPNOn"
+    /// The VPN is on and the helper says the rules are not loaded: traffic may be leaking.
+    private(set) var rulesMissing = false
+    static let vpnOnPath = "/Library/KillSwitch/vpn-on"
+    /// The helper's VPN target on disk, for when the watchdog's file does not say.
+    private static var vpnOnFile: Bool { FileManager.default.fileExists(atPath: vpnOnPath) }
     /// Groups and servers of the running core, from `ks core proxies`.
     private(set) var proxies: CoreProxies?
     private var proxiesLoading = false
@@ -589,7 +600,8 @@ final class KillSwitchControl {
     }
     func coreOff() {
         disconnecting = true
-        run(["core", "off"], userInitiated: true)
+        // the VPN stays on (the core did not stop): the next drop is one again
+        run(["core", "off"], userInitiated: true) { [self] in disconnecting = false }
     }
 
     /// «Отключить» was pressed: the tunnel going down is no drop.
@@ -872,7 +884,8 @@ final class KillSwitchControl {
             if !disconnecting {
                 dropped = true
                 // with protection on the drop is told above, for any tunnel
-                if state != .on { notify(.vpnDropped(protected: false)) }
+                // with protection off it is told here; the VPN still on blocks all the same (ADR 0035)
+                if state != .on { notify(.vpnDropped(protected: Self.vpnOnFile)) }
             }
             disconnecting = false
         } else if !wasOwnUp && ownTunnelUp {
@@ -891,6 +904,7 @@ final class KillSwitchControl {
             coreChoice = Bundle.main.path(forResource: "xray", ofType: nil, inDirectory: "Helper") != nil ? .xray : .mihomo
             daemonProblem = false; networkLeftOff = false
             daemonStateLive = false
+            vpnOn = false; rulesMissing = false
             helperOutdated = false; helperComparedAt = nil
             publish(.notInstalled)
             return
@@ -905,6 +919,8 @@ final class KillSwitchControl {
             daemonStateLive = true
             daemonRuns(true)
             protectionStandby = daemon.standby
+            vpnOn = daemon.vpnOn ?? Self.vpnOnFile
+            rulesMissing = vpnOn && daemon.blocking == false
             coreRunning = coreInstalled && daemon.coreRunning
             if !coreRunning { proxies = nil }
             foreignVPN = coreRunning ? Self.readForeignVPN() : nil
@@ -917,6 +933,7 @@ final class KillSwitchControl {
         }
         daemonStateLive = false
         protectionStandby = false
+        vpnOn = Self.vpnOnFile
         checkDaemon()
         if coreInstalled {
             Task {
@@ -944,6 +961,8 @@ final class KillSwitchControl {
             }
             needsRepair = false
             clearStatePollError()
+            // without the watchdog's file: "ks state" says on only while the rules are loaded
+            rulesMissing = vpnOn && DaemonState.protection(result.output) != .on
             publish(DaemonState.protection(result.output))
         }
     }
@@ -1008,9 +1027,17 @@ final class KillSwitchControl {
 
     private func trackConnecting() {
         resumeIfReconnected()
-        guard connection == .connecting else { connectingSince = nil; return }
+        trackTunnelSeen()
+        // the VPN on and our core not running yet (or not starting): connecting as well (Status)
+        guard connection == .connecting || vpnOn && connection == .disconnected else { connectingSince = nil; return }
         if connectingSince == nil { connectingSince = Date() }
         clock = Date()
+    }
+
+    private func trackTunnelSeen() {
+        guard vpnOn, let target = try? String(contentsOfFile: Self.vpnOnPath, encoding: .utf8) else { tunnelWasUp = false; return }
+        if ownTunnelUp { UserDefaults.standard.set(target, forKey: Self.tunnelSeenKey) }
+        tunnelWasUp = UserDefaults.standard.string(forKey: Self.tunnelSeenKey) == target
     }
 
     private func publish(_ new: State) {
@@ -1029,13 +1056,16 @@ final class KillSwitchControl {
 
     /// `userInitiated`: a click (or the widget) may fall back to the password prompt; anything else
     /// only tries the passwordless way.
-    private func run(_ args: [String], userInitiated: Bool) {
+    /// `failed`: run unless the helper did it.
+    private func run(_ args: [String], userInitiated: Bool, failed: (() -> Void)? = nil) {
         busy = true
         Task {
             switch await callHelper(args, interactive: userInitiated) {
             case .ok: error = nil
-            case .failed(let message): error = UserError.from(raw: message.isEmpty ? "ks \(args.joined(separator: " ")): failed" : message, context: .helper)
-            case .needsPassword, .cancelled: break
+            case .failed(let message):
+                error = UserError.from(raw: message.isEmpty ? "ks \(args.joined(separator: " ")): failed" : message, context: .helper)
+                failed?()
+            case .needsPassword, .cancelled: failed?()
             }
             busy = false
             refresh()
@@ -1245,12 +1275,12 @@ final class KillSwitchControl {
     /// «Сбросить настройки»: `ks repair` (#17), behind the password like any change that opens something.
     func resetSettings() { runAsAdmin([helper, "repair"]) }
 
-    /// «Перезапустить VPN»: the core is running but its API does not answer.
+    /// «Перезапустить VPN»: the core is running but its API does not answer. One `ks core restart`:
+    /// the VPN stays on and pf blocks throughout (ADR 0035), unlike «off» then «on».
     func restartCore() {
         busy = true
         Task {
-            _ = await callHelper(["core", "off"], interactive: true)
-            switch await callHelper(["core", "on"], interactive: true) {
+            switch await callHelper(["core", "restart"], interactive: true) {
             case .ok: error = nil
             case .failed(let message): error = UserError.from(raw: message, context: .helper)
             case .needsPassword, .cancelled: break
