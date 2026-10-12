@@ -1622,7 +1622,7 @@ KS_XRAY_PL='
   my %KEYS = map { (lc $_ => $_) } qw(tag protocol settings vnext servers address reverse streamSettings sendThrough
     proxySettings sockopt dialerProxy interface mark customSockopt network security tlsSettings realitySettings serverName
     xhttpSettings splithttpSettings wsSettings httpupgradeSettings downloadSettings extra host headers selector fallbackTag
-    subjectSelector);
+    subjectSelector pingConfig connectivity);
   sub odd_case { my $x = shift;
     if (ref $x eq "HASH") {
       my %seen;
@@ -1779,6 +1779,12 @@ KS_XRAY_PL='
     my %managed = map { $_ => 1 } qw(inbounds log remarks meta);
     for (sort keys %$c) { next if $keep{$_}; push @dropped, { section => "profile", item => $_, reason => $managed{$_} ? "managed" : "not-allowed" } }
     my %cfg = map { exists $c->{$_} ? ($_ => $c->{$_}) : () } keys %keep;
+    # Xray fetches a burst observatory'"'"'s connectivity URL itself, past routing (measured on
+    # 26.9.30): out of the tunnel to an address of the subscription'"'"'s choice (0.19.1 review 3)
+    if (ref $cfg{burstObservatory} eq "HASH" && ref $cfg{burstObservatory}{pingConfig} eq "HASH" && exists $cfg{burstObservatory}{pingConfig}{connectivity}) {
+      delete $cfg{burstObservatory}{pingConfig}{connectivity};
+      push @dropped, { section => "profile", item => "burstObservatory.pingConfig.connectivity", reason => "not-allowed" };
+    }
     my $outs = $cfg{outbounds};
     # bound to no interface (pf lets the core out by its group), server names pinned (ADR 0020)
     # (customSockopt sets raw socket options, the bound interface among them; also in an XHTTP

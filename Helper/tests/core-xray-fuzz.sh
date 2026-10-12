@@ -315,6 +315,16 @@ if accepted "outbound settings.reverse" '$c->{outbounds}[0]{settings}{reverse} =
   [ "$(j 'scalar grep { ref $_->{settings} eq "HASH" && exists $_->{settings}{reverse} } @{ $c->{outbounds} }')" = 0 ] && ok "  removed" || bad "  reverse: $(j '$c->{outbounds}[0]{settings}')"
 fi
 
+# a burst observatory's connectivity URL is fetched by Xray itself, past routing (measured on
+# 26.9.30 with a blackhole as the only outbound): removed, named in the report (0.19.1 review 3)
+if accepted "burstObservatory pingConfig.connectivity" ''; then
+  [ "$(j 'join ",", sort keys %{ $c->{burstObservatory}{pingConfig} }')" = interval,sampling,timeout ] &&
+    grep -q '"item":"burstObservatory.pingConfig.connectivity"' "$tmp/c.report" && ok "  removed, in the report" ||
+    bad "  pingConfig: $(j '$c->{burstObservatory}{pingConfig}')"
+fi
+perhost "«Connectivity» in another case" '$b->{burstObservatory}{pingConfig}{Connectivity} = delete $b->{burstObservatory}{pingConfig}{connectivity}'
+perhost "«PingConfig» in another case" '$b->{burstObservatory}{PingConfig} = delete $b->{burstObservatory}{pingConfig}'
+
 # --- the host picked by hand left out by a refresh: the first one runs, and the journal says why
 echo 'xrayserver=Плохой' > "$SETTINGS"; : > "$EVENTS"
 edit 'my $b = JSON::PP->new->decode(JSON::PP->new->encode($c)); $b->{remarks} = "Плохой"; $b->{outbounds}[0]{settings}{vnext}[0]{address} = "0.0.0.0"; push @$a, $b'
