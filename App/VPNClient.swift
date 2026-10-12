@@ -746,7 +746,7 @@ final class VPNClient {
     /// imports (admin prompt if needed), a timer only refreshes. `done` records what was imported.
     private func handOver(file: URL, hash: String, interactive: Bool, done: (String) -> Void) async -> Bool {
         if control.coreConfigured, UserDefaults.standard.string(forKey: Self.importedKey) == hash {
-                lastError = nil
+            lastError = nil
             needsPassword = false
             needsConfirmation = false; routingChanged = false
             return true
