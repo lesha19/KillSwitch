@@ -353,4 +353,18 @@ gx "$T/v6x.json" v6-x || bad "v6 xray: $(cat "$T/err")"
   ok "Xray: an IPv6 address and range" || bad "v6 xray: $(j '$c->{routing}{rules}' "$T/v6-x")"
 if [ -x "$XRAY" ]; then out=$(XRAY_LOCATION_ASSET=$CORE_DIR "$XRAY" run -test -format json -c "$T/v6-x" 2>&1) && ok "  xray run -test" || bad "  xray run -test: $(tail -2 <<<"$out")"; fi
 
+# --- Codex P1 (2): no outbound lines only when nothing goes direct at all. A signature that keeps
+# direct lines but drops the outbounds they go through (crafted: the generator prints the
+# outbounds whenever anything goes direct) is not approved
+printf 'core=xray\n' > "$SETTINGS"
+for a in s5-xray-on s1-redir-p; do
+  grep -v $'^outbound\t' "$T/$a.direct" > "$T/$a.noout"
+  SERVERS="$T/$a.srv"; APPROVED_HOSTS="$T/none"; APPROVED_DIRECT="$T/$a.direct"; : > "$T/pins"
+  grep -q $'^outbound\t' "$T/$a.direct" || bad "p1b: $a has no outbound lines to drop"
+  refresh_check "$T/$a.srv" "$T/pins" "$T/$a.noout" 2>/dev/null; rc=$?
+  [ "$rc" = 3 ] && ok "Xray: direct lines kept, their outbounds dropped ($a): the admin" || bad "p1b $a: rc $rc"
+done
+SERVERS="$T/s1-redir-p.srv"; APPROVED_DIRECT="$T/s1-redir-p.direct"; : > "$T/empty.direct"
+refresh_check "$T/s1-redir-p.srv" "$T/pins" "$T/empty.direct" 2>/dev/null && ok "  nothing direct any more (the profile off): no password" || bad "p1b: empty needs the admin"
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

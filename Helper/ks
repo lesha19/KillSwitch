@@ -2535,10 +2535,11 @@ direct_subset() {
   local own=$'^(profile-rule|profile|outbound)\t' ob=$'^outbound\t'
   cmp -s <(grep -vE "$own" -- "$1") <(grep -vE "$own" -- "$APPROVED_DIRECT") &&
     ! { grep -E $'^(profile-rule|profile)\t' -- "$1" || :; } | grep -qvxF -f "$APPROVED_DIRECT" &&
-    # the outbound lines are all the approved ones in their order, or none (nothing goes direct
-    # any more): an untagged first one is Xray's default, whose "default" line names no tag, so
-    # one dropped or moved would make another the default (re-review 2 N-A, Codex P1)
-    { ! grep -qE "$ob" -- "$1" || cmp -s <(grep -E "$ob" -- "$1") <(grep -E "$ob" -- "$APPROVED_DIRECT"); }
+    # the outbound lines are all the approved ones in their order, or the signature is empty
+    # (nothing goes direct any more): an untagged first one is Xray's default, whose "default"
+    # line names no tag, so one dropped or moved would make another the default, and a direct
+    # line left without its outbounds could go through another one (re-review 2 N-A, Codex P1)
+    { [ ! -s "$1" ] || cmp -s <(grep -E "$ob" -- "$1") <(grep -E "$ob" -- "$APPROVED_DIRECT"); }
 }
 
 # direct_parts <direct>: which part of the signature is not the approved one, for the app to say

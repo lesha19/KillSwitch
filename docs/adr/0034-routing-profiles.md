@@ -68,7 +68,8 @@ as a DIRECT change.
   subscription's rules (block or VPN in front of them), which are then exactly as approved, in
   order. The profile's direct rules are `profile-rule`, never `rule`, so a subscription that copies
   one is a change of its own part. `outbound` lines are all the approved ones in their order, or
-  none: they pin the freedom outbounds' settings and are printed for every one of them once
+  the whole signature is empty (nothing goes direct at all; a direct line left without its
+  outbounds is not taken, Codex P1): they pin the freedom outbounds' settings and are printed for every one of them once
   anything goes direct, so with the subscription's part unchanged they vanish only when nothing
   goes direct any more (the profile turned off over a subscription with nothing direct). Fewer or
   moved is not taken: an untagged first freedom outbound is Xray's default, whose `default` line
