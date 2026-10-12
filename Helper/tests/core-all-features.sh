@@ -48,8 +48,9 @@ xprof "$PROFILE" "$T/xp.json"
 printf 'core=xray\n' > "$SETTINGS"
 gx "$T/xp.json" x-profile || bad "xray, the profile alone: $(cat "$T/err")"
 all xray 🇩🇪Германия
-# escalation armed (the running host failing) with a fingerprint that worked remembered
-printf 'net=en0 192.168.1.1\n🇱🇹Литва\tprobe\t1\t1000000\n🇱🇹Литва\tfp\tfirefox\t1000000\n' > "$CORE_DIR/escalation"
+# escalation armed (the running host failing) with a fingerprint and another outbound to the same
+# server (its transport step: that one leads) that worked remembered
+printf 'net=en0 192.168.1.1\n🇱🇹Литва\tprobe\t1\t1000000\n🇱🇹Литва\tlead\tLT_1_FB\t1000000\n🇱🇹Литва\tfp\tfirefox\t1000000\n' > "$CORE_DIR/escalation"
 gx "$T/xp.json" x-all || bad "xray, everything on: $(cat "$T/err")"
 c="$T/x-all"
 [ "$(j '(grep { $_->{tag} eq "ks-tun" } @{ $c->{inbounds} })[0]{settings}{mtu}' "$c")" = 1380 ] && ok "Xray: MTU 1380 on the TUN" || bad "mtu: $(j '$c->{inbounds}' "$c")"
@@ -64,9 +65,9 @@ if [ -s "$CORE_DIR/geosite.dat" ]; then
 else echo "skip  blocked categories (no shipped geosite.dat)"; fi
 [ "$(j 'join ",", map { $_->{tag} } grep { ($_->{streamSettings}{sockopt}{dialerProxy} // "") eq "ks-entry" } @{ $c->{outbounds} }' "$c" | grep -c LT_1)" = 1 ] &&
   ok "  double VPN: the running server dialed through the entry" || bad "  multihop: $(j '[map { [$_->{tag}, $_->{streamSettings}{sockopt}{dialerProxy}] } @{ $c->{outbounds} }]' "$c")"
-[ "$(j '(grep { $_->{tag} eq "LT_1" } @{ $c->{outbounds} })[0]{streamSettings}{realitySettings}{fingerprint}' "$c")" = firefox ] &&
+[ "$(j '$c->{outbounds}[0]{tag} . " " . $c->{outbounds}[0]{streamSettings}{realitySettings}{fingerprint}' "$c")" = "LT_1_FB firefox" ] &&
   [ -n "$(j 'join ",", map { $_->{tag} } grep { $_->{tag} =~ /\Aks-ping-0-/ } @{ $c->{outbounds} }' "$c")" ] &&
-  ok "  escalation: the remembered fingerprint, the alternatives probed" || bad "  escalation: $(j '[map { $_->{tag} } @{ $c->{outbounds} }]' "$c")"
+  ok "  escalation: the other outbound leads with the remembered fingerprint, the alternatives probed" || bad "  escalation: $(j '[map { $_->{tag} } @{ $c->{outbounds} }]' "$c")"
 grep -q $'^profile-rule\t' "$c.direct" && grep -q $'^profile\t' "$c.direct" && ok "  the profile's direct entries in the DIRECT signature" || bad "  profile sig: $(cat "$c.direct")"
 same "$c.direct" "$T/x-profile.direct" && same "$c.egress" "$T/x-profile.egress" &&
   ok "  DIRECT signature and egress: the profile's alone (nothing else on adds a way past the VPN)" || bad "  direct differs: $(diff "$T/x-profile.direct" "$c.direct")"

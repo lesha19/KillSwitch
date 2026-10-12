@@ -53,6 +53,16 @@ as a DIRECT change.
   the approved one nor a part of it (below): the app then names the profile in the notice and
   only a click imports it with the admin's password. A profile that only blocks or sends through
   the VPN changes nothing pf lets out and needs no password. pf is never touched by a profile.
+- **A proxy rule in the `profile` line says «proxy», not the server's tag** (Xray, final 0.20.0
+  review; decided by the agent). Its target is the running host's leading server, and the
+  transport step of escalation (ADR 0030) makes another outbound of that host lead; with the tag in
+  the line, that step's passwordless rebuild failed the server switch check (KS-10, exit 3) for
+  every profile with proxy and direct rules, and the ladder skipped it. The marker cannot hide a
+  change of what goes direct: the target is always one of the host's own VPN servers (the first
+  vless/vmess/trojan/shadowsocks outbound with a tag; the generator refuses the build otherwise),
+  never freedom and never a balancer, which may have a freedom member, so every rule so marked
+  sends its traffic through the VPN whichever server leads, exactly as before. What goes direct
+  is still in the line by its own tag, rule by rule and in order, and in the `profile-rule` lines.
 - **Fewer profile lines need no password** (review S5, narrowed in the re-review, F1).
   `refresh_check` also accepts a signature whose lines other than the profile's own
   (`profile-rule`, `profile`) and the freedom outbounds (`outbound`) are exactly the approved

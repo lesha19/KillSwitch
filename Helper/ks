@@ -2259,8 +2259,15 @@ KS_XRAY_PL='
         if ($act eq "direct") { $egress{rules} = 1; push @direct, "profile-rule\t" . $J->encode($rule) }
       }
       # its block and proxy rules sit in front of the direct ones and shadow them: with anything
-      # of it going direct, the whole profile in order is approved (review B1)
-      push @direct, "profile\t" . $J->encode(\@prof) if defined $direct && grep { $_->{outboundTag} eq $direct } @prof;
+      # of it going direct, the whole profile in order is approved (review B1). A proxy rule goes to
+      # whichever server of this host leads, which escalation changes (ADR 0030): the line says
+      # "proxy" instead of its tag, so that step passes the server switch check (KS-10). $proxy is
+      # always one of the host'"'"'s own VPN servers (the first vless/vmess/trojan/shadowsocks
+      # outbound with a tag, never freedom or a balancer): checked here, else the tag stays
+      die "x-ks-routing: proxy\n" unless ($tag{$proxy}{protocol} // "") =~ /\A(vless|vmess|trojan|shadowsocks)\z/;
+      push @direct, "profile\t" . $J->encode([ map { my $r = $_; $r->{outboundTag} eq $proxy
+        ? { (map { $_ => $r->{$_} } grep { $_ ne "outboundTag" } keys %$r), proxy => JSON::PP::true } : $r } @prof ])
+        if defined $direct && grep { $_->{outboundTag} eq $direct } @prof;
       push @added, { kind => "routing-profile", items => [$pname] };
     }
     splice @direct, $outat, 0, @outlines if @direct;

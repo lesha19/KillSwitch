@@ -133,8 +133,8 @@ gx "$T/xfull.json" x-full || bad "xray profile refused: $(cat "$T/err")"
   ok "  report: from the profile, named" || bad "  report: $(j '$c->{rules}' "$T/x-full.report")"
 grep -q 'domain:ru' "$T/x-full.direct" && grep -q 'geoip:ru' "$T/x-full.direct" && ! grep -v '^profile' "$T/x-full.direct" | grep -q 'ads.example\|youtube' &&
   ok "  its DIRECT rules in the signature" || bad "  direct: $(cat "$T/x-full.direct")"
-[ "$(grep $'^profile\t' "$T/x-full.direct")" = "profile	$(j 'JSON::PP->new->canonical->encode([ @{ $c->{routing}{rules} }[2 .. 6] ])' "$T/x-full")" ] &&
-  ok "  and the whole profile in order (block and proxy rules shadow the direct ones)" || bad "  profile line: $(grep $'^profile\t' "$T/x-full.direct")"
+[ "$(grep $'^profile\t' "$T/x-full.direct")" = "profile	$(j 'JSON::PP->new->canonical->encode([ map { $_->{outboundTag} eq "LT_1" ? do { my %r = %$_; delete $r{outboundTag}; $r{proxy} = JSON::PP::true; \%r } : $_ } @{ $c->{routing}{rules} }[2 .. 6] ])' "$T/x-full")" ] &&
+  ok "  and the whole profile in order (block and proxy rules shadow the direct ones), a proxy rule as «proxy», not the server leading" || bad "  profile line: $(grep $'^profile\t' "$T/x-full.direct")"
 cmp -s "$T/x-full.srv" "$T/x-none.srv" && ok "  the servers for pf unchanged" || bad "  servers"
 xtest "  full profile" "$T/x-full"
 put_setting xrayserver "#2"
