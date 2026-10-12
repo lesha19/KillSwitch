@@ -152,6 +152,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 - Settings changed at the same moment (a «ks set» and the automatic server switch) no longer
   lose one another; the protection log and the pause are written whole (#50).
 - Subscriptions whose rule providers send request headers (`header`) are taken (#37).
+- Closing the window no longer quits KillSwitch: it stays in the menu bar, without a Dock icon
+  while the window is closed; opening the window brings the icon back. «Выйти» / «Выход» still
+  quit, and «Запускать без окна» starts without a Dock icon (#51, ADR 0011). Opening KillSwitch
+  again from Finder, Launchpad or Spotlight opens the window. An update installed while the window
+  is closed relaunches the app without the window; an update alert that needs an answer comes up
+  with the window instead of behind other apps.
+- Without the helper the content filter blocks nothing, and «Удалить KillSwitch из системы…»
+  switches the filter off before it reports done. A filter left enabled after the helper was
+  removed (the app quit, or not running) used to drop every connection while no VPN tunnel was up,
+  except the local network, Tailscale and NetBird (#55, ADR 0012 addendum).
 
 ### Security
 - Password prompt: install.sh and uninstall.sh run from a copy of the app in a folder of root's

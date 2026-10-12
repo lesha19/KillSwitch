@@ -41,6 +41,16 @@ final class UpdateRelaunchTests: XCTestCase {
         XCTAssertTrue(args[1].contains("kill -0 \"$1\""))
         XCTAssertTrue(args[1].contains("/usr/bin/open \"$2\""))
     }
+
+    /// #51: an update relaunch that found the window closed starts the app without it, once.
+    func testStartsWithoutWindowOnlySoonAfterTheMark() {
+        XCTAssertFalse(UpdateRelaunch.startsWithoutWindow(markedAt: nil, now: 1000))
+        XCTAssertTrue(UpdateRelaunch.startsWithoutWindow(markedAt: 1000, now: 1005))
+        XCTAssertTrue(UpdateRelaunch.startsWithoutWindow(markedAt: 1000, now: 1000 + UpdateRelaunch.windowlessFor))
+        XCTAssertFalse(UpdateRelaunch.startsWithoutWindow(markedAt: 1000, now: 1001 + UpdateRelaunch.windowlessFor),
+                       "a relaunch that never came: the next start by hand opens the window")
+        XCTAssertFalse(UpdateRelaunch.startsWithoutWindow(markedAt: 1000, now: 900), "the clock went back")
+    }
 }
 
 @MainActor

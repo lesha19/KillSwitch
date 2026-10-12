@@ -249,3 +249,34 @@ Decision:
   and with no sheet open it relaunches by itself (`/bin/sh` waits for this process to end, then
   `open`s the bundle).
 - Not done: a sheet still blocks logout and shutdown (AppKit's own rule, unrelated to updates).
+
+- The relaunch after an update keeps a closed window closed (#51): ADR 0011, addendum (#51),
+  the «Updates» item.
+
+## Addendum (0.20.0): the filter without the helper (#55)
+
+Seen on the owner's Mac: `/Library/KillSwitch` gone, no daemon, the app not running, but
+`com.lesha19.KillSwitch.Filter [activated enabled]` still filtering. The cause, from the code: the
+filter's verdict did not depend on the helper at all, and its enabled flag is written only by the
+running app (`publish` → `syncFilter` → `FilterControl.sync`, asynchronously, and only once the
+status is loaded). `KillSwitchControl.uninstall()` did not touch the filter; it relied on the next
+refresh. When the helper went away without that refresh landing (the app quit, or never ran, after
+the removal) the filter kept its last configuration and, with no 198.18 tunnel, dropped everything
+but the LAN, the listed addresses and Tailscale/NetBird.
+
+- The filter blocks only while `/Library/KillSwitch/ks` exists (`FilterGate`, checked at most once a
+  second). It is sandboxed, with no entitlement to read `/Library/KillSwitch`, but the App Sandbox
+  profile allows `file-read-metadata` everywhere (`/System/Library/Sandbox/Profiles/application.sb`,
+  a top-level `(allow file-read-metadata)`), so `stat` sees the helper without a new entitlement or
+  a file the helper would have to keep elsewhere. Only `ENOENT`/`ENOTDIR` count as removed; any
+  other failure keeps blocking, so a refusal can never open the filter. `ks` is replaced by a
+  rename (`put_file` in install.sh), so an upgrade never makes it absent.
+  The filter logs the gate's answer at start and each change (`log stream --predicate 'subsystem ==
+  "com.lesha19.KillSwitch" && category == "filter"'`), so a filter that stopped blocking is visible.
+- «Удалить KillSwitch из системы…» awaits `FilterControl.turnOff()` (`isEnabled = false`) after
+  uninstall.sh, before the app reports done. The extension stays activated, so a later install
+  needs no new approval in System Settings; «Удалить» in the filter's settings still removes it.
+  Decided by the agent, can be changed: switching off rather than deactivating, which may ask again.
+  A failure there is only logged (same category): with `ks` gone the gate already opens the filter.
+- Not covered by a test (needs the owner's Mac): the live sandbox `stat` in the extension, and the
+  NE preferences after an uninstall with the app quit right away.

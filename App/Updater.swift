@@ -11,6 +11,7 @@ import SwiftUI
 @Observable
 final class Updater {
     @ObservationIgnored private let installer = QuietInstaller()
+    @ObservationIgnored private let alertFocus = UpdateAlertFocus()   // Sparkle keeps its delegates weak
     @ObservationIgnored private let controller: SPUStandardUpdaterController
     private(set) var canCheck = false
     /// #35: another build is in place of this one (Sparkle installed it but the app was not
@@ -22,7 +23,8 @@ final class Updater {
     @ObservationIgnored private var opener: Process?
 
     init() {
-        controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: installer, userDriverDelegate: nil)
+        controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: installer, userDriverDelegate: alertFocus)
+        alertFocus.updater = controller.updater
         observation = controller.updater.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] _, _ in
             // KVO calls back on the thread that changed the value, not necessarily the main one:
             // the updater is read only after the hop to the main actor
@@ -64,6 +66,7 @@ final class Updater {
         }
         Router.shared.dropSheets()   // first: a sheet whose binding is still true comes back
         UpdateRelaunch.closeSheets(NSApp.windows)
+        StartMinimised.markRelaunch()
         NSApp.terminate(nil)
     }
 
@@ -117,6 +120,7 @@ final class QuietInstaller: NSObject, SPUUpdaterDelegate {
         MainActor.assumeIsolated {
             Router.shared.dropSheets()   // first: a sheet whose binding is still true comes back
             _ = UpdateRelaunch.closeSheets(NSApp.windows)
+            StartMinimised.markRelaunch()   // a closed window stays closed after the relaunch (#51)
         }
     }
 
@@ -139,6 +143,28 @@ final class QuietInstaller: NSObject, SPUUpdaterDelegate {
         timer?.invalidate()
         timer = nil
         install()
+    }
+}
+
+/// #51: with the window closed the app is .accessory, a background app to Sparkle, which would
+/// show a scheduled update's alert behind the other apps. It comes with the window instead
+/// (Sparkle's gentle reminders); user-initiated checks stay Sparkle's.
+@MainActor
+final class UpdateAlertFocus: NSObject, @preconcurrency SPUStandardUserDriverDelegate {   // Sparkle calls on the main thread
+    weak var updater: SPUUpdater?
+
+    var supportsGentleScheduledUpdateReminders: Bool { true }
+
+    func standardUserDriverShouldHandleShowingScheduledUpdate(_ update: SUAppcastItem, andInImmediateFocus immediateFocus: Bool) -> Bool {
+        NSApp.activationPolicy() != .accessory
+    }
+
+    func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem,
+                                                   state: SPUUserUpdateState) {
+        guard !handleShowingUpdate else { return }
+        Router.shared.go(.window)
+        // Sparkle: a check while the update waits brings its alert forward (after Router's activation)
+        DispatchQueue.main.async { [weak self] in self?.updater?.checkForUpdates() }
     }
 }
 

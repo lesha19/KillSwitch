@@ -49,9 +49,11 @@ final class Router {
         case .section(let section): self.section = section
         case .onboarding: onboarding = true
         }
+        NSApp.setActivationPolicy(.regular)   // the Dock icon, gone while the window was closed (#51)
         willShowWindow?()
         openWindow?()
-        NSApp.activate()
+        // right after leaving .accessory AppKit ignores an activation in the same turn (measured, #51)
+        DispatchQueue.main.async { NSApp.activate() }
     }
 
     func go(_ command: Navigation.Command) {

@@ -1,6 +1,7 @@
 import Foundation
 import NetworkExtension
 import Observation
+import os
 import SystemExtensions
 
 /// Second layer: the content filter system extension (Filter/). The app installs it, keeps its
@@ -9,6 +10,7 @@ import SystemExtensions
 @Observable
 final class FilterControl: NSObject {
     static let extensionID = "com.lesha19.KillSwitch.Filter"
+    static let log = Logger(subsystem: "com.lesha19.KillSwitch", category: "filter")
 
     enum Status: Equatable { case unknown, notInstalled, waitingForApproval, off, on, failed(String) }
 
@@ -82,6 +84,25 @@ final class FilterControl: NSObject {
             lastConfig = nil
             lastEnabled = nil
             status = .notInstalled
+        }
+    }
+
+    /// The helper was removed (#55): switched off now and waited for, since the app may be quit right
+    /// after. The extension stays activated (no new approval when the helper comes back); the user
+    /// removes it in Settings. A failure is only logged: with `ks` gone the filter itself already
+    /// blocks nothing (FilterGate), so this is tidying, not what opens the network.
+    func turnOff() async {
+        let manager = NEFilterManager.shared()
+        do {
+            try await manager.loadFromPreferences()
+            guard manager.providerConfiguration != nil, manager.isEnabled else { return }
+            manager.isEnabled = false
+            try await manager.saveToPreferences()
+            lastEnabled = false
+            status = .off
+        } catch {
+            Self.log.error("turning the filter off after the helper's removal failed: \(error.localizedDescription, privacy: .public)")
+            status = .failed(error.localizedDescription)
         }
     }
 
