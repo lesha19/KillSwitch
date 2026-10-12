@@ -39,6 +39,8 @@ j() { /usr/bin/perl -MJSON::PP -e 'local $/; my $c = JSON::PP->new->decode(<STDI
 hosts() { /usr/bin/perl -MJSON::PP -e 'local $/; my $a = JSON::PP->new->decode(<STDIN>); my $c = JSON::PP->new;
   my $d = $c->decode($c->encode($a->[0])); $d->{remarks} = "🇩🇪Германия"; $_->{settings}{vnext}[0]{address} = "de.example.com" for @{ $d->{outbounds} }[0, 1];
   $_->{tag} =~ s/\ALT_/DE_/ for @{ $d->{outbounds} };
+  # its balancer too, or its fallback names an outbound it lacks (a host left out, #37)
+  for my $b (@{ $d->{routing}{balancers} }) { s/\ALT_/DE_/ for $b->{fallbackTag}, @{ $b->{selector} }; s/\ALT_/DE_/ for map { $_->{match} } @{ $b->{strategy}{settings}{costs} } }
   push @$a, $d; eval $ARGV[0]; die $@ if $@; print JSON::PP->new->encode($a)' "${1:-}" < "$fx/xray-panel.json" > "$T/p.json"; }
 gen() { core_generate_xray "$T/p.json" "$T/c" "$T/s" 2>"$T/err"; }
 xtest() {
@@ -158,7 +160,9 @@ set_multihop "🇩🇪Германия" 2>"$T/err" && [ "$(setting multihop x)" 
 # a third host; with an entry set, the others' probes go through it, so their «dead» says nothing
 # of them: switching the entry is not refused for it (the chain is checked after the restart)
 hosts 'my $x = $c->decode($c->encode($a->[1])); $x->{remarks} = "🇳🇱Нидерланды"; $_->{settings}{vnext}[0]{address} = "203.0.113.30" for @{ $x->{outbounds} }[0, 1];
-  $_->{tag} =~ s/\ADE_/NL_/ for @{ $x->{outbounds} }; push @$a, $x'
+  $_->{tag} =~ s/\ADE_/NL_/ for @{ $x->{outbounds} };
+  for my $b (@{ $x->{routing}{balancers} }) { s/\ADE_/NL_/ for $b->{fallbackTag}, @{ $b->{selector} }; s/\ADE_/NL_/ for map { $_->{match} } @{ $b->{strategy}{settings}{costs} } }
+  push @$a, $x'
 core_import "$T/p.json" import 2>"$T/err" || bad "import three: $(cat "$T/err")"
 xray_pings() { printf '🇱🇹Литва\t0\t0\n🇩🇪Германия\t0\t0\n🇳🇱Нидерланды\t0\t0\n'; }
 set_multihop "🇳🇱Нидерланды" 2>"$T/err" && [ "$(setting multihop x)" = "🇳🇱Нидерланды" ] &&

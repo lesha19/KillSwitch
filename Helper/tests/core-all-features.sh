@@ -39,6 +39,8 @@ xprof() { /usr/bin/perl -MJSON::PP -e 'local $/; my $a = JSON::PP->new->decode(<
   my $x = $c->decode($c->encode($a->[0])); $x->{remarks} = "🇱🇹Литва XHTTP"; @{ $x->{outbounds} }[0, 1] = @{ $x->{outbounds} }[1, 0];
   my $d = $c->decode($c->encode($a->[0])); $d->{remarks} = "🇩🇪Германия"; $_->{settings}{vnext}[0]{address} = "de.example.com" for @{ $d->{outbounds} }[0, 1];
   $_->{tag} =~ s/\ALT_/DE_/ for @{ $d->{outbounds} };
+  # its balancer too, or its fallback names an outbound it lacks (a host left out, #37)
+  for my $b (@{ $d->{routing}{balancers} }) { s/\ALT_/DE_/ for $b->{fallbackTag}, @{ $b->{selector} }; s/\ALT_/DE_/ for map { $_->{match} } @{ $b->{strategy}{settings}{costs} } }
   push @$a, $x, $d; if ($ARGV[0]) { my $h; eval "\$h = $ARGV[0]"; die $@ if $@; $a->[0]{"x-ks-routing"} = $h }
   print JSON::PP->new->encode($a)' "$1" < "$fx/xray-panel.json" > "$2"; }
 gx() { core_generate_xray "$1" "$T/$2" "$T/$2.srv" 2>"$T/err"; }

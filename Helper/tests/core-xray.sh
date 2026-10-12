@@ -98,9 +98,10 @@ gen "$tmp/p.json" || bad "untagged first freedom refused: $(cat "$tmp/err")"
   [ "$(wc -c < "$tmp/c.report")" -lt 200000 ] && ok "  a rule object over 16 KB is left out of the report (the app says it cannot tell)" ||
   bad "  big rule: $(wc -c < "$tmp/c.report")"
 # a host's name ends up in settings (xrayserver=) and the report: control characters or more than
-# 256 bytes refuse the subscription, as a damaged one
+# 256 bytes refuse the subscription, as a damaged one; a tab or a line break becomes a space (0.19.1,
+# #37: one name must not become two in the lists)
 edit '$a->[0]{remarks} = "Литва\tвход"'
-gen "$tmp/p.json" && bad "a tab in a host name accepted" || ok "a control character in a host name: refused"
+gen "$tmp/p.json" && [ "$(q '$c->{servers}[0]{name}')" = "Литва вход" ] && ok "a tab in a host name: a space" || bad "a tab in a host name: $(cat "$tmp/err") $(q '$c->{servers}')"
 edit '$a->[0]{remarks} = "x" x 257'
 gen "$tmp/p.json" && bad "a 257-byte host name accepted" || ok "a host name over 256 bytes: refused"
 edit '$a->[0]{remarks} = "x" . "я" x 200'
