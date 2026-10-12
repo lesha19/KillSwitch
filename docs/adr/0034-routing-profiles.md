@@ -71,13 +71,18 @@ as a DIRECT change.
   settings and are printed for every one of them once anything goes direct, so with the
   subscription's part unchanged one disappears only when nothing goes direct any more (the profile
   turned off over a subscription with nothing direct) or the outbound is gone (then nothing can
-  use it); a changed outbound is a new line, not approved. What remains leans on ADR 0013's rule
+  use it); a changed outbound is a new line, not approved. They keep their approved order (a
+  subsequence of it): an untagged first freedom outbound is Xray's default, whose `default` line
+  names no tag, so swapping two untagged ones would move what no rule takes (re-review 2 N-A). What remains leans on ADR 0013's rule
   that a subscription's DIRECT rule, once approved, stands whatever non-direct rules in front of it
   do (they are not in the signature). Turning a direct profile off, deleting it or picking one
   without direct rules thus needs no password while the subscription's part is unchanged; a
   profile's link update that narrows its direct list still changes the `profile` line and needs
-  the password. Compared only with the import's approval, not with what a passwordless refresh
-  left running.
+  the password. Compared only with the import's approval, not with what is running: turning a
+  direct profile off is passwordless only when nothing else changed since the import — a split
+  app the admin added later, for instance, makes it a change of the subscription's part (tagged
+  so) until the next import (re-review 2 N-C; comparing with the running signature too was left
+  out, since not every way the running one changes was checked to be the admin's).
 - **Visible.** The routing report marks the rules `from: "profile"` with the profile's name;
   «Трафик» › «Правила» shows them with a «профиль» badge; «Проверить адрес» walks them like the
   others (they are ordinary rules).
@@ -100,7 +105,10 @@ as a DIRECT change.
   characters (code points) in any script; the helper counted bytes before (review S2).
 - **The pending change is said.** The refusal names the part that is not approved
   (`direct_parts`: ` [profile]`, ` [subscription]`, ` [profile,subscription]` after «(DIRECT)»),
-  and the app names the notice after it: «Профиль «…» меняет, что идёт мимо VPN», or «Подписка и
+  and the app names the notice after it. `[profile]` means only the profile's lines differ, which a
+  provider can still cause (mihomo: the group its «через VPN» goes to; Xray: the freedom outbound
+  its direct rules use), so that text says the change can come from the profile or from the
+  subscription (re-review 2 N-B; telling them apart would need the approved profile itself kept): «Профиль «…» меняет, что идёт мимо VPN», or «Подписка и
   профиль «…» меняют…» with the provider's part told as the provider's; an older helper says
   nothing, read as the subscription's. A block/proxy-only profile can be a profile part too (its
   «через VPN» group holds DIRECT). The old rules work until the password, and the notices say so

@@ -16,7 +16,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   format's own DNS, geodata links and «everything else direct» are not taken. A profile that goes
   direct is approved whole, its block and through-the-VPN exceptions and their order included;
   turning it off, or switching to one that only blocks or sends through the VPN, needs no
-  password while the subscription's own part is unchanged. A change that waits for the password
+  password while nothing else changed since the password was last entered (the subscription's
+  part, split apps). A change that waits for the password
   says whether it is the profile's, the subscription's or both (the helper tells), and that the
   old rules work until then. A profile link is fetched within a minute. Profile links are kept in the keychain; a subscription cannot bring a profile of
   its own; a geosite or geoip code the shipped geodata lacks is left out (shown in «Трафик») rather
