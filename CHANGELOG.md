@@ -179,6 +179,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   host whose XHTTP connection downloads from a server given by name is left out until the next
   import with the password; the other hosts keep working. `probeURL` (Xray's spelling) and an
   empty dialer chain no longer refuse a host or cost it its latency check.
+- Xray subscriptions (as 0.19.1, third review): a subscription that is not UTF-8 is refused (Xray
+  reads a bad byte as U+FFFD, so two tags could be one to it); a value the checks read (tag,
+  selector, type, address, DNS server…) with anything but ASCII makes the host unusable, since Go
+  trims Unicode spaces and lowers «İ» to i where the checks did not (a `+local` DNS server behind a
+  no-break space, `xİcmp`). The burst observatory's `connectivity` URL, which Xray fetches past the
+  tunnel, is removed. Subscriptions written with `\u` escapes show names as written, switch by
+  name and are named readably in a refusal; an empty or null DNS server entry no longer stops Xray.
 - Lock files of the service are root's alone (0600): a local user can no longer hold one and stall
   settings, the protection log and the watchdog; the log never waits more than 2 s (#50, review).
 - Password prompt: a script command in any other shape than the app's install.sh/uninstall.sh is

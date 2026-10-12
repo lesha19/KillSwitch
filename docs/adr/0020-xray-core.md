@@ -89,6 +89,17 @@ clients the full Xray config (an array of configs, one per host).
   `certificates` files must parse as a certificate and key, so they cannot carry another file
   out; the other finalmask types (fragment, noise, header-custom, mkcp, salamander, sudoku, xmc)
   only change the bytes to the server.
+  Third round: the subscription is read as strict UTF-8 (invalid bytes, which Xray reads as
+  U+FFFD, refuse it), decoded as text and turned back into UTF-8 bytes for the checks, so `\u`
+  escapes and raw UTF-8 are the same. Every value the checks read or match on (tags, selectors,
+  protocol, network/method, security, mask type, addresses, ports, dialerProxy, ECH, strategies:
+  one list, `ident_ok`) must be ASCII, or the host is unusable (`case`): Go trims Unicode
+  whitespace, lowers «İ» to i and maps bad bytes to U+FFFD where Perl does neither; a mutation
+  table in core-xray-fuzz.sh covers each value. ASCII whitespace stays allowed: Perl and Go treat
+  it alike (the DNS filter trims it as Go does). The burst observatory's
+  `pingConfig.connectivity` is fetched by Xray itself past routing (measured: requested with a
+  blackhole as the only outbound), so it is removed; `destination` probes go through the
+  observed outbounds.
 
 ## Consequences
 
