@@ -23,6 +23,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
     letters Xray reads as Latin (`ſelector`, `socKopt`), or give a balancer's selector as one
     string or as `""`: Xray reads all of them, the checks did not, so a whole subscription could
     be sent past the VPN with the signature unchanged;
+  - write a value the checks read (a tag, a selector, a DNS server, a transport type) so that
+    Xray reads it differently: with Unicode spaces it trims (a `+local` DNS server kept), with
+    «İ» it lowers to i (`xİcmp`), or with bytes that are not UTF-8, which Xray reads as one
+    character (two tags one to Xray). Such values make the host unusable, and a subscription that
+    is not UTF-8 is refused;
+  - have Xray check connectivity itself, past the tunnel, at a URL of its choice (the burst
+    observatory's `connectivity`, now removed);
   - make the connection itself talk to other addresses than the server: an ECH config fetched
     from a DNS server of its choice, finalmask `realm`, `xdns`, `xicmp` or `udphop` to other
     addresses, the `xdrive` transport; or bind the ECH lookup's socket to an interface, or have
@@ -36,7 +43,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   address (missing, IPv6). The whole subscription is still refused when no host is left, when a
   server name does not resolve, or when a config is broken (two outbounds with one tag, a chain
   through a missing outbound). A host picked by hand that is left out is noted in Журнал защиты
-  with the reason; the first host runs instead.
+  with the reason; the first host runs instead. Tags, types and addresses must be written in
+  Latin letters (names of servers may be anything).
 - After the update, a host whose XHTTP connection downloads from a server given by name is left
   out (named in «Трафик») until the next import with the password (Settings › Обновить
   подписку); the other hosts keep working, switching and settings included.
@@ -47,7 +55,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   a proxy that routes by name keep working. Empty values a panel writes for «none» (a balancer
   fallback, a dialer chain, an XHTTP download address) no longer refuse a host, and a host with
   an empty dialer chain keeps its latency check. Keys spelled the way Xray documents them
-  (`probeURL`) no longer refuse a host.
+  (`probeURL`) no longer refuse a host. Subscriptions written with `\u` escapes (panels in Python)
+  show server names as written, can be switched by name, and a refusal names their servers in
+  readable text. A DNS server entry that is empty or null no longer stops Xray from starting.
 
 ## [0.19.0] - 2026-10-11
 
