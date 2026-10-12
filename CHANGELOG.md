@@ -118,9 +118,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 ### Fixed
 - Xray: with only split apps (or a routing profile) going direct, the subscription's freedom
   outbound they use was not in the DIRECT signature, so a passwordless refresh could change where
-  that traffic goes (a `redirect`). It is now, at the same place as before, so such a setup asks
-  for the admin's password once after the update; other signatures stay byte-identical (#30
-  review).
+  that traffic goes (a `redirect`). It is now, at the same place as before. The update's own
+  rebuild writes that signature as the running one, so the next refresh needs no password either;
+  other signatures stay byte-identical (#30 review).
 - The shortcut «Отключить VPN» stopped the VPN while it was stuck on a server that does not answer;
   it used to say «VPN и так не подключён» and leave the core running (#23).
 - A large subscription (~19 MB) no longer freezes the window while it is read (#50).
