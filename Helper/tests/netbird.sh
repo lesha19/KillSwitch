@@ -96,6 +96,9 @@ case \$1 in
 esac
 EOF
 chmod +x "$bin"
+# macOS assesses a new executable on its first run (0.2-3 s measured, then ~3 ms): run it once here so
+# that the first timed call (1 s) is not killed by it and the reconnect checks do not flake
+"$bin" version >/dev/null 2>&1
 /usr/libexec/PlistBuddy -c 'Add :ProgramArguments: string --daemon-addr' -c "Add :ProgramArguments: string unix://$sock" "$NB_PLIST"
 launchctl() {
   echo "launchctl $*" >> "$tmp/calls"
