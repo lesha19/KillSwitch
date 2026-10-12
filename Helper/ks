@@ -3242,8 +3242,9 @@ set_mtu() {
   cp "$SETTINGS" "$s" 2>/dev/null || : > "$s"
   for f in "${files[@]}"; do rm -f "$f.prev"; [ ! -f "$f" ] || cp -p "$f" "$f.prev"; done
   if ! SETTINGS=$s mtu_store "$1" || ! SETTINGS=$s core_rebuild "$PINS" || ! { chmod 644 "$s" && mv "$s" "$SETTINGS"; }; then
-    rm -f "$s" "$s.tmp"; mtu_back; return 1
+    rm -f "$s" "$s.tmp" "$s.lock"; mtu_back; return 1
   fi
+  rm -f "$s.lock"
   reload_if_on
   if [ "$job" = 0 ] || { [ "$again" = 0 ] && cmp -s "$(core_conf).prev" "$(core_conf)"; }; then
     for f in "${files[@]}"; do rm -f "$f.prev"; done
@@ -3266,7 +3267,7 @@ mtu_back() {
 }
 mtu_store() {  # mtu_store auto|<n>
   if [ "$1" = auto ]; then
-    { grep -vE '^mtu=' "$SETTINGS" 2>/dev/null || :; } > "$SETTINGS.tmp" && chmod 644 "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+    drop_setting mtu
   else put_setting mtu "$1"; fi
 }
 
@@ -3292,7 +3293,7 @@ set_doh() {
 }
 doh_put() {  # doh_put <url>: the settings line, "" removes it
   if [ -n "$1" ]; then put_setting doh "$1"; return; fi
-  { grep -v '^doh=' "$SETTINGS" 2>/dev/null || true; } > "$SETTINGS.tmp" && chmod 644 "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+  drop_setting doh
 }
 
 # "ks set hosts <name=addr,...>" (ADR 0033): own addresses of sites, answered by the core's DNS;
@@ -3311,7 +3312,7 @@ set_hosts() {
 }
 hosts_put() {  # hosts_put <list>: the settings line, "" removes it
   if [ -n "$1" ]; then put_setting hosts "$1"; return; fi
-  { grep -v '^hosts=' "$SETTINGS" 2>/dev/null || true; } > "$SETTINGS.tmp" && chmod 644 "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+  drop_setting hosts
 }
 
 # "ks set multihop <entry proxy>|off": double VPN. The entry is checked by building the config
