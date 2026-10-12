@@ -178,7 +178,7 @@ final class KillSwitchControl {
         updateHelperAvailability()
     }
 
-    private let helper = "/Library/KillSwitch/ks"
+    private let helper = FilterGate.helperPath
     private var timer: Timer?
     /// Changes in /Library/KillSwitch: the watchdog rewrites its state file there (DaemonState).
     private var watcher: DispatchSourceFileSystemObject?
@@ -852,9 +852,10 @@ final class KillSwitchControl {
             return false
         }
     }
-    /// Then the daemon goes too (uninstall.sh removes its authorization right).
+    /// Then the filter is switched off (#55) and the daemon goes too (uninstall.sh removes its authorization right).
     func uninstall() {
         runBundled("uninstall.sh", []) { [self] in
+            await filter.turnOff()
             await helperClient.unregister()
             updateHelperAvailability()
         }
