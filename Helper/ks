@@ -1499,7 +1499,18 @@ KS_XRAY_PL='
   our %PINNED = length($ENV{PINS} // "") ? (map { chomp; my ($h, $a) = split /\t/; ($h => $a // "") } do { open my $f, "<", $ENV{PINS} or die "$ENV{PINS}\n"; <$f> }) : ();
   sub load {
     return Storable::dclone($LOADED) if $LOADED;
-    my $a = eval { local $/; open my $f, "<", "$W/in.json" or die; JSON::PP->new->decode(<$f>) };
+    # UTF-8, strictly: Xray reads an invalid byte as U+FFFD, so two tags that differ only there
+    # would be one to it and two to the checks here; decoded as text (\u escapes too), then
+    # every string back to UTF-8 bytes, which the checks and the outputs work on (0.19.1 review 3)
+    my $t = do { local $/; open my $f, "<:raw", "$W/in.json" or die "$W/in.json\n"; <$f> };
+    require Encode;
+    $t = eval { Encode::decode("UTF-8", $t, Encode::FB_CROAK()) } // die "Подписка не в UTF-8: в ней есть байты, которых нет в UTF-8\n";
+    my $bytes; $bytes = sub { my $x = shift;
+      return { map { my $k = $_; utf8::encode($k) if $k =~ /[^\x00-\x7f]/; ($k => $bytes->($x->{$_})) } keys %$x } if ref $x eq "HASH";
+      return [ map { $bytes->($_) } @$x ] if ref $x eq "ARRAY";
+      utf8::encode($x) if defined $x && !ref $x && $x =~ /[^\x00-\x7f]/;
+      $x };
+    my $a = eval { $bytes->(JSON::PP->new->decode($t)) };
     die "Подписка не в формате Xray (нужен JSON-список конфигов Xray)\n"
       unless ref $a eq "ARRAY" && @$a && !grep { ref $_ ne "HASH" || ref $_->{outbounds} ne "ARRAY" } @$a;
     die "Слишком много конфигов в подписке\n" if @$a > 200;
