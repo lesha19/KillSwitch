@@ -1904,7 +1904,10 @@ KS_XRAY_PL='
   # reached through another outbound of its config (proxySettings, sockopt.dialerProxy)
   # a rule object for the report: at most 16 KB, or left out (the app says it cannot tell)
   sub small { length($J->encode($_[0])) <= 16384 }
-  sub chained { my $o = shift; $o->{proxySettings} || (ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" && exists $o->{streamSettings}{sockopt}{dialerProxy}) }
+  # (null or "" is none, as Xray reads it: set); chain_to: the tag it goes through, undef when none
+  sub chain_to { my $o = shift; return $o->{proxySettings}{tag} if ref $o->{proxySettings} eq "HASH" && set($o->{proxySettings}{tag});
+    my $ss = $o->{streamSettings}; ref $ss eq "HASH" && ref $ss->{sockopt} eq "HASH" && set($ss->{sockopt}{dialerProxy}) ? $ss->{sockopt}{dialerProxy} : undef }
+  sub chained { defined chain_to($_[0]) }
   # a host'"'"'s server: its first proxy outbound with a tag
   sub first_proxy { my $c = shift; my ($o) = grep { ref $_ eq "HASH" && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && length($_->{tag} // "") } @{ $c->{outbounds} }; $o }
   # escalation (ADR 0030): a server'"'"'s transport (raw is tcp), its TLS fingerprint (undef without
@@ -2005,9 +2008,7 @@ KS_XRAY_PL='
     my @pings;
     for my $i (0 .. $#$a) {
       my $o = first_proxy($a->[$i]);
-      # (a chain the way check() reads one: null or "" is none)
-      next if !$o || (ref $o->{proxySettings} eq "HASH" && set($o->{proxySettings}{tag}))
-        || (ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" && set($o->{streamSettings}{sockopt}{dialerProxy}));
+      next if !$o || chained($o);
       $o = $J->decode($J->encode($o)); $o->{tag} = "ks-ping-$i";
       push @pings, $o; $servers[$i]{ping} = $o->{tag};
     }
@@ -2143,7 +2144,7 @@ KS_XRAY_PL='
       for my $o (grep { $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && chained($_) } @$outs) {
         my ($t, %seen) = ($o);
         while ($t && chained($t) && !$seen{$t}++) {
-          my $n = ref $t->{proxySettings} eq "HASH" ? $t->{proxySettings}{tag} : $t->{streamSettings}{sockopt}{dialerProxy};
+          my $n = chain_to($t);
           $t = defined $n && !ref $n ? $tag{$n} : undef;
         }
         next if $t && !chained($t) && $t->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/;

@@ -108,6 +108,14 @@ hosts '$a->[0]{outbounds}[1]{proxySettings} = { tag => "LT_1" }'
 printf 'core=xray\nmultihop=🇩🇪Германия\n' > "$SETTINGS"
 gen && [ "$(dialers)" = "LT_1=ks-entry,LT_1_FB=-,ks-ping-0=ks-entry,ks-ping-1=-,ks-entry=-" ] &&
   ok "a server the subscription reaches through another one is chained through that one" || bad "own chain: $(cat "$T/err") $(dialers)"
+# null or "" in proxySettings / dialerProxy is no chain for Xray, nor for ks (as the probes read it)
+hosts '$a->[0]{outbounds}[1]{streamSettings}{sockopt}{dialerProxy} = ""; $a->[1]{outbounds}[0]{proxySettings} = undef;
+  $a->[1]{outbounds}[0]{streamSettings}{sockopt}{dialerProxy} = undef'
+printf 'core=xray\nmultihop=🇩🇪Германия\n' > "$SETTINGS"; : > "$EVENTS"
+gen && [ "$(dialers)" = "LT_1=ks-entry,LT_1_FB=ks-entry,ks-ping-0=ks-entry,ks-ping-1=-,ks-entry=-" ] && [ "$(setting multihop x)" = "🇩🇪Германия" ] &&
+  ok "an empty or null dialerProxy / proxySettings is no chain: the exit goes through the entry, double VPN stays" ||
+  bad "empty chain: $(cat "$T/err") $(dialers) $(setting multihop x) $(cat "$EVENTS")"
+xtest "empty or null chain fields" "$T/c"
 
 # --- ks set multihop with Xray: stored only when the config builds, then rebuilt and reloaded
 printf 'core=xray\n' > "$SETTINGS"
