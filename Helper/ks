@@ -1506,7 +1506,7 @@ core_generate_xray() (
       case ${left%%	*} in
         address) why="its server address is unusable" ;; protocol) why="a server type KillSwitch does not take" ;;
         tag) why="a ks-… tag is KillSwitch's" ;; selector) why="a selector picks KillSwitch's or the direct outbound" ;;
-        fallback) why="the balancer falls back to an outbound not its own" ;; download) why="its transport names an address KillSwitch does not pin" ;;
+        fallback) why="the balancer falls back to an outbound that does not exist" ;; download) why="its transport names an address KillSwitch does not pin" ;;
         transport) why="its transport talks to other addresses than the server" ;; case) why="a key or value Xray reads differently (case, non-Latin letters)" ;;
         *) why=${left%%	*} ;;
       esac
@@ -1608,7 +1608,7 @@ KS_XRAY_PL='
   # the others stay: panels add placeholder hosts at 0.0.0.0 or 127.0.0.1 («подписка истекла»),
   # and one of them must not refuse the whole subscription, or a stored one its rebuilds.
   %UNUSABLE = (address => "адрес сервера не годится", tag => "тег ks-… занят KillSwitch",
-    selector => "выбирает outbound KillSwitch (ks-…) или прямой", case => "ключ или служебное значение записаны необычно (другой регистр, не латинские буквы)", fallback => "запасной outbound не свой или ks-…",
+    selector => "выбирает outbound KillSwitch (ks-…) или прямой", case => "ключ или служебное значение записаны необычно (другой регистр, не латинские буквы)", fallback => "запасной выход балансировщика называет outbound, которого в этом сервере нет",
     download => "адрес в настройках транспорта, которого KillSwitch не закрепляет", protocol => "тип сервера, который KillSwitch не берёт",
     transport => "транспорт ходит к адресам помимо сервера (ECH через DNS, realm, xdns, xicmp, udphop, xdrive)");
   # Xray reads JSON keys in any case (Go): «Selector», «Address» or «TAG» are the keys below to it,
@@ -1679,7 +1679,7 @@ KS_XRAY_PL='
       # a server type KillSwitch does not take (hysteria2, wireguard…), or no usable address:
       # missing, IPv6 (pf lets the core out to IPv4 servers only), not a host name (NEW-5 of the
       # 0.19.1 review: these refused the whole subscription)
-      unless (($o->{protocol} // "") =~ /\A($ENV{PROTOS})\z/) { $DETAIL = ref $o->{protocol} ? "?" : $o->{protocol} // ""; return "protocol" }
+      unless (($o->{protocol} // "") =~ /\A($ENV{PROTOS})\z/) { $DETAIL = ref $o->{protocol} ? "?" : $o->{protocol} if set($o->{protocol}); return "protocol" }
       for my $r (addrs($o)) { my $h = $$r;
         return "address" if !defined $h || ref $h || !length $h;
         return "address" if ipv4($h) ? $h =~ /\A(0|127|22[4-9]|2[3-5][0-9])\./ : $h =~ /\A[0-9.]+\z/ || !host($h);   # good_server_ip
@@ -1737,7 +1737,7 @@ KS_XRAY_PL='
       for my $o (@{ $c->{outbounds} }) {
         my @to = grep { set($_) } ($o->{proxySettings} && ref $o->{proxySettings} eq "HASH" ? $o->{proxySettings}{tag} : undef,
                                    map { $_->{dialerProxy} } sockopts($o->{streamSettings}));
-        for (@to) { die "$n: «" . ($o->{tag} // "?") . "» подключается через несуществующий «$_»\n" if ref $_ || !$tags{$_} }
+        for (@to) { die "$n: «" . (set($o->{tag}) && !ref $o->{tag} ? $o->{tag} : "?") . "» подключается через несуществующий «" . (ref $_ ? "?" : $_) . "»\n" if ref $_ || !$tags{$_} }
       }
     }
     print "$_\n" for sort keys %hosts;
@@ -1898,10 +1898,11 @@ KS_XRAY_PL='
     # DNS: the system resolver is ourselves (127.0.0.1:53), fakedns would outlive the core, and
     # any <scheme>+local (udp, tcp, https, h2c, quic…) queries straight past routing (#37)
     if (ref $cfg{dns} eq "HASH" && ref $cfg{dns}{servers} eq "ARRAY") {
+      # (a server that is null, has no address or is not text stops Xray, null with a panic)
       $cfg{dns}{servers} = [ grep { my $s = ref $_ eq "HASH" ? $_->{address} // "" : $_ // "";
         my $x = ref $s ? "" : $s =~ s/\A\s+|\s+\z//gr;
-        my $bad = $x =~ /\A(localhost|fakedns(\+\w+)?)\z/i || $x =~ m{\A[a-z0-9]+\+local:}i;
-        push @dropped, { section => "dns", item => $s, reason => "bad-value" } if $bad; !$bad } @{ $cfg{dns}{servers} } ];
+        my $bad = !length $x || $x =~ /\A(localhost|fakedns(\+\w+)?)\z/i || $x =~ m{\A[a-z0-9]+\+local:}i;
+        push @dropped, { section => "dns", item => ref $s ? "?" : $s, reason => "bad-value" } if $bad; !$bad } @{ $cfg{dns}{servers} } ];
     }
     # sniffing: the template inbound'"'"'s, else routing only
     my ($tpl) = grep { ref $_ eq "HASH" && ref $_->{sniffing} eq "HASH" && $_->{sniffing}{enabled} } @{ ref $c->{inbounds} eq "ARRAY" ? $c->{inbounds} : [] };
