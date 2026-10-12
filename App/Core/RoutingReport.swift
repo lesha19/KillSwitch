@@ -227,9 +227,9 @@ extension RoutingReport.Dropped {
         case "address": return String(localized: "Адрес сервера не годится (например, 0.0.0.0 — заглушка панели)")
         case "tag": return String(localized: "Тег ks-… занят KillSwitch")
         case "selector": return String(localized: "Балансировщик или проверка выбирают служебный или прямой выход")
-        case "fallback": return String(localized: "Запасной выход балансировщика не из этого сервера")
+        case "fallback": return String(localized: "Запасной выход балансировщика называет выход, которого в этом сервере нет")
         case "download": return String(localized: "Адрес в настройках транспорта, который KillSwitch не закрепляет")
-        case "case": return String(localized: "Ключ записан необычно (другой регистр или не латинские буквы), KillSwitch не может его проверить")
+        case "case": return String(localized: "Ключ или служебное значение записаны необычно (другой регистр, не латинские буквы), KillSwitch не может их проверить")
         case "protocol": return String(localized: "Тип сервера, который KillSwitch не поддерживает (например, hysteria2)")
         case "transport": return String(localized: "Транспорт связывается не только с сервером, но и с другими адресами")
         default: return reason
