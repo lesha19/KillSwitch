@@ -434,6 +434,30 @@ if accepted "a rule of the subscription for our inbounds" 'unshift @{$c->{routin
     '{"inboundTag":["ks-dns"],"outboundTag":"dns-out"}|{"inboundTag":["ks-fetch"],"outboundTag":"LT_1"}' ] && ok "  ours still come first" || bad "  rules: $(j '$c->{routing}{rules}')"
 fi
 
+# --- the subscription is UTF-8: Xray reads an invalid byte as U+FFFD, so "dx\xFE" and "dx\xFF"
+# are one tag to it and two to a byte-wise check; such a subscription is refused (0.19.1 review 3)
+refused "invalid UTF-8 in a tag" '$c->{outbounds}[2]{tag} = "direct\xff"' "UTF-8"
+refused "invalid UTF-8 in a name" '$c->{remarks} = "Lit\xc0\xafva"' "UTF-8"
+refused "UTF-8 of a surrogate" '$c->{remarks} = "x\xed\xa0\x80"' "UTF-8"
+# a subscription written with \u escapes (Python panels): names as they are, picked by name, and
+# a refusal that names them in readable text (0.19.1 review 3)
+esc() { /usr/bin/perl -Mutf8 -MJSON::PP -MEncode -e 'local $/; my $a = JSON::PP->new->decode(Encode::decode("UTF-8", <STDIN>)); my $c = $a->[0]; eval $ARGV[0]; die $@ if $@;
+          print JSON::PP->new->ascii->encode($a)' "$1" < "$fx/xray-panel.json" > "$tmp/p.json"; }
+esc 'my $b = JSON::PP->new->decode(JSON::PP->new->encode($c)); $b->{remarks} = "\x{1F1E9}\x{1F1EA}Германия"; push @$a, $b'
+grep -q 'Литва' "$tmp/p.json" && bad "escaped subscription: not escaped" || ok "a subscription with \\u escapes only"
+echo 'xrayserver=🇩🇪Германия' > "$SETTINGS"
+if gen; then
+  [ "$(j 'join "|", map { $_->{name} } @{ $c->{servers} }' "$tmp/c.report")" = "🇱🇹Литва|🇩🇪Германия" ] && [ "$(j '$c->{selected}' "$tmp/c.report")" = "🇩🇪Германия" ] &&
+    ok "  names as written, the host picked by its name runs" || bad "  servers $(j '$c->{servers}' "$tmp/c.report") selected $(j '$c->{selected}' "$tmp/c.report")"
+else bad "escaped subscription refused: $(cat "$tmp/err")"; fi
+: > "$SETTINGS"
+esc '$c->{outbounds}[0]{settings}{vnext}[0]{address} = "0.0.0.0"'
+if gen; then bad "escaped subscription without a usable host: accepted"
+else
+  [ "$(head -1 "$tmp/err")" = "В подписке нет ни одного годного сервера (🇱🇹Литва: адрес сервера не годится)" ] &&
+    ok "  refused with the host named in readable text" || bad "  refusal: $(head -c 300 "$tmp/err")"
+fi
+
 # --- names: shown, stored as xrayserver=, logged; no line breaks and no control characters
 refused "a control character in a name" '$c->{remarks} = "a\x07b"' "Управляющие символы"
 refused "a key longer than 256" '$c->{outbounds}[0]{"k" x 300} = 1'
