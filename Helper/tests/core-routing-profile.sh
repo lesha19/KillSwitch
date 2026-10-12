@@ -18,8 +18,32 @@ T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 DIR="$T"; CORE_DIR="$T/core"; mkdir -p "$CORE_DIR" "$T/home"
 SETTINGS="$DIR/settings"; EVENTS="$DIR/events.log"
-# the shipped geodata: GEOSITE/GEOIP entries are taken only with it
-for f in geosite.dat geoip.metadb geoip.dat; do [ ! -s "$here/../$f" ] || { cp "$here/../$f" "$CORE_DIR/" && cp "$here/../$f" "$T/home/"; }; done
+# the shipped geodata: GEOSITE/GEOIP entries are taken only with it. Without it (CI, a fresh
+# checkout: Helper/fetch-geodata.sh is not run) stand-ins with the codes used here, read by ks the
+# same way (a protobuf list of entries whose field 1 is the code); the cores cannot load them, so
+# their own checks of a config with GEOSITE/GEOIP are skipped then (mihomo would download geodata)
+if [ -s "$here/../geosite.dat" ] && [ -s "$here/../geoip.dat" ] && [ -s "$here/../geoip.metadb" ]; then
+  GEO_REAL=1
+  for f in geosite.dat geoip.metadb geoip.dat; do cp "$here/../$f" "$CORE_DIR/" && cp "$here/../$f" "$T/home/"; done
+else
+  GEO_REAL=0
+  dat() { /usr/bin/perl -e 'print map { my $e = "\x0a" . chr(length) . $_; "\x0a" . chr(length $e) . $e } @ARGV' "$@"; }
+  dat YOUTUBE CATEGORY-RU > "$CORE_DIR/geosite.dat"; dat RU US > "$CORE_DIR/geoip.dat"; echo stand-in > "$CORE_DIR/geoip.metadb"
+fi
+# mtest/xtest <desc> <config>: the real core's own check, unless it would need geodata it lacks
+needs_geo() { [ "$GEO_REAL" = 0 ] && grep -qiE 'geo(site|ip)' "$1"; }
+mtest() {
+  if [ ! -x "$MIHOMO" ]; then echo "skip  $1: mihomo -t (no $MIHOMO)"
+  elif needs_geo "$2"; then echo "skip  $1: mihomo -t (no shipped geodata: Helper/fetch-geodata.sh)"
+  elif out=$("$MIHOMO" -t -d "$T/home" -f "$2" 2>&1); then ok "$1: mihomo -t"
+  else bad "$1: mihomo -t: $(tail -2 <<<"$out")"; fi
+}
+xtest() {
+  if [ ! -x "$XRAY" ]; then echo "skip  $1: xray run -test (no $XRAY)"
+  elif needs_geo "$2"; then echo "skip  $1: xray run -test (no shipped geodata: Helper/fetch-geodata.sh)"
+  elif out=$(XRAY_LOCATION_ASSET=$CORE_DIR "$XRAY" run -test -format json -c "$2" 2>&1); then ok "$1: xray run -test"
+  else bad "$1: xray run -test: $(tail -2 <<<"$out")"; fi
+}
 resolve_host() { case "$1" in de.example.com) echo 203.0.113.20 ;; fi.example.com) echo 203.0.113.30 ;; *) return 1 ;; esac; }
 fails=0
 ok()  { echo "ok    $*"; }
@@ -58,8 +82,7 @@ grep -q $'^profile-rule\tDOMAIN-SUFFIX,ru,DIRECT$' "$T/m-full.direct" && grep -q
   ok "  and the whole profile in order, block and proxy rules too (they shadow the direct ones)" || bad "  profile line: $(grep $'^profile\t' "$T/m-full.direct")"
 grep -qx rules "$T/m-full.egress" && ok "  egress: rules" || bad "  egress: $(cat "$T/m-full.egress")"
 cmp -s "$T/m-full.srv" "$T/m-none.srv" && ok "  the servers for pf unchanged" || bad "  servers"
-if [ -x "$MIHOMO" ]; then out=$("$MIHOMO" -t -d "$T/home" -f "$T/m-full" 2>&1) && ok "  mihomo -t" || bad "  mihomo -t: $(tail -2 <<<"$out")"
-else echo "skip  mihomo -t (no $MIHOMO)"; fi
+mtest "  full profile" "$T/m-full"
 with_routing "$T/base.json" "$T/safe.json" '$h = { name => "Без рекламы", block => { sites => ["domain:ads.example.com"] }, proxy => { ips => ["geoip:us"] } }'
 gm "$T/safe.json" m-safe || bad "block/proxy profile refused: $(cat "$T/err")"
 cmp -s "$T/m-safe.direct" "$T/m-none.direct" && cmp -s "$T/m-safe.egress" "$T/m-none.egress" &&
@@ -113,8 +136,7 @@ grep -q 'domain:ru' "$T/x-full.direct" && grep -q 'geoip:ru' "$T/x-full.direct" 
 [ "$(grep $'^profile\t' "$T/x-full.direct")" = "profile	$(j 'JSON::PP->new->canonical->encode([ @{ $c->{routing}{rules} }[2 .. 6] ])' "$T/x-full")" ] &&
   ok "  and the whole profile in order (block and proxy rules shadow the direct ones)" || bad "  profile line: $(grep $'^profile\t' "$T/x-full.direct")"
 cmp -s "$T/x-full.srv" "$T/x-none.srv" && ok "  the servers for pf unchanged" || bad "  servers"
-if [ -x "$XRAY" ]; then out=$(XRAY_LOCATION_ASSET=$CORE_DIR "$XRAY" run -test -format json -c "$T/x-full" 2>&1) && ok "  xray run -test" || bad "  xray run -test: $(tail -2 <<<"$out")"
-else echo "skip  xray run -test (no $XRAY)"; fi
+xtest "  full profile" "$T/x-full"
 put_setting xrayserver "#2"
 with_routing "$fx/xray-panel.json" "$T/x2.json" '$h = { name => "x", direct => { sites => ["domain:ru"] } }; my $b = JSON::PP->new->decode(JSON::PP->new->encode($p->[0])); $b->{remarks} = "#2"; delete $b->{"x-ks-routing"}; push @$p, $b' 1
 KS_APPROVE_ALL=1 gx "$T/x2.json" x-two || bad "two hosts: $(cat "$T/err")"
@@ -184,23 +206,21 @@ s2name "$fx/xray-panel.json" 65 1 > "$T/s2x.json"; if gx "$T/s2x.json" s2-x65; t
 # --- a geosite or geoip code the shipped geodata does not have is left out with the reason, like
 # any entry the core cannot take (review S3): the core refused the whole config, so an active
 # profile with one refused every import and refresh
-if [ -s "$here/../geosite.dat" ] && [ -s "$here/../geoip.dat" ]; then
-  S3='$h = { name => "x", direct => { sites => ["geosite:nonexistent-zzz", "geosite:YouTube"], ips => ["geoip:zz", "geoip:ru"] } }'
-  printf 'core=mihomo\n' > "$SETTINGS"
-  with_routing "$T/base.json" "$T/s3.json" "$S3"
-  gm "$T/s3.json" s3-m || bad "mihomo unknown codes: $(cat "$T/err")"
-  [ "$(j 'join " | ", grep { /\AGEO/ } @{ $c->{rules} }' "$T/s3-m")" = "GEOSITE,youtube,DIRECT | GEOIP,ZZ,DIRECT | GEOIP,RU,DIRECT" ] &&
-    [ "$(j 'join ",", map { "$_->{item}=$_->{reason}" } grep { $_->{section} eq "routing-profile" } @{ $c->{dropped} }' "$T/s3-m.report")" = "geosite:nonexistent-zzz=geodata-code:geosite" ] &&
-    ok "mihomo: an unknown geosite code left out with the reason (GEOIP of an unknown country only never matches)" || bad "mihomo s3: $(j '$c->{rules}' "$T/s3-m") $(j '$c->{dropped}' "$T/s3-m.report")"
-  if [ -x "$MIHOMO" ]; then out=$("$MIHOMO" -t -d "$T/home" -f "$T/s3-m" 2>&1) && ok "  mihomo -t" || bad "  mihomo -t: $(tail -2 <<<"$out")"; fi
-  printf 'core=xray\n' > "$SETTINGS"
-  with_routing "$fx/xray-panel.json" "$T/s3x.json" "$S3" 1
-  gx "$T/s3x.json" s3-x || bad "xray unknown codes: $(cat "$T/err")"
-  [ "$(j 'JSON::PP->new->canonical->encode([ map { $_->{domain} // $_->{ip} } @{ $c->{routing}{rules} }[2, 3] ])' "$T/s3-x")" = '[["geosite:youtube"],["geoip:ru"]]' ] &&
-    [ "$(j 'join ",", map { "$_->{item}=$_->{reason}" } grep { $_->{section} eq "routing-profile" } @{ $c->{dropped} }' "$T/s3-x.report")" = "geosite:nonexistent-zzz=geodata-code:geosite,geoip:zz=geodata-code:geoip" ] &&
-    ok "Xray: unknown geosite and geoip codes left out with the reason" || bad "xray s3: $(j '$c->{routing}{rules}' "$T/s3-x") $(j '$c->{dropped}' "$T/s3-x.report")"
-  if [ -x "$XRAY" ]; then out=$(XRAY_LOCATION_ASSET=$CORE_DIR "$XRAY" run -test -format json -c "$T/s3-x" 2>&1) && ok "  xray run -test" || bad "  xray run -test: $(tail -2 <<<"$out")"; fi
-else echo "skip  unknown geodata codes (no Helper/geosite.dat, geoip.dat: Helper/fetch-geodata.sh)"; fi
+S3='$h = { name => "x", direct => { sites => ["geosite:nonexistent-zzz", "geosite:YouTube"], ips => ["geoip:zz", "geoip:ru"] } }'
+printf 'core=mihomo\n' > "$SETTINGS"
+with_routing "$T/base.json" "$T/s3.json" "$S3"
+gm "$T/s3.json" s3-m || bad "mihomo unknown codes: $(cat "$T/err")"
+[ "$(j 'join " | ", grep { /\AGEO/ } @{ $c->{rules} }' "$T/s3-m")" = "GEOSITE,youtube,DIRECT | GEOIP,ZZ,DIRECT | GEOIP,RU,DIRECT" ] &&
+  [ "$(j 'join ",", map { "$_->{item}=$_->{reason}" } grep { $_->{section} eq "routing-profile" } @{ $c->{dropped} }' "$T/s3-m.report")" = "geosite:nonexistent-zzz=geodata-code:geosite" ] &&
+  ok "mihomo: an unknown geosite code left out with the reason (GEOIP of an unknown country only never matches)" || bad "mihomo s3: $(j '$c->{rules}' "$T/s3-m") $(j '$c->{dropped}' "$T/s3-m.report")"
+mtest "  unknown codes" "$T/s3-m"
+printf 'core=xray\n' > "$SETTINGS"
+with_routing "$fx/xray-panel.json" "$T/s3x.json" "$S3" 1
+gx "$T/s3x.json" s3-x || bad "xray unknown codes: $(cat "$T/err")"
+[ "$(j 'JSON::PP->new->canonical->encode([ map { $_->{domain} // $_->{ip} } @{ $c->{routing}{rules} }[2, 3] ])' "$T/s3-x")" = '[["geosite:youtube"],["geoip:ru"]]' ] &&
+  [ "$(j 'join ",", map { "$_->{item}=$_->{reason}" } grep { $_->{section} eq "routing-profile" } @{ $c->{dropped} }' "$T/s3-x.report")" = "geosite:nonexistent-zzz=geodata-code:geosite,geoip:zz=geodata-code:geoip" ] &&
+  ok "Xray: unknown geosite and geoip codes left out with the reason" || bad "xray s3: $(j '$c->{routing}{rules}' "$T/s3-x") $(j '$c->{dropped}' "$T/s3-x.report")"
+xtest "  unknown codes" "$T/s3-x"
 
 # --- turning a direct profile off needs no password (review S5): a signature whose every line
 # is in the approved one sends past the VPN only what was approved (ADR 0034). The profile's own
@@ -345,13 +365,13 @@ with_routing "$T/base.json" "$T/v6.json" "$V6"
 gm "$T/v6.json" v6-m || bad "v6 mihomo: $(cat "$T/err")"
 [ "$(j 'join " | ", @{ $c->{rules} }[1, 2]' "$T/v6-m")" = "IP-CIDR6,2001:db8::1/128,REJECT | IP-CIDR6,2001:db8:1::/48,DIRECT" ] &&
   ok "mihomo: an IPv6 address and range" || bad "v6 mihomo: $(j '$c->{rules}' "$T/v6-m") $(j '$c->{dropped}' "$T/v6-m.report")"
-if [ -x "$MIHOMO" ]; then out=$("$MIHOMO" -t -d "$T/home" -f "$T/v6-m" 2>&1) && ok "  mihomo -t" || bad "  mihomo -t: $(tail -2 <<<"$out")"; fi
+mtest "  IPv6" "$T/v6-m"
 printf 'core=xray\n' > "$SETTINGS"
 with_routing "$fx/xray-panel.json" "$T/v6x.json" "$V6" 1
 gx "$T/v6x.json" v6-x || bad "v6 xray: $(cat "$T/err")"
 [ "$(j 'JSON::PP->new->canonical->encode([ map { $_->{ip} } @{ $c->{routing}{rules} }[2, 3] ])' "$T/v6-x")" = '[["2001:db8::1/128"],["2001:db8:1::/48"]]' ] &&
   ok "Xray: an IPv6 address and range" || bad "v6 xray: $(j '$c->{routing}{rules}' "$T/v6-x")"
-if [ -x "$XRAY" ]; then out=$(XRAY_LOCATION_ASSET=$CORE_DIR "$XRAY" run -test -format json -c "$T/v6-x" 2>&1) && ok "  xray run -test" || bad "  xray run -test: $(tail -2 <<<"$out")"; fi
+xtest "  IPv6" "$T/v6-x"
 
 # --- Codex P1 (2): no outbound lines only when nothing goes direct at all. A signature that keeps
 # direct lines but drops the outbounds they go through (crafted: the generator prints the
