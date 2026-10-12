@@ -329,4 +329,28 @@ SERVERS="$T/na-A.srv"; APPROVED_HOSTS="$T/none"; APPROVED_DIRECT="$T/na-A.direct
 refresh_check "$T/na-B.srv" "$T/pins" "$T/na-B.direct" 2>/dev/null; rc=$?
 [ "$rc" = 3 ] && ok "Xray: two untagged freedom outbounds swapped (the default moves): the admin" || bad "na: rc $rc"
 
+# --- Codex P1: the first of two untagged freedom outbounds dropped makes the second (a redirect) the
+# default; the outbound lines are all as approved, or none at all
+printf 'core=xray\n' > "$SETTINGS"
+/usr/bin/perl -MJSON::PP -e 'local $/; my $p = JSON::PP->new->decode(<STDIN>); my $c = $p->[0]; shift @{ $c->{outbounds} }; print JSON::PP->new->encode($p)' < "$T/na-A.json" > "$T/p1.json"
+gx "$T/p1.json" p1 || bad "p1: $(cat "$T/err")"
+SERVERS="$T/na-A.srv"; APPROVED_HOSTS="$T/none"; APPROVED_DIRECT="$T/na-A.direct"; : > "$T/pins"
+refresh_check "$T/p1.srv" "$T/pins" "$T/p1.direct" 2>/dev/null; rc=$?
+[ "$rc" = 3 ] && ok "Xray: the first of two untagged freedom outbounds dropped (a redirect becomes the default): the admin" || bad "p1: rc $rc"
+
+# --- Codex P2: IPv6 addresses and ranges are taken, both cores
+V6='$h = { name => "v6", block => { ips => ["2001:db8::1"] }, direct => { ips => ["2001:DB8:1::/48"] } }'
+printf 'core=mihomo\n' > "$SETTINGS"
+with_routing "$T/base.json" "$T/v6.json" "$V6"
+gm "$T/v6.json" v6-m || bad "v6 mihomo: $(cat "$T/err")"
+[ "$(j 'join " | ", @{ $c->{rules} }[1, 2]' "$T/v6-m")" = "IP-CIDR6,2001:db8::1/128,REJECT | IP-CIDR6,2001:db8:1::/48,DIRECT" ] &&
+  ok "mihomo: an IPv6 address and range" || bad "v6 mihomo: $(j '$c->{rules}' "$T/v6-m") $(j '$c->{dropped}' "$T/v6-m.report")"
+if [ -x "$MIHOMO" ]; then out=$("$MIHOMO" -t -d "$T/home" -f "$T/v6-m" 2>&1) && ok "  mihomo -t" || bad "  mihomo -t: $(tail -2 <<<"$out")"; fi
+printf 'core=xray\n' > "$SETTINGS"
+with_routing "$fx/xray-panel.json" "$T/v6x.json" "$V6" 1
+gx "$T/v6x.json" v6-x || bad "v6 xray: $(cat "$T/err")"
+[ "$(j 'JSON::PP->new->canonical->encode([ map { $_->{ip} } @{ $c->{routing}{rules} }[2, 3] ])' "$T/v6-x")" = '[["2001:db8::1/128"],["2001:db8:1::/48"]]' ] &&
+  ok "Xray: an IPv6 address and range" || bad "v6 xray: $(j '$c->{routing}{rules}' "$T/v6-x")"
+if [ -x "$XRAY" ]; then out=$(XRAY_LOCATION_ASSET=$CORE_DIR "$XRAY" run -test -format json -c "$T/v6-x" 2>&1) && ok "  xray run -test" || bad "  xray run -test: $(tail -2 <<<"$out")"; fi
+
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

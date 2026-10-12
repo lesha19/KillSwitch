@@ -1975,8 +1975,9 @@ KS_ROUTING_PL='
       return (undef, undef, "bad-value") if grep({ $_ > 255 } $1, $2, $3, $4) || (defined $5 && $5 > 32);
       return ("cidr4", ($1 + 0) . "." . ($2 + 0) . "." . ($3 + 0) . "." . ($4 + 0) . "/" . ($5 // 32));
     }
-    if ($e =~ /\A([0-9A-Fa-f:.]{2,45})(?:\/([0-9]{1,3}))?\z/ && $1 =~ /:/ && Socket::inet_pton(Socket::AF_INET6(), $1) && (!defined $2 || $2 <= 128)) {
-      return ("cidr6", lc($1) . "/" . ($2 // 128));
+    # the captures copied first: the next match would reset them (Codex P2)
+    if (my ($a6, $l6) = $e =~ /\A([0-9A-Fa-f:.]{2,45})(?:\/([0-9]{1,3}))?\z/) {
+      return ("cidr6", lc($a6) . "/" . ($l6 // 128)) if $a6 =~ /:/ && Socket::inet_pton(Socket::AF_INET6(), $a6) && (!defined $l6 || $l6 <= 128);
     }
     (undef, undef, "bad-value") }
   # the codes (lists) of a v2ray geodata file (geosite.dat, geoip.dat): protobuf, a list of
@@ -2348,10 +2349,10 @@ direct_subset() {
   local own=$'^(profile-rule|profile|outbound)\t' ob=$'^outbound\t'
   cmp -s <(grep -vE "$own" -- "$1") <(grep -vE "$own" -- "$APPROVED_DIRECT") &&
     ! { grep -E $'^(profile-rule|profile)\t' -- "$1" || :; } | grep -qvxF -f "$APPROVED_DIRECT" &&
-    # the outbound lines, fewer or not, keep their order (an untagged first one is Xray's default:
-    # its "default" line has no tag, re-review 2 N-A)
-    awk 'FILENAME == ARGV[1] { a[++n] = $0; next } { while (i < n && a[++i] != $0); if (a[i] != $0) bad = 1 } END { exit bad }' \
-      <(grep -E "$ob" -- "$APPROVED_DIRECT") <(grep -E "$ob" -- "$1")
+    # the outbound lines are all the approved ones in their order, or none (nothing goes direct
+    # any more): an untagged first one is Xray's default, whose "default" line names no tag, so
+    # one dropped or moved would make another the default (re-review 2 N-A, Codex P1)
+    { ! grep -qE "$ob" -- "$1" || cmp -s <(grep -E "$ob" -- "$1") <(grep -E "$ob" -- "$APPROVED_DIRECT"); }
 }
 
 # direct_parts <direct>: which part of the signature is not the approved one, for the app to say
