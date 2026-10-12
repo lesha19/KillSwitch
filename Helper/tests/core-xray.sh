@@ -120,8 +120,8 @@ edit 'unshift @{ $a->[0]{routing}{rules} }, { webhook => { url => "http://x" }, 
       push @{ $a->[0]{dns}{servers} }, "localhost", "fakedns"'
 gen "$tmp/p.json" || bad "panel with extras refused: $(cat "$tmp/err")"
 [ "$(q 'join "|", map { "$_->{section}:" . ($_->{index} // $_->{item}) . "=$_->{reason}" } @{ $c->{dropped} }')" = \
-  "profile:api=not-allowed|profile:inbounds=managed|profile:remarks=managed|profile:reverse=not-allowed|profile:stats=not-allowed|rules:0=not-allowed|rules:1=target:nope|dns:localhost=bad-value|dns:fakedns=bad-value" ] &&
-  ok "left out with reasons: api, stats, reverse, a webhook rule, a rule to nowhere, system and fake DNS" || bad "dropped: $(q '$c->{dropped}')"
+  "profile:api=not-allowed|profile:inbounds=managed|profile:remarks=managed|profile:reverse=not-allowed|profile:stats=not-allowed|profile:burstObservatory.pingConfig.connectivity=not-allowed|rules:0=not-allowed|rules:1=target:nope|dns:localhost=bad-value|dns:fakedns=bad-value" ] &&
+  ok "left out with reasons: api, stats, reverse, the connectivity URL, a webhook rule, a rule to nowhere, system and fake DNS" || bad "dropped: $(q '$c->{dropped}')"
 [ "$(j 'exists $c->{reverse} || $c->{api}{tag} ne "ks-api" || $c->{api}{listen} !~ /\A127\.0\.0\.1:/ ? "kept" : "gone"')" = gone ] &&
   [ "$(j 'exists $c->{outbounds}[0]{sendThrough} || exists $c->{outbounds}[2]{streamSettings}{sockopt}{interface} ? "kept" : "gone"')" = gone ] &&
   ok "config: the subscription's api/stats/reverse gone (ours only), no sendThrough or bound interface" || bad "extras: $(j '[keys %$c]')"
