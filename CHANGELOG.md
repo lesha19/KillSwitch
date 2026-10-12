@@ -4,7 +4,7 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
-## [Unreleased]
+## [0.20.0] - 2026-10-12
 
 ### Added
 - Settings › «Маршрутизация»: named routing profiles (#30, ADR 0034) in the Happ/INCY format —
@@ -106,9 +106,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   its status or servers (#23, ADR 0029). A successful replace removes the old subscription's backup
   link; a replace whose import was not confirmed with the password says «Новая подписка сохранена,
   но не применена» instead of nothing.
-- Going back to 0.19 or older after turning on a new blocking category, the own DoH server or own
-  site addresses blocks all traffic (the older helper does not know these settings) until Settings ›
-  «Сбросить настройки». Turn them off before downgrading.
+- Going back to 0.19 or older after changing any of the new settings blocks all traffic until
+  Settings › «Сбросить настройки»: the older helper refuses a settings file with a line it does not
+  know. Those are the blocking categories (`blockadult=`, `blocksocial=`, `blockbetting=`, even
+  turned back off), the own DoH server (`doh=`), own site addresses (`hosts=`), a packet size other
+  than «Авто» (`mtu=`) and «Пробовать другой отпечаток и транспорт» (`escalate=`, on or off). Routing
+  profiles are not applied by the older version either. Reset the settings after a downgrade.
 
 ### Fixed
 - Xray: with only split apps (or a routing profile) going direct, the subscription's freedom
