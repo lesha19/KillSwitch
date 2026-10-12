@@ -1,0 +1,26 @@
+{
+  "proxies": [
+    {"name": "🇳🇱 Нидерланды", "type": "vless", "server": "203.0.113.10", "port": 443, "uuid": "a3482e88-686a-4a58-8126-99c9df64b7bf",
+     "network": "tcp", "tls": true, "flow": "xtls-rprx-vision", "servername": "www.microsoft.com", "client-fingerprint": "chrome",
+     "reality-opts": {"public-key": "J1sRwuk4Rm8Hb7zEIUPhGIrjjtMHpDKFLDvdy7v9qXo", "short-id": "6ba85179e30d4fc2"}}
+  ],
+  "proxy-groups": [
+    {"name": "PROXY", "type": "select", "proxies": ["🇳🇱 Нидерланды"]}
+  ],
+  "rule-providers": {
+    "refilter-domains": {"type": "http", "behavior": "domain", "format": "mrs",
+      "url": "https://github.com/legiz-ru/mihomo-rule-sets/raw/main/re-filter/domain-rule.mrs", "path": "./re-filter/domain-rule.mrs", "interval": 86400},
+    "refilter-ips": {"type": "http", "behavior": "ipcidr", "format": "mrs",
+      "url": "https://github.com/legiz-ru/mihomo-rule-sets/raw/main/re-filter/ip-rule.mrs", "path": "./re-filter/ip-rule.mrs", "interval": 86400},
+    "discord-voice": {"type": "http", "behavior": "ipcidr", "format": "text",
+      "url": "https://example.com/rules/discord-voice.lst", "interval": 43200, "size-limit": 1048576},
+    "google": {"type": "http", "path": "./rule1.yaml", "url": "https://raw.githubusercontent.com/example/rules/main/Google.yaml", "interval": 600,
+      "proxy": "PROXY", "behavior": "classical", "format": "yaml", "size-limit": 0,
+      "header": {"User-Agent": ["mihomo/1.18.3"], "Authorization": ["token 1231231"]}},
+    "ru-inline": {"type": "inline", "behavior": "domain", "payload": ["+.ru", "+.su", "+.xn--p1ai"]},
+    "classical-inline": {"type": "inline", "behavior": "classical", "format": "yaml",
+      "payload": ["DOMAIN-SUFFIX,yandex.net", "IP-CIDR,77.88.8.8/32,no-resolve"]}
+  },
+  "rules": ["RULE-SET,refilter-domains,PROXY", "RULE-SET,refilter-ips,PROXY,no-resolve", "RULE-SET,discord-voice,PROXY",
+            "RULE-SET,google,PROXY", "RULE-SET,ru-inline,DIRECT", "RULE-SET,classical-inline,DIRECT", "MATCH,PROXY"]
+}

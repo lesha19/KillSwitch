@@ -47,7 +47,13 @@ ks_clean_env() {
   PATH=/usr/bin:/bin:/usr/sbin:/sbin; export PATH
   HOME=/var/root; LC_ALL=C; TMPDIR=/private/tmp; export HOME LC_ALL TMPDIR
   IFS=$' \t\n'
-  unset CURL_HOME BASH_ENV ENV CDPATH GLOBIGNORE PS4 KS_PINS KS_STRICT_DNS
+  # The core lock's re-exec (below) marks its child with the pid of the lockf that ks became:
+  # believed only from that lockf, never from a caller (#50).
+  unset KS_LOCK_HELD; KS_LOCK_HELD=0
+  if [ -n "${KS_LOCKED:-}" ] && [ "$KS_LOCKED" = "$PPID" ]; then
+    case $(/bin/ps -o comm= -p "$PPID" 2>/dev/null) in lockf|*/lockf) KS_LOCK_HELD=1 ;; esac
+  fi
+  unset CURL_HOME BASH_ENV ENV CDPATH GLOBIGNORE PS4 KS_PINS KS_STRICT_DNS KS_NOW KS_APPROVE_ALL KS_LOCKED
   for v in $(compgen -e); do
     case "$v" in
       LANG|LC_ALL) ;;
@@ -396,13 +402,12 @@ physical_services() {
     /Device: (en|bridge)[0-9]+\)/ { if (name != "") print name; name = "" }'
 }
 
-log_event() {
-  echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$EVENTS"
+log_event() {  # the line and the trim to 500 lines under one lock (locked_rewrite, #50); a lock
+  # held longer than 2 s (never by ks itself) gets the line appended untrimmed, the watchdog never waits
+  local line
+  line="$(date '+%Y-%m-%d %H:%M:%S') $*"
+  locked_rewrite_wait 2 "$line" "$EVENTS" 'push @L, $ARGV[0]; splice @L, 0, @L - 500 if @L > 500' "$line"
   diag_event log msg="$*"
-  chmod 644 "$EVENTS"
-  if [ "$(wc -l < "$EVENTS")" -gt 500 ]; then
-    tail -n 500 "$EVENTS" > "$EVENTS.tmp" && mv "$EVENTS.tmp" "$EVENTS"
-  fi
 }
 
 # Rules pf refuses (an address the check let through, 999.1.1.1) block everything too, instead
@@ -454,7 +459,9 @@ loaded() {
 reload_if_on() { if loaded; then load; fi; }
 
 disable() {
-  echo "$1" > "$FLAG"
+  # a new file moved into place: guard never reads it empty (that would end the pause, #50)
+  local t
+  t=$(mktemp "$FLAG.XXXXXX") && echo "$1" > "$t" && chmod 644 "$t" && mv -f "$t" "$FLAG" || { rm -f "${t:-}"; return 1; }
   pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
 }
 
@@ -609,22 +616,58 @@ NB_TRUST_ROOT=/   # the walk goes up to here; set by ks itself, a test points it
 nb_user() { local u; u=$(stat -f %u /dev/console 2>/dev/null) && [[ "$u" =~ ^[0-9]+$ ]] && [ "$u" != 0 ] && echo "$u"; }
 # nb_trusted <path>: the real path (links resolved) when the file and every folder above it belong
 # to root and nobody else can write them; a folder only the admin group may write (/Applications)
-# is accepted. Anything else could be swapped by a user: not NetBird.
-nb_trusted() {
-  perl -MCwd=abs_path -e 'my ($o, $p, $top) = @ARGV; my $r = abs_path($p) // exit 1;
-    my @s = stat $r or exit 1; -f _ && ($s[4] == 0 || $s[4] == $o) && !($s[2] & 022) or exit 1;
-    for (my $d = $r; $d ne "/" && $d ne $top;) { $d =~ s{/[^/]*$}{}; $d = "/" if $d eq "";
-      @s = stat $d or exit 1; ($s[4] == 0 || $s[4] == $o) && !($s[2] & 02) or exit 1;
-      !($s[2] & 020) || $s[5] == 80 || $s[5] == 0 or exit 1 }
-    print "$r\n"' "$NB_OWNER" "$1" "$NB_TRUST_ROOT"
+# is accepted. Anything else could be swapped by a user: not NetBird (exit 1). launchd runs the
+# path as written, so the links are followed one by one and each one's folder is checked too
+# (#50): exit 2, still with the real path, when only a link's folder fails (NetBird's installer
+# puts its link into /usr/local/bin, which some Macs give to the user). Swapped there, the link
+# makes launchd run the new file as root at NetBird's next start whatever KillSwitch does, so a
+# refusal would protect nothing and only cut NetBird off: it is logged instead (decided by the
+# agent, docs/security/hardening-0.20.md).
+nb_trusted() { trusted_path "$NB_OWNER" 1 "$1" "$NB_TRUST_ROOT"; }
+# trusted_path <owner uid> <admin group may write folders: 0|1> <path> [top]: nb_trusted's walk,
+# for any owner besides root (the tests' own files) and with or without the admin group's folders;
+# the folders above [top] (default /) are not checked (NB_TRUST_ROOT: a test's own folder).
+trusted_path() {
+  perl -e 'my ($o, $admin, $p, $top) = @ARGV; $p =~ m{\A/} or exit 1; $top = "/" unless defined $top && length $top;
+    sub above_top { my $d = shift; $top ne "/" && $d ne $top && index("$top/", $d eq "/" ? "/" : "$d/") == 0 }
+    sub dir_ok { my @s = stat $_[0] or return 0; -d _ && ($s[4] == 0 || $s[4] == $o) && !($s[2] & 02) &&
+      (!($s[2] & 020) || ($admin && ($s[5] == 80 || $s[5] == 0))) }
+    my ($cur, $hops, %bad) = ("", 0);
+    my @rest = grep { length } split m{/}, $p;
+    while (@rest) {
+      my $c = shift @rest;
+      next if $c eq ".";
+      if ($c eq "..") { $cur =~ s{/[^/]*\z}{}; next }
+      my $d = $cur eq "" ? "/" : $cur;
+      $bad{$d} = 1 unless above_top($d) || dir_ok($d);
+      if (-l "$cur/$c") {
+        ++$hops <= 40 or exit 1;
+        my $t = readlink "$cur/$c"; defined $t && length $t or exit 1;
+        $cur = "" if $t =~ m{\A/};
+        unshift @rest, grep { length } split m{/}, $t;
+      } else { $cur = "$cur/$c" }
+    }
+    my @s = stat $cur or exit 1; -f _ && ($s[4] == 0 || $s[4] == $o) && !($s[2] & 022) or exit 1;
+    for (my $d = $cur; $d ne "/";) { $d =~ s{/[^/]*\z}{}; $d = "/" if $d eq ""; exit 1 if $bad{$d} }
+    print "$cur\n"; exit(%bad ? 2 : 0)' "$1" "$2" "$3" "${4:-/}"
+}
+nb_target() {  # nb_target <path>: nb_trusted's real path, a link's own folder aside (its exit 2)
+  local r rc
+  r=$(nb_trusted "$1"); rc=$?
+  { [ "$rc" = 0 ] || [ "$rc" = 2 ]; } && echo "$r"
 }
 nb_signed() { codesign -v -R="anchor apple generic and certificate leaf[subject.OU] = \"$NB_TEAM\"" "$1" 2>/dev/null; }
 nb_want() {
-  local bin
+  local bin real rc
   [ "$(setting tailscale 1)" = 1 ] && dscl . -read "/Groups/$NB_GROUP" PrimaryGroupID >/dev/null 2>&1 || return 1
   bin=$(nb_bin) && [ -n "$bin" ] || return 1
-  bin=$(nb_trusted "$bin") || { log_event "netbird: its binary can be changed by others than root, not let past the VPN"; return 1; }
-  nb_signed "$bin"
+  real=$(nb_trusted "$bin"); rc=$?
+  case $rc in
+    0) ;;
+    2) log_event "netbird: $bin is a link in a folder others than root can write (launchd runs it as root); let past the VPN by the file it leads to" ;;
+    *) log_event "netbird: its binary can be changed by others than root, not let past the VPN"; return 1 ;;
+  esac
+  nb_signed "$real"
 }
 nb_addr() {  # the daemon address from the plist's --daemon-addr, NetBird's default otherwise
   local a i=1 prev=""
@@ -637,7 +680,7 @@ nb_addr() {  # the daemon address from the plist's --daemon-addr, NetBird's defa
 }
 nb_cli() {  # nb_cli <seconds> <args...>: NetBird's CLI against its daemon as the console user, killed after <seconds>
   local t=$1 u bin; shift
-  u=$(nb_user) && bin=$(nb_trusted "$(nb_bin)") && nb_signed "$bin" || return 1
+  u=$(nb_user) && bin=$(nb_target "$(nb_bin)") && nb_signed "$bin" || return 1
   perl -MPOSIX -e '$t = shift; $u = shift; @pw = getpwuid $u or exit 1; $p = fork; defined $p or exit 1;
     if (!$p) { $) = "$pw[3] $pw[3]"; POSIX::setgid($pw[3]) && POSIX::setuid($u) && $< == $u && $> == $u && $u != 0 or exit 1;
       @ENV{qw(HOME USER LOGNAME)} = @pw[7, 0, 0]; exec @ARGV; exit 127 }
@@ -676,7 +719,7 @@ nb_try_restart() {  # nb_try_restart <failures so far> <now>
   log_event "netbird: its daemon did not start again (launchctl bootstrap failed), next try in ${delay} s"
   return 1
 }
-netbird_bg() { [ -f "$NB_PLIST" ] || return 0; lockf -k -t 0 "$DIR/netbird.lock" "$0" _netbird >/dev/null 2>&1 & }
+netbird_bg() { [ -f "$NB_PLIST" ] || return 0; lock_ready "$DIR/netbird.lock" 2>/dev/null; lockf -k -t 0 "$DIR/netbird.lock" "$0" _netbird >/dev/null 2>&1 & }
 netbird_sync() {  # netbird_sync [now]: nothing to do unless the plist, binary or setting changed
   local sig want=0 have=0 now=${1:-$(date +%s)} n next
   [ -f "$NB_PLIST" ] || { rm -f "$NB_SIGF" "$NB_RETRYF" "$NB_UPF"; return 0; }
@@ -1178,7 +1221,8 @@ core_generate_mihomo() (
     # fields only; no path, mihomo picks its own in its directory.
     NOTES="$w/notes" KS_DNS=$KS_DNS json_edit "$RP" '
       die "rule-providers: не объект\n" unless ref $j eq "HASH";
-      my %field = map { ($_ => 1) } qw(type behavior format url interval proxy size-limit payload path);
+      # header: request headers of the download (mihomo docs; #37), names and plain strings only
+      my %field = map { ($_ => 1) } qw(type behavior format url interval proxy size-limit payload path header);
       open my $notes, ">>", $ENV{NOTES} or die;
       for my $n (sort keys %$j) {
         my $shown = $n =~ s/[\x00-\x1f\x7f]/?/gr;
@@ -1189,6 +1233,14 @@ core_generate_mihomo() (
         my $t = $p->{type};
         die "rule-provider «$n»: тип «" . (ref $t ? "?" : ($t // "") =~ s/[\x00-\x1f\x7f]/?/gr) . "» не допускается (только http и inline)\n"
           unless defined $t && !ref $t && $t =~ /\A(http|inline)\z/;
+        if (exists $p->{header}) {
+          my $h = $p->{header};
+          die "rule-provider «$n»: header не объект\n" unless ref $h eq "HASH";
+          for (sort keys %$h) {
+            die "rule-provider «$n»: плохой заголовок\n" unless /\A[A-Za-z0-9-]{1,64}\z/ && ref $h->{$_} eq "ARRAY" && @{ $h->{$_} } <= 8 &&
+              !grep { !defined || ref || /[\x00-\x1f\x7f]/ || length > 1024 } @{ $h->{$_} };
+          }
+        }
         print $notes "provider-path\t$n\n" if exists $p->{path};
         delete $p->{path};
         if ($t eq "http") {
@@ -2635,11 +2687,56 @@ servers_migrate() {  # before the split every server was added by hand
   if [ -f "$SERVERS" ]; then cp "$SERVERS" "$SERVERS_MANUAL"; else : > "$SERVERS_MANUAL"; fi
 }
 
+# Lock files are root's alone: a plain 0600 file of ours. One that is not (0644 from an older ks,
+# a link, someone else's) is replaced first; a local user who could open a lock file could hold
+# it for ever, and every write of ks behind it would wait (review of #50).
+# shellcheck disable=SC2016 # perl, not shell
+KS_LOCK_OPEN_PL='
+    sub lock_open { my $l = shift; my @s = lstat $l;
+      unlink $l or die "$l: $!\n" if @s && (-l _ || !-f _ || ($s[2] & 07777) != 0600 || $s[4] != $>);
+      sysopen my $h, $l, O_RDWR | O_CREAT | O_NOFOLLOW, 0600 or die "$l: $!\n"; $h }'
+lock_ready() {  # lock_ready <file>: the file lockf will lock, root-only (KS_LOCK_OPEN_PL)
+  /usr/bin/perl -e 'use Fcntl qw(O_RDWR O_CREAT O_NOFOLLOW);'"$KS_LOCK_OPEN_PL"' lock_open($ARGV[0])' "$1"
+}
+# locked_rewrite <file> <perl code changing @L> [its args, in @ARGV]: the file's lines read,
+# changed and written back as a new 0644 file moved into place, all under an flock of <file>.lock
+# (#50): a concurrent writer (the failover's xrayserver next to "ks set", two log_event) loses
+# nothing, a reader never sees half a file, and the temporary file's name is this process's own.
+# The lock file is root's alone (lock_open, 0600): one others could open, they could hold for ever.
+locked_rewrite() { locked_rewrite_wait 30 "" "$@"; }
+# locked_rewrite_wait <seconds> <line> <file> <code> [args]: as locked_rewrite, but after <seconds>
+# without the lock <line> (if not empty) is appended as it is, without the rewrite (log_event).
+locked_rewrite_wait() {
+  /usr/bin/perl -e 'use Fcntl qw(:flock O_RDWR O_WRONLY O_CREAT O_EXCL O_APPEND O_NOFOLLOW);
+    my ($wait, $busy, $f, $code) = splice @ARGV, 0, 4;
+    '"$KS_LOCK_OPEN_PL"'
+    my $lk = lock_open("$f.lock");
+    my $got; my $until = time + $wait;
+    until ($got = flock $lk, LOCK_EX | LOCK_NB) { last if time >= $until; select undef, undef, undef, 0.1 }
+    unless ($got) {
+      die "$f.lock: busy\n" unless length $busy;
+      sysopen my $o, $f, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW, 0644 or die "$f: $!\n";
+      print $o "$busy\n"; close $o or die "$f: $!\n"; exit 0;
+    }
+    our @L = ();
+    if (open my $in, "<", $f) { @L = <$in>; chomp @L; close $in }
+    eval $code; die $@ if $@;
+    my ($t, $o);
+    for my $n (0 .. 99) { $t = "$f.$$.$n.new"; last if sysopen $o, $t, O_WRONLY | O_CREAT | O_EXCL, 0600 }
+    $o or die "$f: $!\n";
+    print $o map { "$_\n" } @L;
+    close $o && chmod(0644, $t) && rename($t, $f) or do { unlink $t; die "$f: $!\n" }' "$@"
+}
 put_setting() {  # put_setting <key> <value> [settings-file]
-  local f=${3:-$SETTINGS}
-  { grep -vE "^$1=" "$f" 2>/dev/null; echo "$1=$2"; } > "$f.tmp" && chmod 644 "$f.tmp" && mv "$f.tmp" "$f"
+  locked_rewrite "${3:-$SETTINGS}" '@L = ((grep { !/\A\Q$ARGV[0]\E=/ } @L), "$ARGV[0]=$ARGV[1]")' "$1" "$2"
+}
+drop_setting() {  # drop_setting <key>: back to its default
+  [ -f "$SETTINGS" ] || return 0
+  locked_rewrite "$SETTINGS" '@L = grep { !/\A\Q$ARGV[0]\E=/ } @L' "$1"
 }
 
+# src_owner <file>: the owner's uid of a regular file with one name, not a link
+src_owner() { perl -e 'my @s = lstat $ARGV[0] or exit 1; -f _ && $s[3] == 1 or exit 1; print "$s[4]\n"' -- "$1"; }
 core_import() {  # core_import <profile.json> [import|refresh]
   local src=${1:-} prof conf in tmp srv="$SERVERS_CORE.tmp" rc
   prof=$(core_profile); conf=$(core_conf); in="$prof.new"; tmp="$conf.tmp"
@@ -2648,8 +2745,17 @@ core_import() {  # core_import <profile.json> [import|refresh]
   # Read once, with the caller's rights (root must not open files for the user), into our
   # directory; everything after works on that copy, which is kept for rebuilds.
   [ -n "$src" ] || { echo "usage: ks core import <json>" >&2; return 1; }
-  local as=()
-  [ -n "${SUDO_UID:-}" ] && [ "$SUDO_UID" != 0 ] && as=(sudo -n -u "#$SUDO_UID")
+  local as=() o
+  if [ -n "${SUDO_UID:-}" ]; then
+    [ "$SUDO_UID" = 0 ] || as=(sudo -n -u "#$SUDO_UID")
+  else
+    # the admin password prompt and the daemon set no SUDO_UID (#37): the file's owner reads it
+    # (the app's temporary file); root's own file (the daemon's copy) only from folders only
+    # root can change, by its real path. Never a link, never a file with a second name.
+    o=$(src_owner "$src") || { echo "Не удалось прочитать $src" >&2; return 1; }
+    if [ "$o" != "$EUID" ]; then as=(sudo -n -u "#$o")
+    else src=$(trusted_path "$EUID" 0 "$src") || { echo "Не удалось прочитать $src" >&2; return 1; }; fi
+  fi
   # It holds the servers' passwords: root-only from the first byte (core/ is 711, so a file of a
   # known name there would be readable by anyone), and a leftover file would keep its old mode.
   rm -f "$in"
@@ -3032,7 +3138,7 @@ rotate_due() {
   ROT_LAST=$1; ROT_NEXT=$(($1 + 1800))
 }
 # skipped if an import, refresh or setting change holds the lock
-core_rotate_bg() { lockf -k -t 0 "$CORE_DIR/core.lock" "$0" _rotate >/dev/null 2>&1 & }
+core_rotate_bg() { lock_ready "$CORE_DIR/core.lock" 2>/dev/null; lockf -k -t 0 "$CORE_DIR/core.lock" "$0" _rotate >/dev/null 2>&1 & }
 net_sig() {  # primary interface and router
   printf 'show State:/Network/Global/IPv4\n' | scutil | awk '$1 == "PrimaryInterface" || $1 == "Router" { print $3 }' | paste -sd' ' -
 }
@@ -3212,7 +3318,7 @@ hosts_put() {  # hosts_put <list>: the settings line, "" removes it
 # with it first; the setting is stored only if that works. With Xray the entry is a host of the
 # subscription (its first server, ADR 0027); "ks set core" turns it off.
 set_multihop() {
-  local s pid="" i prev
+  local d s pid="" i prev
   prev=$(setting multihop off)
   if [ "$1" != off ]; then
     valid_name "$1" || { echo "Плохое имя прокси" >&2; return 1; }
@@ -3229,12 +3335,14 @@ set_multihop() {
       core_job; [ "$CORE_RUN" = 1 ] && pid=$CORE_PID
     fi
   fi
-  s=$(mktemp) || return 1
+  # the copy and its lock in a folder of their own (0700), never at a name others could take
+  d=$(mktemp -d) || return 1
+  s="$d/settings"
   cp "$SETTINGS" "$s" 2>/dev/null
   put_setting multihop "$1" "$s"
   # strict: an entry the build could only make one hop of is refused, not stored (ADR 0027)
-  if [ -f "$(core_profile)" ] && [ -f "$PINS" ] && ! KS_MULTIHOP_STRICT=1 SETTINGS=$s core_rebuild "$PINS"; then rm -f "$s"; return 1; fi
-  rm -f "$s"
+  if [ -f "$(core_profile)" ] && [ -f "$PINS" ] && ! KS_MULTIHOP_STRICT=1 SETTINGS=$s core_rebuild "$PINS"; then rm -rf "$d"; return 1; fi
+  rm -rf "$d"
   put_setting multihop "$1" || return 1
   reload_if_on; core_reload
   [ -n "$pid" ] || return 0
@@ -3417,7 +3525,7 @@ core_log_tidy() {
 }
 
 # "ks core on|off" and the watchdog run these at the same time; lockf serialises them.
-dns_locked() { lockf -k -t 30 "$CORE_DIR/dns.lock" "$0" _dns "$1"; }
+dns_locked() { lock_ready "$CORE_DIR/dns.lock" 2>/dev/null; lockf -k -t 30 "$CORE_DIR/dns.lock" "$0" _dns "$1"; }
 core_running() { launchctl print "$CORE_JOB" 2>/dev/null | grep -q 'state = running'; }
 
 # "interface address" for every tunnel interface (utun, ipsec, ppp), IPv4 and IPv6, sorted.
@@ -3991,7 +4099,7 @@ diag_tick() {
   D_INIT=1; D_TICK=$SECONDS; D_PROT=$PROT; D_STANDBY=${STANDBY:-0}; D_TSIG=$TSIG; D_CORE=$CORE_STATE; D_PID=$CORE_PID
 }
 # not in the tests (they cannot write a root folder) and skipped while the last one still runs
-diag_bg() { [ -d "$DIAG" ] && [ -w "$DIAG" ] || return 0; lockf -k -t 0 "$DIAG/.lock" "$0" _diag >/dev/null 2>&1 & }
+diag_bg() { [ -d "$DIAG" ] && [ -w "$DIAG" ] || return 0; lock_ready "$DIAG/.lock" 2>/dev/null; lockf -k -t 0 "$DIAG/.lock" "$0" _diag >/dev/null 2>&1 & }
 
 # The core's launchd job: CORE_RUN 1|0, CORE_PID, CORE_EXIT (the last exit code or signal).
 PID_RE='pid = ([0-9]+)'; EXIT_RE='last exit code = ([0-9]+)'; SIGNAL_RE='last terminating signal = ([A-Za-z0-9: ]+)'
@@ -4353,7 +4461,7 @@ core_lock_wanted() {
   esac
   return 1
 }
-core_lock_exec() { lockf -k -t "$1" "$CORE_DIR/core.lock" "${@:2}"; }   # core_lock_exec <seconds to wait> <command…>
+core_lock_exec() { lock_ready "$CORE_DIR/core.lock" 2>/dev/null; lockf -k -t "$1" "$CORE_DIR/core.lock" "${@:2}"; }   # core_lock_exec <seconds to wait> <command…>
 
 # the command list at the top of this file, up to its first empty line
 ks_usage() { sed -n '2,/^$/{/./p;}' "${BASH_SOURCE[0]}"; }
@@ -4365,7 +4473,7 @@ ks_usage() { sed -n '2,/^$/{/./p;}' "${BASH_SOURCE[0]}"; }
 passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; ks_usage >&2; exit 1; }
 
 # The core lock (core_lock_wanted, above).
-if core_lock_wanted "$@" && [ -z "${KS_LOCKED:-}" ] && [ -d "$CORE_DIR" ]; then KS_LOCKED=1 exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@"; fi
+if core_lock_wanted "$@" && [ "$KS_LOCK_HELD" = 0 ] && [ -d "$CORE_DIR" ]; then lock_ready "$CORE_DIR/core.lock" 2>/dev/null; KS_LOCKED=$$ exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@"; fi
 
 case "${1:-status}" in
   apply) guard ;;
@@ -4380,9 +4488,9 @@ case "${1:-status}" in
   watch) watch_main ;;
   netrestore) net_restore || exit 1 ;;
   on)    rm -f "$FLAG"; load && echo "kill switch: ON" ;;
-  off)   disable 0; echo "kill switch: OFF (until 'ks on')" ;;
+  off)   disable 0 || exit 1; echo "kill switch: OFF (until 'ks on')" ;;
   pause) min=${2:-5}; [[ "$min" =~ ^[0-9]{1,4}$ ]] || { echo "bad minutes" >&2; exit 1; }
-         disable $(( $(date +%s) + min * 60 )); echo "kill switch: paused for $min min" ;;
+         disable $(( $(date +%s) + min * 60 )) || exit 1; echo "kill switch: paused for $min min" ;;
   set)
     key=${2:-}; val=${3:-}
     case "$key" in
@@ -4418,7 +4526,7 @@ case "${1:-status}" in
     # subscription's alone (ADR 0013); install.sh drops the old line
     [[ "$key" =~ ^(lan|tailscale|dns|direct|wifiguard|adblock|blockadult|blocksocial|blockbetting|failover|escalate)$ && "$val" =~ ^[01]$ ]] ||
       { echo "usage: ks set lan|tailscale|dns|direct|wifiguard|adblock|blockadult|blocksocial|blockbetting|failover|escalate 0|1" >&2; exit 1; }
-    { grep -vE "^$key=" "$SETTINGS" 2>/dev/null; echo "$key=$val"; } > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+    put_setting "$key" "$val" || exit 1
     reload_if_on
     # the generator adds the blocked categories (ADR 0031)
     case "$key" in adblock|blockadult|blocksocial|blockbetting) core_apply_settings || exit 1; block_geodata_note "$key" "$val" ;; esac

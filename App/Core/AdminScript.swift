@@ -47,8 +47,48 @@ enum AdminScript {
     /// SHELLOPTS and exported functions as well.
     static func bundled(_ path: String, _ args: [String]) -> [String] { ["/bin/bash", "-p", path] + args }
 
-    /// Runs `commands` as root behind one password prompt.
-    static func run(_ commands: [[String]]) async -> Outcome { await execute(source(commands)) }
+    /// Runs `commands` as root behind one password prompt, bundled scripts from a verified copy.
+    static func run(_ commands: [[String]]) async -> Outcome { await execute(source(commands.map { staged($0) })) }
+
+    /// The scripts of the bundle that run as root.
+    static let stagedScripts: Set<String> = ["install.sh", "uninstall.sh"]
+
+    /// A bundled install.sh or uninstall.sh (`bundled`) as the password prompt runs it (#37): root
+    /// copies the whole app into a fresh folder of its own, checks the copy's signature against
+    /// `requirement` and runs the script of the copy, so nothing swapped in the bundle after the
+    /// app's own check (BundleSignature) can run. The daemon does the same with its verified copy
+    /// (ADR 0012, Runner) and the same requirement. Commands of `ks` are returned unchanged; a
+    /// `/bin/bash` command of any other shape would run a script in place, unverified, and becomes
+    /// `refusal`.
+    static func staged(_ command: [String], requirement: String = HelperIdentity.appRequirement) -> [String] {
+        guard command.first == "/bin/bash" else { return command }
+        let marker = "/Contents/Resources/Helper/"
+        guard command.count >= 3, command[1] == "-p",
+              let range = command[2].range(of: marker, options: .backwards) else { return refusal }
+        let app = String(command[2][..<range.lowerBound]), script = String(command[2][range.upperBound...])
+        guard app.hasPrefix("/"), app.hasSuffix(".app"), stagedScripts.contains(script) else { return refusal }
+        return ["/bin/bash", "-p", "-c", stagingScript, "killswitch-staged", app, requirement, script] + command.dropFirst(3)
+    }
+
+    /// What runs instead of a script `staged` cannot verify: it fails, and the batch stops there.
+    static let refusal = ["/bin/sh", "-c", "echo 'KillSwitch: this script does not run as root' >&2; exit 64"]
+
+    /// `bash -p -c` text of `staged`: <app> <requirement> <script> <its arguments…>. Fixed text of
+    /// the app, every value an argument. mktemp makes a 0700 folder in root's own temporary
+    /// directory; `cp -H` copies the folder a link points at, never the link; the copy goes
+    /// whatever happens. The refusal reads like the daemon's (Runner.CopyFailure.signature).
+    static let stagingScript = """
+        set -u
+        app=$1 requirement=$2 script=$3; shift 3
+        case $app in /*.app) ;; *) echo "KillSwitch: no app" >&2; exit 64 ;; esac
+        case $script in install.sh|uninstall.sh) ;; *) echo "KillSwitch: no such script" >&2; exit 64 ;; esac
+        dir=$(/usr/bin/mktemp -d) || exit 70
+        trap '/bin/rm -rf "$dir"' EXIT
+        /bin/cp -RH "$app" "$dir/KillSwitch.app" || { echo "KillSwitch: the app could not be copied" >&2; exit 70; }
+        /usr/bin/codesign --verify --deep --strict --all-architectures -R "=$requirement" "$dir/KillSwitch.app" 2>/dev/null ||
+          { echo "Программа KillSwitch повреждена или подписана не нами: скачайте её заново" >&2; exit 77; }
+        /bin/bash -p "$dir/KillSwitch.app/Contents/Resources/Helper/$script" "$@"
+        """
 
     /// Runs an AppleScript in its own /usr/bin/osascript process. NSAppleScript may only be used on
     /// the main thread (Apple's documentation), where the prompt and install.sh would freeze the

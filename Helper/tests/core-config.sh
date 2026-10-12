@@ -145,5 +145,15 @@ c="$tmp/ok-awg.json.config"
 [ -f "$c" ] && { [ "$(val proxies.0.amnezia-wg-option.jc "$c")" = 4 ] && [ "$(val proxies.0.amnezia-wg-option.h4 "$c")" = 1234567894 ] &&
   [ "$(val proxies.0.amnezia-wg-option.itime "$c")" = 120 ] && ok "ok-awg: amnezia-wg-option passed through" || bad "ok-awg: amnezia-wg-option"; }
 
+# rule providers as subscriptions write them (mihomo docs, legiz-ru mrs sets; #37: no real
+# subscription was at hand, these are the documented shapes)
+r="$tmp/ok-providers-real.json.config"
+[ -f "$r" ] && { [ "$(val rule-providers.google.header.User-Agent.0 "$r")" = mihomo/1.18.3 ] && [ "$(val rule-providers.google.proxy "$r")" = PROXY ] &&
+  [ "$(val rule-providers.refilter-domains.format "$r")" = mrs ] && [ "$(val rule-providers.discord-voice.proxy "$r")" = KS-DNS ] &&
+  ! plutil -type rule-providers.refilter-domains.path "$r" >/dev/null 2>&1 &&
+  ok "ok-providers-real: header and mrs kept, path dropped, downloads through PROXY or KS-DNS" || bad "ok-providers-real: $(plutil -extract rule-providers json -o - "$r")"; }
+grep -q 'token 1231231' "$tmp/ok-providers-real.json.config.report" 2>/dev/null && bad "ok-providers-real: a header value in the report" ||
+  ok "ok-providers-real: no header value in the report"
+
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

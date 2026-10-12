@@ -126,3 +126,42 @@ final class ProfileConverterTests: XCTestCase {
         XCTAssertEqual(profile["rules"] as? [String], ["MATCH,\(ProfileMerger.defaultGroup)"])
     }
 }
+
+/// #50: a flat profile of ~19 MB froze the window ~25 s while the main actor parsed it. The app
+/// parses through `readInBackground`: the same result, and the main actor stays free meanwhile.
+final class ProfileConverterBackgroundTests: XCTestCase {
+    private static let big = (1...20_000)
+        .map { "vless://00000000-0000-4000-8000-\(String(format: "%012d", $0))@h\($0).example.com:443?security=tls#n\($0)" }
+        .joined(separator: "\n")
+
+    func testSameResultAsRead() async throws {
+        let body = "vless://u@h:443#a\ntrojan://p@t:443#b"
+        let direct = try ProfileConverter.read(subscription: body)
+        let background = try await ProfileConverter.readInBackground(subscription: body)
+        XCTAssertEqual(background.leftOut, direct.leftOut)
+        XCTAssertEqual(try ProfileConverter.json(background.profile), try ProfileConverter.json(direct.profile))
+        XCTAssertEqual(background.json, try ProfileConverter.json(direct.profile))
+        do {
+            _ = try await ProfileConverter.readInBackground(subscription: "<html></html>")
+            XCTFail("html accepted")
+        } catch {
+            XCTAssertEqual(error as? ProfileError, .html)
+        }
+    }
+
+    @MainActor
+    func testMainActorStaysFreeWhileParsing() async throws {
+        let clock = ContinuousClock()
+        let start = clock.now
+        let parse = Task { @MainActor in
+            let read = try await ProfileConverter.readInBackground(subscription: Self.big)
+            return (clock.now, (read.profile["proxies"] as? [Any])?.count ?? 0)
+        }
+        try await Task.sleep(for: .milliseconds(30))
+        let mainFree = await MainActor.run { clock.now }
+        let (parsed, count) = try await parse.value
+        XCTAssertEqual(count, 20_000)
+        XCTAssertGreaterThan(parsed - start, .milliseconds(100), "too small to tell")
+        XCTAssertLessThan(mainFree, parsed, "the main actor waited for the parse")
+    }
+}

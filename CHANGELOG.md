@@ -118,6 +118,25 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   review).
 - The shortcut «Отключить VPN» stopped the VPN while it was stuck on a server that does not answer;
   it used to say «VPN и так не подключён» and leave the core running (#23).
+- A large subscription (~19 MB) no longer freezes the window while it is read (#50).
+- Settings changed at the same moment (a «ks set» and the automatic server switch) no longer
+  lose one another; the protection log and the pause are written whole (#50).
+- Subscriptions whose rule providers send request headers (`header`) are taken (#37).
+
+### Security
+- Password prompt: install.sh and uninstall.sh run from a copy of the app in a folder of root's
+  own, checked there against the daemon's signature requirement (#37, as ADR 0012). Nothing put
+  into the app between the app's check and the run can run as root.
+- `ks core import` through the password prompt reads the profile as the file's owner, never a
+  link or a file with a second name; root's own file only from folders only root can change (#37).
+- Lock files of the service are root's alone (0600): a local user can no longer hold one and stall
+  settings, the protection log and the watchdog; the log never waits more than 2 s (#50, review).
+- Password prompt: a script command in any other shape than the app's install.sh/uninstall.sh is
+  refused instead of run in place (#37, review).
+- `KS_NOW`, `KS_APPROVE_ALL` and `KS_LOCKED` never come from the caller; the core lock's re-exec
+  is believed only from its own lockf (#50).
+- NetBird: every link on the way to its binary is followed and its folder checked; a link in a
+  folder others can write is logged, not refused (#50, docs/security/hardening-0.20.md).
 
 ## [0.19.1] - 2026-10-12
 
