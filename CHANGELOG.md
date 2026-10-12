@@ -19,7 +19,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   password while nothing else changed since the password was last entered (the subscription's
   part, split apps). A change that waits for the password
   says whether it is the profile's, the subscription's or both (the helper tells), and that the
-  old rules work until then. A profile link is fetched within a minute. Profile links are kept in the keychain; a subscription cannot bring a profile of
+  old rules work until then. IPv6 addresses and ranges are taken. A profile link is fetched within a minute. Profile links are kept in the keychain; a subscription cannot bring a profile of
   its own; a geosite or geoip code the shipped geodata lacks is left out (shown in «Трафик») rather
   than refusing every update.
 - Xray: transport escalation (#20, ADR 0030). When the running server stops answering, before

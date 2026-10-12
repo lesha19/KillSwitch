@@ -67,13 +67,13 @@ as a DIRECT change.
   and without that line no rule of it can go direct, so it can only take traffic away from the
   subscription's rules (block or VPN in front of them), which are then exactly as approved, in
   order. The profile's direct rules are `profile-rule`, never `rule`, so a subscription that copies
-  one is a change of its own part. `outbound` lines may be fewer: they pin a freedom outbound's
-  settings and are printed for every one of them once anything goes direct, so with the
-  subscription's part unchanged one disappears only when nothing goes direct any more (the profile
-  turned off over a subscription with nothing direct) or the outbound is gone (then nothing can
-  use it); a changed outbound is a new line, not approved. They keep their approved order (a
-  subsequence of it): an untagged first freedom outbound is Xray's default, whose `default` line
-  names no tag, so swapping two untagged ones would move what no rule takes (re-review 2 N-A). What remains leans on ADR 0013's rule
+  one is a change of its own part. `outbound` lines are all the approved ones in their order, or
+  none: they pin the freedom outbounds' settings and are printed for every one of them once
+  anything goes direct, so with the subscription's part unchanged they vanish only when nothing
+  goes direct any more (the profile turned off over a subscription with nothing direct). Fewer or
+  moved is not taken: an untagged first freedom outbound is Xray's default, whose `default` line
+  names no tag, so dropping or swapping one would make another — a `redirect`, say — the default
+  (re-review 2 N-A, Codex P1). What remains leans on ADR 0013's rule
   that a subscription's DIRECT rule, once approved, stands whatever non-direct rules in front of it
   do (they are not in the signature). Turning a direct profile off, deleting it or picking one
   without direct rules thus needs no password while the subscription's part is unchanged; a
