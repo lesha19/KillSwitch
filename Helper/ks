@@ -1459,7 +1459,7 @@ core_generate_xray() (
         address) why="its server address is unusable" ;; protocol) why="a server type KillSwitch does not take" ;;
         tag) why="a ks-… tag is KillSwitch's" ;; selector) why="a selector picks KillSwitch's or the direct outbound" ;;
         fallback) why="the balancer falls back to an outbound not its own" ;; download) why="its transport names an address KillSwitch does not pin" ;;
-        transport) why="its transport talks to other addresses than the server" ;; case) why="a key Xray reads in another spelling" ;;
+        transport) why="its transport talks to other addresses than the server" ;; case) why="a key or value Xray reads differently (case, non-Latin letters)" ;;
         *) why=${left%%	*} ;;
       esac
       log_event "xray: server «${pick}» left out of the subscription ($why), «${left#*	}» runs"
@@ -1560,7 +1560,7 @@ KS_XRAY_PL='
   # the others stay: panels add placeholder hosts at 0.0.0.0 or 127.0.0.1 («подписка истекла»),
   # and one of them must not refuse the whole subscription, or a stored one its rebuilds.
   %UNUSABLE = (address => "адрес сервера не годится", tag => "тег ks-… занят KillSwitch",
-    selector => "выбирает outbound KillSwitch (ks-…) или прямой", case => "ключ записан необычно (другой регистр или не латинские буквы)", fallback => "запасной outbound не свой или ks-…",
+    selector => "выбирает outbound KillSwitch (ks-…) или прямой", case => "ключ или служебное значение записаны необычно (другой регистр, не латинские буквы)", fallback => "запасной outbound не свой или ks-…",
     download => "адрес в настройках транспорта, которого KillSwitch не закрепляет", protocol => "тип сервера, который KillSwitch не берёт",
     transport => "транспорт ходит к адресам помимо сервера (ECH через DNS, realm, xdns, xicmp, udphop, xdrive)");
   # Xray reads JSON keys in any case (Go): «Selector», «Address» or «TAG» are the keys below to it,
@@ -1606,7 +1606,23 @@ KS_XRAY_PL='
     if (ref $x eq "HASH") { for (keys %$x) { push @r, $x->{$_} if /\A(sockopt|echSockopt)\z/i && ref $x->{$_} eq "HASH"; push @r, sockopts($x->{$_}) } }
     elsif (ref $x eq "ARRAY") { push @r, sockopts($_) for @$x }
     @r }
+  # The values the checks read or match on (tags, selectors, types, addresses, ports, strategies)
+  # are ASCII text: Go trims Unicode whitespace that Perl keeps, lowers «İ» to i, reads invalid
+  # bytes as U+FFFD (0.19.1 review 3). Any other character there makes the host unusable; names,
+  # domains, header values and the data maps stay free text.
+  my %IDENT = map { (lc $_ => 1) } qw(tag outboundTag balancerTag inboundTag fallbackTag selector subjectSelector dialerProxy
+    protocol network method security type address port servers echConfigList remoteIPs domainStrategy queryStrategy);
+  sub ident_ok { my $v = shift; ref $v eq "ARRAY" ? !grep { !ident_ok($_) } @$v : ref $v || !defined $v || $v =~ /\A[\x09-\x0d\x20-\x7e]*\z/ }
+  sub odd_value { my $x = shift;
+    if (ref $x eq "HASH") {
+      for my $k (keys %$x) {
+        next if $k =~ /\A(headers|hosts|attrs)\z/;
+        return 1 if ($IDENT{ lc $k } && !ident_ok($x->{$k})) || odd_value($x->{$k});
+      }
+    } elsif (ref $x eq "ARRAY") { odd_value($_) and return 1 for @$x }
+    0 }
   sub unusable { my $c = shift; my %tags;
+    return "case" if odd_value([ @$c{ grep { exists $c->{$_} } qw(outbounds routing dns policy observatory burstObservatory) } ]);
     return "case" if odd_case([ @$c{ grep { exists $c->{$_} } qw(outbounds routing dns policy observatory burstObservatory) },
       map { ref $_ eq "HASH" && exists $_->{sniffing} ? $_->{sniffing} : () } @{ ref $c->{inbounds} eq "ARRAY" ? $c->{inbounds} : [] } ]);
     my @outs = grep { ref $_ eq "HASH" } @{ $c->{outbounds} };

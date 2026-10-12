@@ -458,6 +458,45 @@ else
     ok "  refused with the host named in readable text" || bad "  refusal: $(head -c 300 "$tmp/err")"
 fi
 
+# --- every value the checks read or match on, mutated the ways Go and Perl read differently
+# (0.19.1 review 3: Unicode whitespace that Go trims and Perl does not, İ that Go lowers to i,
+# invalid bytes that Go makes U+FFFD): next to a good host the changed one is always left out, or
+# the subscription refused; never taken with a meaning the checks did not see. Each field is
+# "<value in $b> | <setup>", each variant "<lead|trail|in|first>:<text>" (~uXXXX~: a \u escape).
+fields=(
+  '$b->{outbounds}[2]{tag}|' '$b->{outbounds}[0]{tag}|' '$b->{outbounds}[2]{protocol}|' '$b->{outbounds}[0]{protocol}|'
+  '$b->{outbounds}[0]{settings}{vnext}[0]{address}|'
+  '$b->{outbounds}[0]{streamSettings}{network}|' '$b->{outbounds}[0]{streamSettings}{security}|'
+  '$b->{outbounds}[0]{streamSettings}{sockopt}{domainStrategy}|'
+  '$b->{outbounds}[1]{streamSettings}{sockopt}{dialerProxy}|$b->{outbounds}[1]{streamSettings}{sockopt}{dialerProxy} = "block"'
+  '$b->{outbounds}[0]{streamSettings}{method}|$b->{outbounds}[0]{streamSettings}{method} = "xdrive"'
+  '$b->{outbounds}[0]{streamSettings}{finalmask}{udp}[0]{type}|$b->{outbounds}[0]{streamSettings}{finalmask} = { udp => [{ type => "xicmp" }] }'
+  '$b->{outbounds}[0]{streamSettings}{tlsSettings}{echConfigList}|$b->{outbounds}[0]{streamSettings}{tlsSettings} = { echConfigList => "udp://9.9.9.9" }'
+  '$b->{routing}{rules}[0]{outboundTag}|' '$b->{routing}{rules}[1]{balancerTag}|' '$b->{routing}{rules}[0]{inboundTag}[0]|'
+  '$b->{routing}{rules}[2]{port}|' '$b->{routing}{balancers}[0]{tag}|' '$b->{routing}{balancers}[0]{selector}[0]|'
+  '$b->{routing}{balancers}[0]{fallbackTag}|' '$b->{burstObservatory}{subjectSelector}[0]|'
+  '$b->{dns}{servers}[0]{address}|$b->{dns}{servers}[0]{address} = "tcp+local://9.9.9.9"'
+  '$b->{dns}{servers}[3]|$b->{dns}{servers}[3] = "localhost"'
+  '$b->{dns}{servers}[0]{tag}|' '$b->{dns}{queryStrategy}|'
+)
+variants=('lead:\xc2\xa0' 'trail:\xc2\xa0' 'lead:~u3000~' 'lead:\xe2\x80\xa8' 'trail:\xc2\x85' 'lead:~u200b~' 'in:\xc4\xb0' 'in:~u0131~'
+          'in:\xc5\xbf' 'in:~u212a~' 'in:\xef\xbf\xbd' 'first:\xef\xbd\x98' 'in:\xff')
+n=0; nbad=0
+for f in "${fields[@]}"; do
+  for v in "${variants[@]}"; do
+    edit 'my $b = JSON::PP->new->decode(JSON::PP->new->encode($c)); $b->{remarks} = "Плохой"; '"${f#*|}"';
+          my ($mode, $x) = split /:/, "'"$v"'", 2; my $v = '"${f%%|*}"' // "";
+          '"${f%%|*}"' = $mode eq "lead" ? "$x$v" : $mode eq "trail" ? "$v$x" : $mode eq "in" ? substr($v, 0, 1) . $x . substr($v, 1) : $x . substr($v, 1);
+          push @$a, $b'
+    n=$((n + 1))
+    if gen; then
+      [ "$(j 'join "|", map { $_->{name} } @{ $c->{servers} }' "$tmp/c.report")" = "🇱🇹Литва" ] ||
+        { bad "mutation ${f%%|*} $v: taken: servers $(j '$c->{servers}' "$tmp/c.report")"; nbad=$((nbad + 1)); }
+    elif ! grep -q "UTF-8" "$tmp/err"; then bad "mutation ${f%%|*} $v: refused, but: $(head -c 200 "$tmp/err")"; nbad=$((nbad + 1)); fi
+  done
+done
+[ "$nbad" = 0 ] && ok "$n mutations of ${#fields[@]} read values: the host left out (or the subscription refused) every time"
+
 # --- names: shown, stored as xrayserver=, logged; no line breaks and no control characters
 refused "a control character in a name" '$c->{remarks} = "a\x07b"' "Управляющие символы"
 refused "a key longer than 256" '$c->{outbounds}[0]{"k" x 300} = 1'
