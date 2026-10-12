@@ -142,11 +142,29 @@ put_setting multihop Ghost; rm -f "$T/up"
 if set_mtu 1280 2>/dev/null; then bad "a core that does not come up: success"; fi
 [ "$(setting multihop x)" = Ghost ] && [ "$(setting mtu auto)" = 1380 ] && ok "  a rollback puts the settings back as they were" ||
   bad "  rollback settings: $(paste -sd, - < "$SETTINGS")"
-: > "$T/up"
+# a "ks set" outside the core lock (lan, wifiguard) while set_mtu builds or restarts (#50): only
+# what set_mtu changed goes into the settings and back, the other key stays
+: > "$T/up"; real=$SETTINGS
+eval "rebuild_orig() $(declare -f core_rebuild | tail -n +2)"
+core_rebuild() { put_setting lan 1 "$real"; rebuild_orig "$@"; }
+put_setting multihop Ghost
+set_mtu 1420 2>"$T/err" && [ "$(setting lan x)" = 1 ] && [ "$(setting mtu auto)" = 1420 ] && [ "$(setting multihop x)" = off ] &&
+  ok "  a ks set of another key during the build: kept, mtu and the double VPN still carried" ||
+  bad "  concurrent set lost: $(cat "$T/err") $(paste -sd, - < "$SETTINGS")"
+eval "core_rebuild() $(declare -f rebuild_orig | tail -n +2)"
+eval "restart_orig() $(declare -f core_restart | tail -n +2)"
+core_restart() { [ -e "$T/setonce" ] || { : > "$T/setonce"; put_setting wifiguard 1; }; restart_orig; }
+put_setting multihop Ghost; rm -f "$T/up" "$T/setonce"
+if set_mtu 1280 2>/dev/null; then bad "a core that does not come up: success"; fi
+[ "$(setting wifiguard x)" = 1 ] && [ "$(setting lan x)" = 1 ] && [ "$(setting mtu auto)" = 1420 ] && [ "$(setting multihop x)" = Ghost ] &&
+  ok "  a ks set of another key during the restart, then a rollback: kept, mtu and the double VPN back" ||
+  bad "  concurrent set lost by the rollback: $(paste -sd, - < "$SETTINGS")"
+eval "core_restart() $(declare -f restart_orig | tail -n +2)"
+: > "$T/up"; drop_setting lan; drop_setting wifiguard; set_mtu 1380 >/dev/null 2>&1 || bad "  back to 1380 for the rest"
 # killed after the config was put in place and before the restart: the same value again finishes it
 { ( core_restart() { kill -9 "$BASHPID"; }; set_mtu 1420 ); } 2>/dev/null; : > "$T/calls"
 set_mtu 1420 2>"$T/err" && [ "$(setting mtu auto)" = 1420 ] && [ "$(conf_mtu)" = 1420 ] && [ "$(kicks)" = 1 ] &&
-  ! ls "$CORE_DIR" "$DIR" | grep -q '\.prev$' && ok "  an interrupted change: the same value again restarts the core, no copies left" ||
+  ! ls "$CORE_DIR" "$DIR" | grep -q '\.prev$\|\.mtu' && ok "  an interrupted change: the same value again restarts the core, no copies left" ||
   bad "  interrupted: $(cat "$T/err") $(setting mtu auto) $(kicks) $(ls "$CORE_DIR" "$DIR" | grep '\.prev$')"
 # auto and 1500 build the same Xray config: stored, nothing restarted
 set_mtu auto 2>/dev/null; : > "$T/calls"; : > "$EVENTS"
