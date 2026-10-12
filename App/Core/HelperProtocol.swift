@@ -42,6 +42,7 @@ enum HelperIdentity {
     func coreState(reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreOn(reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreOff(reply: @escaping @Sendable (Int32, String, String) -> Void)
+    func coreRestart(reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreProxies(reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreTraffic(reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreConnections(reply: @escaping @Sendable (Int32, String, String) -> Void)

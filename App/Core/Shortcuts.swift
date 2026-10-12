@@ -15,8 +15,8 @@ enum Shortcuts {
 
     static func connect(status: Status, busy isBusy: Bool, coreConfigured: Bool) -> Decision {
         switch status {
-        case .protected, .connectedUnprotected: return .done(String(localized: "VPN уже подключён"))
-        case .connecting, .stuck: return .done(String(localized: "VPN уже подключается"))
+        case .protected, .unblocked(vpnOn: false): return .done(String(localized: "VPN уже подключён"))
+        case .connecting, .reconnecting: return .done(String(localized: "VPN уже подключается"))
         default: break
         }
         guard status.primary == .connect, status.primaryEnabled else {
@@ -31,10 +31,11 @@ enum Shortcuts {
         return isBusy ? .refused(busy) : .run
     }
 
-    /// Our core runs: connected, connecting, or stuck on a server that does not answer (its main
-    /// button is «Выбрать другой сервер…», «Отключить» is the second one).
+    /// Our core runs or the VPN is on (ADR 0035): connected, connecting, or stuck on a server that
+    /// does not answer (its main button is «Выбрать другой сервер…», «Отключить» is the second one).
     static func vpnRuns(_ status: Status) -> Bool {
-        status.primary == .disconnect || status.primary == .cancel || status.secondary == .disconnect
+        status.primary == .disconnect || status.primary == .disconnectVPN || status.primary == .cancel || status.secondary == .disconnect
+            || status.secondary == .disconnectVPN
     }
 
     /// «Защищено, сервер LT-Vilnius»: spoken by Siri too, so without emoji.

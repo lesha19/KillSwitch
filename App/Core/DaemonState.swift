@@ -13,6 +13,9 @@ struct DaemonState: Equatable {
     var tunnels: String
     /// Protection on but standing by: another VPN is up and ours is not (ADR 0018).
     var standby: Bool
+    /// The VPN is on (ADR 0035) and whether our rules block; nil from a helper before 0.20.
+    var vpnOn: Bool?
+    var blocking: Bool?
 
     /// Nil unless it names the daemon's pid and the protection state.
     init?(text: String) {
@@ -28,6 +31,8 @@ struct DaemonState: Equatable {
         coreRunning = values["core"] == "on"
         tunnels = values["tunnels"] ?? ""
         standby = values["standby"] == "1"
+        vpnOn = values["vpn"].map { $0 == "1" }
+        blocking = values["blocking"].map { $0 == "1" }
     }
 
     /// The word of `ks state` (and of the state file): on | off | paused:<epoch>.

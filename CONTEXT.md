@@ -12,4 +12,4 @@ Terms as the owner and the UI use them. Decisions live in `docs/adr/`, behaviour
   «lockdown mode»). Off, paused or «выключено» → the internet goes direct after «Отключить».
 - **Пауза** (pause): protection off until a time; same meaning as off while it lasts.
 - **Другой VPN** (another VPN): a tunnel of another program (Happ, dropweb…); KillSwitch stands by
-  next to it (ADR 0018).
+  next to it (ADR 0018) while our VPN is off.

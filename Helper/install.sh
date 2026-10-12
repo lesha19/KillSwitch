@@ -12,6 +12,8 @@
 # SIGHUP (never a plain bootout: on SIGTERM it turns the network off, see "ks watch"), pf rules are
 # only ever reloaded, never flushed, and the core restarts only if its binary, geodata or plist
 # changed (prints "core: restarted" or "core: kept").
+# With the VPN on (ADR 0035) nothing of the core is touched before the new watchdog runs and has the
+# rules loaded (watchdog_takeover): a 0.19 one flushes them while protection is off.
 # The installing user may run only "ks state" and "ks on" without a password, so the
 # app can show the state and turn protection back on in one click. Turning it off,
 # pausing and changing what is let through always need the admin password, so a
@@ -56,7 +58,7 @@ sudoers_text() {  # sudoers_text <user> <ks>
   echo "Defaults!$ks secure_path=\"/usr/bin:/bin:/usr/sbin:/sbin\", env_reset"
   echo "Defaults!$ks env_keep-=\"HOME MAIL CHARSET LANG LANGUAGE LC_ALL LC_COLLATE LC_CTYPE LC_MESSAGES LC_MONETARY LC_NUMERIC LC_TIME SSH_AUTH_SOCK TZ EDITOR VISUAL\""
   echo "Defaults!$ks env_delete+=\"HOME CURL_HOME BASH_ENV ENV LC_ALL\""
-  echo "$1 ALL=(root) NOPASSWD: $ks state, $ks probe, $ks on, $ks netrestore, $ks core state, $ks core on, $ks core off," \
+  echo "$1 ALL=(root) NOPASSWD: $ks state, $ks probe, $ks on, $ks netrestore, $ks core state, $ks core on, $ks core off, $ks core restart," \
     "$ks core proxies, $ks core traffic, $ks core connections, $ks core select *, $ks core delay *, $ks core refresh *, $ks diag report *"
 }
 
@@ -123,6 +125,26 @@ job_disabled() { launchctl print-disabled system 2>/dev/null | grep -qE "\"${1#s
 # launchctl bootout returns before the job is gone, and bootstrap refuses it until then
 job_gone() { for _ in $(seq 1 50); do job_loaded "$1" || return 0; sleep 0.2; done; return 1; }
 
+# The VPN target (ADR 0035): a core job a helper before 0.20 loaded and left enabled means the VPN is
+# on (a disabled one would not start after a reboot, and the Mac would stay blocked).
+vpn_migrate() {
+  [ ! -e "$DIR/vpn-on" ] && job_loaded "$CORE_JOB" && ! job_disabled "$CORE_JOB" || return 0
+  date +%s > "$DIR/.vpn-on.new"; chmod 644 "$DIR/.vpn-on.new"; mv -f "$DIR/.vpn-on.new" "$DIR/vpn-on"
+}
+# A watchdog of 0.20 or later says vpn= in its state file; the one running is older than the ks in place.
+watchdog_old() { ! grep -q '^vpn=' "$DIR/daemon-state" 2>/dev/null; }
+# With the VPN on: wait until the watchdog running is the new one and has the rules loaded, about 30 s
+# at most; the core is not touched otherwise (the install fails, and the app runs it again).
+watchdog_takeover() {
+  [ -e "$DIR/vpn-on" ] || return 0
+  for _ in $(seq 1 150); do
+    grep -qx 'vpn=1' "$DIR/daemon-state" 2>/dev/null && grep -qx 'blocking=1' "$DIR/daemon-state" && return 0
+    sleep 0.2
+  done
+  echo "the new watchdog did not take over with the rules loaded: the core not touched" >&2
+  return 1
+}
+
 # watchdog_update <ks changed 0|1> <plist changed 0|1>
 watchdog_update() {
   if ! job_loaded "$WATCH_JOB"; then
@@ -140,7 +162,7 @@ watchdog_update() {
     [ "$was_disabled" = 1 ] || launchctl enable "$WATCH_JOB"
     launchctl bootstrap system "$WATCH_PLIST"
     echo "watchdog: reloaded"
-  elif [ "$1" = 1 ]; then
+  elif [ "$1" = 1 ] || { [ -e "$DIR/vpn-on" ] && watchdog_old; }; then
     launchctl kill HUP "$WATCH_JOB"
     echo "watchdog: new helper"
   fi
@@ -201,8 +223,9 @@ core_update() {
   fi
   if [ -f geoip.dat ] && geodata_put geoip.dat && [ "$run" = xray ]; then restart=1; fi
   printf '%s' "$GEO_STATE" > "$DIR/core/.geodata.new"; chmod 644 "$DIR/core/.geodata.new"; mv -f "$DIR/core/.geodata.new" "$DIR/core/geodata"
-  # the core starts at boot only after "ks core on"; an upgrade keeps a running core running
-  job_running "$CORE_JOB" || launchctl disable "$CORE_JOB"
+  # the core starts at boot only after "ks core on"; an upgrade keeps a running core running, and
+  # never disables it while the VPN is on, running or not (ADR 0035)
+  [ -e "$DIR/vpn-on" ] || job_running "$CORE_JOB" || launchctl disable "$CORE_JOB"
   # both jobs stay in core/ for "ks set core"; the chosen one is the system's
   put_file local.killswitch.core.plist "$DIR/core/plist.mihomo" 644 || true
   if [ -f local.killswitch.core.xray.plist ]; then put_file local.killswitch.core.xray.plist "$DIR/core/plist.xray" 644 || true; fi
@@ -282,6 +305,9 @@ main() {
   chmod 600 "$DIR/core/core.log"
   # the diagnostics journal (ADR 0021): root-only, the app gets it redacted through «Собрать отчёт»
   install -d -o root -g wheel -m 700 "$DIR/diag"
+  vpn_migrate
+  watchdog_update "$ks_new" "$plist_new"
+  watchdog_takeover
   if [ -f mihomo ] || [ -f xray ]; then core_update; fi
   [ -e "$DIR/events.log" ] || install -o root -g wheel -m 644 /dev/null "$DIR/events.log"
 
@@ -293,7 +319,6 @@ main() {
   # ks checks each address against pf and skips duplicates
   for ip in "$@"; do ks_run server-add "$ip"; done
 
-  watchdog_update "$ks_new" "$plist_new"
   if [ "$upgrade" = 1 ]; then
     echo "kill switch: $(ks_run state)"
   else

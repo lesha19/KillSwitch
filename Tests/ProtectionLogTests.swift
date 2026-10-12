@@ -24,6 +24,14 @@ final class ProtectionLogTests: XCTestCase {
                        "Защита не действует: в /etc/pf.conf нет правил macOS")
     }
 
+    /// ADR 0035: a line per gap, its length and why.
+    func testGaps() {
+        XCTAssertEqual(text("2026-10-12 17:02:43 internet closed for 8 s: update"), "Интернет был закрыт 8 с: обновление")
+        XCTAssertEqual(text("2026-10-12 17:02:43 internet closed for 3 s: server switch"), "Интернет был закрыт 3 с: смена сервера")
+        XCTAssertEqual(text("2026-10-12 17:02:43 internet closed for 125 s: reconnect"), "Интернет был закрыт 2 мин 5 с: переподключение")
+        XCTAssertEqual(text("2026-10-12 17:02:43 internet closed for 120 s: VPN off"), "Интернет был закрыт 2 мин: до отключения VPN")
+    }
+
     func testVPNEvents() {
         XCTAssertEqual(text("2026-10-10 14:03:22 core: 🚀 Выбор сервера -> 🇱🇹 Литва"), "Выбран сервер «🇱🇹 Литва»")
         XCTAssertEqual(text("2026-10-10 14:03:22 double VPN: off"), "Двойной VPN выключен")

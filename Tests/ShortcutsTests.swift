@@ -10,8 +10,16 @@ final class ShortcutsTests: XCTestCase {
 
     func testConnectWhenAlreadyConnected() {
         XCTAssertEqual(Shortcuts.connect(status: .protected, busy: false, coreConfigured: true), .done("VPN уже подключён"))
-        XCTAssertEqual(Shortcuts.connect(status: .connectedUnprotected, busy: false, coreConfigured: true), .done("VPN уже подключён"))
-        XCTAssertEqual(Shortcuts.connect(status: .connecting, busy: false, coreConfigured: true), .done("VPN уже подключается"))
+        XCTAssertEqual(Shortcuts.connect(status: .reconnecting, busy: false, coreConfigured: true), .done("VPN уже подключается"))
+        XCTAssertEqual(Shortcuts.connect(status: .connecting(), busy: false, coreConfigured: true), .done("VPN уже подключается"))
+        XCTAssertEqual(Shortcuts.connect(status: .connecting(closed: true), busy: false, coreConfigured: true), .done("VPN уже подключается"))
+    }
+
+    /// A Connect that did not come up (the core did not start, the server does not answer) is not
+    /// «уже подключается»: the window has the way out.
+    func testConnectWhenStuck() {
+        XCTAssertEqual(Shortcuts.connect(status: .stuck(closed: true), busy: false, coreConfigured: true),
+                       .refused("Не подключилось: Подключение затянулось. Открой KillSwitch."))
     }
 
     /// Nothing that needs the window (install, repair, a subscription, another VPN) is done from a
@@ -29,9 +37,11 @@ final class ShortcutsTests: XCTestCase {
 
     func testDisconnect() {
         XCTAssertEqual(Shortcuts.disconnect(status: .protected, busy: false), .run)
-        XCTAssertEqual(Shortcuts.disconnect(status: .connecting, busy: false), .run)
+        XCTAssertEqual(Shortcuts.disconnect(status: .connecting(), busy: false), .run)
         // stuck on a server that does not answer: the core still runs and must be stopped
-        XCTAssertEqual(Shortcuts.disconnect(status: .stuck, busy: false), .run)
+        XCTAssertEqual(Shortcuts.disconnect(status: .stuck(), busy: false), .run)
+        XCTAssertEqual(Shortcuts.disconnect(status: .stuck(closed: true), busy: false), .run)
+        XCTAssertEqual(Shortcuts.disconnect(status: .otherVPN(blocksDirect: true, vpnOn: true), busy: false), .run)
         XCTAssertEqual(Shortcuts.disconnect(status: .blocked, busy: false), .done("VPN и так не подключён"))
         XCTAssertEqual(Shortcuts.disconnect(status: .protected, busy: true), .refused("KillSwitch занят. Попробуй через минуту."))
     }

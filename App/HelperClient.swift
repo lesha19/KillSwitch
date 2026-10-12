@@ -146,6 +146,7 @@ final class HelperClient {
             case .coreState: helper.coreState(reply: reply)
             case .coreOn: helper.coreOn(reply: reply)
             case .coreOff: helper.coreOff(reply: reply)
+            case .coreRestart: helper.coreRestart(reply: reply)
             case .coreProxies: helper.coreProxies(reply: reply)
             case .coreTraffic: helper.coreTraffic(reply: reply)
             case .coreConnections: helper.coreConnections(reply: reply)

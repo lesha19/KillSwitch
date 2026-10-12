@@ -326,17 +326,20 @@ pass; pass; pass
 grep -qx 'server=🇱🇹Литва 2' "$CORE_DIR/failover" && grep -qx 'manual=' "$CORE_DIR/failover" &&
   ok "a switch that worked: the new server in the state, not a pick by hand" || bad "state after switch: $(cat "$CORE_DIR/failover")"
 
-# --- the watchdog starts it every 20 s, only while the core runs and the protection is on
+# --- the watchdog starts it every 20 s, only while the core runs and pf blocks (ADR 0035: protection
+# on, or the VPN on whatever the switch says)
 calls=0
 failover_bg() { calls=$((calls + 1)); }
 guard() { :; }; core_guard() { :; }; publish_state() { :; }; diag_tick() { :; }; diag_bg() { :; }; netbird_bg() { :; }
-CORE_STATE=on; PROT=on; STANDBY=0
+CORE_STATE=on; PROT=on; BLOCKING=1; STANDBY=0
 for i in $(seq 0 59); do watch_pass "$i"; done
 [ "$calls" = 3 ] && ok "watchdog: a failover pass every 20 s" || bad "watchdog calls: $calls"
 calls=0; PROT=off; for i in $(seq 0 59); do watch_pass "$i"; done
-STANDBY=1; PROT=on; for i in $(seq 0 59); do watch_pass "$i"; done
+[ "$calls" = 3 ] && ok "  protection off, the VPN on (pf blocks): failover all the same" || bad "  blocking, protection off: $calls"
+calls=0; BLOCKING=0; for i in $(seq 0 59); do watch_pass "$i"; done
+STANDBY=1; PROT=on; BLOCKING=1; for i in $(seq 0 59); do watch_pass "$i"; done
 CORE_STATE=off; STANDBY=0; for i in $(seq 0 59); do watch_pass "$i"; done
-[ "$calls" = 0 ] && ok "  none while the protection is off, in standby next to another VPN, or the core is down" || bad "  calls: $calls"
+[ "$calls" = 0 ] && ok "  none while nothing is blocked, in standby next to another VPN, or the core is down" || bad "  calls: $calls"
 
 # --- the setting
 printf 'failover=0\nfailover=1\n' > "$T/set"

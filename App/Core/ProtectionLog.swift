@@ -30,6 +30,7 @@ enum ProtectionLog {
             if why == "initial load" { return String(localized: "Защита включилась") }
             return String(localized: "Защита обновлена")
         }
+        if let gap = gap(message) { return gap }
         if message.hasPrefix("core: "), let arrow = message.range(of: " -> ") {
             return String(localized: "Выбран сервер «\(ServerName.display(String(message[arrow.upperBound...])))»")
         }
@@ -129,6 +130,22 @@ enum ProtectionLog {
             return String(localized: "Размер пакетов VPN (MTU): \(title(value)), VPN перезапущен")
         }
         return String(localized: "Размер пакетов VPN (MTU): \(title(value))")
+    }
+
+    /// ADR 0035, one line per gap: `internet closed for <n> s: update|server switch|VPN off|reconnect`.
+    private static func gap(_ message: String) -> String? {
+        let prefix = "internet closed for "
+        guard message.hasPrefix(prefix), let unit = message.range(of: " s: "),
+              let seconds = Int(message[message.index(message.startIndex, offsetBy: prefix.count)..<unit.lowerBound]) else { return nil }
+        let length = seconds < 60 ? String(localized: "\(seconds) с")
+            : seconds % 60 == 0 ? String(localized: "\(seconds / 60) мин") : String(localized: "\(seconds / 60) мин \(seconds % 60) с")
+        let why = switch message[unit.upperBound...] {
+        case "update": String(localized: "обновление")
+        case "server switch": String(localized: "смена сервера")
+        case "VPN off": String(localized: "до отключения VPN")
+        default: String(localized: "переподключение")
+        }
+        return String(localized: "Интернет был закрыт \(length): \(why)")
     }
 
     /// The «…»-quoted parts of a line, in order.

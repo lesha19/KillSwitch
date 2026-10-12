@@ -101,6 +101,31 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   «Перенос настроек».
 
 ### Changed
+- The VPN blocks everything outside it from «Подключить» to «Отключить», whatever «защита» says
+  (#54, ADR 0035), like Mullvad: with protection off or paused, an update, a server switch, a
+  settings change, a crash or a reboot no longer sends traffic directly with the real IP for the
+  seconds the core restarts (measured 2026-10-11 and 2026-10-12). The helper keeps «VPN включён»
+  in `/Library/KillSwitch/vpn-on`, written by `ks core on`, removed only by `ks core off`; an
+  upgrade from 0.19 with the core loaded writes it. The update waits until the new watchdog runs
+  with the rules loaded before it touches the core (the 0.19 one removes them while protection is
+  off) and never disables the core while the VPN is on. No timeout: a VPN that cannot come back
+  keeps the internet closed until it does or «Отключить VPN». «Защита» is now the switch for
+  blocking while the VPN is off (Mullvad's lockdown mode); standby next to another VPN (ADR 0018)
+  only while ours is off. «Перезапустить VPN» restarts the core in place (`ks core restart`), the
+  VPN kept on. «Подключить», «Отключить» and the restart take the core lock, so a Disconnect cannot
+  land inside a Connect; a core that does not stop leaves the VPN on, its job enabled, and says so;
+  «Подключить» during an update waits until the new watchdog has the rules loaded. The main screen:
+  «Интернет закрыт: VPN переподключается» with «Отключить VPN» when the VPN is on and its tunnel,
+  up since «Подключить», is gone; the first connect stays «Подключение…» then «Подключение
+  затянулось», saying the internet is closed meanwhile, with «Отключить VPN» (a core that does not
+  start included; Shortcuts' «Подключить» then says to open KillSwitch); another VPN next to ours
+  turned on offers «Отключить VPN» too (main screen, menu bar); connected is «Защищено» whatever the switch («Подключено без защиты» is gone; connected
+  with neither the VPN target nor protection is «Трафик может идти мимо VPN», its main button
+  «Включить защиту»; with the VPN on and the rules not loaded it says so whatever the
+  connection, with «Восстановить службу…»); a red notice
+  «Трафик может идти мимо VPN» if the VPN is on and the rules are not loaded; «Журнал защиты» says
+  how long each gap was and why («Интернет был закрыт 8 с: обновление»). Automatic server switch
+  and transport escalation work with protection off too, now that a restart cannot leak.
 - Replacing the subscription link (Settings, QR, a `killswitch://` link, «Начало работы») keeps the
   old one until the new one answered: a link that fails no longer costs the working subscription,
   its status or servers (#23, ADR 0029). A successful replace removes the old subscription's backup

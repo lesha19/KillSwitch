@@ -85,8 +85,8 @@ final class DeepLinkTests: XCTestCase {
     /// With protection on, disconnecting cuts the internet: the window asks first.
     func testDisconnectAsksWhileProtectionIsOn() {
         XCTAssertEqual(plan(.disconnect, .protected), .confirm(.disconnect))
-        XCTAssertEqual(plan(.disconnect, .connecting), .confirm(.disconnect))
-        XCTAssertEqual(plan(.disconnect, .stuck), .confirm(.disconnect))
+        XCTAssertEqual(plan(.disconnect, .connecting()), .confirm(.disconnect))
+        XCTAssertEqual(plan(.disconnect, .stuck()), .confirm(.disconnect))
         XCTAssertEqual(plan(.disconnect, .blocked), .done("VPN и так не подключён"))
         XCTAssertEqual(plan(.disconnect, .protected, busy: true), .refused("KillSwitch занят. Попробуй через минуту."))
     }
@@ -95,18 +95,19 @@ final class DeepLinkTests: XCTestCase {
     /// the same as turning protection off, which no link may do. Refused, even with a question.
     func testNoDisconnectWhileProtectionIsOffOrPaused() {
         let refusal = DeepLink.Plan.refused("Ссылка не отключает VPN, пока защита выключена или на паузе.")
-        XCTAssertEqual(plan(.disconnect, .connectedUnprotected, protectionOn: false), refusal)
-        XCTAssertEqual(plan(.disconnect, .connecting, protectionOn: false), refusal)
-        XCTAssertEqual(plan(.disconnect, .stuck, protectionOn: false), refusal)
-        XCTAssertEqual(plan(.toggle, .connectedUnprotected, protectionOn: false), refusal)
+        XCTAssertEqual(plan(.disconnect, .protected, protectionOn: false), refusal)
+        XCTAssertEqual(plan(.disconnect, .reconnecting, protectionOn: false), refusal)
+        XCTAssertEqual(plan(.disconnect, .connecting(), protectionOn: false), refusal)
+        XCTAssertEqual(plan(.disconnect, .stuck(), protectionOn: false), refusal)
+        XCTAssertEqual(plan(.toggle, .protected, protectionOn: false), refusal)
         // whatever the summary says, the protection state decides
-        XCTAssertEqual(plan(.disconnect, .connectedUnprotected, protectionOn: true), .confirm(.disconnect))
+        XCTAssertEqual(plan(.disconnect, .reconnecting, protectionOn: true), .confirm(.disconnect))
     }
 
     func testToggleConnectsAtOnceButAsksToDisconnect() {
         XCTAssertEqual(plan(.toggle, .blocked), .run(.connect))
         XCTAssertEqual(plan(.toggle, .protected), .confirm(.disconnect))
-        XCTAssertEqual(plan(.toggle, .stuck), .confirm(.disconnect))
+        XCTAssertEqual(plan(.toggle, .stuck()), .confirm(.disconnect))
         XCTAssertEqual(plan(.toggle, .otherVPN(blocksDirect: false)),
                        .refused("Не подключилось: Работает другой VPN. Открой KillSwitch."))
     }

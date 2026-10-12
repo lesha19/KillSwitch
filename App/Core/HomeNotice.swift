@@ -2,6 +2,8 @@ import Foundation
 
 /// The one notice of the main screen besides an error (spec §5.1, priorities 2–7).
 enum HomeNotice: Equatable {
+    /// The VPN is on and the rules are not loaded (ADR 0035): traffic may be leaking.
+    case rulesMissing
     case otherVPN
     /// Nothing answers and `ks probe` says why (NetworkCause).
     case network(NetworkCause)
@@ -43,12 +45,15 @@ enum HomeNotice: Equatable {
         var filterUpdateWaiting = false
         /// HelperService.showApprovalBanner, not dismissed.
         var helperApproval = false
+        /// The VPN on and the watchdog says the rules do not block (DaemonState.blocking).
+        var rulesMissing = false
     }
 
     static let endingDays = 3
     static let trafficShare = 0.9
 
     static func pick(_ input: Input) -> HomeNotice? {
+        if input.rulesMissing { return .rulesMissing }
         if input.otherVPN { return .otherVPN }
         if let cause = input.networkCause { return .network(cause) }
         if let country = input.serversDown { return .serversDown(country: country) }
@@ -73,6 +78,7 @@ enum HomeNotice: Equatable {
 
     var title: String {
         switch self {
+        case .rulesMissing: String(localized: "Трафик может идти мимо VPN.")
         case .otherVPN: String(localized: "Работает другой VPN.")
         case .network(let cause): cause.title + "."
         case .serversDown(let country): String(localized: "Серверы «\(country)» не отвечают.")
@@ -93,6 +99,7 @@ enum HomeNotice: Equatable {
 
     var message: String {
         switch self {
+        case .rulesMissing: String(localized: "VPN включён, но правила защиты не загружены. Восстанови службу.")
         case .otherVPN: String(localized: "Отключи его: два VPN мешают друг другу.")
         case .network(let cause): cause.message
         case .serversDown: String(localized: "Другие страны KillSwitch сам не включает: выбери страну или «Самый быстрый».")
