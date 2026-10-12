@@ -110,8 +110,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   Settings › «Сбросить настройки»: the older helper refuses a settings file with a line it does not
   know. Those are the blocking categories (`blockadult=`, `blocksocial=`, `blockbetting=`, even
   turned back off), the own DoH server (`doh=`), own site addresses (`hosts=`), a packet size other
-  than «Авто» (`mtu=`) and «Пробовать другой отпечаток и транспорт» (`escalate=`, on or off). Routing
-  profiles are not applied by the older version either. Reset the settings after a downgrade.
+  than «Авто» (`mtu=`) and «Пробовать другой отпечаток и транспорт» (`escalate=`, on or off). Reset
+  the settings after a downgrade. A routing profile is not refused but ignored there: the
+  subscription still imports and refreshes, without the profile's rules (with Xray the routing
+  report lists `x-ks-routing` among what it left out).
 
 ### Fixed
 - Xray: with only split apps (or a routing profile) going direct, the subscription's freedom
