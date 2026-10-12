@@ -41,13 +41,16 @@ indirect enum JSONValue: Decodable, Equatable, Sendable {
 struct RoutingReport: Decodable, Equatable, Sendable {
     static let path = "/Library/KillSwitch/core/routing.json"
 
-    enum Origin: String, Decodable, Sendable { case subscription, killswitch }
+    /// profile: the person's routing profile (ADR 0034), named in `profile`.
+    enum Origin: String, Decodable, Sendable { case subscription, killswitch, profile }
 
     struct Rule: Decodable, Equatable, Sendable {
         var rule: String
         var from: Origin
         /// Position in the subscription's list (nil for KillSwitch's).
         var index: Int?
+        /// The routing profile's name, for its rules.
+        var profile: String?
         /// With Xray: the rule object as the core has it, for «Проверить адрес» (ADR 0027).
         var xray: [String: JSONValue]?
     }
@@ -167,6 +170,7 @@ struct RoutingReport: Decodable, Equatable, Sendable {
 
     var subscriptionRules: [Rule] { rules.filter { $0.from == .subscription } }
     var ownRules: [Rule] { rules.filter { $0.from == .killswitch } }
+    var profileRules: [Rule] { rules.filter { $0.from == .profile } }
 
     func provider(_ name: String) -> Provider? { providers.first { $0.name == name } }
 
@@ -238,6 +242,9 @@ extension RoutingReport.Dropped {
             case "geosite": return String(localized: "Нет базы категорий сайтов (geosite)")
             default: return String(localized: "Нет базы стран (geoip)")
             }
+        case "geodata-code":
+            return detail == "geosite" ? String(localized: "Такой категории сайтов нет в базе (geosite)")
+                : String(localized: "Такой страны нет в базе стран (geoip)")
         case "managed": return String(localized: "Это KillSwitch задаёт сам")
         case "not-allowed": return String(localized: "Этого KillSwitch из подписки не берёт")
         case "bad-value": return String(localized: "Значение не прошло проверку")

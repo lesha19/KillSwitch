@@ -698,6 +698,8 @@ private struct AdvancedSettings: View {
             }
             .disabled(control.busy || control.state == .notInstalled)
 
+            RoutingProfilesSection()
+
             TransportSection()
 
             Section("Размер пакетов VPN") {
@@ -744,6 +746,96 @@ private struct AdvancedSettings: View {
                       placeholder: String(localized: "Адрес сервера"), original: control.manualServers,
                       apply: control.setManualServers)
         }
+    }
+}
+
+/// «Маршрутизация» (ADR 0034): named routing profiles the person added, «Как в подписке» by default.
+/// A profile whose direct part changes what goes past the VPN waits for the admin's password
+/// (the notice of a subscription's DIRECT change).
+private struct RoutingProfilesSection: View {
+    @Environment(VPNClient.self) private var client
+    @State private var adding = false
+
+    var body: some View {
+        Section("Маршрутизация") {
+            Picker("Профиль", selection: Binding(get: { client.activeRoutingProfile },
+                                                 set: { id in Task { await client.useRoutingProfile(id) } })) {
+                Text("Как в подписке").tag(UUID?.none)
+                ForEach(client.routingProfiles) { profile in Text(profile.name).tag(UUID?.some(profile.id)) }
+            }
+            .disabled(client.updating)
+            if client.needsConfirmation, client.routingChanged, client.routingSource != .subscription {
+                HStack {
+                    Label { Text("Ждёт пароля администратора: до подтверждения действуют прежние правила.") } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }.font(.caption)
+                    Spacer()
+                    Button("Подтвердить…") { Task { await client.confirmNewServers() } }.controlSize(.small).disabled(client.updating)
+                }
+            }
+            if let id = client.activeRoutingProfile, let profile = client.routingProfiles.first(where: { $0.id == id }) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Блокировать: \(profile.block.sites.count + profile.block.ips.count) · через VPN: \(profile.proxy.sites.count + profile.proxy.ips.count) · напрямую: \(profile.direct.sites.count + profile.direct.ips.count)")
+                        .font(.callout).foregroundStyle(.secondary)
+                    if let fetched = profile.fetched {
+                        Text("Обновлён \(fetched.formatted(date: .abbreviated, time: .shortened)), по ссылке раз в сутки").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if !profile.ignored.isEmpty {
+                        Text("Не используется: \(profile.ignored.joined(separator: ", ")) — остальное решает подписка").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let error = profile.error {
+                        Label { Text(error) } icon: { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange) }.font(.caption)
+                    }
+                }
+                HStack {
+                    if profile.url != nil {
+                        Button("Обновить") { Task { await client.updateRoutingProfiles(force: true) } }.disabled(client.updating)
+                    }
+                    Button("Удалить профиль", role: .destructive) { Task { await client.removeRoutingProfile(profile.id) } }
+                        .disabled(client.updating)
+                }
+            }
+            Button("Добавить профиль…") { adding = true }
+            Footnote(text: String(localized: "Правила профиля идут раньше правил подписки. Если профиль меняет, что идёт мимо VPN, KillSwitch попросит пароль администратора."),
+                     more: String(localized: "Профиль маршрутизации — списки сайтов и адресов: что блокировать, что пускать через VPN и что напрямую, в формате Happ и INCY. Всё, чего нет в профиле, идёт так, как решает подписка. Свои DNS, ссылки на базы стран и «всё остальное напрямую» из профиля не берутся. Профиль по ссылке обновляется раз в сутки; если он начнёт пускать мимо VPN что-то новое, это снова подтверждается паролем. Пароль нужен и для правил «через VPN», если подписка отправляет их в группу, где есть «напрямую». Пока пароль не введён, действуют прежние правила. Выключить профиль можно без пароля, если подписка за это время не поменяла свои правила «напрямую». Какие правила пришли из профиля, видно в «Трафик» › «Правила»."))
+        }
+        .sheet(isPresented: $adding) { AddRoutingProfileSheet(isPresented: $adding) }
+    }
+}
+
+private struct AddRoutingProfileSheet: View {
+    @Environment(VPNClient.self) private var client
+    @Binding var isPresented: Bool
+    @State private var text = ""
+    @State private var problem: String?
+    @State private var working = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Добавить профиль маршрутизации").font(.headline)
+            Text("Ссылка https на профиль или сам профиль (JSON, ссылка happ://routing/… или incy://routing/…).")
+                .font(.callout).foregroundStyle(.secondary)
+            TextEditor(text: $text).font(.callout.monospaced()).frame(minHeight: 100)
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(.separator))
+            if let problem {
+                Label { Text(problem) } icon: { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange) }.font(.callout)
+            }
+            HStack {
+                Spacer()
+                Button("Отмена", role: .cancel) { isPresented = false }.keyboardShortcut(.cancelAction)
+                Button("Добавить") {
+                    working = true
+                    Task {
+                        problem = await client.addRoutingProfile(text)
+                        working = false
+                        if problem == nil { isPresented = false }
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(working || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20).frame(width: 460)
     }
 }
 

@@ -1376,8 +1376,32 @@ core_generate_mihomo() (
     my $old = rd("$W/dropped.json"); wr("$W/dropped.json", [@$old, @dropped]);
     open $f, ">>", "$W/notes" or die; print $f "$_\n" for @notes; close $f;' || fail "Не удалось разобрать sniffer или dns подписки"
 
+  # The person's routing profile (ADR 0034): its rules go first here and stay right after
+  # KillSwitch's own below; its DIRECT ones are in the signature that follows, like the
+  # subscription's. "proxy" is where the subscription sends what no rule takes (its MATCH group),
+  # else its first select group, else KS-DNS: never DIRECT.
+  echo '[]' > "$w/profile-rules.json"
+  if has x-ks-routing "$in"; then
+    plutil -extract x-ks-routing json -o "$w/rt.json" "$in" >/dev/null 2>&1 || fail "x-ks-routing: не разобрать"
+    RT="$w/rt.json" GEO=$geo G="$G" KS_DNS=$KS_DNS W="$w" KS_GEOSITE_DAT="$CORE_DIR/geosite.dat" json_edit "$R" "$KS_RULES_PL$KS_ROUTING_PL"'
+      my %geo = map { ($_ => 1) } split " ", $ENV{GEO};
+      my ($name, $rules, $dropped) = routing_hint(rd($ENV{RT}), $geo{site}, $geo{ip});
+      my $groups = rd($ENV{G});
+      my %grp = map { ($_->{name} => 1) } @$groups;
+      my ($match) = map { /\AMATCH,([^,]+)\z/ ? $1 : () } grep { !ref } @$j;
+      my ($sel) = map { $_->{name} } grep { lc($_->{type} // "") eq "select" } @$groups;
+      my $proxy = defined $match && $grp{$match} ? $match : $sel // $ENV{KS_DNS};
+      my %to = (block => "REJECT", direct => "DIRECT", proxy => $proxy);
+      my %mk = (domain => "DOMAIN-SUFFIX", full => "DOMAIN", keyword => "DOMAIN-KEYWORD", geosite => "GEOSITE", cidr4 => "IP-CIDR", cidr6 => "IP-CIDR6");
+      my @r = map { my ($act, undef, $t, $v) = @$_; $t eq "geoip" ? "GEOIP," . ($v eq "private" ? "LAN" : uc $v) . ",$to{$act}" : "$mk{$t},$v,$to{$act}" } @$rules;
+      unshift @$j, @r;
+      wr("$ENV{W}/profile-rules.json", { name => $name, rules => \@r });
+      my $old = rd("$ENV{W}/dropped.json"); wr("$ENV{W}/dropped.json", [ @$old, @$dropped ]);' || fail "Профиль маршрутизации не подходит"
+  fi
+
   # What would go outside the tunnel, for "ks core refresh" to compare with the last import.
-  { direct_sig "$G" "$R" "$RP" && cat "$w/dns-sig"; } > "$w/direct" || fail "Не удалось разобрать правила"
+  { KS_PROFILE_RULES=$(/usr/bin/perl -MJSON::PP -e 'local $/; my $p = JSON::PP->new->decode(<STDIN>); print ref $p eq "HASH" ? scalar @{ $p->{rules} } : 0' < "$w/profile-rules.json") \
+      direct_sig "$G" "$R" "$RP" && cat "$w/dns-sig"; } > "$w/direct" || fail "Не удалось разобрать правила"
 
   # Double VPN: every other proxy is dialed through the entry, so the core only has to reach
   # the entry's server; the exits are reached through it and stay out of pf.
@@ -1488,9 +1512,10 @@ core_generate_mihomo() (
   fi
 
   # Why the core may leave the tunnel at all (pf, rules()): the subscription sends something
-  # DIRECT (a rule, a provider download, a DNS server), or the admin put apps outside the VPN.
+  # DIRECT (a rule, a provider download, a DNS server), the routing profile does (ADR 0034), or
+  # the admin put apps outside the VPN.
   {
-    grep -qE '^(rule|provider-proxy)'$'\t' "$w/direct" && echo rules
+    grep -qE '^(rule|profile-rule|provider-proxy)'$'\t' "$w/direct" && echo rules
     cat "$w/dns-egress"
     [ -n "$apps" ] && echo splitapps
   } > "$w/egress"
@@ -1578,10 +1603,12 @@ core_generate_xray() (
   # pass 2: the config and what goes with it
   W=$w PROTOS=$XRAY_PROTOCOLS PICK=$(setting xrayserver "") BLOCK="$(block_geosites | paste -sd" " -)" DOH=$(doh_url) \
     HOSTS="$(hosts_entries /dev/null | paste -sd, -)" APPS=$(setting splitapps "") MULTIHOP=$(setting multihop off) \
+    GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) GEOIP=$([ -s "$CORE_DIR/geoip.dat" ] && echo 1) \
+    KS_GEOSITE_DAT="$CORE_DIR/geosite.dat" KS_GEOIP_DAT="$CORE_DIR/geoip.dat" \
     ESC=$(setting escalate 1) ESC_FILE="${KS_ESC_FILE:-$CORE_DIR/escalation}" MTU=$(tun_mtu) \
     TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT API_PORT=$([ -f "$CORE_DIR/api-off" ] || echo "$CORE_API_PORT") \
     ACCESS=$([ "$(setting diag 0)" = 1 ] && [ -d "$DIAG" ] && echo "$DIAG/access.log") \
-    /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' build()' || exit 1
+    /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL$KS_ROUTING_PL"' build()' || exit 1
   if [ -f "$w/multihop-gone" ]; then   # built one hop: the setting says so too (ADR 0027)
     # set by hand (ks set multihop): refused with the reason, never stored as on while one hop
     if [ -n "${KS_MULTIHOP_STRICT:-}" ]; then
@@ -1603,8 +1630,10 @@ core_generate_xray() (
   if [ -n "${KS_APPROVE_ALL:-}" ]; then
     mkdir "$w/e" && ln "$w/in.json" "$w/pins" "$w/e/" || exit 1
     W=$w/e PROTOS=$XRAY_PROTOCOLS BLOCK="$(block_geosites | paste -sd" " -)" DOH=$(doh_url) \
+      GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) GEOIP=$([ -s "$CORE_DIR/geoip.dat" ] && echo 1) \
+      KS_GEOSITE_DAT="$CORE_DIR/geosite.dat" KS_GEOIP_DAT="$CORE_DIR/geoip.dat" \
       APPS=$(setting splitapps "") TUN_GW=10.0.0.1/30 FETCH_PORT=$FETCH_PORT API_PORT="" ACCESS="" \
-      /usr/bin/perl -MJSON::PP -MStorable -MDigest::SHA -e "$KS_XRAY_PL"' approve()' > "$w/approved.all" || exit 1
+      /usr/bin/perl -MJSON::PP -MStorable -MDigest::SHA -e "$KS_XRAY_PL$KS_ROUTING_PL"' approve()' > "$w/approved.all" || exit 1
     sort -u "$w/approved.all" > "$w/approved"
     # a host that cannot be built is not approved for a switch (one to it fails the same way)
     [ ! -s "$w/e/skipped" ] || log_event "server switch approval skipped (cannot be built): $(head -n 20 "$w/e/skipped" | paste -sd, -)"
@@ -1813,7 +1842,7 @@ KS_XRAY_PL='
     my (@dropped, @added, %unbound);
     my %keep = map { $_ => 1 } qw(dns routing outbounds policy observatory burstObservatory);
     my %managed = map { $_ => 1 } qw(inbounds log remarks meta);
-    for (sort keys %$c) { next if $keep{$_}; push @dropped, { section => "profile", item => $_, reason => $managed{$_} ? "managed" : "not-allowed" } }
+    for (sort keys %$c) { next if $keep{$_} || $_ eq "x-ks-routing"; push @dropped, { section => "profile", item => $_, reason => $managed{$_} ? "managed" : "not-allowed" } }
     my %cfg = map { exists $c->{$_} ? ($_ => $c->{$_}) : () } keys %keep;
     my $outs = $cfg{outbounds};
     # bound to no interface (pf lets the core out by its group), server names pinned (ADR 0020)
@@ -1914,7 +1943,10 @@ KS_XRAY_PL='
     # what no rule takes goes to the first outbound
     if ($outs->[0]{protocol} eq "freedom") { $egress{rules} = 1; push @direct, "default\t" . ($outs->[0]{tag} // "") }
     for my $t (sort keys %bal) { push @direct, "balancer\t" . $J->encode({ tag => $t, members => $bal{$t} }) if grep { $freedom{$_} } @{ $bal{$t} } }
-    for my $o (grep { $_->{protocol} eq "freedom" } @$outs) { push @direct, "outbound\t" . $J->encode($o) if @direct }
+    # the subscription'"'"'s freedom outbounds, here in the signature once anything goes direct, also
+    # when only split apps or the routing profile below do through them (review S1)
+    my $outat = @direct;
+    my @outlines = map { "outbound\t" . $J->encode($_) } grep { $_->{protocol} eq "freedom" } @$outs;
     push @direct, "dns\t" . $J->encode($cfg{dns}) if $egress{dns};
     # ours, first: the system DNS to the template DNS outbound, the fetch to a server (never
     # direct, ADR 0016), then the person'"'"'s choices
@@ -1941,8 +1973,39 @@ KS_XRAY_PL='
       push @ours, $rule; push @added, { kind => "splitapps", items => \@apps };
       $egress{splitapps} = 1; push @direct, "rule\t" . $J->encode($rule);
     }
-    unshift @report, map { { rule => rule_text($_), from => "killswitch", xray => $_ } } @ours;
-    $rt{rules} = [ @ours, @rules ];
+    # the routing profile the person chose (ADR 0034), carried in the first config for every host:
+    # block, proxy (the running server, never direct) and direct rules after the KillSwitch ones;
+    # its direct ones in the DIRECT signature like those of the subscription
+    my (@prof, $pname);
+    if (defined(my $hint = $a->[0]{"x-ks-routing"})) {
+      my ($list, $dr);
+      ($pname, $list, $dr) = routing_hint($hint, $ENV{GEOSITE}, $ENV{GEOIP});
+      push @dropped, @$dr;
+      my @g;
+      for (@$list) {
+        my ($act, $kind, $t, $v) = @$_;
+        my $key = $kind eq "site" ? "domain" : "ip";
+        my $val = $t =~ /\Acidr/ ? $v : "$t:$v";
+        if (@g && $g[-1][0] eq $act && $g[-1][1] eq $key) { push @{ $g[-1][2] }, $val } else { push @g, [ $act, $key, [$val] ] }
+      }
+      for (@g) {
+        my ($act, $key, $vals) = @$_;
+        my $to = $proxy;
+        if ($act eq "block") { unless (defined $block) { $block = "ks-block"; push @$outs, { tag => $block, protocol => "blackhole" } } $to = $block }
+        if ($act eq "direct") { unless (defined $direct) { $direct = "ks-direct"; push @$outs, { tag => $direct, protocol => "freedom" } } $to = $direct }
+        my $rule = { $key => $vals, outboundTag => $to };
+        push @prof, $rule;
+        if ($act eq "direct") { $egress{rules} = 1; push @direct, "profile-rule\t" . $J->encode($rule) }
+      }
+      # its block and proxy rules sit in front of the direct ones and shadow them: with anything
+      # of it going direct, the whole profile in order is approved (review B1)
+      push @direct, "profile\t" . $J->encode(\@prof) if defined $direct && grep { $_->{outboundTag} eq $direct } @prof;
+      push @added, { kind => "routing-profile", items => [$pname] };
+    }
+    splice @direct, $outat, 0, @outlines if @direct;
+    unshift @report, (map { { rule => rule_text($_), from => "killswitch", xray => $_ } } @ours),
+      (map { { rule => rule_text($_), from => "profile", profile => $pname, xray => $_ } } @prof);
+    $rt{rules} = [ @ours, @prof, @rules ];
     # DNS: the system resolver is ourselves (127.0.0.1:53), fakedns would outlive the core
     if (ref $cfg{dns} eq "HASH" && ref $cfg{dns}{servers} eq "ARRAY") {
       $cfg{dns}{servers} = [ grep { my $s = ref $_ eq "HASH" ? $_->{address} // "" : $_ // "";
@@ -2071,6 +2134,93 @@ KS_XRAY_PL='
   }
 '
 
+# A named routing profile (ADR 0034, #30), the person's choice in the app, as "x-ks-routing":
+# {"name": "...", "order": ["block","proxy","direct"], "block"|"proxy"|"direct": {"sites": [...],
+# "ips": [...]}}. Sites: domain:x (or bare x), full:x, keyword:x, geosite:x; IPs: a CIDR, geoip:cc,
+# geoip:private. routing_hint gives the entries in the profile's order as [action, site|ip, type,
+# value] and what it leaves out ({section, item, reason}: regexp:, ext:, negations and anything
+# else unsupported, a bad value, GEOSITE/GEOIP without the shipped geodata, which is never
+# downloaded, or a code the shipped KS_GEOSITE_DAT/KS_GEOIP_DAT lacks); a malformed hint dies
+# (the whole import is refused, as with any malformed profile).
+# shellcheck disable=SC2016 # perl, not shell
+KS_ROUTING_PL='
+  use Socket ();
+  sub rt_site { my $e = shift;
+    my $d = qr/(?=[^\s]{1,253}\z)[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*/;
+    return ("geosite", lc $1) if $e =~ /\Ageosite:([A-Za-z0-9][A-Za-z0-9._-]{0,63})\z/;
+    return ("full", lc $1) if $e =~ /\Afull:\.?($d)\z/;
+    return ("keyword", lc $1) if $e =~ /\Akeyword:([A-Za-z0-9._-]{1,64})\z/;
+    return ("domain", lc $1) if $e =~ /\A(?:domain:)?\.?($d)\z/;
+    return (undef, undef, $e =~ /\A(geosite|full|keyword|domain):/ ? "bad-value" : $e =~ /\A[a-z]+:/ ? "unsupported" : "bad-value") }
+  sub rt_ip { my $e = shift;
+    return ("geoip", lc $1) if $e =~ /\Ageoip:([A-Za-z]{2}|private)\z/;
+    return (undef, undef, "unsupported") if $e =~ /\A[a-z]+:/;
+    if ($e =~ /\A([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(?:\/([0-9]{1,2}))?\z/) {
+      return (undef, undef, "bad-value") if grep({ $_ > 255 } $1, $2, $3, $4) || (defined $5 && $5 > 32);
+      return ("cidr4", ($1 + 0) . "." . ($2 + 0) . "." . ($3 + 0) . "." . ($4 + 0) . "/" . ($5 // 32));
+    }
+    # the captures copied first: the next match would reset them (Codex P2)
+    if (my ($a6, $l6) = $e =~ /\A([0-9A-Fa-f:.]{2,45})(?:\/([0-9]{1,3}))?\z/) {
+      return ("cidr6", lc($a6) . "/" . ($l6 // 128)) if $a6 =~ /:/ && Socket::inet_pton(Socket::AF_INET6(), $a6) && (!defined $l6 || $l6 <= 128);
+    }
+    (undef, undef, "bad-value") }
+  # the codes (lists) of a v2ray geodata file (geosite.dat, geoip.dat): protobuf, a list of
+  # entries (field 1) whose own field 1 is the code. Read once per run; {} when unreadable
+  my %DAT;
+  sub dat_codes { my $f = shift;
+    return $DAT{$f} //= do { my %c;
+      if (open my $fh, "<:raw", $f) { local $/; my $d = <$fh>; close $fh;
+        my ($p, $n) = (0, length $d);
+        my $vi = sub { my ($v, $s) = (0, 0); while ($p < $n) { my $b = ord substr($d, $p++, 1); $v |= ($b & 0x7f) << $s; return $v unless $b & 0x80; $s += 7 } -1 };
+        while ($p < $n) {
+          my $tag = $vi->(); my $len = $vi->();
+          last unless $tag == 0x0a && $len >= 0 && $p + $len <= $n;
+          my $end = $p + $len;
+          if ($vi->() == 0x0a) { my $l = $vi->(); $c{ lc substr($d, $p, $l) } = 1 if $l > 0 && $p + $l <= $end }
+          $p = $end;
+        }
+      }
+      \%c } }
+  sub routing_hint { my ($h, $gs, $gi) = @_;
+    die "x-ks-routing: не объект\n" unless ref $h eq "HASH";
+    for (sort keys %$h) { die "x-ks-routing: незнакомый ключ «$_»\n" unless /\A(name|order|block|proxy|direct)\z/ }
+    my $name = $h->{name};
+    # up to 64 characters as the app allows, not bytes (the JSON is read as UTF-8 bytes)
+    my $chars = $name;
+    utf8::decode($chars) if defined $chars && !ref $chars && $chars !~ /[^\x00-\xff]/;
+    die "x-ks-routing: имя профиля\n" unless defined $name && !ref $name && length $name && length $chars <= 64 && $name !~ /[\x00-\x1f\x7f]/;
+    my @order = qw(block proxy direct);
+    if (exists $h->{order}) {
+      die "x-ks-routing: order — block, proxy и direct в каком-то порядке\n"
+        unless ref $h->{order} eq "ARRAY" && join(",", sort map { ref $_ ? "?" : $_ } @{ $h->{order} }) eq "block,direct,proxy";
+      @order = @{ $h->{order} };
+    }
+    my (@out, @dropped); my $n = 0;
+    for my $act (@order) {
+      next unless exists $h->{$act};
+      my $l = $h->{$act};
+      die "x-ks-routing: $act — не объект\n" unless ref $l eq "HASH";
+      for (sort keys %$l) { die "x-ks-routing: $act — незнакомый ключ\n" unless /\A(sites|ips)\z/ }
+      for my $kind (qw(sites ips)) {
+        next unless exists $l->{$kind};
+        die "x-ks-routing: $act.$kind — не список\n" unless ref $l->{$kind} eq "ARRAY";
+        for my $e (@{ $l->{$kind} }) {
+          die "x-ks-routing: запись — не строка\n" if ref $e || !defined $e;
+          die "x-ks-routing: больше 10000 записей\n" if ++$n > 10000;
+          my ($t, $v, $why) = $kind eq "sites" ? rt_site($e) : rt_ip($e);
+          $why //= "geodata:geosite" if $t && $t eq "geosite" && !$gs;
+          $why //= "geodata:geoip" if $t && $t eq "geoip" && !$gi;
+          # a code the shipped file lacks: the core would refuse the whole config (review S3)
+          $why //= "geodata-code:geosite" if $t && $t eq "geosite" && $ENV{KS_GEOSITE_DAT} && !dat_codes($ENV{KS_GEOSITE_DAT})->{$v};
+          $why //= "geodata-code:geoip" if $t && $t eq "geoip" && $ENV{KS_GEOIP_DAT} && !dat_codes($ENV{KS_GEOIP_DAT})->{$v};
+          if ($why) { push @dropped, { section => "routing-profile", item => substr($e =~ s/[\x00-\x1f\x7f]/?/gr, 0, 256), reason => $why }; next }
+          push @out, [ $act, $kind eq "sites" ? "site" : "ip", $t, $v ];
+        }
+      }
+    }
+    ($name, \@out, \@dropped) }
+'
+
 # Perl shared by the generator's checks and its report: rd/wr read and write JSON files, split_rule
 # takes a mihomo rule apart the way mihomo does (TYPE,PAYLOAD,TARGET[,options]; MATCH,TARGET;
 # AND|OR|NOT,(…),TARGET), rule_problem says why the core would not take it ("" = fine).
@@ -2144,6 +2294,8 @@ core_report() {
     my $ours = () = $lines->("$W/ours");
     my @rules;
     push @rules, { rule => $final->[$_], from => "killswitch" } for 0 .. $ours - 1;
+    my $prof = rd("$W/profile-rules.json");
+    push @rules, map { { rule => $_, from => "profile", profile => $prof->{name} } } @{ ref $prof eq "HASH" ? $prof->{rules} : [] };
     my $default = exists $notes{"default-rule"};
     for my $i (0 .. $#$orig) {
       next if $gone{$i};
@@ -2214,6 +2366,10 @@ json_edit() {
 # definition of every rule provider such a rule uses (its url or payload is the real list of
 # what goes direct), then every provider whose download proxy the profile set or that an http
 # provider lacks, which means a direct download (KS-DNS, our default, is not printed).
+# KS_PROFILE_RULES=n: the first n rules are the person's routing profile (ADR 0034), printed as
+# "profile-rule" (a subscription's rule of the same text is another approval); when one of them can
+# go direct, all n in order are printed too ("profile"), since its block and proxy rules shadow its
+# direct ones (review B1).
 direct_sig() {
   KS_DNS=$KS_DNS /usr/bin/perl -MJSON::PP -e '
     sub rd { local $/; open my $f, "<", $_[0] or die; JSON::PP->new->decode(<$f>) }
@@ -2236,12 +2392,17 @@ direct_sig() {
         qw(name type proxies filter exclude-filter exclude-type include-all include-all-proxies include-all-providers) }), "\n";
     }
     my %used;
-    for my $rule (@$r) {
+    my $np = $ENV{KS_PROFILE_RULES} || 0;
+    my $pdirect;
+    for my $i (0 .. $#$r) {
+      my $rule = $r->[$i];
       my $t = ref $rule ? $c->encode($rule) : $rule;
       next unless grep { $d{$_} || $d{uc $_} } map { s/^[\s(]+|[\s)]+$//gr } split /,/, $t;
-      print "rule\t$t\n";
+      print $i < $np ? "profile-rule\t$t\n" : "rule\t$t\n";
+      $pdirect = 1 if $i < $np;
       $used{$1} = 1 while $t =~ /RULE-SET\s*,\s*([^,()\s]+)/gi;
     }
+    print "profile\t", $c->encode([ @$r[0 .. $np - 1] ]), "\n" if $pdirect;
     for my $n (sort keys %used) {
       my %x = ref $p->{$n} eq "HASH" ? %{ $p->{$n} } : (missing => JSON::PP::true);
       delete $x{proxy} if defined $x{proxy} && $x{proxy} eq $ENV{KS_DNS};   # ours, see provider-proxy
@@ -2340,8 +2501,8 @@ refresh_check() {
   # Approved: the import's DIRECT, the running one, or one the import approved for a switch
   # (direct_unapproved); with no record of an import at all, only an import
   if { [ -s "$3" ] || [ -s "$APPROVED_DIRECT" ]; } && ! cmp -s "$3" "$APPROVED_DIRECT" &&
-     { [ ! -f "$APPROVED_DIRECT" ] || direct_unapproved "$3"; }; then
-    echo "Профиль меняет, что идёт мимо VPN (DIRECT): нужно подтверждение паролем администратора" >&2
+     { [ ! -f "$APPROVED_DIRECT" ] || { direct_unapproved "$3" && ! direct_subset "$3"; }; }; then
+    echo "Профиль меняет, что идёт мимо VPN (DIRECT)$(direct_parts "$3"): нужно подтверждение паролем администратора" >&2
     rc=3
   fi
   return "$rc"
@@ -2361,6 +2522,36 @@ core_commit() {
   mv "$tmp.pins" "$PINS"; mv "$tmp.direct" "$CORE_DIR/direct"; rm -f "$tmp.approved"
   core_publish "$tmp"
   mv "$tmp" "$(core_conf)"
+}
+
+# direct_subset <direct>: only the person's routing profile went direct less (ADR 0034, review S5,
+# re-review F1): every line but the profile's own ("profile-rule", "profile") and the freedom
+# outbounds ("outbound") is the approved signature's, in the same order, and each of those is one
+# of the approved ones. Whole lines of a subscription's rules may not be fewer: one to a group or
+# balancer that can also go direct shields the DIRECT rules behind it (and split apps' rules, KS's
+# own, must not be taken over by a subscription's rule of the same text).
+direct_subset() {
+  [ -f "$APPROVED_DIRECT" ] || return 1
+  local own=$'^(profile-rule|profile|outbound)\t' ob=$'^outbound\t'
+  cmp -s <(grep -vE "$own" -- "$1") <(grep -vE "$own" -- "$APPROVED_DIRECT") &&
+    ! { grep -E $'^(profile-rule|profile)\t' -- "$1" || :; } | grep -qvxF -f "$APPROVED_DIRECT" &&
+    # the outbound lines are all the approved ones in their order, or none (nothing goes direct
+    # any more): an untagged first one is Xray's default, whose "default" line names no tag, so
+    # one dropped or moved would make another the default (re-review 2 N-A, Codex P1)
+    { ! grep -qE "$ob" -- "$1" || cmp -s <(grep -E "$ob" -- "$1") <(grep -E "$ob" -- "$APPROVED_DIRECT"); }
+}
+
+# direct_parts <direct>: which part of the signature is not the approved one, for the app to say
+# (re-review F4): " [profile]" (the routing profile's lines), " [subscription]" (the rest; a freedom
+# outbound only when one was approved before, else it came with the profile), or both.
+direct_parts() {
+  local a=$APPROVED_DIRECT p="" s=""
+  [ -f "$a" ] || a=/dev/null
+  { grep -E $'^(profile-rule|profile)\t' -- "$1" || :; } | grep -qvxF -f "$a" && p=profile
+  cmp -s <(grep -vE $'^(profile-rule|profile|outbound)\t' -- "$1") <(grep -vE $'^(profile-rule|profile|outbound)\t' -- "$a") || s=subscription
+  if grep -q $'^outbound\t' -- "$a" && { grep -E $'^outbound\t' -- "$1" || :; } | grep -qvxF -f "$a"; then s=subscription; fi
+  [ -n "$p$s" ] || s=subscription
+  if [ -n "$p" ] && [ -n "$s" ]; then echo " [$p,$s]"; else echo " [$p$s]"; fi
 }
 
 # direct_unapproved <direct>: a generated config for another Xray host sends past the VPN what

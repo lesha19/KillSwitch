@@ -116,6 +116,9 @@ final class RoutingReportTests: XCTestCase {
         // the own DoH and own addresses of sites replace the template's (ADR 0031, 0033): never the raw code
         XCTAssertEqual(RoutingReport.Dropped.reasonText("own-doh"), "Вместо него — твой DNS-over-HTTPS")
         XCTAssertEqual(RoutingReport.Dropped.reasonText("own-hosts"), "Подходила под твой адрес сайта — убрана для всех имён")
+        // a routing profile's code the shipped geodata lacks (ADR 0034)
+        XCTAssertEqual(RoutingReport.Dropped.reasonText("geodata-code:geosite"), "Такой категории сайтов нет в базе (geosite)")
+        XCTAssertEqual(RoutingReport.Dropped.reasonText("geodata-code:geoip"), "Такой страны нет в базе стран (geoip)")
     }
 
     func testTakenDNSAndEgressAsText() throws {
