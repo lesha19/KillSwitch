@@ -56,7 +56,7 @@ struct RoutingReport: Decodable, Equatable, Sendable {
     }
 
     struct Dropped: Decodable, Equatable, Sendable {
-        /// profile, rules, sniffer, dns (and «app» for what the app itself left out)
+        /// profile, rules, sniffer, dns, servers (an Xray host left out; and «app» for what the app itself left out)
         var section: String
         var item: String
         var reason: String
@@ -220,6 +220,7 @@ extension RoutingReport.Dropped {
         case "rules": String(localized: "Правило")
         case "sniffer": String(localized: "Распознавание сайтов")
         case "dns": "DNS"
+        case "servers": String(localized: "Сервер")
         case "app": String(localized: "Раздел подписки")
         default: String(localized: "Раздел подписки")
         }
@@ -251,6 +252,15 @@ extension RoutingReport.Dropped {
         case "parse": return String(localized: "Не удалось разобрать правило")
         case "own-doh": return String(localized: "Вместо него — твой DNS-over-HTTPS")
         case "own-hosts": return String(localized: "Подходила под твой адрес сайта — убрана для всех имён")
+        // a host of an Xray subscription left out (section "servers")
+        case "address": return String(localized: "Адрес сервера не годится (например, 0.0.0.0 — заглушка панели)")
+        case "tag": return String(localized: "Тег ks-… занят KillSwitch")
+        case "selector": return String(localized: "Балансировщик или проверка выбирают служебный или прямой выход")
+        case "fallback": return String(localized: "Запасной выход балансировщика называет выход, которого в этом сервере нет")
+        case "download": return String(localized: "Адрес в настройках транспорта, который KillSwitch не закрепляет")
+        case "case": return String(localized: "Ключ или служебное значение записаны необычно (другой регистр, не латинские буквы), KillSwitch не может их проверить")
+        case "protocol": return String(localized: "Тип сервера, который KillSwitch не поддерживает (например, hysteria2)")
+        case "transport": return String(localized: "Транспорт связывается не только с сервером, но и с другими адресами")
         default: return reason
         }
     }

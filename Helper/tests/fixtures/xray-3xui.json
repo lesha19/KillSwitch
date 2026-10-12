@@ -1,0 +1,24 @@
+[
+  {
+    "remarks": "🇩🇪 3x-ui",
+    "dns": {"servers": ["1.1.1.1", {"address": "77.88.8.8", "domains": ["geosite:category-ru"]}]},
+    "inbounds": [{"tag": "socks", "port": 10808, "listen": "127.0.0.1", "protocol": "socks", "settings": {"udp": true}}],
+    "outbounds": [
+      {"tag": "proxy", "protocol": "vless",
+       "settings": {"vnext": [{"address": "203.0.113.30", "port": 443,
+         "users": [{"id": "00000000-0000-4000-8000-000000000030", "encryption": "none", "flow": "xtls-rprx-vision"}]}]},
+       "streamSettings": {"network": "tcp", "security": "reality",
+         "realitySettings": {"serverName": "www.example.com", "fingerprint": "chrome",
+           "publicKey": "Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBrjqnAw", "shortId": "6ba85179e30d4fc2"},
+         "sockopt": {"tcpNoDelay": true}}},
+      {"tag": "direct", "protocol": "freedom",
+       "settings": {"domainStrategy": "UseIPv4", "fragment": {"packets": "tlshello", "length": "100-200", "interval": "10-20"}},
+       "streamSettings": {"sockopt": {"tcpNoDelay": true, "domainStrategy": "UseIPv4"}}},
+      {"tag": "block", "protocol": "blackhole"}
+    ],
+    "routing": {"domainStrategy": "IPIfNonMatch",
+      "rules": [{"type": "field", "domain": ["geosite:category-ru"], "outboundTag": "direct"},
+                {"type": "field", "ip": ["geoip:private"], "outboundTag": "direct"},
+                {"type": "field", "network": "tcp,udp", "outboundTag": "proxy"}]}
+  }
+]

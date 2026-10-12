@@ -63,6 +63,43 @@ clients the full Xray config (an array of configs, one per host).
   `Сервер` of the subscription's hosts. Delay, traffic and connections answer «С ядром Xray это
   недоступно»; the app hides the connections list. A server switch or a setting restarts the core
   (about a second; pf blocks meanwhile).
+- **Addendum 0.19.1 (#37): per host.** A host the generator cannot take safely is left out, named
+  in the report's `dropped` (section `servers`: `address`, `tag`, `selector`, `fallback`,
+  `download`, `case`), and the others stay; the subscription is refused only when none is left.
+  Panels add placeholder hosts (0.0.0.0, 127.0.0.1) for «подписка истекла», and one must not stop
+  the rest, nor a rebuild of a stored profile. Xray reads JSON keys in any case and some lists as
+  one string, so a key that folds to one the generator reads without being it, and a selector
+  that is not a list, make a host unusable. XHTTP/splithttp download servers are servers like the
+  outbound's own (checked, pinned, approved); observatories never probe through freedom.
+  Second review round: also `protocol` and `transport`. Go folds «ſ» to s and «K» to k, so a
+  key with any non-ASCII character in the sections the config takes makes a host unusable (header
+  names, DNS hosts and rule attributes are data); the case list holds only keys the generator
+  reads. A selector is unset only when null (`""` is `[""]` to Xray, a prefix of every tag). A
+  host of an unknown type or without a usable address is left out too; a name that does not
+  resolve, a duplicate tag and a chain through a missing outbound still refuse the subscription
+  (on an import a lookup may fail by chance, and a host left out then would come back with a
+  refresh unapproved). A rebuild from the kept pins leaves out a host whose XHTTP download name
+  has no pin (0.19.0 did not pin those) instead of failing. Stream settings were measured on Xray
+  26.9.30: `transport` covers an ECH config fetched from a DNS URL (`echConfigList` with `://`,
+  dialled by the system dialer past routing), finalmask `realm` (STUN, a rendezvous server),
+  `xdns` (resolvers), `xicmp` (raw ICMP), `udphop` with `remoteIPs`, and the `xdrive` network.
+  `echSockopt` (the ECH lookup's socket) is treated like `sockopt`; a TLS `masterKeyLog` is
+  removed. Left as they are: `addressPortStrategy` and `domainStrategy` of a sockopt act only on
+  a destination given by name, and every server destination is pinned to an address; client
+  `certificates` files must parse as a certificate and key, so they cannot carry another file
+  out; the other finalmask types (fragment, noise, header-custom, mkcp, salamander, sudoku, xmc)
+  only change the bytes to the server.
+  Third round: the subscription is read as strict UTF-8 (invalid bytes, which Xray reads as
+  U+FFFD, refuse it), decoded as text and turned back into UTF-8 bytes for the checks, so `\u`
+  escapes and raw UTF-8 are the same. Every value the checks read or match on (tags, selectors,
+  protocol, network/method, security, mask type, addresses, ports, dialerProxy, ECH, strategies:
+  one list, `ident_ok`) must be ASCII, or the host is unusable (`case`): Go trims Unicode
+  whitespace, lowers «İ» to i and maps bad bytes to U+FFFD where Perl does neither; a mutation
+  table in core-xray-fuzz.sh covers each value. ASCII whitespace stays allowed: Perl and Go treat
+  it alike (the DNS filter trims it as Go does). The burst observatory's
+  `pingConfig.connectivity` is fetched by Xray itself past routing (measured: requested with a
+  blackhole as the only outbound), so it is removed; `destination` probes go through the
+  observed outbounds.
 
 ## Consequences
 

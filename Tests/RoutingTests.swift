@@ -121,6 +121,21 @@ final class RoutingReportTests: XCTestCase {
         XCTAssertEqual(RoutingReport.Dropped.reasonText("geodata-code:geoip"), "Такой страны нет в базе стран (geoip)")
     }
 
+    /// Hosts of an Xray subscription the helper left out (section "servers", 0.19.1).
+    func testLeftOutHostsInWords() {
+        XCTAssertEqual(["address", "tag", "selector", "fallback", "download", "case", "protocol", "transport"].map(RoutingReport.Dropped.reasonText), [
+            "Адрес сервера не годится (например, 0.0.0.0 — заглушка панели)",
+            "Тег ks-… занят KillSwitch",
+            "Балансировщик или проверка выбирают служебный или прямой выход",
+            "Запасной выход балансировщика называет выход, которого в этом сервере нет",
+            "Адрес в настройках транспорта, который KillSwitch не закрепляет",
+            "Ключ или служебное значение записаны необычно (другой регистр, не латинские буквы), KillSwitch не может их проверить",
+            "Тип сервера, который KillSwitch не поддерживает (например, hysteria2)",
+            "Транспорт связывается не только с сервером, но и с другими адресами",
+        ])
+        XCTAssertEqual(RoutingReport.Dropped(section: "servers", item: "Плохой", reason: "address").sectionTitle, "Сервер")
+    }
+
     func testTakenDNSAndEgressAsText() throws {
         let report = try RoutingReport(data: Self.sample)
         XCTAssertEqual(report.dnsRows.map(\.key), ["direct-nameserver", "nameserver-policy", "respect-rules"])

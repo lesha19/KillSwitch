@@ -60,7 +60,7 @@ ks_clean_env
 set -u
 umask 022
 
-KS_VERSION="0.19.0" # the app's version (project.yml); the app compares the whole file anyway
+KS_VERSION="0.19.1" # the app's version (project.yml); the app compares the whole file anyway
 DIR="/Library/KillSwitch"
 ANCHOR="com.apple/killswitch"
 FLAG="$DIR/disabled"     # contains epoch when to re-enable, 0 = never
@@ -1591,7 +1591,7 @@ core_generate_xray() (
   [ "$(wc -c < "$in")" -le 20000000 ] || fail "Профиль слишком большой"
   cp "$in" "$w/in.json" || exit 1
   # pass 1: checked; the server host names to pin, one per line
-  W=$w PROTOS=$XRAY_PROTOCOLS /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' check()' > "$w/hosts" || exit 1
+  W=$w PROTOS=$XRAY_PROTOCOLS PINS=${KS_PINS:-} /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' check()' > "$w/hosts" || exit 1
   : > "$w/pins"
   while IFS= read -r h; do
     [ -n "$h" ] || continue
@@ -1601,7 +1601,7 @@ core_generate_xray() (
     printf '%s\t%s\n' "$h" "$a" >> "$w/pins"
   done < "$w/hosts"
   # pass 2: the config and what goes with it
-  W=$w PROTOS=$XRAY_PROTOCOLS PICK=$(setting xrayserver "") BLOCK="$(block_geosites | paste -sd" " -)" DOH=$(doh_url) \
+  W=$w PROTOS=$XRAY_PROTOCOLS PINS=${KS_PINS:-} PICK=$(setting xrayserver "") BLOCK="$(block_geosites | paste -sd" " -)" DOH=$(doh_url) \
     HOSTS="$(hosts_entries /dev/null | paste -sd, -)" APPS=$(setting splitapps "") MULTIHOP=$(setting multihop off) \
     GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) GEOIP=$([ -s "$CORE_DIR/geoip.dat" ] && echo 1) \
     KS_GEOSITE_DAT="$CORE_DIR/geosite.dat" KS_GEOIP_DAT="$CORE_DIR/geoip.dat" \
@@ -1624,12 +1624,29 @@ core_generate_xray() (
     log_event "double VPN off: its entry «$(setting multihop off)»: $(head -1 "$w/multihop-gone")"
     put_setting multihop off || exit 1
   fi
+  # the host picked by hand left out as unusable: the first one runs, and the journal says why
+  pick=$(setting xrayserver "")
+  if [ -n "$pick" ]; then
+    left=$(PICK=$pick /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>);
+      my ($d) = grep { $_->{section} eq "servers" && $_->{item} eq $ENV{PICK} } @{ $r->{dropped} || [] };
+      print "$d->{reason}\t$r->{selected}" if $d && $r->{selected} ne $ENV{PICK}' < "$w/report.json" 2>/dev/null)
+    if [ -n "$left" ]; then
+      case ${left%%	*} in
+        address) why="its server address is unusable" ;; protocol) why="a server type KillSwitch does not take" ;;
+        tag) why="a ks-… tag is KillSwitch's" ;; selector) why="a selector picks KillSwitch's or the direct outbound" ;;
+        fallback) why="the balancer falls back to an outbound that does not exist" ;; download) why="its transport names an address KillSwitch does not pin" ;;
+        transport) why="its transport talks to other addresses than the server" ;; case) why="a key or value Xray reads differently (case, non-Latin letters)" ;;
+        *) why=${left%%	*} ;;
+      esac
+      log_event "xray: server «${pick}» left out of the subscription ($why), «${left#*	}» runs"
+    fi
+  fi
   # an import (KS_APPROVE_ALL): the DIRECT signature of every host, which the admin approves
   # with it, so a passwordless switch can be measured against it (KS-10)
   : > "$w/approved"
   if [ -n "${KS_APPROVE_ALL:-}" ]; then
     mkdir "$w/e" && ln "$w/in.json" "$w/pins" "$w/e/" || exit 1
-    W=$w/e PROTOS=$XRAY_PROTOCOLS BLOCK="$(block_geosites | paste -sd" " -)" DOH=$(doh_url) \
+    W=$w/e PROTOS=$XRAY_PROTOCOLS PINS=${KS_PINS:-} BLOCK="$(block_geosites | paste -sd" " -)" DOH=$(doh_url) \
       GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) GEOIP=$([ -s "$CORE_DIR/geoip.dat" ] && echo 1) \
       KS_GEOSITE_DAT="$CORE_DIR/geosite.dat" KS_GEOIP_DAT="$CORE_DIR/geoip.dat" \
       APPS=$(setting splitapps "") TUN_GW=10.0.0.1/30 FETCH_PORT=$FETCH_PORT API_PORT="" ACCESS="" \
@@ -1650,12 +1667,28 @@ KS_XRAY_PL='
   my $J = JSON::PP->new->canonical;
   sub rd { local $/; open my $f, "<", $_[0] or die "$_[0]\n"; JSON::PP->new->decode(<$f>) }
   sub wr { open my $f, ">", $_[0] or die; print $f JSON::PP->new->canonical->encode($_[1]); close $f or die }
-  sub ipv4 { $_[0] =~ /\A\d{1,3}(\.\d{1,3}){3}\z/ }
+  # dotted decimal only, each part 0-255 without a leading zero: pf would refuse 999.1.1.1 (and
+  # block everything), Xray would take 01.2.3.4 for a name and resolve it (#37)
+  # ([0-9], not \d: after decoding JSON \d also takes other scripts'"'"' digits)
+  sub ipv4 { my @p = $_[0] =~ /\A([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\z/ or return 0; !grep { $_ > 255 || /\A0[0-9]/ } @p }
   sub host { $_[0] =~ /\A[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\z/ }
-  my $LOADED;   # parsed and checked once per run; later loads (approve) get copies, build edits its own
+  my $LOADED; our (@ORIG, @DROPPED, %UNUSABLE, $DETAIL);  # parsed and checked once per run; later loads (approve) get copies, build edits its own
+  # with PINS (a rebuild): the names pinned before, the only addresses it may use
+  our %PINNED = length($ENV{PINS} // "") ? (map { chomp; my ($h, $a) = split /\t/; ($h => $a // "") } do { open my $f, "<", $ENV{PINS} or die "$ENV{PINS}\n"; <$f> }) : ();
   sub load {
     return Storable::dclone($LOADED) if $LOADED;
-    my $a = eval { local $/; open my $f, "<", "$W/in.json" or die; JSON::PP->new->decode(<$f>) };
+    # UTF-8, strictly: Xray reads an invalid byte as U+FFFD, so two tags that differ only there
+    # would be one to it and two to the checks here; decoded as text (\u escapes too), then
+    # every string back to UTF-8 bytes, which the checks and the outputs work on (0.19.1 review 3)
+    my $t = do { local $/; open my $f, "<:raw", "$W/in.json" or die "$W/in.json\n"; <$f> };
+    require Encode;
+    $t = eval { Encode::decode("UTF-8", $t, Encode::FB_CROAK()) } // die "Подписка не в UTF-8: в ней есть байты, которых нет в UTF-8\n";
+    my $bytes; $bytes = sub { my $x = shift;
+      return { map { my $k = $_; utf8::encode($k) if $k =~ /[^\x00-\x7f]/; ($k => $bytes->($x->{$_})) } keys %$x } if ref $x eq "HASH";
+      return [ map { $bytes->($_) } @$x ] if ref $x eq "ARRAY";
+      utf8::encode($x) if defined $x && !ref $x && $x =~ /[^\x00-\x7f]/;
+      $x };
+    my $a = eval { $bytes->(JSON::PP->new->decode($t)) };
     die "Подписка не в формате Xray (нужен JSON-список конфигов Xray)\n"
       unless ref $a eq "ARRAY" && @$a && !grep { ref $_ ne "HASH" || ref $_->{outbounds} ne "ARRAY" } @$a;
     die "Слишком много конфигов в подписке\n" if @$a > 200;
@@ -1664,16 +1697,154 @@ KS_XRAY_PL='
       elsif (ref $x eq "ARRAY") { $walk->($_) for @$x }
       elsif (defined $x && !ref $x && $x =~ /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/) { die "Управляющие символы в подписке\n" } };
     $walk->($a);
+    my @keep;
+    for my $i (0 .. $#$a) {
+      $DETAIL = undef; my $why = unusable($a->[$i]);
+      # (the refusal names an unknown server type, the report only the reason)
+      if (length $why) { push @DROPPED, { section => "servers", item => name_of($a->[$i], $i), reason => $why }; $DROPPED[-1]{detail} = $DETAIL if defined $DETAIL }
+      else { push @keep, $i }
+    }
+    die "В подписке нет ни одного годного сервера (" . join("; ", map { "$_->{item}: $UNUSABLE{ $_->{reason} }" . (defined $_->{detail} ? " «$_->{detail}»" : "") } @DROPPED[0 .. ($#DROPPED < 2 ? $#DROPPED : 2)]) . ")\n"
+      unless @keep;
+    @ORIG = @keep;
+    $a = [ @$a[@keep] ];
     $LOADED = $a;
     $a
   }
   # the server addresses of a proxy outbound, as references to edit in place
-  sub addrs { my $o = shift; my $s = $o->{settings}; return () unless ref $s eq "HASH";
+  sub own_addrs { my $o = shift; my $s = $o->{settings}; return () unless ref $s eq "HASH";
     my @r;
     for my $k (qw(vnext servers)) { push @r, map { \$_->{address} } grep { ref $_ eq "HASH" } @{ ref $s->{$k} eq "ARRAY" ? $s->{$k} : [] } }
-    push @r, \$s->{address} if exists $s->{address} && $o->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/;
+    push @r, \$s->{address} if exists $s->{address} && ($o->{protocol} // "") =~ /\A(vless|vmess|trojan|shadowsocks)\z/;
     @r }
-  sub name_of { my ($c, $i) = @_; my $r = $c->{remarks}; defined $r && !ref $r && length $r ? $r : "#" . ($i + 1) }
+  # XHTTP may download from another server: streamSettings.xhttpSettings.downloadSettings, or the
+  # same inside xhttpSettings.extra; each one a stream setting of its own with address and port (#37)
+  # (splithttpSettings: the older name, still read by Xray)
+  # (read with exists: a hash slice or element aliased by grep would add the missing keys as null)
+  sub downloads { my $o = shift; my $ss = $o->{streamSettings}; return () unless ref $ss eq "HASH";
+    my @x = map { exists $ss->{$_} && ref $ss->{$_} eq "HASH" ? ($ss->{$_}) : () } qw(xhttpSettings splithttpSettings);
+    my @d = map { ((exists $_->{downloadSettings} ? ($_->{downloadSettings}) : ()),
+                   (exists $_->{extra} && ref $_->{extra} eq "HASH" && exists $_->{extra}{downloadSettings} ? ($_->{extra}{downloadSettings}) : ())) } @x;
+    grep { ref $_ eq "HASH" } @d }
+  # a value Xray reads as unset: null or "" (no download address of its own, no chain, no fallback)
+  sub set { my $v = shift; defined $v && (ref $v || length $v) }
+  sub addrs { my $o = shift; (own_addrs($o), map { \$_->{address} } grep { set($_->{address}) } downloads($o)) }
+  # a line break would make one name two in the lists ks core select reads (#37)
+  # (the number is the host'"'"'s place in the subscription, before unusable hosts were left out)
+  sub name_of { my ($c, $i) = @_; my $r = $c->{remarks}; defined $r && !ref $r && length $r ? $r =~ s/[\r\n\t]/ /gr : "#" . (($ORIG[$i] // $i) + 1) }
+  # a selector of a balancer or an observatory that also picks KillSwitch'"'"'s outbounds (ks-…)
+  sub picks_ours { my $s = shift; defined $s && !ref $s && (index("ks-", $s) == 0 || $s =~ /\Aks-/) }
+  # Why a host cannot be used, "" if it can. Such a host is left out (and named in the report),
+  # the others stay: panels add placeholder hosts at 0.0.0.0 or 127.0.0.1 («подписка истекла»),
+  # and one of them must not refuse the whole subscription, or a stored one its rebuilds.
+  %UNUSABLE = (address => "адрес сервера не годится", tag => "тег ks-… занят KillSwitch",
+    selector => "выбирает outbound KillSwitch (ks-…) или прямой", case => "ключ или служебное значение записаны необычно (другой регистр, не латинские буквы)", fallback => "запасной выход балансировщика называет outbound, которого в этом сервере нет",
+    download => "адрес в настройках транспорта, которого KillSwitch не закрепляет", protocol => "тип сервера, который KillSwitch не берёт",
+    transport => "транспорт ходит к адресам помимо сервера (ECH через DNS, realm, xdns, xicmp, udphop, xdrive)");
+  # Xray reads JSON keys in any case (Go): «Selector», «Address» or «TAG» are the keys below to it,
+  # but not to the checks here, which read the exact spelling. A key that folds to one of them
+  # without being it, or two keys of one object that fold alike, make the host unusable (0.19.1
+  # review). Go also folds «ſ» (U+017F) to s and «K» (U+212A) to k, raw or escaped, so a key with
+  # any character outside ASCII is refused the same way (second round). Names of HTTP headers, DNS
+  # hosts and rule attributes are data, not keys of Xray. Only the sections the config takes.
+  # (the keys the checks and the edits below read in what the config takes as it is; a section or
+  # a routing key in another case is not taken at all, a rule with one is dropped)
+  my %KEYS = map { (lc $_ => $_) } qw(tag protocol settings vnext servers address reverse streamSettings sendThrough
+    proxySettings sockopt dialerProxy interface mark customSockopt network security tlsSettings realitySettings serverName
+    xhttpSettings splithttpSettings wsSettings httpupgradeSettings downloadSettings extra host headers selector fallbackTag
+    subjectSelector pingConfig connectivity);
+  sub odd_case { my $x = shift;
+    if (ref $x eq "HASH") {
+      my %seen;
+      for my $k (keys %$x) {
+        my $f = lc $k;
+        return 1 if $k =~ /[^\x00-\x7f]/ || $seen{$f}++ || (exists $KEYS{$f} && $KEYS{$f} ne $k);
+        next if $k =~ /\A(headers|hosts|attrs)\z/;
+        return 1 if odd_case($x->{$k});
+      }
+    } elsif (ref $x eq "ARRAY") { odd_case($_) and return 1 for @$x }
+    0 }
+  # A transport that talks to other addresses than its (pinned) server, measured on Xray 26.9.30
+  # (0.19.1 review 2): an ECH config fetched from a DNS server (echConfigList with "://", dialled
+  # by the system, past routing), finalmask realm (STUN, a rendezvous server), xdns (resolvers),
+  # xicmp (raw ICMP to any address), udphop to other addresses (remoteIPs), xdrive (a storage
+  # service). Keys in any case and mask types lowercased, as Xray reads them.
+  sub far_transport { my $x = shift;
+    if (ref $x eq "HASH") {
+      for my $k (keys %$x) { my ($l, $v) = (lc $k, $x->{$k});
+        return 1 if $l eq "remoteips" && set($v);
+        return 1 if defined $v && !ref $v && (($l eq "echconfiglist" && $v =~ m{://}) || ($l =~ /\A(network|method)\z/ && lc $v eq "xdrive")
+          || ($l eq "type" && lc($v) =~ /\A(realm|xdns|xicmp)\z/));
+        return 1 if far_transport($v);
+      }
+    } elsif (ref $x eq "ARRAY") { far_transport($_) and return 1 for @$x }
+    0 }
+  # every socket setting in a stream (sockopt, the ECH lookup'"'"'s echSockopt, in downloads too)
+  sub sockopts { my $x = shift; my @r;
+    if (ref $x eq "HASH") { for (keys %$x) { push @r, $x->{$_} if /\A(sockopt|echSockopt)\z/i && ref $x->{$_} eq "HASH"; push @r, sockopts($x->{$_}) } }
+    elsif (ref $x eq "ARRAY") { push @r, sockopts($_) for @$x }
+    @r }
+  # The values the checks read or match on (tags, selectors, types, addresses, ports, strategies)
+  # are ASCII text: Go trims Unicode whitespace that Perl keeps, lowers «İ» to i, reads invalid
+  # bytes as U+FFFD (0.19.1 review 3). Any other character there makes the host unusable; names,
+  # domains, header values and the data maps stay free text.
+  my %IDENT = map { (lc $_ => 1) } qw(tag outboundTag balancerTag inboundTag fallbackTag selector subjectSelector dialerProxy
+    protocol network method security type address port servers echConfigList remoteIPs domainStrategy queryStrategy);
+  sub ident_ok { my $v = shift; ref $v eq "ARRAY" ? !grep { !ident_ok($_) } @$v : ref $v || !defined $v || $v =~ /\A[\x09-\x0d\x20-\x7e]*\z/ }
+  sub odd_value { my $x = shift;
+    if (ref $x eq "HASH") {
+      for my $k (keys %$x) {
+        next if $k =~ /\A(headers|hosts|attrs)\z/;
+        return 1 if ($IDENT{ lc $k } && !ident_ok($x->{$k})) || odd_value($x->{$k});
+      }
+    } elsif (ref $x eq "ARRAY") { odd_value($_) and return 1 for @$x }
+    0 }
+  sub unusable { my $c = shift; my %tags;
+    return "case" if odd_value([ @$c{ grep { exists $c->{$_} } qw(outbounds routing dns policy observatory burstObservatory) } ]);
+    return "case" if odd_case([ @$c{ grep { exists $c->{$_} } qw(outbounds routing dns policy observatory burstObservatory) },
+      map { ref $_ eq "HASH" && exists $_->{sniffing} ? $_->{sniffing} : () } @{ ref $c->{inbounds} eq "ARRAY" ? $c->{inbounds} : [] } ]);
+    my @outs = grep { ref $_ eq "HASH" } @{ $c->{outbounds} };
+    for my $o (@outs) { my $t = $o->{tag}; $tags{$t} = 1 if defined $t && !ref $t; return "tag" if defined $t && !ref $t && $t =~ /\Aks-/ }
+    for my $o (@outs) {
+      # a server type KillSwitch does not take (hysteria2, wireguard…), or no usable address:
+      # missing, IPv6 (pf lets the core out to IPv4 servers only), not a host name (NEW-5 of the
+      # 0.19.1 review: these refused the whole subscription)
+      unless (($o->{protocol} // "") =~ /\A($ENV{PROTOS})\z/) { $DETAIL = ref $o->{protocol} ? "?" : $o->{protocol} if set($o->{protocol}); return "protocol" }
+      for my $r (addrs($o)) { my $h = $$r;
+        return "address" if !defined $h || ref $h || !length $h;
+        return "address" if ipv4($h) ? $h =~ /\A(0|127|22[4-9]|2[3-5][0-9])\./ : $h =~ /\A[0-9.]+\z/ || !host($h);   # good_server_ip
+      }
+      # every address in the stream settings must be one downloads() knows (and so pins)
+      my $n = 0; my $count; $count = sub { my $x = shift;
+        if (ref $x eq "HASH") { for (keys %$x) { $n++ if $_ eq "address" && set($x->{$_}); $count->($x->{$_}) } } elsif (ref $x eq "ARRAY") { $count->($_) for @$x } };
+      $count->($o->{streamSettings});
+      return "transport" if far_transport($o->{streamSettings});
+      my @d = downloads($o);
+      return "download" if $n > grep { set($_->{address}) } @d;
+      # a rebuild from the kept pins (no DNS): 0.19.0 did not pin download names, and one without
+      # a pin would fail every rebuild (rotation, settings, a switch) until the next import
+      return "download" if length($ENV{PINS} // "") && grep { my $h = $_->{address}; set($h) && !ref $h && !ipv4($h) && host($h) && !$PINNED{$h} } @d;
+      return "download" if grep { downloads({ streamSettings => $_ }) } @d;
+    }
+    my $rt = ref $c->{routing} eq "HASH" ? $c->{routing} : {};
+    # (Xray also takes a selector as one string, which the checks here would not see; "" too, as
+    # [""], which picks every outbound: only null is no selector)
+    for my $b (grep { ref $_ eq "HASH" } @{ ref $rt->{balancers} eq "ARRAY" ? $rt->{balancers} : [] }) {
+      return "selector" if defined $b->{selector} && ref $b->{selector} ne "ARRAY";
+      return "selector" if grep { picks_ours($_) } @{ ref $b->{selector} eq "ARRAY" ? $b->{selector} : [] };
+      my $f = $b->{fallbackTag};
+      return "fallback" if set($f) && (ref $f || !$tags{$f});   # "": no fallback
+    }
+    # an observatory probing through a freedom outbound sends its probes, to a URL of the
+    # subscription, past the tunnel and outside the direct signature (0.19.1 review)
+    my @free = map { $_->{tag} } grep { ($_->{protocol} // "") eq "freedom" && set($_->{tag}) && !ref $_->{tag} } @outs;
+    for my $obs (qw(observatory burstObservatory)) {
+      next unless ref $c->{$obs} eq "HASH" && defined $c->{$obs}{subjectSelector};
+      my $sel = $c->{$obs}{subjectSelector};
+      return "selector" if ref $sel ne "ARRAY";
+      return "selector" if grep { my $x = $_; picks_ours($x) || (defined $x && !ref $x && grep { index($_, $x) == 0 } @free) } @$sel;
+    }
+    "" }
   # reached through another outbound of its config (proxySettings, sockopt.dialerProxy)
   # a rule object for the report: at most 16 KB, or left out (the app says it cannot tell)
   sub small { length($J->encode($_[0])) <= 16384 }
@@ -1714,6 +1885,7 @@ KS_XRAY_PL='
         my $p = $o->{protocol} // "";
         die "$n: незнакомый тип сервера «$p» (KillSwitch берёт $ENV{PROTOS})\n" unless $p =~ /\A($ENV{PROTOS})\z/;
         my $t = $o->{tag} // ""; die "$n: два outbound с тегом «$t»\n" if length $t && $tags{$t}++;
+        # (tags ks-…, unusable addresses, selectors and fallbacks: load() left such hosts out)
         for my $r (addrs($o)) {
           my $h = $$r // ""; die "$n: у сервера нет адреса\n" if ref $h || !length $h;
           next if ipv4($h);
@@ -1723,9 +1895,9 @@ KS_XRAY_PL='
         }
       }
       for my $o (@{ $c->{outbounds} }) {
-        my @to = grep { defined } ($o->{proxySettings} && ref $o->{proxySettings} eq "HASH" ? $o->{proxySettings}{tag} : undef,
-                                   ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" ? $o->{streamSettings}{sockopt}{dialerProxy} : undef);
-        for (@to) { die "$n: «" . ($o->{tag} // "?") . "» подключается через несуществующий «$_»\n" if ref $_ || !$tags{$_} }
+        my @to = grep { set($_) } ($o->{proxySettings} && ref $o->{proxySettings} eq "HASH" ? $o->{proxySettings}{tag} : undef,
+                                   map { $_->{dialerProxy} } sockopts($o->{streamSettings}));
+        for (@to) { die "$n: «" . (set($o->{tag}) && !ref $o->{tag} ? $o->{tag} : "?") . "» подключается через несуществующий «" . (ref $_ ? "?" : $_) . "»\n" if ref $_ || !$tags{$_} }
       }
     }
     print "$_\n" for sort keys %hosts;
@@ -1777,7 +1949,9 @@ KS_XRAY_PL='
     my @pings;
     for my $i (0 .. $#$a) {
       my $o = first_proxy($a->[$i]);
-      next if !$o || chained($o);
+      # (a chain the way check() reads one: null or "" is none)
+      next if !$o || (ref $o->{proxySettings} eq "HASH" && set($o->{proxySettings}{tag}))
+        || (ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" && set($o->{streamSettings}{sockopt}{dialerProxy}));
       $o = $J->decode($J->encode($o)); $o->{tag} = "ks-ping-$i";
       push @pings, $o; $servers[$i]{ping} = $o->{tag};
     }
@@ -1840,26 +2014,56 @@ KS_XRAY_PL='
     }
     my $c = $a->[$ci];
     my (@dropped, @added, %unbound);
+    push @dropped, map { { %$_{qw(section item reason)} } } @DROPPED;   # hosts load() left out
     my %keep = map { $_ => 1 } qw(dns routing outbounds policy observatory burstObservatory);
     my %managed = map { $_ => 1 } qw(inbounds log remarks meta);
     for (sort keys %$c) { next if $keep{$_} || $_ eq "x-ks-routing"; push @dropped, { section => "profile", item => $_, reason => $managed{$_} ? "managed" : "not-allowed" } }
     my %cfg = map { exists $c->{$_} ? ($_ => $c->{$_}) : () } keys %keep;
+    # Xray fetches a burst observatory'"'"'s connectivity URL itself, past routing (measured on
+    # 26.9.30): out of the tunnel to an address of the subscription'"'"'s choice (0.19.1 review 3)
+    if (ref $cfg{burstObservatory} eq "HASH" && ref $cfg{burstObservatory}{pingConfig} eq "HASH" && exists $cfg{burstObservatory}{pingConfig}{connectivity}) {
+      delete $cfg{burstObservatory}{pingConfig}{connectivity};
+      push @dropped, { section => "profile", item => "burstObservatory.pingConfig.connectivity", reason => "not-allowed" };
+    }
     my $outs = $cfg{outbounds};
     # bound to no interface (pf lets the core out by its group), server names pinned (ADR 0020)
+    # (customSockopt sets raw socket options, the bound interface among them; also in an XHTTP
+    # download stream, which is pinned like the outbound itself, #37)
     my $tame = sub { my ($o, $t) = @_;
       if (exists $o->{sendThrough}) { delete $o->{sendThrough}; $unbound{$t} = 1 if defined $t }
-      my $so = ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" ? $o->{streamSettings}{sockopt} : undef;
-      for my $k (qw(interface mark)) { if ($so && exists $so->{$k}) { delete $so->{$k}; $unbound{$t} = 1 if defined $t } }
-      for my $r (addrs($o)) {
-        next if ipv4($$r);
+      # a reverse portal through the server (VLESS settings.reverse) is not a client'"'"'s to open
+      delete $o->{settings}{reverse} if ref $o->{settings} eq "HASH" && exists $o->{settings}{reverse};
+      # $net: the network when the stream names none (a download inherits its outbound'"'"'s)
+      my $pinned = sub { my ($r, $ss, $net) = @_;
+        return if ipv4($$r);
         my $h = $$r; $$r = $pin{$h};
-        my $ss = ref $o->{streamSettings} eq "HASH" ? $o->{streamSettings} : undef;
         my $sec = $ss ? $ss->{security} // "" : "";
         if ($sec eq "tls" || $sec eq "reality") {
           my $k = $sec . "Settings"; $ss->{$k} = {} unless ref $ss->{$k} eq "HASH";
           $ss->{$k}{serverName} = $h unless defined $ss->{$k}{serverName} && length $ss->{$k}{serverName};
+        } elsif ($ss) {
+          # without TLS the HTTP transports send the address as Host: the name, as before the pin,
+          # unless the subscription set a Host itself (0.19.1 review)
+          my $k = { ws => "wsSettings", httpupgrade => "httpupgradeSettings", xhttp => "xhttpSettings", splithttp => "splithttpSettings" }
+            ->{ exists $ss->{network} && !ref $ss->{network} ? $ss->{network} : $net // "" };
+          if ($k) {
+            $ss->{$k} = {} unless ref $ss->{$k} eq "HASH";
+            my $hs = $ss->{$k};
+            $hs->{host} = $h unless (exists $hs->{host} && set($hs->{host})) || (ref $hs->{headers} eq "HASH" && grep { lc eq "host" } keys %{ $hs->{headers} });
+          }
         }
+      };
+      my $ss = ref $o->{streamSettings} eq "HASH" ? $o->{streamSettings} : undef;
+      for my $so (sockopts($ss)) {
+        for my $k (qw(interface mark customSockopt)) { if (exists $so->{$k}) { delete $so->{$k}; $unbound{$t} = 1 if defined $t } }
       }
+      # a TLS key log: a file the core would write wherever the subscription says
+      my $nolog; $nolog = sub { my $x = shift;
+        if (ref $x eq "HASH") { for (keys %$x) { if (/\AmasterKeyLog\z/i) { delete $x->{$_} } else { $nolog->($x->{$_}) } } }
+        elsif (ref $x eq "ARRAY") { $nolog->($_) for @$x } };
+      $nolog->($ss);
+      $pinned->($_, $ss) for own_addrs($o);
+      for my $d (downloads($o)) { $pinned->(\$d->{address}, $d, $ss && exists $ss->{network} ? $ss->{network} : undef) if set($d->{address}) }
     };
     my (%tag, %freedom, $dnsout, $block, $direct, $proxy);
     for my $o (@$outs) {
@@ -2006,11 +2210,14 @@ KS_XRAY_PL='
     unshift @report, (map { { rule => rule_text($_), from => "killswitch", xray => $_ } } @ours),
       (map { { rule => rule_text($_), from => "profile", profile => $pname, xray => $_ } } @prof);
     $rt{rules} = [ @ours, @prof, @rules ];
-    # DNS: the system resolver is ourselves (127.0.0.1:53), fakedns would outlive the core
+    # DNS: the system resolver is ourselves (127.0.0.1:53), fakedns would outlive the core, and
+    # any <scheme>+local (udp, tcp, https, h2c, quic…) queries straight past routing (#37)
     if (ref $cfg{dns} eq "HASH" && ref $cfg{dns}{servers} eq "ARRAY") {
+      # (a server that is null, has no address or is not text stops Xray, null with a panic)
       $cfg{dns}{servers} = [ grep { my $s = ref $_ eq "HASH" ? $_->{address} // "" : $_ // "";
-        my $bad = $s =~ /\A(localhost|fakedns)\z/i || $s =~ m{\A(https|tcp|quic)\+local://}i;
-        push @dropped, { section => "dns", item => $s, reason => "bad-value" } if $bad; !$bad } @{ $cfg{dns}{servers} } ];
+        my $x = ref $s ? "" : $s =~ s/\A\s+|\s+\z//gr;
+        my $bad = !length $x || $x =~ /\A(localhost|fakedns(\+\w+)?)\z/i || $x =~ m{\A[a-z0-9]+\+local:}i;
+        push @dropped, { section => "dns", item => ref $s ? "?" : $s, reason => "bad-value" } if $bad; !$bad } @{ $cfg{dns}{servers} } ];
     }
     # the own DoH first; when it gives no answer Xray asks the next one, Cloudflare'"'"'s DoH, also
     # tagged ks-doh, so through a server. The template'"'"'s servers stay only for their own domains
