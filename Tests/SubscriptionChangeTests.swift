@@ -44,11 +44,4 @@ final class SubscriptionChangeTests: XCTestCase {
         XCTAssertNil(SubscriptionChange.replace.xrayFailure(raw: "offline: timed out"))
         XCTAssertNil(SubscriptionChange.same.xrayFailure(raw: XrayProfile.Failure.notXray.errorDescription!))
     }
-
-    /// The backup link belongs to the old subscription: a new link is never fetched through it.
-    func testANewLinkIsNotFetchedThroughTheOldBackup() {
-        XCTAssertEqual(SubscriptionChange.replace.sources(hasBackup: true, vpnRunning: true), [.primary, .primaryViaVPN])
-        XCTAssertEqual(SubscriptionChange.first.sources(hasBackup: true, vpnRunning: false), [.primary])
-        XCTAssertEqual(SubscriptionChange.same.sources(hasBackup: true, vpnRunning: false), [.primary, .backup])
-    }
 }

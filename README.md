@@ -33,8 +33,8 @@ Rules are loaded at boot, before login.
   is fetched with a mihomo User-Agent and Remnawave's device headers (`x-hwid` = hash of the Mac's
   hardware UUID, `x-device-os`, `x-ver-os`, `x-device-model`), reduced to proxies, proxy-groups, rules
   and rule-providers and handed to the helper; a failed update keeps the old config. If the subscription's host does not answer,
-  the app asks again through the core's loopback listener (127.0.0.1:47890, always through the VPN) and
-  then the optional backup link (keychain), and shows which source worked (ADR 0016). A click (adding the
+  the app asks again through the core's loopback listener (127.0.0.1:47890, always through the VPN),
+  and shows which way worked (ADR 0016; the backup link is gone, ADR 0036). A click (adding the
   subscription, «Обновить», a new server) runs `ks core import <file.json>`, with the admin prompt if
   needed. The timer only runs `sudo -n ks core refresh <file.json>` and never prompts; if the helper
   refuses it (exit 3: new server addresses) the app shows «Нужно подтверждение: в подписке новые

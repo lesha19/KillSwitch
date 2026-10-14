@@ -140,6 +140,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   subscription still imports and refreshes, without the profile's rules (with Xray the routing
   report lists `x-ks-routing` among what it left out).
 
+### Removed
+- The backup subscription link (#62, ADR 0036): no «Резервная ссылка» row in Settings › Подписка
+  and no mention of it when adding a link. The subscription is fetched directly, then through the
+  VPN when it is on (ADR 0016). A backup link kept by an older version is deleted from the
+  keychain at launch, and its host no longer counts among the subscription's hosts in «Свои
+  адреса сайтов». A status saved after an update from the backup link still loads (without its
+  «Откуда»).
+
 ### Fixed
 - A double-click on a server in «Серверы» switches once, to the server clicked. The first click
   added it to «Недавние» and moved the rows below, so the second one chose the neighbour and

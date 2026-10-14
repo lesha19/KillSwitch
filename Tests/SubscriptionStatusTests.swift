@@ -15,6 +15,15 @@ final class SubscriptionStatusTests: XCTestCase {
         XCTAssertEqual(old.serverInterval, 12 * 3600)
     }
 
+    /// Saved by 0.16–0.19 after an update from the backup link, which ADR 0036 dropped.
+    func testStatusFromTheBackupLinkKeepsTheRest() throws {
+        let json = Data(#"{"title": "Stork", "lastUpdate": 0, "source": "backupViaVPN"}"#.utf8)
+        let status = try JSONDecoder().decode(SubscriptionStatus.self, from: json)
+        XCTAssertEqual(status.title, "Stork")
+        XCTAssertNotNil(status.lastUpdate)
+        XCTAssertNil(status.source)
+    }
+
     func testStatusRoundTrips() throws {
         let status = SubscriptionStatus(title: "Stork", serverInterval: 6 * 3600, lastUpdate: Date(timeIntervalSince1970: 1_767_225_600))
         XCTAssertEqual(try JSONDecoder().decode(SubscriptionStatus.self, from: JSONEncoder().encode(status)), status)

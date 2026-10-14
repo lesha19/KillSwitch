@@ -182,9 +182,6 @@ private struct VPNSettings: View {
     @State private var editing = false
     @State private var newURL = ""
     @State private var confirmRemove = false
-    @State private var backupRevealed: String?
-    @State private var editingBackup = false
-    @State private var newBackupURL = ""
     @State private var addingServer = false
     @State private var editingApps = false
 
@@ -215,9 +212,6 @@ private struct VPNSettings: View {
                         QRScanButton()
                         if editing { Button("Отмена") { editing = false; newURL = "" } }
                     }
-                }
-                if client.hasURL {
-                    BackupLinkRow(revealed: $backupRevealed, editing: $editingBackup, newURL: $newBackupURL)
                 }
                 Picker("Обновлять", selection: $client.intervalHours) {
                     Text("как просит подписка (\(client.status.serverIntervalHours) ч)").tag(0)
@@ -320,47 +314,6 @@ private struct CoreChoiceSection: View {
                 .disabled(control.busy || control.state == .notInstalled)
             }
         }
-    }
-}
-
-/// «Резервная ссылка» (#11): asked when the main link fails, directly and then through the VPN.
-private struct BackupLinkRow: View {
-    @Environment(VPNClient.self) private var client
-    @Binding var revealed: String?
-    @Binding var editing: Bool
-    @Binding var newURL: String
-
-    var body: some View {
-        if let masked = client.maskedBackupURL, !editing {
-            LabeledContent("Резервная ссылка") {
-                Text(revealed ?? masked).monospaced().textSelection(.enabled).lineLimit(revealed == nil ? 1 : nil)
-            }
-            HStack {
-                Button(revealed == nil ? String(localized: "Показать") : String(localized: "Скрыть")) {
-                    revealed = revealed == nil ? client.revealBackupURL() : nil
-                }
-                Button("Изменить…") { editing = true; revealed = nil }
-                Spacer()
-                Button("Убрать") { revealed = nil; client.removeBackupURL() }
-            }
-        } else {
-            LabeledContent {
-                HStack {
-                    TextField("https://…", text: $newURL).onSubmit(save).accessibilityLabel("Резервная ссылка на подписку")
-                    Button("Сохранить", action: save).disabled(newURL.isEmpty)
-                    if editing { Button("Отмена") { editing = false; newURL = "" } }
-                }
-            } label: {
-                Text("Резервная ссылка")
-                Text("Если основная не открывается, KillSwitch возьмёт подписку по этой.")
-            }
-        }
-    }
-
-    private func save() {
-        client.setBackupURL(newURL)
-        newURL = ""
-        editing = false
     }
 }
 

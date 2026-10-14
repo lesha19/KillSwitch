@@ -26,7 +26,8 @@ extension SubscriptionStatus {
         serverInterval = SubscriptionHeaders.clampedInterval(try container.decodeIfPresent(TimeInterval.self, forKey: .serverInterval))
         lastUpdate = try container.decodeIfPresent(Date.self, forKey: .lastUpdate)
         accountURL = try container.decodeIfPresent(URL.self, forKey: .accountURL)
-        source = try container.decodeIfPresent(SubscriptionSource.self, forKey: .source)
+        // a backup-link source saved before ADR 0036 is no source now, not a lost status
+        source = try? container.decodeIfPresent(SubscriptionSource.self, forKey: .source)
         provider = try container.decodeIfPresent(ProviderInfo.self, forKey: .provider)
     }
 }

@@ -1,28 +1,21 @@
 import XCTest
 
 /// #11: the subscription is asked from its own link first, then through the VPN (the core's
-/// loopback listener, Helper/ks FETCH_PORT), then from the backup link the same two ways.
+/// loopback listener, Helper/ks FETCH_PORT). The backup link is gone (ADR 0036).
 final class SubscriptionSourceTests: XCTestCase {
     func testOrder() {
-        XCTAssertEqual(SubscriptionSource.order(hasBackup: false, vpnRunning: false), [.primary])
-        XCTAssertEqual(SubscriptionSource.order(hasBackup: false, vpnRunning: true), [.primary, .primaryViaVPN])
-        XCTAssertEqual(SubscriptionSource.order(hasBackup: true, vpnRunning: false), [.primary, .backup])
-        XCTAssertEqual(SubscriptionSource.order(hasBackup: true, vpnRunning: true),
-                       [.primary, .primaryViaVPN, .backup, .backupViaVPN])
+        XCTAssertEqual(SubscriptionSource.order(vpnRunning: false), [.primary])
+        XCTAssertEqual(SubscriptionSource.order(vpnRunning: true), [.primary, .primaryViaVPN])
     }
 
     func testWhatEachUses() {
         XCTAssertFalse(SubscriptionSource.primary.viaVPN)
         XCTAssertTrue(SubscriptionSource.primaryViaVPN.viaVPN)
-        XCTAssertTrue(SubscriptionSource.backupViaVPN.usesBackup)
-        XCTAssertFalse(SubscriptionSource.primaryViaVPN.usesBackup)
     }
 
     func testPlainWords() {
         XCTAssertEqual(SubscriptionSource.primary.label, "основная ссылка")
         XCTAssertEqual(SubscriptionSource.primaryViaVPN.label, "основная ссылка через VPN")
-        XCTAssertEqual(SubscriptionSource.backup.label, "резервная ссылка")
-        XCTAssertEqual(SubscriptionSource.backupViaVPN.label, "резервная ссылка через VPN")
     }
 
     func testProxyIsTheCoresListener() throws {
@@ -41,7 +34,7 @@ final class SubscriptionSourceTests: XCTestCase {
     func testStatusKeepsTheSource() throws {
         let old = try JSONDecoder().decode(SubscriptionSource?.self, from: Data("null".utf8))
         XCTAssertNil(old)
-        let data = try JSONEncoder().encode(SubscriptionSource.backupViaVPN)
-        XCTAssertEqual(try JSONDecoder().decode(SubscriptionSource.self, from: data), .backupViaVPN)
+        let data = try JSONEncoder().encode(SubscriptionSource.primaryViaVPN)
+        XCTAssertEqual(try JSONDecoder().decode(SubscriptionSource.self, from: data), .primaryViaVPN)
     }
 }

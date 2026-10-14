@@ -200,9 +200,6 @@ private struct LinkRequestView: View {
             .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         if current != nil {
             Text("Текущая подписка останется, если новая не ответит.").font(.callout).foregroundStyle(.secondary)
-            if client.maskedBackupURL != nil {
-                Text("Резервная ссылка текущей подписки будет удалена.").font(.callout).foregroundStyle(.secondary)
-            }
         }
     }
 

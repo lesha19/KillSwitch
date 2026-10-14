@@ -47,10 +47,4 @@ enum SubscriptionChange: Equatable {
         return UserError(title: String(localized: "Эта подписка не для основного способа подключения"),
                          message: String(localized: "Переключи способ подключения на запасной в настройках VPN, затем добавь ссылку снова. Текущая подписка осталась."))
     }
-
-    /// The backup link (#11) belongs to the subscription that is kept: a new link is never fetched
-    /// through it (and is removed when a replacing link is kept).
-    func sources(hasBackup: Bool, vpnRunning: Bool) -> [SubscriptionSource] {
-        SubscriptionSource.order(hasBackup: hasBackup && self == .same, vpnRunning: vpnRunning)
-    }
 }

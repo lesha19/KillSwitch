@@ -13,3 +13,8 @@ Terms as the owner and the UI use them. Decisions live in `docs/adr/`, behaviour
 - **Пауза** (pause): protection off until a time; same meaning as off while it lasts.
 - **Другой VPN** (another VPN): a tunnel of another program (Happ, dropweb…); KillSwitch stands by
   next to it (ADR 0018) while our VPN is off.
+- **Подписка** (subscription): a link from a VPN provider; it brings servers and the whole
+  configuration (which sites go where, DNS, its own automatic groups). KillSwitch holds several;
+  adding one never replaces another. (ADR 0036)
+- **Сервер** (server): one server *of a subscription* (or of «Свои серверы»); «Литва» of two
+  subscriptions are two servers. Choosing it brings its subscription's configuration. (ADR 0036)

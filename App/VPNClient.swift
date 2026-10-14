@@ -17,8 +17,6 @@ final class VPNClient {
 
     private(set) var hasURL = false
     private(set) var maskedURL: String?
-    /// #11: the person's backup link, asked when the main one fails; keychain, never logged.
-    private(set) var maskedBackupURL: String?
     private(set) var status = Status()
     private(set) var manual: [ManualServer] = []
     private(set) var updating = false
@@ -80,7 +78,7 @@ final class VPNClient {
     }
 
     private static let urlAccount = "subscription-url"
-    private static let backupAccount = "subscription-url-backup"
+    private static let backupAccount = "subscription-url-backup"   // only to delete it
     private static let linksAccount = "manual-links"
     private static let statusKey = "subscriptionStatus"
     private static let importedKey = "importedProfileHash"
@@ -91,7 +89,7 @@ final class VPNClient {
             hasURL = true
             maskedURL = SubscriptionHeaders.masked(url)
         }
-        maskedBackupURL = Self.storedBackupURL().map(SubscriptionHeaders.masked)
+        Keychain.delete(Self.backupAccount)   // the backup link of 0.16–0.19 (#11), dropped by ADR 0036
         // #11: a fetch that failed while the VPN was off goes again as soon as it connects
         NotificationCenter.default.addObserver(forName: UpdateRetry.vpnConnected, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -142,26 +140,7 @@ final class VPNClient {
     /// The hosts of the subscription links (lower-cased): «Свои адреса сайтов» (ADR 0033) may not
     /// redirect them. Never shown or logged.
     func subscriptionHosts() -> Set<String> {
-        Set([Self.storedURL(), Self.storedBackupURL()].compactMap { $0.flatMap { URLComponents(string: $0)?.host?.lowercased() } })
-    }
-
-    /// Shown only on request in Settings; never logged.
-    func revealBackupURL() -> String? { Self.storedBackupURL() }
-
-    /// «Резервная ссылка» (#11): kept like the main one, asked only when the main one fails.
-    func setBackupURL(_ text: String) {
-        let url = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard Self.isSubscriptionLink(url) else { lastError = Self.notALink; return }
-        guard Keychain.write(Self.backupAccount, Data(url.utf8)) else {
-            lastError = UserError(title: String(localized: "Ссылка не сохранилась"), message: String(localized: "Не получилось сохранить ссылку в связке ключей."))
-            return
-        }
-        maskedBackupURL = SubscriptionHeaders.masked(url)
-    }
-
-    func removeBackupURL() {
-        Keychain.delete(Self.backupAccount)
-        maskedBackupURL = nil
+        Set([Self.storedURL()].compactMap { $0.flatMap { URLComponents(string: $0)?.host?.lowercased() } })
     }
 
     private static func isSubscriptionLink(_ url: String) -> Bool {
@@ -434,12 +413,11 @@ final class VPNClient {
         return { [weak self] in self?.urlGeneration == generation && stillWanted() }
     }
 
-    /// Keeps a replacing link that answered; its old backup link belonged to the old subscription.
+    /// Keeps a replacing link that answered.
     private func keep(_ commit: Commit?) throws {
         guard let commit else { return }
         guard commit.allowed() else { throw Abandoned() }
         guard store(commit.url) else { throw NotKept() }
-        if maskedBackupURL != nil { removeBackupURL() }
     }
 
     /// Downloads and caches the subscription, without handing it to the helper. The cache is what
@@ -448,12 +426,10 @@ final class VPNClient {
     /// core's config alone. #11: tried in SubscriptionSource.order; the first error is shown.
     /// `commit`: a replacing link, kept (and the status started over) only once it answered.
     private func fetchProfile(_ url: URL, change: SubscriptionChange = .same, commit: Commit? = nil) async -> Profile? {
-        let backup = Self.storedBackupURL().flatMap(URL.init(string:))
         var firstError: String?
-        for source in change.sources(hasBackup: backup != nil, vpnRunning: control.coreRunning) {
-            guard let link = source.usesBackup ? backup : url else { continue }
+        for source in SubscriptionSource.order(vpnRunning: control.coreRunning) {
             do {
-                return try await fetchProfile(link, source: source, title: url.host, commit: commit)
+                return try await fetchProfile(url, source: source, title: url.host, commit: commit)
             } catch is NotKept, is Abandoned {
                 return nil
             } catch {
@@ -483,12 +459,10 @@ final class VPNClient {
 
     /// The same sources and order as fetchProfile; the link plus XrayProfile.pathComponent.
     private func fetchXray(_ url: URL, change: SubscriptionChange = .same, commit: Commit? = nil) async -> XrayProfile? {
-        let backup = Self.storedBackupURL().flatMap(URL.init(string:))
         var firstError: String?
-        for source in change.sources(hasBackup: backup != nil, vpnRunning: control.coreRunning) {
-            guard let link = source.usesBackup ? backup : url else { continue }
+        for source in SubscriptionSource.order(vpnRunning: control.coreRunning) {
             do {
-                return try await fetchXray(link, source: source, title: url.host, commit: commit)
+                return try await fetchXray(url, source: source, title: url.host, commit: commit)
             } catch is NotKept, is Abandoned {
                 return nil
             } catch {
@@ -917,10 +891,6 @@ final class VPNClient {
 
     private static func storedURL() -> String? {
         Keychain.read(urlAccount).flatMap { String(data: $0, encoding: .utf8) }
-    }
-
-    private static func storedBackupURL() -> String? {
-        Keychain.read(backupAccount).flatMap { String(data: $0, encoding: .utf8) }
     }
 
     private func saveManual() {

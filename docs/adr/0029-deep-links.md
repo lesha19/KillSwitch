@@ -60,12 +60,13 @@ The links (`App/Core/DeepLink.swift`, unit-tested; the app side is `App/DeepLink
   `VPNClient.setURL`, the same checks as a link typed in Settings.
 - **A replacing link is kept only once it answered** (`SubscriptionChange`, also for Settings and
   QR codes, which go through the same `setURL`). The new link is fetched first, never through the
-  old subscription's backup link; only a successful fetch writes it to the keychain, starts the
+  old subscription's backup link (the backup link is dropped by ADR 0036); only a successful fetch writes it to the keychain, starts the
   status over and replaces the cache. A failed fetch leaves the old link, its status and its
   servers, and is not recorded as a failed update of the old one. A first link is still kept
   before its fetch, so the timer tries it again. The check of «Начало работы» (`VPNClient.check`)
   follows the same order. What is and is not atomic:
-  - the link, status, cache and backup change together, at the moment the new link answered;
+  - the link, status, cache and backup change together, at the moment the new link answered
+    (no backup since ADR 0036);
   - the import into the core comes after and may need the administrator's password. If that is
     cancelled or refused, the new link stays kept while the core still runs the old servers. This
     is said (the sheet shows «Новая подписка сохранена, но не применена…»; Settings shows
@@ -73,7 +74,7 @@ The links (`App/Core/DeepLink.swift`, unit-tested; the app side is `App/DeepLink
     «Обновить» applies the new link;
   - a successful replace removes the backup link (#11): it belonged to the old provider, and a
     later fallback to it would bring the old provider's servers back. The sheet says so when
-    there is one;
+    there is one (dropped by ADR 0036: there is no backup link to remove);
   - the link's sheet cannot be dismissed while the fetch runs («Отмена» disabled,
     `interactiveDismissDisabled`); if it goes away anyway (an update's quit) or the link is removed
     or replaced elsewhere meanwhile, the answer is not kept (`setURL(stillWanted:)` and a
