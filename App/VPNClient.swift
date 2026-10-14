@@ -406,7 +406,7 @@ final class VPNClient {
             return false
         }
         defer { try? FileManager.default.removeItem(at: file) }
-        return await handOver(file: file, hash: Self.hash(data), interactive: interactive) { [self] hash in
+        return await handOver(file: file, hash: Self.hash(data), subscription: server.subscription, interactive: interactive) { [self] hash in
             importedXray(hash: hash, subscription: server.subscription)
         }
     }
@@ -452,7 +452,8 @@ final class VPNClient {
 
     /// «Выбор сервера» (ADR 0036): a server of the subscription the helper runs is chosen at once;
     /// one of another subscription (or of «Свои серверы») first has that subscription's profile
-    /// imported, with the admin's password (a switch without it: #64), then is chosen in it.
+    /// handed to the helper, without the password when the last import approved it (#64), then is
+    /// chosen in it.
     /// Blocking holds through the import as through any (ADR 0035).
     /// Only a server actually chosen goes to «Недавние»: not one whose import was cancelled or
     /// failed, nor a click while an update runs (it does nothing).
@@ -682,19 +683,33 @@ final class VPNClient {
         }
         guard let (file, hash) = write(profile) else { return false }
         defer { try? FileManager.default.removeItem(at: file) }
-        return await handOver(file: file, hash: hash, interactive: interactive) { [self] hash in
+        return await handOver(file: file, hash: hash, subscription: server.subscription, interactive: interactive) { [self] hash in
             imported(profile, hash: hash, subscription: server.subscription)
         }
     }
 
     /// The written profile to the helper, unless the core already has exactly this: a click
     /// imports (admin prompt if needed), a timer only refreshes. `done` records what was imported.
-    private func handOver(file: URL, hash: String, interactive: Bool, done: (String) -> Void) async -> Bool {
+    /// A click on another subscription's server first switches without the password (#64); the
+    /// password import hands every subscription's profile, so one password approves them all.
+    private func handOver(file: URL, hash: String, subscription: String, interactive: Bool, done: (String) -> Void) async -> Bool {
         if control.coreConfigured, UserDefaults.standard.string(forKey: Self.importedKey) == hash {
             done(hash)   // the subscription it is, too
             return true
         }
-        guard interactive else {
+        let step = Subscriptions.handOver(interactive: interactive, switching: subscription != control.activeSubscription)
+        if step == .use {
+            let outcome = await control.coreUse(file: file.path)
+            if outcome == .applied {
+                done(hash)
+                return true
+            }
+            guard Subscriptions.needsImport(after: outcome) else {
+                if case .failed(let message) = outcome { lastError = UserError.from(raw: message, context: .subscription) }
+                return false
+            }
+        }
+        guard step != .refresh else {
             let outcome = await control.coreRefresh(file: file.path)
             switch outcome {
             case .applied:
@@ -713,7 +728,9 @@ final class VPNClient {
             }
             return false
         }
-        switch await control.coreImport(file: file.path, allowPassword: true) {
+        let others = approvalFiles(besides: subscription)
+        defer { others.forEach { try? FileManager.default.removeItem(at: $0) } }
+        switch await control.coreImport(file: file.path, others: others.map(\.path), allowPassword: true) {
         case .ok:
             done(hash)
             return true
@@ -725,6 +742,44 @@ final class VPNClient {
             lastError = UserError.from(raw: message, context: .subscription)
         }
         return false
+    }
+
+    /// Whose servers «Подтвердить…» approves: every subscription the import hands the helper (#64).
+    var approvalNote: String? {
+        let titles = Dictionary(subscriptions.map { ($0.id, $0.title) } + [(ServerID.own, String(localized: "Свои серверы"))]) { first, _ in first }
+        let all = subscriptions.map(\.id) + (manual.isEmpty ? [] : [ServerID.own])
+        return Subscriptions.approvalNote(titles: Subscriptions.approvalOrder(running: activeID, all: all).compactMap { titles[$0] })
+    }
+
+    /// The other subscriptions' profiles (and the own servers'), in the format of the way the helper
+    /// runs, for it to approve with the one it runs (Subscriptions.approvalOrder). One that cannot be
+    /// written is left out: it stays unapproved, and a switch to it asks again.
+    private func approvalFiles(besides subscription: String) -> [URL] {
+        let all = subscriptions.map(\.id) + (manual.isEmpty ? [] : [ServerID.own])
+        let order = Subscriptions.approvalOrder(running: subscription, all: all)
+        if order.count < all.count {
+            HelperClient.log.notice("import: \(all.count - order.count) subscriptions over the limit left unapproved")
+        }
+        return order.dropFirst().compactMap { id in
+            let server = ServerID(subscription: id, name: "")
+            let data = usesXray
+                ? Subscriptions.xray(for: server, configs: Self.cachedXray(subscriptions), own: manualProxies).map(RoutingHint.strippingXray)
+                : forCore(server).flatMap { try? ProfileConverter.json($0) }
+            guard let data else { return nil }
+            // the servers' passwords: the user's only from the first byte
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-approve-\(UUID().uuidString).json")
+            let fd = open(file.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+            guard fd >= 0 else { return nil }
+            let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+            do {
+                try handle.write(contentsOf: data)
+                try handle.close()
+            } catch {
+                try? FileManager.default.removeItem(at: file)
+                return nil
+            }
+            return file
+        }
     }
 
     /// What goes to the helper: the server's subscription alone, or the own servers alone

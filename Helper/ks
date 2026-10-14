@@ -24,10 +24,13 @@
 #                           "core on" to "core off" the VPN is on and pf blocks whatever on/off/pause
 #                           say (ADR 0035)
 #   ks core restart         the core again, the VPN kept on («Перезапустить VPN»)
-#   ks core import <json>   build the core's config: a mihomo profile converted to JSON, or with
-#                           core=xray the panel's Xray JSON (a list of Xray configs)
+#   ks core import <json> [json…]  build the core's config: a mihomo profile converted to JSON, or
+#                           with core=xray the panel's Xray JSON (a list of Xray configs); the later
+#                           ones (the other subscriptions) are approved with it (ADR 0036)
 #   ks core refresh <json>  the same, refused (exit 3) if it brings new server names or
 #                           addresses or changes what goes DIRECT
+#   ks core use <json>      another subscription's profile, refused (exit 3) unless the last import
+#                           approved its servers and what it sends DIRECT
 #   ks core proxies         groups and proxies of the running core (JSON)
 #   ks core select <group> <proxy> | delay <group|proxy>
 #   ks core traffic         "up=<bytes> down=<bytes>" through the core so far (the menu bar speed)
@@ -2685,15 +2688,10 @@ settings_merge() {
 
 # src_owner <file>: the owner's uid of a regular file with one name, not a link
 src_owner() { perl -e 'my @s = lstat $ARGV[0] or exit 1; -f _ && $s[3] == 1 or exit 1; print "$s[4]\n"' -- "$1"; }
-core_import() {  # core_import <profile.json> [import|refresh]
-  local src=${1:-} prof conf in tmp srv="$SERVERS_CORE.tmp" rc
-  prof=$(core_profile); conf=$(core_conf); in="$prof.new"; tmp="$conf.tmp"
-  servers_migrate
-  install -d -o root -g wheel -m 700 "$CORE_DIR/ctl"
-  # Read once, with the caller's rights (root must not open files for the user), into our
-  # directory; everything after works on that copy, which is kept for rebuilds.
-  [ -n "$src" ] || { echo "usage: ks core import <json>" >&2; return 1; }
-  local as=() o
+# profile_read <file> <copy>: the app's profile read once, with the caller's rights (root must not
+# open files for the user), into our directory; everything after works on that copy.
+profile_read() {
+  local src=$1 in=$2 as=() o
   if [ -n "${SUDO_UID:-}" ]; then
     [ "$SUDO_UID" = 0 ] || as=(sudo -n -u "#$SUDO_UID")
   else
@@ -2710,28 +2708,130 @@ core_import() {  # core_import <profile.json> [import|refresh]
   ( umask 077; ${as[@]+"${as[@]}"} /bin/cat -- "$src" | head -c 20000001 > "$in"; exit "${PIPESTATUS[0]}" ) ||
     { rm -f "$in"; echo "Не удалось прочитать $src" >&2; return 1; }
   chmod 600 "$in"
-  if [ "${2:-}" = refresh ]; then
-    KS_STRICT_DNS=1 core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; rm -f "$in"; return 1; }
-    # refresh is passwordless (subscription auto-update): nothing new may be let out
-    refresh_check "$srv" "$tmp.pins" "$tmp.direct" || { rc=$?; core_clean "$tmp" "$srv"; rm -f "$in"; return "$rc"; }
+}
+
+# The admin's approval is a set (ADR 0036, #64): one folder per profile of the last import in
+# core/approved/<n>, root-only, with the core kind it was built for (#65 switches the core by it),
+# its server host names and addresses, its DIRECT signature and every host's (KS-10).
+# approved-hosts, approved-direct and approved-switch are those of the profile that runs, so
+# refresh, rotation and an Xray server switch measure against it as before. An install from
+# before 0.20 has no set: its files of one import are the set of one.
+# approval_write <dir> <config.tmp> <servers.tmp>: the entry of a profile generated with KS_APPROVE_ALL
+approval_write() {
+  ( umask 077; mkdir "$1" && core_kind > "$1/kind" && cut -f1 "$2.pins" > "$1/hosts" && cp "$3" "$1/servers" && cp "$2.direct" "$1/direct" &&
+    { cp "$2.approved" "$1/switch" 2>/dev/null || : > "$1/switch"; } ) && chmod 600 "$1"/*
+}
+
+# approval_more <set.new> <profile.json>…: the other subscriptions' profiles, approved with the
+# one that runs: each read, generated and tested like an import, nothing of it kept but its entry.
+# Without the running one's double VPN and server pick: they name that subscription's servers.
+approval_more() {
+  local set=$1 n=1 f why in="$CORE_DIR/approve-profile.new" out="$CORE_DIR/approve.tmp" srv="$CORE_DIR/approve-servers.tmp" s="$CORE_DIR/approve-settings.tmp"
+  shift
+  rm -f "$s"; ( umask 077; grep -vE '^(multihop|xrayserver)=' "$SETTINGS" > "$s" 2>/dev/null; : )
+  for f; do
+    n=$((n + 1))
+    # one that is not taken stays unapproved, the others are not affected (ADR 0036, decision 7):
+    # a switch to it asks for the password again, and that import tells why
+    # the journal gets the step only: the errors name hosts, paths and addresses
+    why=""
+    if ! profile_read "$f" "$in" 2>/dev/null; then why=unreadable
+    elif ! SETTINGS=$s KS_APPROVE_ALL=1 core_generate "$in" "$out" "$srv" "$SERVERS_MANUAL" 2>/dev/null; then why="refused by the generator"
+    elif ! { chmod 600 "$out"; core_test "$out" >/dev/null 2>&1; }; then why="refused by the core"
+    elif ! approval_write "$set/$n" "$out" "$srv"; then why="not written"; fi
+    if [ -n "$why" ]; then rm -rf "${set:?}/$n"; log_event "approval: profile $n of the import skipped: $why"; fi
+    core_clean "$out" "$srv"; rm -f "$in"
+  done
+  rm -f "$s"
+}
+
+# approval_find <servers> <pins> <direct>: the entry of the set that approves all of a generated
+# profile (nothing printed for the files of one import from before 0.20): one entry built for the
+# running core takes every host, address and the DIRECT signature. Refused with 3 and
+# refresh_check's reason (against the entry sharing most hosts) when none does.
+approval_find() {
+  local e best="" n most=-1 set="$CORE_DIR/approved"
+  [ -f "$APPROVED_HOSTS" ] || { echo "Нет подтверждённых серверов: нужно подтверждение паролем администратора" >&2; return 3; }
+  [ -d "$set" ] || { refresh_check "$1" "$2" "$3"; return; }
+  for e in "$set"/*; do
+    [ "$(cat "$e/kind" 2>/dev/null)" = "$(core_kind)" ] || continue
+    if refresh_check "$1" "$2" "$3" "$e" 2>/dev/null; then echo "$e"; return 0; fi
+    n=$(cut -f1 "$2" | grep -cxF -f "$e/hosts")
+    [ "$n" -le "$most" ] || { best=$e; most=$n; }
+  done
+  [ -z "$best" ] || { refresh_check "$1" "$2" "$3" "$best"; return 3; }
+  echo "Подписка не подтверждена для ядра $(core_kind): нужно подтверждение паролем администратора" >&2
+  return 3
+}
+
+# core_import <profile.json> [import|refresh|use] [profile.json…]: "import" (the admin password)
+# approves the first profile and the later ones (the other subscriptions) and runs the first;
+# "refresh" (passwordless) takes a newer copy of the running one, "use" (passwordless) another
+# approved one: neither may let out anything the admin did not approve. The copy is kept for rebuilds.
+core_import() {
+  local src=${1:-} mode=${2:-import} prof conf in tmp srv="$SERVERS_CORE.tmp" rc set="$CORE_DIR/approved" e="" s=$SETTINGS mh=""
+  prof=$(core_profile); conf=$(core_conf); in="$prof.new"; tmp="$conf.tmp"
+  servers_migrate
+  install -d -o root -g wheel -m 700 "$CORE_DIR/ctl"
+  [ -n "$src" ] && { [ $# -le 2 ] || { [ "$mode" = import ] && [ $# -le 66 ]; }; } || { echo "usage: ks core import <json> [json…]" >&2; return 1; }
+  profile_read "$src" "$in" || return 1
+  if [ "$mode" != import ]; then
+    # use: on a copy of the settings, so a refused one changes none (the generator turns double
+    # VPN off when its entry is not in that subscription); kept below once it runs
+    if [ "$mode" = use ]; then
+      s="$CORE_DIR/use-settings.tmp"; rm -f "$s"; ( umask 077; cp "$SETTINGS" "$s" 2>/dev/null || : > "$s" )
+    fi
+    SETTINGS=$s KS_STRICT_DNS=1 core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" ||
+      { core_clean "$tmp" "$srv"; rm -f "$in"; [ "$s" = "$SETTINGS" ] || rm -f "$s"; return 1; }
+    # refresh and use are passwordless (subscription auto-update, another approved subscription):
+    # nothing new may be let out
+    if [ "$mode" = use ]; then e=$(approval_find "$srv" "$tmp.pins" "$tmp.direct")
+    else refresh_check "$srv" "$tmp.pins" "$tmp.direct"; fi ||
+      { rc=$?; core_clean "$tmp" "$srv"; rm -f "$in"; [ "$s" = "$SETTINGS" ] || rm -f "$s"; return "$rc"; }
+    # what refresh and an Xray server switch measure against from now: the entry that approved it
+    if [ -n "$e" ]; then
+      rm -f "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new"
+      ( umask 077; cp "$e/hosts" "$APPROVED_HOSTS.new"; cp "$e/direct" "$APPROVED_DIRECT.new"; cp "$e/switch" "$CORE_DIR/approved-switch.new" )
+    fi
+    if [ "$s" != "$SETTINGS" ]; then mh=$(SETTINGS=$s setting multihop off); rm -f "$s"; fi
   else
     KS_APPROVE_ALL=1 core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; rm -f "$in"; return 1; }
     # what the admin just approved: refresh and rotation measure against it, an Xray server
-    # switch against every host's DIRECT (approved-switch, KS-10)
-    rm -f "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new"
-    ( umask 077; cut -f1 "$tmp.pins" > "$APPROVED_HOSTS.new"; cp "$tmp.direct" "$APPROVED_DIRECT.new"
-      cp "$tmp.approved" "$CORE_DIR/approved-switch.new" 2>/dev/null || : > "$CORE_DIR/approved-switch.new" )
-    chmod 600 "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new"
+    # switch against every host's DIRECT (approved-switch, KS-10), use against the set
+    rm -rf "$set.new" "$set.old"; rm -f "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new"
+    if ! ( umask 077; mkdir "$set.new" ) || ! approval_write "$set.new/1" "$tmp" "$srv" || ! approval_more "$set.new" "${@:3}"; then
+      core_clean "$tmp" "$srv"; rm -rf "$in" "$set.new"; return 1
+    fi
+    ( umask 077; cp "$set.new/1/hosts" "$APPROVED_HOSTS.new"; cp "$set.new/1/direct" "$APPROVED_DIRECT.new"
+      cp "$set.new/1/switch" "$CORE_DIR/approved-switch.new" )
   fi
-  core_commit "$tmp" "$srv" || { rm -f "$in" "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new"; return 1; }
+  core_commit "$tmp" "$srv" || { rm -rf "$in" "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new" "$set.new"; return 1; }
   mv "$in" "$prof"
-  if [ "${2:-}" != refresh ]; then
+  [ -z "$mh" ] || [ "$mh" = "$(setting multihop off)" ] || put_setting multihop "$mh"
+  if [ "$mode" = import ] || [ -n "$e" ]; then
     mv "$APPROVED_HOSTS.new" "$APPROVED_HOSTS"; mv "$APPROVED_DIRECT.new" "$APPROVED_DIRECT"
     mv "$CORE_DIR/approved-switch.new" "$CORE_DIR/approved-switch"
+  fi
+  if [ "$mode" = import ]; then
+    # the old set aside, the new one in, then the old one gone: a crash leaves one of them
+    { [ ! -e "$set" ] || mv "$set" "$set.old"; } && mv "$set.new" "$set" && rm -rf "$set.old"
+    # what one password approved, for the journal: no host names, no links (review B2)
+    [ $# -le 2 ] || log_event "approval: $(find "$set" -name kind | wc -l | tr -d ' ') profiles approved:$(for e in "$set"/*; do
+      printf ' %s hosts=%s direct=%s' "${e##*/}" "$(wc -l < "$e/hosts" | tr -d ' ')" "$(shasum -a 256 < "$e/direct" | cut -c1-12)"; done)"
   fi
 }
 
 core_clean() { rm -f "$1" "$1.pins" "$1.direct" "$1.egress" "$1.report" "$1.approved" "$2" "$SERVERS.tmp"; }
+
+# core_take <profile.json> <import|refresh|use> [profile.json…]: core_import, then pf and the core
+# follow. pf is reloaded with the new servers, never flushed, before the core restarts: blocking
+# holds throughout a switch to another subscription (ADR 0035, 0036).
+core_take() {
+  core_import "$@" || return $?
+  reload_if_on   # the servers list changed
+  launchctl print "$CORE_JOB" >/dev/null 2>&1 && launchctl kickstart -k "$CORE_JOB"
+  log_event "core config imported"
+}
 
 # core_publish <config.tmp>: the world-readable companions of an accepted config (egress for pf,
 # the report for the app) into place. Fails (1) when egress stayed the same, so a caller knows
@@ -2748,13 +2848,18 @@ core_publish() {
 # the admin: a server host name not in the last import, an address that is neither allowed
 # yet nor the address of an approved name, or DIRECT rules/groups other than those approved.
 # Installs from before 0.7 have no record: only addresses are compared, DIRECT needs an import.
+# [entry]: DIRECT measured against that entry of the approved set (approval_find) instead.
 refresh_check() {
-  local names="" ok="$1.ok" h a new rc=0
+  local names="" ok="$1.ok" h a new rc=0 switch="$CORE_DIR/approved-switch" known=$SERVERS
+  # an entry measures all of the profile by itself: its hosts, its addresses (and the ones added by
+  # hand), its DIRECT; nothing of the running profile, so one subscription's servers never pass
+  # with another's DIRECT (review B1)
+  [ -z "${4:-}" ] || { local APPROVED_HOSTS="$4/hosts" APPROVED_DIRECT="$4/direct"; switch="$4/switch"; known="$4/servers"; }
   if [ -f "$APPROVED_HOSTS" ]; then
     names=$(cut -f1 "$2" | grep -vxF -f "$APPROVED_HOSTS")
   fi
   {
-    cat "$SERVERS" 2>/dev/null
+    cat "$known" 2>/dev/null; [ -z "${4:-}" ] || cat "$SERVERS_MANUAL" 2>/dev/null
     [ -f "$APPROVED_HOSTS" ] && while IFS=$'\t' read -r h a; do grep -qxF -- "$h" "$APPROVED_HOSTS" && echo "$a"; done < "$2"
   } | grep -v '^$' > "$ok"
   new=$(grep -vxF -f "$ok" "$1"); rm -f "$ok"
@@ -2766,7 +2871,7 @@ refresh_check() {
   # Approved: the import's DIRECT, the running one, or one the import approved for a switch
   # (direct_unapproved); with no record of an import at all, only an import
   if { [ -s "$3" ] || [ -s "$APPROVED_DIRECT" ]; } && ! cmp -s "$3" "$APPROVED_DIRECT" &&
-     { [ ! -f "$APPROVED_DIRECT" ] || { direct_unapproved "$3" && ! direct_subset "$3"; }; }; then
+     { [ ! -f "$APPROVED_DIRECT" ] || { direct_unapproved "$3" "$switch" "${4:+entry}" && ! direct_subset "$3"; }; }; then
     echo "Профиль меняет, что идёт мимо VPN (DIRECT)$(direct_parts "$3"): нужно подтверждение паролем администратора" >&2
     rc=3
   fi
@@ -2820,15 +2925,15 @@ direct_parts() {
   if [ -n "$p" ] && [ -n "$s" ]; then echo " [$p,$s]"; else echo " [$p$s]"; fi
 }
 
-# direct_unapproved <direct>: a generated config for another Xray host sends past the VPN what
+# direct_unapproved <direct> [approved-switch]: a generated config for another Xray host sends past the VPN what
 # the admin did not approve (KS-10): neither what the running config sends (approved at import or
 # with a setting; before 0.19 no copy was kept, then the import's approved-direct) nor what that
 # import found for one of the subscription's hosts (approved-switch). Egress follows the signature.
-direct_unapproved() {
+direct_unapproved() {  # [entry]: an entry of the approved set alone, not the running config
   local run="$CORE_DIR/direct"
-  [ -f "$run" ] || run=$APPROVED_DIRECT
+  [ -f "$run" ] && [ -z "${3:-}" ] || run=$APPROVED_DIRECT
   if cmp -s "$1" "$run" || { [ ! -s "$1" ] && [ ! -s "$run" ]; }; then return 1; fi
-  ! grep -qxF -- "$(shasum -a 256 < "$1" | cut -d' ' -f1)" "$CORE_DIR/approved-switch" 2>/dev/null
+  ! grep -qxF -- "$(shasum -a 256 < "$1" | cut -d' ' -f1)" "${2:-$CORE_DIR/approved-switch}" 2>/dev/null
 }
 
 # core_rebuild <pins> [switch]: the config again from the kept profile with these addresses, no
@@ -4367,7 +4472,7 @@ passwordless_args_ok() {
         select) [ $# -eq 4 ] && valid_name "$3" && valid_name "$4" ;;
         delay) [ $# -eq 3 ] && valid_name "$3" ;;
         # the app's own temporary file, read with the caller's rights (core_import)
-        refresh) [ $# -eq 3 ] && [[ "$3" == /* && "${#3}" -le 1024 && "$3" != *[[:cntrl:]]* ]] ;;
+        refresh|use) [ $# -eq 3 ] && [[ "$3" == /* && "${#3}" -le 1024 && "$3" != *[[:cntrl:]]* ]] ;;
         *) return 0 ;;
       esac ;;
     # «Собрать отчёт»: the folder the archive goes to (written as the caller, diag_report)
@@ -4384,7 +4489,7 @@ passwordless_args_ok() {
 # «Подключить», «Отключить» and «Перезапустить VPN» too: a Disconnect never lands inside a Connect (ADR 0035).
 core_lock_wanted() {
   case "${1:-}:${2:-}" in
-    core:on|core:off|core:restart|core:import|core:refresh|core:select|set:splitapps|set:multihop|set:adblock|set:blockadult|set:blocksocial|set:blockbetting|set:doh|set:diag|set:escalate|set:mtu|_regen:|repair:) return 0 ;;
+    core:on|core:off|core:restart|core:import|core:refresh|core:use|core:select|set:splitapps|set:multihop|set:adblock|set:blockadult|set:blocksocial|set:blockbetting|set:doh|set:diag|set:escalate|set:mtu|_regen:|repair:) return 0 ;;
   esac
   return 1
 }
@@ -4500,12 +4605,9 @@ case "${1:-status}" in
       on) core_on || exit 1 ;;
       off) core_off || exit 1 ;;
       restart) core_vpn_restart || exit 1 ;;
-      import|refresh)
-        [ $# -eq 3 ] || { echo "usage: ks core $2 <json>" >&2; exit 1; }
-        core_import "$3" "$2" || exit $?
-        reload_if_on   # the servers list changed
-        launchctl print "$CORE_JOB" >/dev/null 2>&1 && launchctl kickstart -k "$CORE_JOB"
-        log_event "core config imported" ;;
+      import|refresh|use)
+        [ $# -eq 3 ] || { [ "$2" = import ] && [ $# -gt 3 ]; } || { echo "usage: ks core $2 <json>" >&2; exit 1; }
+        core_take "$3" "$2" "${@:4}" || exit $? ;;
       state)
         if core_running; then echo on; else echo off; fi ;;
       proxies)
@@ -4524,7 +4626,7 @@ case "${1:-status}" in
       connections)
         [ $# -eq 2 ] || { echo "usage: ks core connections" >&2; exit 1; }
         core_connections || exit 1 ;;
-      *) echo "usage: ks core on|off|restart|state|import <json>|refresh <json>|proxies|select <group> <proxy>|delay <name>|traffic|connections" >&2; exit 1 ;;
+      *) echo "usage: ks core on|off|restart|state|import <json> [json…]|refresh <json>|use <json>|proxies|select <group> <proxy>|delay <name>|traffic|connections" >&2; exit 1 ;;
     esac
     ;;
   probe) net_probe ;;

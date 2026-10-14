@@ -82,6 +82,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   subscription's profile alone (own servers only in «Свои серверы»); a server of another
   subscription is switched to with the admin's password for now. The single subscription of 0.19
   becomes the first of the list, with favourites, recents and the chosen server.
+- One administrator password approves every subscription (#64, ADR 0036): `ks core import` takes
+  the running profile and the others' after it and keeps one approval per profile
+  (`core/approved/<n>`: core kind, hosts, addresses, DIRECT); new `ks core use <json>` (passwordless)
+  runs another approved subscription's profile and refuses (exit 3) anything the import did not
+  approve. A server of another subscription is switched to without the password; new servers of
+  any subscription are approved with one password for all. A subscription whose profile is not
+  taken stays unapproved without failing the others. The approval of 0.19 stays valid for the
+  first subscription.
 
 ### Changed
 - The VPN blocks everything outside it from «Подключить» to «Отключить», whatever «защита» says

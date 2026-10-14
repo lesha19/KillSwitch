@@ -89,3 +89,16 @@ recents, favourites, multihop, Shortcuts).
   and the «Автозамена сервера» setting are deleted.
 - «Двойной VPN»: the entry server is one of the selected subscription's servers; switching to
   another subscription turns it off.
+- Approval as a set (#64): `ks core import <running> <other>…` keeps one entry per profile in
+  `core/approved/<n>` (core kind, host names, addresses, DIRECT signature, every Xray host's
+  DIRECT), a folder per profile rather than one file, so each part is the same file format as
+  before; `approved-hosts`, `approved-direct` and `approved-switch` stay the running
+  profile's so refresh, rotation and an Xray server switch are unchanged. `ks core use <json>`
+  (passwordless, sudoers and the daemon like `core refresh`) runs a profile only when one entry
+  of the running core's kind takes all of it: every host, every address and the DIRECT signature
+  (never the hosts of one with the DIRECT of another, review B1); anything else exits 3 and
+  the app imports all subscriptions with one password. A later profile the import cannot take is
+  left out of the set and logged by step (no host names); the others are approved, and the journal
+  lists per profile its host count and DIRECT hash. «Подтвердить…» names the subscriptions one
+  password approves. An entry of the other core kind is
+  refused until #65.

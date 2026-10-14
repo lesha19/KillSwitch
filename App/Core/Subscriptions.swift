@@ -176,6 +176,42 @@ enum Subscriptions {
         server.isOwn ? ProfileMerger.merge(subscription: nil, manual: own) : profiles[server.subscription]
     }
 
+    /// The subscriptions whose profiles an import with the password hands the helper (#64): the one
+    /// that runs first (ks runs the first), then every other one, so one password approves them all.
+    /// At most what the helper takes (HelperCommand.maxOtherProfiles): the rest stay unapproved.
+    static func approvalOrder(running: String, all: [String]) -> [String] {
+        [running] + all.filter { $0 != running }.prefix(HelperCommand.maxOtherProfiles)
+    }
+
+    /// Under «Подтвердить…»: whose servers the password approves (the import hands them all), when
+    /// more than one; nil for one.
+    static func approvalNote(titles: [String]) -> String? {
+        titles.count > 1 ? String(localized: "Пароль подтвердит серверы подписок: \(titles.joined(separator: ", "))") : nil
+    }
+
+    /// How a profile reaches the helper (#64).
+    enum HandOver: Equatable {
+        /// A timer: a newer copy of the running subscription, never a prompt.
+        case refresh
+        /// A click on a server of another subscription: without the password if the last import approved it.
+        case use
+        /// The password, approving every subscription at once.
+        case importAll
+    }
+
+    static func handOver(interactive: Bool, switching: Bool) -> HandOver {
+        interactive ? (switching ? .use : .importAll) : .refresh
+    }
+
+    /// After `use`: the helper refused (exit 3) or the installed sudoers has no `core use` yet. Then
+    /// the password, once for all subscriptions with new servers.
+    static func needsImport(after outcome: RefreshOutcome) -> Bool {
+        switch outcome {
+        case .newServers, .routingChanged, .needsPassword: true
+        case .applied, .failed: false
+        }
+    }
+
     /// The same with Xray: the subscription's panel config as it came, or the own servers as hosts
     /// of their own (XrayManual).
     static func xray(for server: ServerID, configs: [String: Data], own: [(name: String, proxy: [String: Any])]) -> Data? {

@@ -296,6 +296,9 @@ struct SubscriptionSummary: View {
                         .help(!client.routingChanged ? "Разрешить новые серверы подписки (спросит пароль)"
                               : "Разрешить новые правила «напрямую» подписки (спросит пароль)")
                 }
+                if let note = client.approvalNote {
+                    Text(note).font(.caption).foregroundStyle(.secondary)
+                }
             }
             if client.needsPassword {
                 StatusLabel("Подписка изменилась. Нажми «Обновить», чтобы применить (спросит пароль).",

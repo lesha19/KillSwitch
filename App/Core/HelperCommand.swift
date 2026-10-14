@@ -19,6 +19,9 @@ enum HelperCommand: Equatable, Sendable {
     case coreDelay(String)
     /// Refused by ks (exit 3) if the profile brings new servers: the subscription auto-update.
     case coreRefresh(profile: String)
+    /// Another subscription's profile (ADR 0036): refused by ks (exit 3) unless the last import
+    /// approved its servers and what it sends DIRECT.
+    case coreUse(profile: String)
     /// «Собрать отчёт» (ADR 0021): the redacted archive into this folder. Through the daemon the
     /// app opens the file and the daemon gives ks its own folder (`Executor`) and the uid of the
     /// user who asked: ks takes only that user's crash reports.
@@ -39,7 +42,8 @@ enum HelperCommand: Equatable, Sendable {
     case setMTU(Int?)
     case allow(String), unallow(String)
     case serverAdd(String), serverRemove(String)
-    case coreImport(profile: String)
+    /// The profile that runs and the other subscriptions' profiles, approved with it (ADR 0036).
+    case coreImport(profile: String, others: [String] = [])
     /// The daemon puts the connecting user here (audit token), whatever the app said.
     case install(user: String, servers: [String])
     case uninstall
@@ -64,7 +68,7 @@ enum HelperCommand: Equatable, Sendable {
     var needsAuthorization: Bool {
         switch self {
         case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreRestart, .coreProxies, .coreTraffic,
-             .coreConnections, .coreSelect, .coreDelay, .coreRefresh, .diagReport, .upgrade:
+             .coreConnections, .coreSelect, .coreDelay, .coreRefresh, .coreUse, .diagReport, .upgrade:
             false
         default:
             true
@@ -77,7 +81,7 @@ enum HelperCommand: Equatable, Sendable {
     /// the state stays open. Commands behind the right are authorized by the admin's password.
     var onlyForConsoleUser: Bool {
         switch self {
-        case .protectionOn, .netRestore, .coreOn, .coreOff, .coreRestart, .coreSelect, .coreRefresh, .upgrade, .coreConnections: true
+        case .protectionOn, .netRestore, .coreOn, .coreOff, .coreRestart, .coreSelect, .coreRefresh, .coreUse, .upgrade, .coreConnections: true
         default: false
         }
     }
@@ -115,6 +119,7 @@ enum HelperCommand: Equatable, Sendable {
         case .coreSelect(let group, let proxy): ["core", "select", group, proxy]
         case .coreDelay(let name): ["core", "delay", name]
         case .coreRefresh(let profile): ["core", "refresh", profile]
+        case .coreUse(let profile): ["core", "use", profile]
         case .diagReport(let directory, let uid): ["diag", "report", directory] + (uid.map { [String($0)] } ?? [])
         case .protectionOff: ["off"]
         case .pause(let minutes): ["pause", String(minutes)]
@@ -128,7 +133,7 @@ enum HelperCommand: Equatable, Sendable {
         case .unallow(let address): ["unallow", address]
         case .serverAdd(let address): ["server-add", address]
         case .serverRemove(let address): ["server-remove", address]
-        case .coreImport(let profile): ["core", "import", profile]
+        case .coreImport(let profile, let others): ["core", "import", profile] + others
         case .install(let user, let servers): [user] + servers
         case .uninstall: []
         case .upgrade: ["--upgrade"]
@@ -143,7 +148,9 @@ enum HelperCommand: Equatable, Sendable {
             true
         case .coreSelect(let group, let proxy): Self.isName(group) && Self.isName(proxy)
         case .coreDelay(let name): Self.isName(name)
-        case .coreRefresh(let profile), .coreImport(let profile): Self.isProfilePath(profile)
+        case .coreRefresh(let profile), .coreUse(let profile): Self.isProfilePath(profile)
+        case .coreImport(let profile, let others):
+            others.count <= Self.maxOtherProfiles && ([profile] + others).allSatisfy(Self.isProfilePath)
         case .diagReport(let directory, _): Self.isProfilePath(directory)
         case .pause(let minutes): (0...9999).contains(minutes)
         case .setSwitch(let key, _): Self.switchKeys.contains(key)
@@ -236,7 +243,9 @@ enum HelperCommand: Equatable, Sendable {
             case ("server-add", 2): command = .serverAdd(arguments[1])
             case ("server-remove", 2): command = .serverRemove(arguments[1])
             case ("core", 3) where arguments[1] == "delay": command = .coreDelay(arguments[2])
-            case ("core", 3) where arguments[1] == "import": command = .coreImport(profile: arguments[2])
+            case ("core", 3...) where arguments[1] == "import":
+                command = .coreImport(profile: arguments[2], others: Array(arguments.dropFirst(3)))
+            case ("core", 3) where arguments[1] == "use": command = .coreUse(profile: arguments[2])
             case ("core", 3) where arguments[1] == "refresh": command = .coreRefresh(profile: arguments[2])
             case ("diag", 3) where arguments[1] == "report": command = .diagReport(directory: arguments[2])
             case ("core", 4) where arguments[1] == "select": command = .coreSelect(group: arguments[2], proxy: arguments[3])
@@ -326,6 +335,9 @@ enum HelperCommand: Equatable, Sendable {
         let parts = entry.split(separator: "/", omittingEmptySubsequences: false).dropFirst()
         return entry.utf8.count <= 255 && entry.hasSuffix(".app") && !parts.contains { $0.isEmpty || $0 == "." || $0 == ".." }
     }
+
+    /// What ks's core_import takes besides the profile that runs.
+    static let maxOtherProfiles = 64
 
     /// The daemon writes profiles to its own directory; the path is absolute and one line.
     static func isProfilePath(_ path: String) -> Bool {

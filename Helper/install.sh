@@ -44,6 +44,8 @@ valid_user() {
 }
 
 # "core refresh" (subscription auto-update) is refused by ks if it brings new server addresses;
+# "core use" (another subscription) is refused the same way unless its servers and DIRECT were
+# approved by the last import with the password (ADR 0036).
 # "core import" may add servers the core can reach, so it keeps asking for the password.
 # "netrestore" only turns back on the network services ks itself turned off, and refuses while the
 # watchdog runs without its rules.
@@ -59,7 +61,7 @@ sudoers_text() {  # sudoers_text <user> <ks>
   echo "Defaults!$ks env_keep-=\"HOME MAIL CHARSET LANG LANGUAGE LC_ALL LC_COLLATE LC_CTYPE LC_MESSAGES LC_MONETARY LC_NUMERIC LC_TIME SSH_AUTH_SOCK TZ EDITOR VISUAL\""
   echo "Defaults!$ks env_delete+=\"HOME CURL_HOME BASH_ENV ENV LC_ALL\""
   echo "$1 ALL=(root) NOPASSWD: $ks state, $ks probe, $ks on, $ks netrestore, $ks core state, $ks core on, $ks core off, $ks core restart," \
-    "$ks core proxies, $ks core traffic, $ks core connections, $ks core select *, $ks core delay *, $ks core refresh *, $ks diag report *"
+    "$ks core proxies, $ks core traffic, $ks core connections, $ks core select *, $ks core delay *, $ks core refresh *, $ks core use *, $ks diag report *"
 }
 
 # --upgrade: the user the installed entry names (install.sh wrote it), so nobody gains anything.

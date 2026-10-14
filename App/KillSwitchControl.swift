@@ -611,10 +611,11 @@ final class KillSwitchControl {
     /// writes the full core config and lets the servers out. The config decides what goes around
     /// the VPN, so unless sudoers allows it, this asks for the password; `allowPassword: false`
     /// (automatic updates) never shows the prompt.
-    func coreImport(file: String, allowPassword: Bool) async -> ImportResult {
+    /// `others`: the other subscriptions' profiles, approved with this one (ADR 0036).
+    func coreImport(file: String, others: [String] = [], allowPassword: Bool) async -> ImportResult {
         busy = true
         defer { busy = false; refresh() }
-        switch await callHelper(["core", "import", file], interactive: allowPassword) {
+        switch await callHelper(["core", "import", file] + others, interactive: allowPassword) {
         case .ok: measured = [:]; return .ok
         case .needsPassword: return .needsPassword
         case .cancelled: return .cancelled
@@ -628,6 +629,17 @@ final class KillSwitchControl {
         busy = true
         defer { busy = false; refresh() }
         let result = await readHelper(["core", "refresh", file])
+        let outcome = RefreshOutcome(status: result.status, output: result.output)
+        if outcome == .applied { measured = [:] }
+        return outcome
+    }
+
+    /// Another subscription's profile, without a prompt: refused by the helper (exit 3) unless the
+    /// last import approved its servers and DIRECT (ADR 0036).
+    func coreUse(file: String) async -> RefreshOutcome {
+        busy = true
+        defer { busy = false; refresh() }
+        let result = await readHelper(["core", "use", file])
         let outcome = RefreshOutcome(status: result.status, output: result.output)
         if outcome == .applied { measured = [:] }
         return outcome

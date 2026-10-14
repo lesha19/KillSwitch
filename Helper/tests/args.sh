@@ -15,7 +15,7 @@ refuses() { if passwordless_args_ok "$@"; then bad "took: ks $(printf '%q ' "$@"
 # every passwordless command of install.sh's sudoers, as written there
 eval "$(sed -n '/^sudoers_text() {/,/^}/p' "$here/../install.sh")"
 cmds=$(sudoers_text someone /k | sed -n 's/^someone ALL=(root) NOPASSWD: //p' | tr ',' '\n' | sed 's/^ *\/k //')
-[ "$(wc -l <<<"$cmds")" -eq 15 ] && ok "sudoers lists 15 passwordless commands" || bad "sudoers commands: $cmds"
+[ "$(wc -l <<<"$cmds")" -eq 16 ] && ok "sudoers lists 16 passwordless commands" || bad "sudoers commands: $cmds"
 grep -qx 'core restart' <<<"$cmds" && ok "sudoers: core restart («Перезапустить VPN», ADR 0035)" || bad "sudoers: no core restart"
 grep -qx 'core traffic' <<<"$cmds" && ok "sudoers: core traffic (the menu bar speed)" || bad "sudoers: no core traffic"
 grep -qx 'core connections' <<<"$cmds" && ok "sudoers: core connections (the «Трафик» window)" || bad "sudoers: no core connections"
@@ -45,6 +45,12 @@ refuses core refresh
 refuses core refresh relative.json
 refuses core refresh $'/tmp/a\nb'
 refuses core refresh /a /b
+grep -qx 'core use \*' <<<"$cmds" && ok "sudoers: core use (another approved subscription, #64)" || bad "sudoers: no core use"
+takes core use "/Users/me/Library/Caches/com.lesha19.KillSwitch/sub.json"
+refuses core use
+refuses core use relative.json
+refuses core use $'/tmp/a\nb'
+refuses core use /a /b
 takes diag report /Users/me/Desktop
 refuses diag report Desktop
 refuses diag report /a /b
@@ -55,6 +61,7 @@ takes set adblock 1
 takes set blockadult 1
 takes set doh https://dns.example.com/dns-query
 takes core import /x.json
+takes core import /x.json /y.json
 
 # --- install.sh: the user it writes into sudoers
 eval "$(sed -n '/^valid_user() {/,/^}/p' "$here/../install.sh")"
@@ -68,7 +75,7 @@ done
 
 # every command that writes the core's config runs under the core lock (rotation, refresh and
 # import write the same files): ks's own dispatch asks core_lock_wanted (ADR 0023)
-for c in "core import /f" "core refresh /f" "set splitapps x" "set multihop off" "set diag 1" "set adblock 1" "set blockadult 1" "set blocksocial 0" "set blockbetting 1" "set doh https://dns.example.com/q" "_regen" "repair" "core select Сервер DE"; do
+for c in "core import /f" "core refresh /f" "core use /f" "set splitapps x" "set multihop off" "set diag 1" "set adblock 1" "set blockadult 1" "set blocksocial 0" "set blockbetting 1" "set doh https://dns.example.com/q" "_regen" "repair" "core select Сервер DE"; do
   # shellcheck disable=SC2086 # the command's words
   core_lock_wanted $c && ok "under the core lock: ks $c" || bad "not under the core lock: ks $c"
 done

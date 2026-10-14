@@ -49,6 +49,9 @@ final class Endpoint: NSObject, HelperProtocol, Sendable {
     func coreRefresh(profile: FileHandle, reply: @escaping Reply) {
         Executor.perform(.coreRefresh(profile: Executor.profilePlaceholder), profile: profile, caller: uid, reply: reply)
     }
+    func coreUse(profile: FileHandle, reply: @escaping Reply) {
+        Executor.perform(.coreUse(profile: Executor.profilePlaceholder), profile: profile, caller: uid, reply: reply)
+    }
     func diagReport(output: FileHandle, reply: @escaping Reply) {
         // the journal holds every user's connections: not for whoever else is logged in
         guard DiagReport.mayCollect(caller: uid, console: DiagReport.consoleUser(), installer: DiagReport.installingUser()) else {
@@ -102,9 +105,9 @@ final class Endpoint: NSObject, HelperProtocol, Sendable {
     func serverRemove(address: String, authorization: Data, reply: @escaping Reply) {
         Executor.perform(.serverRemove(address), authorization: authorization, caller: uid, reply: reply)
     }
-    func coreImport(profile: FileHandle, authorization: Data, reply: @escaping Reply) {
+    func coreImport(profile: FileHandle, others: [FileHandle], authorization: Data, reply: @escaping Reply) {
         Executor.perform(.coreImport(profile: Executor.profilePlaceholder), authorization: authorization, profile: profile,
-                         caller: uid, reply: reply)
+                         others: others, caller: uid, reply: reply)
     }
     func install(servers: [String], authorization: Data, reply: @escaping Reply) {
         // the sudoers entry goes to whoever connected, not to a name the app sends

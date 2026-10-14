@@ -9,18 +9,20 @@ enum Executor {
 
     private static let queue = DispatchQueue(label: "com.lesha19.KillSwitch.helper.run", attributes: .concurrent)
 
-    static func perform(_ command: HelperCommand, authorization: Data? = nil, profile: FileHandle? = nil,
+    static func perform(_ command: HelperCommand, authorization: Data? = nil, profile: FileHandle? = nil, others: [FileHandle] = [],
                         output: FileHandle? = nil, caller: uid_t, reply: @escaping @Sendable (Int32, String, String) -> Void) {
         Activity.shared.begin()
         queue.async {
-            defer { Activity.shared.end() }
-            let result = output.map { report(command, into: $0) } ?? run(command, caller: caller, authorization: authorization, profile: profile)
+            defer { Activity.shared.end(); others.forEach { try? $0.close() } }
+            let result = output.map { report(command, into: $0) }
+                ?? run(command, caller: caller, authorization: authorization, profile: profile, others: others)
             Log.daemon.info("\(String(describing: command.program), privacy: .public) \(command.arguments.first ?? "", privacy: .public): \(result.status)")
             reply(result.status, result.stdout, result.stderr)
         }
     }
 
-    private static func run(_ command: HelperCommand, caller: uid_t, authorization: Data?, profile: FileHandle?) -> HelperReply {
+    private static func run(_ command: HelperCommand, caller: uid_t, authorization: Data?, profile: FileHandle?,
+                            others: [FileHandle]) -> HelperReply {
         // KS-11: by the connecting uid (audit token), whatever program the client is
         if command.onlyForConsoleUser, !HelperCommand.mayChangeWithoutPassword(
             caller: caller, console: DiagReport.consoleUser(), installer: DiagReport.installingUser()) {
@@ -33,22 +35,33 @@ enum Executor {
             }
         }
         var command = command
-        var copy: URL?
-        defer { if let copy { PrivateDirectory.remove(copy.deletingLastPathComponent()) } }
+        var copies: [URL] = []
+        defer { copies.forEach { PrivateDirectory.remove($0.deletingLastPathComponent()) } }
         if let profile {
-            guard let path = copyProfile(profile) else {
-                return HelperReply(status: HelperReply.failedToRun, stdout: "", stderr: "Не удалось прочитать профиль")
+            // the others only with an import, and no more than ks takes
+            var isImport = false
+            if case .coreImport = command { isImport = true }
+            guard others.isEmpty || (isImport && others.count <= HelperCommand.maxOtherProfiles) else {
+                return HelperReply(status: HelperReply.refused, stdout: "", stderr: "Недопустимые данные")
             }
-            copy = path
+            for handle in [profile] + others {
+                guard let path = copyProfile(handle) else {
+                    return HelperReply(status: HelperReply.failedToRun, stdout: "", stderr: "Не удалось прочитать профиль")
+                }
+                copies.append(path)
+            }
+            let path = copies[0].path
             switch command {
-            case .coreImport: command = .coreImport(profile: path.path)
-            case .coreRefresh: command = .coreRefresh(profile: path.path)
+            case .coreImport: command = .coreImport(profile: path, others: copies.dropFirst().map(\.path))
+            case .coreRefresh: command = .coreRefresh(profile: path)
+            case .coreUse: command = .coreUse(profile: path)
             default: return HelperReply(status: HelperReply.refused, stdout: "", stderr: "Профиль не к этой команде")
             }
         }
+        let copy = copies.first
         let needsCopy: Bool
         switch command {
-        case .coreImport, .coreRefresh: needsCopy = true
+        case .coreImport, .coreRefresh, .coreUse: needsCopy = true
         default: needsCopy = false
         }
         guard command.isValid, !needsCopy || copy != nil else {

@@ -35,6 +35,39 @@ final class SubscriptionsTests: XCTestCase {
     }
 
     /// «Свои серверы»: today's profile without a subscription, nothing of any subscription.
+    /// #64: one password approves every subscription; the one that runs goes first (ks runs the first).
+    func testAnImportHandsAllSubscriptionsRunningFirst() {
+        XCTAssertEqual(Subscriptions.approvalOrder(running: "2", all: ["1", "2", "3", ServerID.own]), ["2", "1", "3", ServerID.own])
+        XCTAssertEqual(Subscriptions.approvalOrder(running: ServerID.own, all: ["1", ServerID.own]), [ServerID.own, "1"])
+        XCTAssertEqual(Subscriptions.approvalOrder(running: "1", all: ["1"]), ["1"])
+        // what ks takes: the running one and 64 others, the rest left unapproved (not a failed import)
+        let many = (1...70).map(String.init)
+        XCTAssertEqual(Subscriptions.approvalOrder(running: "70", all: many), ["70"] + (1...64).map(String.init))
+    }
+
+    /// #64 review B2: the confirmation names what one password approves, when it is more than one.
+    func testTheConfirmationNamesTheSubscriptionsItApproves() {
+        XCTAssertNil(Subscriptions.approvalNote(titles: []))
+        XCTAssertNil(Subscriptions.approvalNote(titles: ["Stork"]))
+        XCTAssertEqual(Subscriptions.approvalNote(titles: ["Stork", "iVPN", "Свои серверы"]),
+                       "Пароль подтвердит серверы подписок: Stork, iVPN, Свои серверы")
+    }
+
+    /// #64: a timer only refreshes the running subscription; a click on another one tries it
+    /// without the password and asks once for all only when the helper refuses (exit 3) or the
+    /// installed sudoers has no `core use` yet.
+    func testSwitchingSubscriptionsTriesWithoutThePasswordFirst() {
+        XCTAssertEqual(Subscriptions.handOver(interactive: false, switching: false), .refresh)
+        XCTAssertEqual(Subscriptions.handOver(interactive: false, switching: true), .refresh)
+        XCTAssertEqual(Subscriptions.handOver(interactive: true, switching: true), .use)
+        XCTAssertEqual(Subscriptions.handOver(interactive: true, switching: false), .importAll)
+        XCTAssertTrue(Subscriptions.needsImport(after: .newServers))
+        XCTAssertTrue(Subscriptions.needsImport(after: .routingChanged))
+        XCTAssertTrue(Subscriptions.needsImport(after: .needsPassword))
+        XCTAssertFalse(Subscriptions.needsImport(after: .applied))
+        XCTAssertFalse(Subscriptions.needsImport(after: .failed("x")))
+    }
+
     func testOwnServersGetTheProfileWithoutASubscription() throws {
         let profile = try XCTUnwrap(Subscriptions.profile(for: ServerID(subscription: ServerID.own, name: "Дом"),
                                                           profiles: ["s1": stork], own: own))

@@ -29,6 +29,9 @@ final class HelperCommandTests: XCTestCase {
             (.serverAdd("2001:db8::1"), ["server-add", "2001:db8::1"]),
             (.serverRemove("192.0.2.1"), ["server-remove", "192.0.2.1"]),
             (.coreImport(profile: "/private/tmp/p.json"), ["core", "import", "/private/tmp/p.json"]),
+            (.coreImport(profile: "/private/tmp/p.json", others: ["/private/tmp/q.json", "/private/tmp/r.json"]),
+             ["core", "import", "/private/tmp/p.json", "/private/tmp/q.json", "/private/tmp/r.json"]),
+            (.coreUse(profile: "/private/tmp/q.json"), ["core", "use", "/private/tmp/q.json"]),
             (.repair, ["repair"]),
             (.setSwitch("blockadult", true), ["set", "blockadult", "1"]), (.setSwitch("blocksocial", false), ["set", "blocksocial", "0"]),
             (.setSwitch("blockbetting", true), ["set", "blockbetting", "1"]),
@@ -112,6 +115,7 @@ final class HelperCommandTests: XCTestCase {
         let all: [HelperCommand] = [
             .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreRestart, .coreProxies, .coreTraffic,
             .coreConnections, .coreSelect(group: "g", proxy: "p"), .coreDelay("g"), .coreRefresh(profile: "/tmp/p.json"),
+            .coreUse(profile: "/tmp/p.json"), .coreImport(profile: "/tmp/p.json", others: ["/tmp/q.json"]),
             .protectionOff, .pause(minutes: 5), .setSwitch("lan", true), .setSwitch("adblock", true), .setSplitApps([]),
             .setMultihop(nil), .setCore(.xray), .setMTU(1400),
             .allow("192.0.2.1"), .unallow("192.0.2.1"), .serverAdd("192.0.2.1"), .serverRemove("192.0.2.1"),
@@ -140,7 +144,7 @@ final class HelperCommandTests: XCTestCase {
     func testPasswordlessChangesOnlyForTheConsoleUserWhoInstalled() {
         let restricted: [HelperCommand] = [
             .protectionOn, .netRestore, .coreOn, .coreOff, .coreRestart, .coreSelect(group: "g", proxy: "p"),
-            .coreRefresh(profile: "/tmp/p.json"), .upgrade, .coreConnections,
+            .coreRefresh(profile: "/tmp/p.json"), .coreUse(profile: "/tmp/p.json"), .upgrade, .coreConnections,
         ]
         let open: [HelperCommand] = [.state, .probe, .coreState, .coreProxies, .coreTraffic, .coreDelay("g")]
         for command in restricted { XCTAssertTrue(command.onlyForConsoleUser, "\(command)") }
@@ -290,6 +294,11 @@ final class HelperCommandTests: XCTestCase {
         XCTAssertFalse(HelperCommand.coreImport(profile: "x.json").isValid)
         XCTAssertFalse(HelperCommand.coreRefresh(profile: "").isValid)
         XCTAssertFalse(HelperCommand.coreRefresh(profile: "/tmp/a\nb").isValid)
+        XCTAssertFalse(HelperCommand.coreUse(profile: "x.json").isValid)
+        XCTAssertFalse(HelperCommand.coreImport(profile: "/tmp/p.json", others: ["x.json"]).isValid)
+        // ks takes the first and at most 64 others (core_import)
+        XCTAssertTrue(HelperCommand.coreImport(profile: "/tmp/p.json", others: (1...64).map { "/tmp/\($0).json" }).isValid)
+        XCTAssertFalse(HelperCommand.coreImport(profile: "/tmp/p.json", others: (1...65).map { "/tmp/\($0).json" }).isValid)
     }
 
     func testInstallUser() {
