@@ -204,7 +204,7 @@ private struct ServerRow: View {
     var body: some View {
         let server = control.currentServer
         let title = control.coreRunning ? server.map(ServerName.display)
-            : control.pendingChoice?.title ?? control.lastServer.map(ServerName.display)
+            : control.pendingChoice?.title ?? control.lastServer.map { ServerName.display($0.name) }
         Button(action: action) {
             HStack {
                 Text(title ?? String(localized: "Выбрать сервер")).lineLimit(1)
@@ -230,7 +230,7 @@ private struct ServerRow: View {
         if let pending = control.pendingChoice {
             return pending.isFastest ? ServerPicker.fastestTitle : ServerName.spoken(pending.name)
         }
-        return control.lastServer.map(ServerName.spoken) ?? String(localized: "не выбран")
+        return control.lastServer.map { ServerName.spoken($0.name) } ?? String(localized: "не выбран")
     }
 }
 
@@ -340,7 +340,7 @@ private struct NoticeBanner: View {
             case .network(let cause):
                 Banner(icon: "wifi.exclamationmark", title: notice.title, message: notice.message) {
                     if cause == .serversBlocked {
-                        if let fastest = control.proxies.flatMap({ ServerPicker.entries($0).first(where: \.isFastest) }) {
+                        if let fastest = control.proxies.flatMap({ ServerPicker.entries($0, subscription: control.activeSubscription).first(where: \.isFastest) }) {
                             Button(ServerPicker.fastestTitle) { control.choose(fastest) }.disabled(control.busy)
                         }
                         Button("Выбрать сервер…", action: chooseServer)
@@ -350,7 +350,7 @@ private struct NoticeBanner: View {
                 }
             case .serversDown:
                 Banner(icon: "antenna.radiowaves.left.and.right.slash", title: notice.title, message: notice.message) {
-                    if let fastest = control.proxies.flatMap({ ServerPicker.entries($0).first(where: \.isFastest) }) {
+                    if let fastest = control.proxies.flatMap({ ServerPicker.entries($0, subscription: control.activeSubscription).first(where: \.isFastest) }) {
                         Button(ServerPicker.fastestTitle) { control.choose(fastest) }.disabled(control.busy)
                     }
                     Button("Выбрать сервер…", action: chooseServer)

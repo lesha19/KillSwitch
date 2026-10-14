@@ -157,29 +157,18 @@ enum DeepLink: Equatable {
         let created: TimeInterval
         /// The sheet appeared.
         var shown = false
-        /// The masked link of the subscription an `add` would replace, as the sheet shows it: read
-        /// when the link came, read again on «Добавить» (`needsSecondLook`).
-        var replacing: String?
 
         static let timeout: TimeInterval = 120
 
-        init(_ confirmation: Confirmation, at created: TimeInterval, replacing: String? = nil) {
+        init(_ confirmation: Confirmation, at created: TimeInterval) {
             self.confirmation = confirmation
             self.created = created
-            self.replacing = replacing
         }
 
         /// `busy`: a subscription it confirmed is being fetched; the sheet stays until it answers.
         func isStale(now: TimeInterval, resignedActive: Bool, busy: Bool) -> Bool {
             guard !busy else { return false }
             return now - created > Self.timeout || (resignedActive && !shown)
-        }
-
-        /// An `add` whose kept subscription changed since the sheet was drawn (added, replaced or
-        /// removed elsewhere): «Добавить» would not do what the sheet says.
-        func needsSecondLook(current: String?) -> Bool {
-            guard case .add = confirmation else { return false }
-            return current != replacing
         }
     }
 

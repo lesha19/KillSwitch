@@ -194,6 +194,7 @@ targets:
       - App/Core/Protection.swift
       - App/Core/CoreProxies.swift
       - App/Core/ServerPicker.swift
+      - App/Core/ServerID.swift
       - App/Core/CoreDelay.swift
       - App/Core/ServerName.swift
       - App/Core/ServerDescription.swift

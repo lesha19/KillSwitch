@@ -96,6 +96,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   «Tailscale, NetBird». Not for the own DoH server's name (it is resolved at the VPN exit). Exact names only; not IPv6, 127.x, the VPN's servers, the subscription link or the hosts the
   app needs for updates and checks (`ks set hosts <name=ip,…>`, `""` clears). Travels with
   «Перенос настроек».
+- Several subscriptions (#63, ADR 0036): adding a link (Settings, a QR code, `killswitch://add`)
+  adds a subscription and never replaces one; the same link again is refused. «Серверы» shows
+  «Недавние», «Избранное» (each row names its subscription), one block per subscription titled by
+  its `profile-title` (else the link's host), then «Свои серверы». A server is (subscription,
+  server): «Литва» of two subscriptions are two rows. Picking a server hands the helper its
+  subscription's profile alone (own servers only in «Свои серверы»); a server of another
+  subscription is switched to with the admin's password for now. The single subscription of 0.19
+  becomes the first of the list, with favourites, recents and the chosen server.
 
 ### Changed
 - The VPN blocks everything outside it from «Подключить» to «Отключить», whatever «защита» says

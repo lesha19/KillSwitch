@@ -58,6 +58,27 @@ final class SettingsBackupTests: XCTestCase {
         XCTAssertTrue(text.contains("\"format\" : \"killswitch-settings\""))
     }
 
+    /// ADR 0036: favourites and recents are kept by (subscription, server). The file names the
+    /// servers of the subscription in use and the own ones, by name (by subscription title: #66);
+    /// read back, own names go to «Свои серверы», the rest to the subscription in use.
+    func testServersOfTheSubscriptionInUseTravelByName() throws {
+        let home = ServerID(subscription: ServerID.own, name: "Дом").stored
+        defaults.set(["s1\t\(germanyKey)", home, "s2\t🇳🇱 NL", "s1\tGone-key-less"].joined(separator: "\n"), forKey: "favouriteServers")
+        defaults.set("s1\t\(germanyKey)", forKey: "recentServers")
+        let app = SettingsBackup.snapshot(defaults, serverKeys: ["🇩🇪 Germany": germanyKey], subscription: "s1")
+        XCTAssertEqual(app["favouriteServers"], .list(["🇩🇪 Germany", "Дом", "Gone-key-less"]))
+        XCTAssertEqual(app["recentServers"], .list(["🇩🇪 Germany"]))
+
+        let fresh = UserDefaults(suiteName: suite + "-fresh")!
+        defer { UserDefaults().removePersistentDomain(forName: suite + "-fresh") }
+        let read = try SettingsBackup.read(SettingsBackup.export(.init(app: app, root: root), appVersion: "0.20.0", date: Date()))
+        SettingsBackup.apply(read.app, to: fresh, subscription: "new", own: ["Дом"])
+        XCTAssertEqual(ServerRecents.list(fresh.string(forKey: "favouriteServers") ?? "").compactMap(ServerID.init(stored:)),
+                       [ServerID(subscription: "new", name: "🇩🇪 Germany"), ServerID(subscription: ServerID.own, name: "Дом"),
+                        ServerID(subscription: "new", name: "Gone-key-less")])
+        XCTAssertEqual(fresh.string(forKey: "recentServers"), ServerID(subscription: "new", name: "🇩🇪 Germany").stored)
+    }
+
     func testExportReadsBackTheSame() throws {
         defaults.set(false, forKey: "autoConnect")
         defaults.set(["Дом"], forKey: "trustedNetworks")
@@ -75,10 +96,10 @@ final class SettingsBackupTests: XCTestCase {
         let read = try SettingsBackup.read(file(app: ["pauseLong": 60, "favouriteServers": ["NL"], "wifiRules": [["ssid": "Cafe", "autoConnect": false]],
                                                       "trustedNetworks": ["Дом"], "updateBetaChannel": true]))
         defaults.set(7, forKey: "pauseShort")
-        SettingsBackup.apply(read.app, to: defaults)
+        SettingsBackup.apply(read.app, to: defaults, subscription: "s1")
 
         XCTAssertEqual(defaults.integer(forKey: "pauseLong"), 60)
-        XCTAssertEqual(defaults.string(forKey: "favouriteServers"), "NL")
+        XCTAssertEqual(defaults.string(forKey: "favouriteServers"), "s1\tNL")
         XCTAssertEqual(WiFiRules.decode(defaults.data(forKey: WiFiRules.key)), [.init(ssid: "Cafe", autoConnect: false)])
         XCTAssertEqual(defaults.stringArray(forKey: "trustedNetworks"), ["Дом"])
         XCTAssertTrue(UpdateChannel.isBeta(defaults))

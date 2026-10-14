@@ -361,13 +361,23 @@ final class KillSwitchControl {
     /// A server picked while disconnected (ServerPicker path), applied by the next «Подключить».
     private(set) var pendingChoice: ServerPicker.Entry? = KillSwitchControl.loadPending()
     /// The server of the last connection, shown while disconnected.
-    private(set) var lastServer = UserDefaults.standard.string(forKey: "lastServer")
+    private(set) var lastServer = UserDefaults.standard.string(forKey: Subscriptions.lastKey).flatMap(ServerID.init(stored:))
 
-    private static let pendingKey = "pendingServer"
+    private static let pendingKey = Subscriptions.pendingKey
+
+    /// The subscription (or ServerID.own) whose profile the helper was handed last (ADR 0036);
+    /// VPNClient sets it on every import.
+    private(set) var activeSubscription = UserDefaults.standard.string(forKey: Subscriptions.activeKey) ?? ServerID.own
+
+    func setActiveSubscription(_ id: String) {
+        guard id != activeSubscription else { return }
+        activeSubscription = id
+        UserDefaults.standard.set(id, forKey: Subscriptions.activeKey)
+    }
 
     /// «Выбор сервера»: switches the running core at once, or remembers the choice for «Подключить».
     func choose(_ entry: ServerPicker.Entry) {
-        setChosen(entry.name)
+        setChosen(entry.server)
         serversDown = nil
         guard coreRunning else {
             pendingChoice = entry
@@ -384,7 +394,7 @@ final class KillSwitchControl {
     /// «Предпочитаемый сервер» of a Wi-Fi network (WiFiRules): like `choose`, but never asks for a
     /// password, since nobody clicked.
     func chooseAutomatically(_ entry: ServerPicker.Entry) async {
-        setChosen(entry.name)
+        setChosen(entry.server)
         serversDown = nil
         guard coreRunning else {
             pendingChoice = entry
@@ -397,6 +407,24 @@ final class KillSwitchControl {
         loadProxies(force: true)
     }
 
+    /// A server of the subscription just imported (VPNClient.choose): chosen as on «Подключить»,
+    /// since the core's API may take a moment to come back after the import.
+    func chooseImported(_ entry: ServerPicker.Entry) async {
+        setChosen(entry.server)
+        serversDown = nil
+        pendingChoice = entry
+        if let data = try? JSONEncoder().encode(entry) { UserDefaults.standard.set(data, forKey: Self.pendingKey) }
+        if coreRunning { await applyPendingChoice() }
+    }
+
+    /// A deleted subscription's chosen, last and waiting server (ADR 0036): the home screen no
+    /// longer names it. Subscriptions.remove clears what was stored.
+    func forget(subscription: String) {
+        if chosenServer?.subscription == subscription { chosenServer = nil }
+        if lastServer?.subscription == subscription { lastServer = nil }
+        if pendingChoice?.subscription == subscription { pendingChoice = nil }
+    }
+
     /// The current server in «Выбор сервера» terms: the running core's choice, else the one
     /// waiting for «Подключить».
     var pickedServer: String? {
@@ -407,20 +435,21 @@ final class KillSwitchControl {
     // MARK: the chosen server went silent (nothing switches by itself, ADR 0036)
 
     /// The server the person picked last.
-    private(set) var chosenServer = UserDefaults.standard.string(forKey: KillSwitchControl.chosenKey)
+    private(set) var chosenServer = UserDefaults.standard.string(forKey: KillSwitchControl.chosenKey).flatMap(ServerID.init(stored:))
     /// The chosen server, as displayed, while it does not answer; the person picks what next.
     private(set) var serversDown: String?
 
-    private static let chosenKey = "chosenServer"
+    private static let chosenKey = Subscriptions.chosenKey
 
-    private func setChosen(_ name: String?) {
-        chosenServer = name
-        UserDefaults.standard.set(name, forKey: Self.chosenKey)
+    private func setChosen(_ server: ServerID?) {
+        chosenServer = server
+        UserDefaults.standard.set(server?.stored, forKey: Self.chosenKey)
     }
 
     /// After every server list from the core: tells once when the chosen server stopped answering.
     private func checkServers(_ proxies: CoreProxies) {
-        let server = NetworkCause.serverDown(chosen: chosenServer, proxies: proxies)
+        let chosen = chosenServer.flatMap { $0.subscription == activeSubscription ? $0.name : nil }
+        let server = NetworkCause.serverDown(chosen: chosen, proxies: proxies)
         if let server, serversDown != server { notify(.serversDown(server: server)) }
         serversDown = server
     }
@@ -533,6 +562,8 @@ final class KillSwitchControl {
         guard let entry = pendingChoice else { return }
         pendingChoice = nil
         UserDefaults.standard.removeObject(forKey: Self.pendingKey)
+        // a server of another subscription waits for its import (VPNClient.choose)
+        guard entry.subscription == activeSubscription else { return }
         for step in entry.path {
             for attempt in 0..<6 {
                 if case .ok = await callHelper(["core", "select", step.group, step.proxy], interactive: false) { break }
@@ -608,7 +639,7 @@ final class KillSwitchControl {
 
     /// Picks a server in a selector group of the running core. Always a click.
     func coreSelect(group: String, proxy: String) {
-        if group == proxies?.mainGroup?.name { setChosen(proxy) }
+        if group == proxies?.mainGroup?.name { setChosen(ServerID(subscription: activeSubscription, name: proxy)) }
         busy = true
         Task {
             await select(group: group, proxy: proxy)
@@ -718,9 +749,9 @@ final class KillSwitchControl {
                     if parsed != proxies { proxies = parsed }
                     checkServers(parsed)
                     checkNetwork(parsed)
-                    if let server = currentServer, server != lastServer {
-                        lastServer = server
-                        UserDefaults.standard.set(server, forKey: "lastServer")
+                    if let name = currentServer, ServerID(subscription: activeSubscription, name: name) != lastServer {
+                        lastServer = ServerID(subscription: activeSubscription, name: name)
+                        UserDefaults.standard.set(lastServer?.stored, forKey: Subscriptions.lastKey)
                     }
                 } else {
                     proxiesError = UserError.from(raw: "proxies: not a JSON list", context: .serverList)
@@ -838,7 +869,7 @@ final class KillSwitchControl {
             disconnecting = false
         } else if !wasOwnUp && ownTunnelUp {
             NotificationCenter.default.post(name: UpdateRetry.vpnConnected, object: nil)
-            if dropped { notify(.reconnected(server: lastServer.map(ServerName.display))) }
+            if dropped { notify(.reconnected(server: lastServer.map { ServerName.display($0.name) })) }
             dropped = false
             disconnecting = false
         }

@@ -86,7 +86,7 @@ final class StatusItem: NSObject, NSMenuDelegate {
 
     /// «Самый быстрый» of the server list, connected or not.
     private var fastest: ServerPicker.Entry? {
-        (control.proxies ?? client.profileProxies).flatMap { ServerPicker.entries($0).first(where: \.isFastest) }
+        (control.proxies ?? client.profileProxies).flatMap { ServerPicker.entries($0, subscription: client.activeID).first(where: \.isFastest) }
     }
 
     @objc private func choose(_ sender: NSMenuItem) {

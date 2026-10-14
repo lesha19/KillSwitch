@@ -10,6 +10,7 @@ struct KillSwitchApp: App {
     @State private var updater: Updater
 
     init() {
+        VPNClient.migrate()   // before KillSwitchControl reads the chosen server (ADR 0036)
         let control = KillSwitchControl()
         let client = VPNClient(control: control)
         let updater = Updater()

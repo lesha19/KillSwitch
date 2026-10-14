@@ -50,16 +50,17 @@ enum Shortcuts {
                          : String(localized: "Выбран сервер \(server). Он включится при следующем подключении.")
     }
 
-    /// The parameter of «Сменить страну»: the list of «Серверы» (ServerPicker).
-    static func servers(_ proxies: CoreProxies?) -> [ServerPicker.Entry] {
-        proxies.map(ServerPicker.entries) ?? []
+    /// The parameter of «Сменить страну»: the list of «Серверы» (ServerPicker) of the subscription
+    /// the helper runs (`subscription`; all subscriptions: #66).
+    static func servers(_ proxies: CoreProxies?, subscription: String = ServerID.own) -> [ServerPicker.Entry] {
+        proxies.map { ServerPicker.entries($0, subscription: subscription) } ?? []
     }
 
-    static func servers(_ proxies: CoreProxies?, matching query: String) -> [ServerPicker.Entry] {
-        ServerPicker.search(servers(proxies), query)
+    static func servers(_ proxies: CoreProxies?, subscription: String = ServerID.own, matching query: String) -> [ServerPicker.Entry] {
+        ServerPicker.search(servers(proxies, subscription: subscription), query)
     }
 
-    static func servers(_ proxies: CoreProxies?, named names: [String]) -> [ServerPicker.Entry] {
-        servers(proxies).filter { names.contains($0.name) }
+    static func servers(_ proxies: CoreProxies?, subscription: String = ServerID.own, named names: [String]) -> [ServerPicker.Entry] {
+        servers(proxies, subscription: subscription).filter { names.contains($0.name) }
     }
 }

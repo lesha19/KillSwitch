@@ -178,41 +178,41 @@ private struct VPNSettings: View {
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
     @AppStorage("showProfileGroups") private var showProfileGroups = false
-    @State private var revealed: String?
-    @State private var editing = false
+    /// Links shown on request, by subscription.
+    @State private var revealed: [String: String] = [:]
     @State private var newURL = ""
-    @State private var confirmRemove = false
+    /// The subscription «Удалить…» asks about.
+    @State private var removing: Subscription?
     @State private var addingServer = false
     @State private var editingApps = false
 
     var body: some View {
         @Bindable var client = client
         SettingsForm {
-            Section("Подписка") {
-                if client.hasURL && !editing {
-                    LabeledContent("Ссылка") {
-                        Text(revealed ?? client.maskedURL ?? "").monospaced().textSelection(.enabled)
-                            .lineLimit(revealed == nil ? 1 : nil)
+            Section("Подписки") {
+                // ADR 0036: each subscription of the list; adding one never replaces another
+                ForEach(client.subscriptions) { subscription in
+                    LabeledContent(subscription.title) {
+                        Text(revealed[subscription.id] ?? client.maskedURL(of: subscription.id) ?? "").monospaced().textSelection(.enabled)
+                            .lineLimit(revealed[subscription.id] == nil ? 1 : nil)
                     }
                     HStack {
-                        Button(revealed == nil ? String(localized: "Показать") : String(localized: "Скрыть")) {
-                            revealed = revealed == nil ? client.revealURL() : nil
-                        }.hiddenByProvider(client.urlHidden)
-                        Button("Изменить…") { editing = true; revealed = nil }
-                        SubscriptionQRButton()
+                        Button(revealed[subscription.id] == nil ? String(localized: "Показать") : String(localized: "Скрыть")) {
+                            revealed[subscription.id] = revealed[subscription.id] == nil ? client.revealURL(of: subscription.id) : nil
+                        }.hiddenByProvider(client.urlHidden(subscription.id))
+                        SubscriptionQRButton(id: subscription.id)
                         Spacer()
-                        Button("Удалить…", role: .destructive) { confirmRemove = true }
-                    }
-                    SubscriptionSummary()
-                } else {
-                    HStack {
-                        TextField("https://…", text: $newURL).onSubmit(saveURL)
-                            .accessibilityLabel("Ссылка на подписку")
-                        Button("Сохранить", action: saveURL).disabled(newURL.isEmpty)
-                        QRScanButton()
-                        if editing { Button("Отмена") { editing = false; newURL = "" } }
+                        Button("Удалить…", role: .destructive) { removing = subscription }
                     }
                 }
+                if client.hasURL { SubscriptionSummary() }
+                HStack {
+                    TextField(client.hasURL ? String(localized: "Ещё одна подписка: https://…") : "https://…", text: $newURL).onSubmit(saveURL)
+                        .accessibilityLabel("Ссылка на подписку")
+                    Button("Добавить", action: saveURL).disabled(newURL.isEmpty)
+                    QRScanButton()
+                }
+                if client.hasURL, let error = client.lastError { InlineError(error: error) }
                 Picker("Обновлять", selection: $client.intervalHours) {
                     Text("как просит подписка (\(client.status.serverIntervalHours) ч)").tag(0)
                     ForEach([1, 3, 6, 12, 24, 48], id: \.self) { Text("каждые \($0) ч").tag($0) }
@@ -268,9 +268,10 @@ private struct VPNSettings: View {
         }
         .sheet(isPresented: $addingServer) { AddServerSheet() }
         .sheet(isPresented: $editingApps) { SplitAppsSheet() }
-        .confirmationDialog("Удалить подписку?", isPresented: $confirmRemove) {
-            Button("Удалить", role: .destructive) { revealed = nil; Task { await client.removeURL() } }
-        } message: {
+        .confirmationDialog("Удалить подписку?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
+                            presenting: removing) { subscription in
+            Button("Удалить", role: .destructive) { revealed = [:]; Task { await client.remove(subscription.id) } }
+        } message: { _ in
             Text("Ссылка удалится из связки ключей. VPN продолжит работать с последним списком серверов.")
         }
     }
@@ -278,8 +279,7 @@ private struct VPNSettings: View {
     private func saveURL() {
         let value = newURL
         newURL = ""
-        editing = false
-        Task { await client.setURL(value) }
+        Task { await client.add(value) }
     }
 }
 

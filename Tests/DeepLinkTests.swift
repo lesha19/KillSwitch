@@ -241,20 +241,6 @@ final class DeepLinkTests: XCTestCase {
         XCTAssertNotEqual(DeepLink.Request(.disconnect, at: start).id, DeepLink.Request(.disconnect, at: start).id)
     }
 
-    /// «Добавить» / «Заменить» was read when the link came; if the kept subscription changed since,
-    /// the sheet shows the new state and wants a second click.
-    func testAnAddWhoseSubjectChangedWantsASecondLook() {
-        let subscription = DeepLink.Subscription(url: "https://a.co/s", host: "a.co")
-        let first = DeepLink.Request(.add(subscription), at: 0, replacing: nil)
-        XCTAssertFalse(first.needsSecondLook(current: nil))
-        XCTAssertTrue(first.needsSecondLook(current: "https://old.co/•••••"))
-        let replace = DeepLink.Request(.add(subscription), at: 0, replacing: "https://old.co/•••••")
-        XCTAssertFalse(replace.needsSecondLook(current: "https://old.co/•••••"))
-        XCTAssertTrue(replace.needsSecondLook(current: nil))
-        XCTAssertTrue(replace.needsSecondLook(current: "https://other.co/•••••"))
-        XCTAssertFalse(DeepLink.Request(.disconnect, at: 0).needsSecondLook(current: "https://old.co/•••••"))
-    }
-
     func testAddRefusesImpossiblePorts() {
         for port in ["0", "65536", "99999"] {
             XCTAssertEqual(parse("killswitch://add?url=https://a.co:\(port)/s"), .failure(.badParameters), port)

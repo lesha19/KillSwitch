@@ -112,10 +112,22 @@ enum SettingsBackup {
     }
 
     /// Every field as the app has it now. Server identities become the servers' names now
-    /// (`serverKeys`, VPNClient); one no longer in the profile is left out.
-    static func snapshot(_ defaults: UserDefaults, serverKeys: [String: String]) -> [String: Value] {
-        var names: [String: String] = [:]
-        for (name, key) in serverKeys where names[key] == nil || name < names[key]! { names[key] = name }
+    /// (`serverKeys`, VPNClient); one no longer in the profile is left out. Favourites and recents
+    /// (kept by subscription, ADR 0036) travel as the names of the servers of `subscription` (the
+    /// one in use) and of «Свои серверы»; by subscription title: #66.
+    static func snapshot(_ defaults: UserDefaults, serverKeys: [String: String], subscription: String = ServerID.own,
+                         ownKeys: [String: String] = [:]) -> [String: Value] {
+        func byKey(_ keys: [String: String]) -> [String: String] {
+            var names: [String: String] = [:]
+            for (name, key) in keys where names[key] == nil || name < names[key]! { names[key] = name }
+            return names
+        }
+        let names = byKey(serverKeys), ownNames = byKey(ownKeys)
+        func name(_ line: Substring) -> String? {
+            guard let server = ServerID(stored: String(line)) else { return line.hasPrefix(ServerIdentity.prefix) ? names[String(line)] : String(line) }
+            guard server.subscription == subscription || server.isOwn else { return nil }
+            return server.name.hasPrefix(ServerIdentity.prefix) ? (server.isOwn ? ownNames : names)[server.name] : server.name
+        }
         var result: [String: Value] = [:]
         for field in fields {
             let stored: Value? = switch (field.fallback, field.storage) {
@@ -124,7 +136,7 @@ enum SettingsBackup {
             case (.text, _): defaults.string(forKey: field.key).map(Value.text)
             case (.list, .lines):
                 defaults.string(forKey: field.key).map { text in
-                    .list(text.split(separator: "\n").compactMap { $0.hasPrefix(ServerIdentity.prefix) ? names[String($0)] : String($0) })
+                    .list(text.split(separator: "\n").compactMap(name))
                 }
             case (.list, _): defaults.stringArray(forKey: field.key).map(Value.list)
             case (.rules, _): .rules(WiFiRules.decode(defaults.data(forKey: field.key)))
@@ -134,10 +146,18 @@ enum SettingsBackup {
         return result
     }
 
-    /// Writes where the app reads them (AppStorage, AutoConnector, Updater).
-    static func apply(_ app: [String: Value], to defaults: UserDefaults) {
+    /// Writes where the app reads them (AppStorage, AutoConnector, Updater). Favourites and recents
+    /// go to `subscription` (the one in use), the names in `own` and Xray's «… (свой)» to «Свои
+    /// серверы» (ADR 0036).
+    static func apply(_ app: [String: Value], to defaults: UserDefaults, subscription: String = ServerID.own, own: Set<String> = []) {
         for field in fields {
-            switch app[field.key] {
+            var value = app[field.key]
+            if [Subscriptions.favouritesKey, Subscriptions.recentsKey].contains(field.key), case .list(let names) = value {
+                value = .list(names.map { name in
+                    ServerID(subscription: own.contains(name) || name.hasSuffix(XrayManual.mark) ? ServerID.own : subscription, name: name).stored
+                })
+            }
+            switch value {
             case .bool(let on): defaults.set(on, forKey: field.key)
             case .int(let number): defaults.set(number, forKey: field.key)
             case .text(let text): defaults.set(text, forKey: field.key)

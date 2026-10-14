@@ -111,18 +111,21 @@ struct ServerQuery: EntityStringQuery {
     }
 
     @MainActor
+    static var subscription: String { ShortcutTarget.client?.activeID ?? ServerID.own }
+
+    @MainActor
     func entities(for identifiers: [String]) async throws -> [ServerEntity] {
-        Shortcuts.servers(Self.proxies, named: identifiers).map(ServerEntity.init)
+        Shortcuts.servers(Self.proxies, subscription: Self.subscription, named: identifiers).map(ServerEntity.init)
     }
 
     @MainActor
     func entities(matching string: String) async throws -> [ServerEntity] {
-        Shortcuts.servers(Self.proxies, matching: string).map(ServerEntity.init)
+        Shortcuts.servers(Self.proxies, subscription: Self.subscription, matching: string).map(ServerEntity.init)
     }
 
     @MainActor
     func suggestedEntities() async throws -> [ServerEntity] {
-        Shortcuts.servers(Self.proxies).map(ServerEntity.init)
+        Shortcuts.servers(Self.proxies, subscription: Self.subscription).map(ServerEntity.init)
     }
 }
 
@@ -139,7 +142,7 @@ struct ChooseServerIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let (control, client) = try await ShortcutTarget.ready()
         let proxies = control.proxies ?? client.profileProxies
-        guard let entry = Shortcuts.servers(proxies, named: [server.id]).first else {
+        guard let entry = Shortcuts.servers(proxies, subscription: client.activeID, named: [server.id]).first else {
             throw ShortcutError.refused(String(localized: "Такого сервера больше нет в списке."))
         }
         if control.busy { throw ShortcutError.refused(Shortcuts.busy) }

@@ -19,13 +19,17 @@ enum ServerPicker {
         var own = false
         /// The selections that make this entry current, innermost group first.
         var path: [Selection]
-        var id: String { name }
+        /// Whose server it is (Subscription.id, or ServerID.own).
+        var subscription = ServerID.own
+        var server: ServerID { ServerID(subscription: subscription, name: name) }
+        var id: String { server.stored }
     }
 
     static let builtIn: Set<String> = ["DIRECT", "REJECT", "REJECT-DROP", "PASS", "COMPATIBLE", "GLOBAL"]
     static let fastestTitle = String(localized: "Самый быстрый")
 
-    static func entries(_ proxies: CoreProxies) -> [Entry] {
+    /// `subscription`: whose servers they are (ADR 0036).
+    static func entries(_ proxies: CoreProxies, subscription: String = ServerID.own) -> [Entry] {
         guard let main = proxies.mainGroup else { return [] }
         let groups = Dictionary(proxies.groups.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
         var result: [Entry] = []
@@ -55,7 +59,7 @@ enum ServerPicker {
         for member in main.all {
             add(member, through: [Selection(group: main.name, proxy: member)], own: false, seen: [main.name])
         }
-        return result
+        return result.map { var entry = $0; entry.subscription = subscription; return entry }
     }
 
     /// The entry the traffic goes through now: the main group's choice, opened through selectors.
@@ -168,6 +172,48 @@ enum ServerPicker {
                         recents: query.trimmingCharacters(in: .whitespaces).isEmpty ? recents.compactMap { byName[$0] } : [],
                         favourites: servers.filter { favourites.contains($0.name) },
                         all: servers.filter { !favourites.contains($0.name) })
+    }
+
+    /// One block of the list (ADR 0036): a subscription's servers, or «Свои серверы».
+    struct Block: Equatable, Identifiable {
+        /// Subscription.id, or ServerID.own.
+        var id: String
+        var title: String
+        var entries: [Entry]
+    }
+
+    struct List: Equatable {
+        struct Block: Equatable, Identifiable {
+            var id: String
+            var title: String
+            var fastest: Entry?
+            var servers: [Entry]
+        }
+
+        var recents: [Entry]
+        var favourites: [Entry]
+        var blocks: [Block]
+    }
+
+    /// The whole list: «Недавние» and «Избранное» across the blocks, then each block searched and
+    /// sorted as `sections` does it; a favourite is listed under «Избранное» only; a block where
+    /// nothing was found is left out. `delays` by server, of the blocks whose ping is known.
+    static func list(_ blocks: [Block], favourites: Set<ServerID>, recents: [ServerID], query: String, sort: Sort,
+                     delays: [ServerID: Int]) -> List {
+        var result = List(recents: [], favourites: [], blocks: [])
+        var recent: [ServerID: Entry] = [:]
+        for block in blocks {
+            let names = { (servers: [ServerID]) in servers.filter { $0.subscription == block.id }.map(\.name) }
+            let ping = Dictionary(delays.filter { $0.key.subscription == block.id }.map { ($0.key.name, $0.value) }, uniquingKeysWith: { a, _ in a })
+            let sections = sections(block.entries, favourites: Set(names(Array(favourites))), recents: names(recents),
+                                    query: query, sort: sort, delays: ping)
+            for entry in sections.recents { recent[entry.server] = entry }
+            result.favourites += sections.favourites
+            guard sections.fastest != nil || !sections.all.isEmpty else { continue }
+            result.blocks.append(.init(id: block.id, title: block.title, fastest: sections.fastest, servers: sections.all))
+        }
+        result.recents = recents.compactMap { recent[$0] }
+        return result
     }
 
     /// A latency as words and a mark, never as colour alone (spec §9.3).

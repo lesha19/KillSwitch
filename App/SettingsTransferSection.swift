@@ -28,7 +28,8 @@ struct SettingsTransferSection: View {
     private var installed: Bool { control.state != .notInstalled }
 
     private var current: SettingsBackup.Settings {
-        .init(app: SettingsBackup.snapshot(.standard, serverKeys: client.serverKeys), root: installed ? control.rootSettings : nil)
+        .init(app: SettingsBackup.snapshot(.standard, serverKeys: client.serverKeys, subscription: client.activeID,
+                                         ownKeys: client.blocks.first { $0.id == ServerID.own }?.keys ?? [:]), root: installed ? control.rootSettings : nil)
     }
 
     var body: some View {
@@ -99,7 +100,7 @@ struct SettingsTransferSection: View {
     }
 
     private func applyApp(_ app: [String: SettingsBackup.Value]) {
-        SettingsBackup.apply(app, to: .standard)
+        SettingsBackup.apply(app, to: .standard, subscription: client.activeID, own: Set(client.manual.map(\.name)))
         auto.reloadSettings()
         let interval = UserDefaults.standard.integer(forKey: "subscriptionIntervalHours")
         if client.intervalHours != interval { client.intervalHours = interval }

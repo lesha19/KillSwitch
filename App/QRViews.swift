@@ -84,17 +84,14 @@ private struct QRScanSheet: View {
         if case .subscription = payload {
             LabeledContent("Подписка") { Text(payload.summary).monospaced().lineLimit(1) }
             if client.hasURL {
-                Text("Она заменит текущую подписку.").font(.callout).foregroundStyle(.secondary)
+                Text("Она добавится к твоим подпискам, они останутся как есть.").font(.callout).foregroundStyle(.secondary)
             }
         } else {
             LabeledContent("Свои серверы") { Text(payload.summary) }
         }
     }
 
-    private var addTitle: String {
-        if case .subscription = found, client.hasURL { return String(localized: "Заменить подписку") }
-        return String(localized: "Добавить")
-    }
+    private var addTitle: String { String(localized: "Добавить") }
 
     private func scanClipboard() {
         guard let image = NSImage(pasteboard: .general) else {
@@ -140,7 +137,7 @@ private struct QRScanSheet: View {
         tried = true
         Task {
             switch found {
-            case .subscription(let url): await client.setURL(url)
+            case .subscription(let url): await client.add(url)
             case .servers(let text): await client.addLink(text)
             case .unrecognized: break
             }
@@ -154,11 +151,13 @@ private struct QRScanSheet: View {
 /// after a warning, drawn in memory, gone when the sheet closes; not offered when the provider
 /// sends `hide-url`.
 struct SubscriptionQRButton: View {
+    /// Subscription.id.
+    let id: String
     @Environment(VPNClient.self) private var client
     @State private var warning = false
     @State private var code: CGImage?
 
-    private var hidden: Bool { client.urlHidden }
+    private var hidden: Bool { client.urlHidden(id) }
 
     var body: some View {
         Button("QR-код…") { warning = true }
@@ -166,7 +165,7 @@ struct SubscriptionQRButton: View {
             .help(hidden ? String(localized: "Сервис подписки просит не показывать ссылку")
                          : String(localized: "Показать ссылку QR-кодом, чтобы добавить подписку на телефоне"))
             .confirmationDialog("Показать QR-код подписки?", isPresented: $warning) {
-                Button("Показать") { code = client.revealURL().flatMap { QRCode.image(for: $0) } }
+                Button("Показать") { code = client.revealURL(of: id).flatMap { QRCode.image(for: $0) } }
             } message: {
                 Text("Ссылка на подписку — это ключ: кто сфотографирует код, тот подключится за твой счёт. Показывай его только своему телефону и не делай снимков экрана.")
             }

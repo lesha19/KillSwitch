@@ -93,7 +93,7 @@ struct WiFiRulesSection: View {
     }
 
     private var entries: [ServerPicker.Entry] {
-        (control.proxies ?? client.profileProxies).map(ServerPicker.entries) ?? []
+        (control.proxies ?? client.profileProxies).map { ServerPicker.entries($0, subscription: client.activeID) } ?? []
     }
 
     private func binding<Value>(_ rule: WiFiRules.Rule, _ field: WritableKeyPath<WiFiRules.Rule, Value>) -> Binding<Value> {

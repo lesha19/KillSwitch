@@ -51,7 +51,7 @@ enum DeepLinks {
         }
         perform(DeepLink.plan(link, status: control.status(client), busy: control.busy, coreConfigured: control.coreConfigured,
                               protectionOn: protectionOn(control)),
-                control: control, replacing: client.maskedURL)
+                control: control)
     }
 
     /// Protection blocks now: on, not paused, not standing by next to another VPN (ADR 0018).
@@ -59,7 +59,7 @@ enum DeepLinks {
         control.state == .on && !control.protectionStandby
     }
 
-    static func perform(_ plan: DeepLink.Plan, control: KillSwitchControl, replacing: String? = nil) {
+    static func perform(_ plan: DeepLink.Plan, control: KillSwitchControl) {
         switch plan {
         case .show(let route):
             Router.shared.go(route)
@@ -74,7 +74,7 @@ enum DeepLinks {
             assertionFailure("a link's subscription is added only from its sheet")
             log.fault("killswitch:// link: a subscription reached perform")
         case .confirm(let confirmation):
-            ask(confirmation, replacing: replacing)
+            ask(confirmation)
         case .done(let text):
             log.notice("killswitch:// link done: \(text, privacy: .public)")
         case .refused(let text):
@@ -84,7 +84,7 @@ enum DeepLinks {
         }
     }
 
-    private static func ask(_ confirmation: DeepLink.Confirmation, replacing: String?) {
+    private static func ask(_ confirmation: DeepLink.Confirmation) {
         let router = Router.shared
         guard !router.onboarding else {
             // a sheet cannot show over «Начало работы»: it would pop up later, out of context
@@ -93,7 +93,7 @@ enum DeepLinks {
             return
         }
         watchActivity()
-        let request = DeepLink.Request(confirmation, at: ProcessInfo.processInfo.systemUptime, replacing: replacing)
+        let request = DeepLink.Request(confirmation, at: ProcessInfo.processInfo.systemUptime)
         router.linkRequest = request
         router.go(.window)
         Task {
@@ -144,11 +144,6 @@ private struct LinkRequestView: View {
     @State private var adding = false
     /// The client's error is shown only for an «Добавить» from this sheet, not an older one.
     @State private var tried = false
-    /// Kept but not applied (the password was cancelled): said, and the sheet only closes.
-    @State private var notice: String?
-
-    /// The subscription it replaces (masked), as the sheet shows it.
-    private var current: String? { request.replacing }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -158,23 +153,15 @@ private struct LinkRequestView: View {
             }
             Text("Об этом попросила ссылка killswitch:// с сайта или из другой программы. Если это не ты, нажми «Отмена».")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if let notice {
-                Label(notice, systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout).fixedSize(horizontal: false, vertical: true)
-            } else if tried, let error = client.lastError {
+            if tried, let error = client.lastError {
                 InlineError(error: error)
             }
             HStack {
                 if adding { ProgressView().controlSize(.small) }
                 Spacer()
-                if notice != nil {
-                    Button("Готово") { close() }.keyboardShortcut(.cancelAction)
-                } else {
-                    // not while the new link is fetched: it is kept only if it answers, and
-                    // then the import may still ask for the password (see `notice`)
-                    Button("Отмена") { close() }.keyboardShortcut(.cancelAction).disabled(adding)
-                    confirmButton
-                }
+                // not while the new link is fetched
+                Button("Отмена") { close() }.keyboardShortcut(.cancelAction).disabled(adding)
+                confirmButton
             }
         }
         .padding(20)
@@ -186,20 +173,17 @@ private struct LinkRequestView: View {
     }
 
     @ViewBuilder private func add(_ subscription: DeepLink.Subscription) -> some View {
-        Text(current == nil ? String(localized: "Добавить подписку?") : String(localized: "Заменить подписку?")).font(.headline).accessibilityAddTraits(.isHeader)
+        Text("Добавить подписку?").font(.headline).accessibilityAddTraits(.isHeader)
         LabeledContent("Адрес") {
             Text(subscription.host).font(.title3.bold()).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
         }
         LabeledContent("Ссылка") { Text(subscription.masked).monospaced().lineLimit(1).truncationMode(.middle) }
-        if let current {
-            LabeledContent("Сейчас") { Text(current).monospaced().lineLimit(1).truncationMode(.middle) }
-        }
         Text("Добавляй, только если этот адрес — твоего провайдера.")
             .font(.callout).fixedSize(horizontal: false, vertical: true)
         Text("KillSwitch сразу обратится к этому адресу: его владелец увидит IP-адрес и идентификатор этого Mac.")
             .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        if current != nil {
-            Text("Текущая подписка останется, если новая не ответит.").font(.callout).foregroundStyle(.secondary)
+        if client.hasURL {
+            Text("Она добавится к твоим подпискам, они останутся как есть.").font(.callout).foregroundStyle(.secondary)
         }
     }
 
@@ -212,19 +196,13 @@ private struct LinkRequestView: View {
     @ViewBuilder private var confirmButton: some View {
         switch request.confirmation {
         case .add:
-            Button(current == nil ? String(localized: "Добавить") : String(localized: "Заменить подписку"), action: confirm)
-                .disabled(adding)
+            Button("Добавить", action: confirm).disabled(adding)
         case .disconnect:
             Button("Отключить", role: .destructive, action: confirm)
         }
     }
 
     private func confirm() {
-        // the kept subscription changed since the sheet was drawn: show that, ask for a second click
-        if request.needsSecondLook(current: client.maskedURL) {
-            if Router.shared.linkRequest?.id == request.id { Router.shared.linkRequest?.replacing = client.maskedURL }
-            return
-        }
         let plan = DeepLink.confirmed(request.confirmation, status: control.status(client), busy: control.busy,
                                       protectionOn: DeepLinks.protectionOn(control))
         guard case .add(let subscription) = plan else {
@@ -236,16 +214,11 @@ private struct LinkRequestView: View {
         adding = true
         tried = true
         Router.shared.linkBusy = true
-        let id = request.id
         Task {
-            let outcome = await client.setURL(subscription.url) { Router.shared.linkRequest?.id == id }
+            await client.add(subscription.url)
             Router.shared.linkBusy = false
             adding = false
-            switch outcome {
-            case .applied: close()
-            case .keptNotApplied: notice = outcome.notice
-            case .notKept: if client.lastError == nil { close() }
-            }
+            if client.lastError == nil { close() }
         }
     }
 
