@@ -178,19 +178,18 @@ enum CLI {
     }
 
     /// The `core select` steps for a server named by the person: the exact name, «fastest», a
-    /// name or title in any case, else the one entry ServerPicker.search finds. Through the
-    /// server's failover group when it has one, as the app picks it (Failover.path).
+    /// name or title in any case, else the one entry ServerPicker.search finds.
     static func selection(_ query: String, in proxies: CoreProxies) -> Result<[ServerPicker.Selection], SelectionError> {
         let entries = ServerPicker.entries(proxies)
         let lowered = query.lowercased()
         let found = entries.first { $0.name == query }
             ?? (lowered == "fastest" ? entries.first(where: \.isFastest) : nil)
             ?? unique(entries.filter { $0.name.lowercased() == lowered || $0.title.lowercased() == lowered })
-        if let found { return .success(Failover.path(for: found, in: proxies)) }
+        if let found { return .success(found.path) }
         let matches = ServerPicker.search(entries, query)
         switch matches.count {
         case 0: return .failure(.notFound)
-        case 1: return .success(Failover.path(for: matches[0], in: proxies))
+        case 1: return .success(matches[0].path)
         default: return .failure(.ambiguous(matches.map(\.name)))
         }
     }

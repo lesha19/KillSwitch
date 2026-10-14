@@ -30,7 +30,7 @@ PROFILE='{ name => "Всё сразу", block => { sites => ["domain:ads.example
   direct => { sites => ["domain:ru", "keyword:yandex"], ips => ["geoip:ru", "10.0.0.0/8"] } }'
 # all <file>: every new setting on, besides the core and double VPN's entry ($2)
 all() {
-  printf 'core=%s\nmultihop=%s\nmtu=1380\ndoh=https://dns.example.com/dns-query\nhosts=nas.home.arpa=192.168.1.10,files.example.net=203.0.113.77\nadblock=1\nblockadult=1\nblocksocial=1\nblockbetting=1\nescalate=1\nfailover=1\n' "$1" "$2" > "$SETTINGS"
+  printf 'core=%s\nmultihop=%s\nmtu=1380\ndoh=https://dns.example.com/dns-query\nhosts=nas.home.arpa=192.168.1.10,files.example.net=203.0.113.77\nadblock=1\nblockadult=1\nblocksocial=1\nblockbetting=1\nescalate=1\n' "$1" "$2" > "$SETTINGS"
 }
 
 # --- Xray: hosts 🇱🇹Литва (the fixture), 🇱🇹Литва XHTTP (the same server, the other transport

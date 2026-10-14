@@ -55,14 +55,77 @@ final class NetworkCauseTests: XCTestCase {
 
     func testTheCauseComesRightAfterAnotherVPN() {
         var input = HomeNotice.Input(otherVPN: false, usage: nil, newServers: true, filterIncomplete: false,
-                                     filterDismissed: false, now: Date(), serversDown: "Литва", networkCause: .whitelist)
+                                     filterDismissed: false, now: Date(), serversDown: "🇱🇹 Литва 1", networkCause: .whitelist)
         XCTAssertEqual(HomeNotice.pick(input), .network(.whitelist))
         XCTAssertEqual(HomeNotice.network(.whitelist).title, "Оператор пускает только на российские сайты.")
         input.otherVPN = true
         XCTAssertEqual(HomeNotice.pick(input), .otherVPN)
         input.otherVPN = false
         input.networkCause = nil
-        XCTAssertEqual(HomeNotice.pick(input), .serversDown(country: "Литва"))
+        XCTAssertEqual(HomeNotice.pick(input), .serversDown(server: "🇱🇹 Литва 1"))
+    }
+
+    // MARK: the chosen server's country is silent (no server is ever switched by itself, ADR 0036)
+
+    private func proxies(now: String = "🇱🇹 Литва 1", alive1: Bool = false, alive2: Bool = true, aliveDE: Bool = true) throws -> CoreProxies {
+        let json = """
+        {"proxies": {
+          "GLOBAL": {"type": "Selector", "now": "🚀 Выбор", "all": ["🚀 Выбор", "DIRECT"]},
+          "🚀 Выбор": {"type": "Selector", "now": "\(now)", "all": ["⚡ Авто", "🇱🇹 Литва 1", "🇱🇹 Литва 2", "🇩🇪 Германия", "DIRECT"]},
+          "⚡ Авто": {"type": "URLTest", "now": "🇱🇹 Литва 2", "all": ["🇱🇹 Литва 1", "🇱🇹 Литва 2", "🇩🇪 Германия"]},
+          "🇱🇹 Литва 1": {"type": "Vless", "alive": \(alive1)},
+          "🇱🇹 Литва 2": {"type": "Vless", "alive": \(alive2)},
+          "🇩🇪 Германия": {"type": "Vless", "alive": \(aliveDE)},
+          "DIRECT": {"type": "Direct", "alive": true}
+        }}
+        """
+        return try CoreProxies(data: Data(json.utf8), order: ["🚀 Выбор", "⚡ Авто"])
+    }
+
+    private func xray(now: String = "🇱🇹Литва", alive1: Bool = false, alive2: Bool = true) throws -> CoreProxies {
+        let json = """
+        {"proxies": {
+          "Сервер": {"type": "Selector", "now": "\(now)", "all": ["🇱🇹Литва", "🇱🇹Литва 2", "🇩🇪Германия"]},
+          "🇱🇹Литва": {"type": "Xray", "alive": \(alive1), "history": [{"delay": \(alive1 ? 90 : 0)}]},
+          "🇱🇹Литва 2": {"type": "Xray", "alive": \(alive2), "history": [{"delay": \(alive2 ? 120 : 0)}]},
+          "🇩🇪Германия": {"type": "Xray", "alive": true, "history": [{"delay": 30}]}
+        }}
+        """
+        return try CoreProxies(data: Data(json.utf8))
+    }
+
+    /// Nothing moves off a dead server by itself any more: the person is told and picks.
+    func testServerDownWhenTheChosenServerIsSilent() throws {
+        XCTAssertEqual(NetworkCause.serverDown(chosen: "🇱🇹 Литва 1", proxies: try proxies()), "🇱🇹 Литва 1")
+        XCTAssertNil(NetworkCause.serverDown(chosen: "🇱🇹 Литва 1", proxies: try proxies(alive1: true)))
+        XCTAssertEqual(NetworkCause.serverDown(chosen: "🇩🇪 Германия", proxies: try proxies(now: "🇩🇪 Германия", aliveDE: false)), "🇩🇪 Германия")
+        XCTAssertNil(NetworkCause.serverDown(chosen: "🇱🇹 Литва 1", proxies: try proxies(now: "🇩🇪 Германия")),
+                     "the person picked something else since")
+        XCTAssertNil(NetworkCause.serverDown(chosen: nil, proxies: try proxies()))
+        // «Самый быстрый» moves by itself across countries
+        XCTAssertNil(NetworkCause.serverDown(chosen: "⚡ Авто", proxies: try proxies(now: "⚡ Авто", alive2: false, aliveDE: false)))
+        XCTAssertEqual(NetworkCause.serverDown(chosen: "🇱🇹Литва", proxies: try xray()), "🇱🇹 Литва")
+        XCTAssertNil(NetworkCause.serverDown(chosen: "🇱🇹Литва", proxies: try xray(alive1: true)))
+        XCTAssertNil(NetworkCause.serverDown(chosen: "🇱🇹Литва", proxies: try xray(now: "🇱🇹Литва 2")), "picked by the person since")
+    }
+
+    /// The owner's wording (PR #70): one server, never a country.
+    func testServerDownNotices() {
+        let down = UserNotice.serversDown(server: "🇱🇹 Литва 1")
+        XCTAssertEqual(down.title, "Сервер «🇱🇹 Литва 1» не отвечает")
+        XCTAssertEqual(down.body, "Выбери другой сервер.")
+        XCTAssertEqual(down.action, .openApp)
+        XCTAssertEqual(down.setting, .connection)
+        XCTAssertEqual(HomeNotice.serversDown(server: "🇱🇹 Литва 1").title, "Сервер «🇱🇹 Литва 1» не отвечает.")
+        XCTAssertEqual(HomeNotice.serversDown(server: "🇱🇹 Литва 1").message, "Выбери другой сервер.")
+    }
+
+    func testXrayHostsCarryTheObservatorysLatency() throws {
+        let proxies = try xray(now: "🇱🇹Литва 2")
+        XCTAssertEqual(proxies.delay("🇱🇹Литва 2"), 120)
+        XCTAssertNil(proxies.delay("🇱🇹Литва"))
+        XCTAssertEqual(proxies.alive("🇱🇹Литва"), false)
+        XCTAssertNil(proxies.alive("nope"))
     }
 
     func testProbedAtMostOncePerMinuteAndOnlyWhenNothingAnswers() {

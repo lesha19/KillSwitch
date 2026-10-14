@@ -437,7 +437,6 @@ private struct AddedRow: View {
     static func symbol(_ kind: String) -> String {
         switch kind {
         case "dns-group", "dns-servers": "network.badge.shield.half.filled"
-        case "failover": "arrow.triangle.2.circlepath"
         case "pinning": "pin"
         case "overrides": "slider.horizontal.3"
         case "provider-proxy": "arrow.down.circle"

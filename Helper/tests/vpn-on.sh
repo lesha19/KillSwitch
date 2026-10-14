@@ -89,7 +89,7 @@ rm -f "$FLAG"
 
 # --- «Журнал защиты»: one line per gap (the VPN on, not connected), how long and why
 CORE=on; core_guard() { CORE_STATE=$CORE; }; BOOT=100; boot_id() { echo "$BOOT"; }
-netbird_bg() { :; }; diag_tick() { :; }; diag_bg() { :; }; failover_bg() { :; }
+netbird_bg() { :; }; diag_tick() { :; }; diag_bg() { :; }; escalate_bg() { :; }
 up()   { CORE=on; ADDRS="utun4 198.18.0.1"; watch_pass "$1"; }
 down() { CORE=off; ADDRS=""; watch_pass "$1"; }
 ago()  { echo "$(( $(date +%s) - $1 )) ${2:-100}" > "$GAPF"; }   # the gap began <s> ago
@@ -112,7 +112,7 @@ tail -1 "$EVENTS" | grep -qE 'internet closed for 3[01] s: VPN off$' && ok "gap 
 [ "$(gaps)" = "$n" ] && [ ! -e "$GAPF" ] && ok "a gap from before a reboot: dropped, no line with a made-up length" || bad "reboot gap: $(tail -1 "$EVENTS")"
 rm -f "$FLAG"; down 24; rm -f "$VPN_ON"; : > "$EVENTS"; up 26; down 28
 [ ! -e "$GAPF" ] && ok "VPN off: no gap at all" || bad "gap without the VPN on"
-unset -f core_guard netbird_bg diag_tick diag_bg failover_bg
+unset -f core_guard netbird_bg diag_tick diag_bg escalate_bg
 
 # --- «Перезапустить VPN» (ks core restart): the VPN stays on, pf never empty meanwhile
 echo 0 > "$FLAG"; : > "$tmp/anchor"; ADDRS=""; echo unloaded > "$tmp/job"

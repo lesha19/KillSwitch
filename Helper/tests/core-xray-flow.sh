@@ -151,8 +151,8 @@ core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>/dev/null
 ! grep -q 'Литва 2' "$tmp/seen" && ok "  while the candidate is built and gated, the settings still name the running pick" ||
   bad "  pick written before the gate: $(cat "$tmp/seen")"
 eval "$(declare -f real_core_rebuild | sed '1s/real_core_rebuild/core_rebuild/')"
-# KS-10 / fail closed: a host name the settings would call damaged is never written (failover
-# takes names from the subscription without the passwordless filter)
+# KS-10 / fail closed: a host name the settings would call damaged is never written (the
+# subscription's names, beyond what the passwordless filter sees)
 # the copy the candidate is built from cannot be written (a full disk): the old pick would be
 # built and pass the gate, and the new one written ungated; refused instead, nothing written
 eval "$(declare -f put_setting | sed '1s/put_setting/real_put_setting/')"

@@ -73,7 +73,7 @@ final class AdminGateTests: XCTestCase {
             "init", "refresh", "registerHelperAtLaunch", "updateHelperAvailability", "notifyIfMacOSUpdated", "listenForWidget",
             "scheduleTimer", "watchHelperDirectory", "helperDirectoryChanged", "compareHelper", "upgradeHelper", "trackConnecting",
             "resumeIfReconnected", "publish", "syncFilter", "readSettings", "checkDaemon", "daemonRuns", "loadProxies",
-            "checkFailover", "checkNetwork", "readOtherVPN", "readOtherTunnels", "syncSpeed", "readSpeed",
+            "checkServers", "checkNetwork", "readOtherVPN", "readOtherTunnels", "syncSpeed", "readSpeed",
             "applyPendingChoice", "coreOnAutomatically", "coreRefresh", "readHelper",
         ]
         for name in automatic {

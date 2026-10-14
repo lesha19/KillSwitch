@@ -5,10 +5,8 @@ import Foundation
 enum UserNotice: Equatable {
     case vpnDropped(protected: Bool)
     case reconnected(server: String?)
-    /// Failover moved to another server of the same country (names as displayed).
-    case serverSwitched(from: String, to: String)
-    /// No server of the chosen country answers; another country is the person's choice.
-    case serversDown(country: String)
+    /// The chosen server stopped answering; another server is the person's choice (ADR 0036).
+    case serversDown(server: String)
     /// The helper turned «Двойной VPN» off by itself: its entry no longer fits (ADR 0027).
     case doubleVPNOff(entry: String)
     case autoConnectNeedsPassword
@@ -57,7 +55,6 @@ enum UserNotice: Equatable {
         switch self {
         case .vpnDropped: "vpnDropped"
         case .reconnected: "reconnected"
-        case .serverSwitched: "serverSwitched"
         case .serversDown: "serversDown"
         case .doubleVPNOff: "doubleVPNOff"
         case .autoConnectNeedsPassword: "autoConnect"
@@ -76,7 +73,7 @@ enum UserNotice: Equatable {
 
     var setting: Setting? {
         switch self {
-        case .vpnDropped, .reconnected, .autoConnectNeedsPassword, .serverSwitched, .serversDown, .otherVPN, .doubleVPNOff: .connection
+        case .vpnDropped, .reconnected, .autoConnectNeedsPassword, .serversDown, .otherVPN, .doubleVPNOff: .connection
         case .subscriptionEnding, .trafficLow, .newServers, .routingChanged, .profileRouting: .subscription
         case .pauseEnded: .pause
         case .serviceOff: .service
@@ -92,7 +89,7 @@ enum UserNotice: Equatable {
         case .newServers, .routingChanged, .profileRouting: .approve
         case .serviceOff: .openLoginItems
         case .macOSUpdated: .check
-        case .reconnected, .serverSwitched, .trafficLow, .pauseEnded, .updateInstalled: nil
+        case .reconnected, .trafficLow, .pauseEnded, .updateInstalled: nil
         }
     }
 
@@ -100,8 +97,7 @@ enum UserNotice: Equatable {
         switch self {
         case .vpnDropped: String(localized: "VPN оборвался")
         case .reconnected: String(localized: "VPN снова работает")
-        case .serverSwitched: String(localized: "VPN переключился на другой сервер")
-        case .serversDown(let country): String(localized: "Серверы «\(country)» не отвечают")
+        case .serversDown(let server): String(localized: "Сервер «\(server)» не отвечает")
         case .doubleVPNOff: String(localized: "Двойной VPN выключен")
         case .autoConnectNeedsPassword: String(localized: "VPN не подключился сам")
         case .otherVPN(let name): OtherVPN.title(name: name)
@@ -125,8 +121,7 @@ enum UserNotice: Equatable {
             protected ? String(localized: "Интернет закрыт, пока VPN не подключится. Ничего не утекает.")
                       : String(localized: "Защита выключена — программы идут в интернет напрямую.")
         case .reconnected(let server): server ?? String(localized: "Интернет снова идёт через VPN.")
-        case .serverSwitched(let from, let to): String(localized: "«\(from)» не отвечал. Теперь — «\(to)».")
-        case .serversDown: String(localized: "Выбери другую страну или «Самый быстрый».")
+        case .serversDown: String(localized: "Выбери другой сервер.")
         case .doubleVPNOff(let entry): String(localized: "Сервер входа «\(entry)» больше не подходит. VPN работает через один сервер.")
         case .autoConnectNeedsPassword: String(localized: "Службу нужно обновить.")
         case .otherVPN: String(localized: "KillSwitch не подключился сам, чтобы не выключать его без спроса. Переключиться можно в KillSwitch.")

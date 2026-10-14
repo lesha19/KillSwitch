@@ -197,7 +197,6 @@ targets:
       - App/Core/CoreDelay.swift
       - App/Core/ServerName.swift
       - App/Core/ServerDescription.swift
-      - App/Core/Failover.swift
       - App/Core/ProfileMerger.swift
       - App/Core/ProfileConverter.swift
       - App/Core/ProxyLink.swift

@@ -1,6 +1,6 @@
 # ADR 0005: auto-failover with mihomo fallback groups, within the chosen country
 
-- Status: accepted (0.10)
+- Status: superseded by ADR 0036 (0.20.0: no automatic server replacement; the failover groups are removed)
 - Date: 2026-10-10
 
 ## Context

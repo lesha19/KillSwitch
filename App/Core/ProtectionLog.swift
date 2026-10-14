@@ -34,7 +34,7 @@ enum ProtectionLog {
         if message.hasPrefix("core: "), let arrow = message.range(of: " -> ") {
             return String(localized: "Выбран сервер «\(ServerName.display(String(message[arrow.upperBound...])))»")
         }
-        if let failover = failover(message) { return failover }
+        if let refused = refusedSwitch(message) { return refused }
         if let doubleVPN = doubleVPN(message) { return doubleVPN }
         if let escalation = escalation(message) { return escalation }
         if let mtu = tunnelMTU(message) { return mtu }
@@ -58,8 +58,6 @@ enum ProtectionLog {
             ("network turned back on", String(localized: "Сеть включена вручную")),
             ("detailed diagnostics: on", String(localized: "Подробная диагностика включена")),
             ("detailed diagnostics: off", String(localized: "Подробная диагностика выключена, записанные соединения удалены")),
-            ("automatic server switch: on", String(localized: "Автопереключение сервера включено")),
-            ("automatic server switch: off", String(localized: "Автопереключение сервера выключено")),
             ("connection escalation: on", String(localized: "Подбор отпечатка и транспорта включён")),
             ("connection escalation: off", String(localized: "Подбор отпечатка и транспорта выключен")),
             ("escalate reset (network changed)", String(localized: "Сеть сменилась — серверы снова подключаются так, как задано в подписке")),
@@ -89,8 +87,6 @@ enum ProtectionLog {
         return known.first { message.hasPrefix($0.0) }?.1 ?? message
     }
 
-    /// The helper's automatic server switch with Xray (ADR 0023): `failover (no answer|slow): A -> B`,
-    /// `failover (…): A, no live|faster server of its country`, `failover failed: A -> B, A kept`.
     /// The helper turned «Двойной VPN» off or back by itself (ADR 0027): `double VPN off: its entry
     /// «X»: <why>`, `double VPN off: no answer through «X»`, `double VPN off: «X» was set for the other
     /// way of connecting`, `double VPN back: «A», no answer through «B»`.
@@ -159,37 +155,13 @@ enum ProtectionLog {
         return result
     }
 
-    private static func failover(_ message: String) -> String? {
-        let name = { (s: Substring) in ServerName.display(String(s)) }
-        // ks refused a server switch that would change what goes past the VPN (KS-10)
-        // the separators are searched after the prefix: a name may begin with one (it would trap)
+    /// ks refused a server switch that would change what goes past the VPN (KS-10).
+    private static func refusedSwitch(_ message: String) -> String? {
+        // the separator is searched after the prefix: a name may begin with one (it would trap)
         let switchTo = message.dropFirst("server switch to ".count)
-        if message.hasPrefix("server switch to "), let refused = switchTo.range(of: " refused: ") {
-            let server = name(switchTo[..<refused.lowerBound])
-            return String(localized: "Не переключились на «\(server)»: он пускает мимо VPN не то, что было подтверждено. Возьми подписку заново с паролем")
-        }
-        let failed = message.dropFirst("failover failed: ".count)
-        if message.hasPrefix("failover failed: "), let arrow = failed.range(of: " -> ") {
-            let from = failed[..<arrow.lowerBound]
-            var to = failed[arrow.upperBound...]
-            if let kept = to.range(of: ", ", options: .backwards) { to = to[..<kept.lowerBound] }
-            return String(localized: "Не получилось переключиться с «\(name(from))» на «\(name(to))»")
-        }
-        let slow = message.hasPrefix("failover (slow): ")
-        // a host at the same address: another transport of the same server (ADR 0030)
-        let same = message.hasPrefix("failover (no answer, same server): ")
-        guard slow || same || message.hasPrefix("failover (no answer): ") else { return nil }
-        let rest = message.drop { $0 != ":" }.dropFirst(2)
-        if let arrow = rest.range(of: " -> ") {
-            let from = name(rest[..<arrow.lowerBound]), to = name(rest[arrow.upperBound...])
-            if same { return String(localized: "«\(from)» не отвечал — переключились на «\(to)»: тот же сервер, другой транспорт") }
-            return slow ? String(localized: "«\(from)» стал отвечать слишком медленно — переключились на «\(to)»")
-                : String(localized: "«\(from)» не отвечал — переключились на «\(to)»")
-        }
-        guard let comma = rest.range(of: ", no ", options: .backwards) else { return nil }
-        let server = name(rest[..<comma.lowerBound])
-        return slow ? String(localized: "«\(server)» отвечает медленно, а быстрее в этой стране нет")
-            : String(localized: "«\(server)» не отвечает, а других работающих серверов этой страны нет")
+        guard message.hasPrefix("server switch to "), let refused = switchTo.range(of: " refused: ") else { return nil }
+        let server = ServerName.display(String(switchTo[..<refused.lowerBound]))
+        return String(localized: "Не переключились на «\(server)»: он пускает мимо VPN не то, что было подтверждено. Возьми подписку заново с паролем")
     }
 
     /// The same server another way (ADR 0030): `escalate (no answer): A fingerprint|transport X -> Y`,

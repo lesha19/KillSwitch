@@ -122,7 +122,7 @@ private struct HomeContent: View {
     private var detail: Status.Detail {
         let server = control.currentServer
         return Status.Detail(server: server.map(ServerName.display), ping: server.flatMap(control.delay(of:)),
-                             switched: control.recentSwitch, otherVPN: control.otherVPNName,
+                             otherVPN: control.otherVPNName,
                              otherVPNStopFailed: control.otherVPNStopFailed)
     }
 

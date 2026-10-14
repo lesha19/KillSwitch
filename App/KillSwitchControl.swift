@@ -85,10 +85,8 @@ final class KillSwitchControl {
     private(set) var ownHosts: [String] = []
     /// «Подробная диагностика» (diag, ADR 0021): Xray records every connection in the local journal.
     private(set) var diagVerbose = false
-    /// Xray: the helper moves to another host of the country when this one stops answering (ADR 0023).
-    private(set) var autoSwitch = true
-    /// Xray: before another server, the same one with another TLS fingerprint or another transport
-    /// the subscription offers (escalate, ADR 0030).
+    /// Xray: a server that stops answering is tried with another TLS fingerprint or another transport
+    /// the subscription offers (escalate, ADR 0030); the server itself never changes (ADR 0036).
     private(set) var escalate = true
     /// «Собрать отчёт» is running, and why the last one failed (nil after a good one).
     private(set) var reportBusy = false
@@ -331,7 +329,7 @@ final class KillSwitchControl {
 
     /// «Перенос настроек» (SettingsBackup, ADR 0024): the root settings as Settings shows them.
     var rootSettings: SettingsBackup.Root {
-        .init(core: coreChoice, switches: switches.merging(["direct": allowDirect, "adblock": adBlock, "diag": diagVerbose, "failover": autoSwitch,
+        .init(core: coreChoice, switches: switches.merging(["direct": allowDirect, "adblock": adBlock, "diag": diagVerbose,
                                                       "escalate": escalate, "blockadult": blockAdult, "blocksocial": blockSocial,
                                                       "blockbetting": blockBetting]) { $1 },
               exceptions: exceptions, manualServers: manualServers, splitApps: splitApps, doh: ownDoH ?? "", hosts: ownHosts, mtu: tunnelMTU ?? 0)
@@ -368,7 +366,6 @@ final class KillSwitchControl {
     private static let pendingKey = "pendingServer"
 
     /// «Выбор сервера»: switches the running core at once, or remembers the choice for «Подключить».
-    /// A server is picked through its country's failover group when it has one (Failover).
     func choose(_ entry: ServerPicker.Entry) {
         setChosen(entry.name)
         serversDown = nil
@@ -377,10 +374,9 @@ final class KillSwitchControl {
             if let data = try? JSONEncoder().encode(entry) { UserDefaults.standard.set(data, forKey: Self.pendingKey) }
             return
         }
-        let path = proxies.map { Failover.path(for: entry, in: $0) } ?? entry.path
         busy = true
         Task {
-            for step in path { await select(group: step.group, proxy: step.proxy) }
+            for step in entry.path { await select(group: step.group, proxy: step.proxy) }
             busy = false
         }
     }
@@ -395,7 +391,7 @@ final class KillSwitchControl {
             if let data = try? JSONEncoder().encode(entry) { UserDefaults.standard.set(data, forKey: Self.pendingKey) }
             return
         }
-        for step in proxies.map({ Failover.path(for: entry, in: $0) }) ?? entry.path {
+        for step in entry.path {
             _ = await callHelper(["core", "select", step.group, step.proxy], interactive: false)
         }
         loadProxies(force: true)
@@ -408,72 +404,25 @@ final class KillSwitchControl {
         return pendingChoice?.name
     }
 
-    // MARK: auto-failover (Failover, ADR 0005)
+    // MARK: the chosen server went silent (nothing switches by itself, ADR 0036)
 
-    /// The server the person picked last, or the last good one after a switch.
+    /// The server the person picked last.
     private(set) var chosenServer = UserDefaults.standard.string(forKey: KillSwitchControl.chosenKey)
-    /// The last switch to another server of the same country.
-    private(set) var lastSwitch: Failover.Switch? = KillSwitchControl.loadSwitch()
-    /// The country whose servers all stopped answering; the person picks what next.
+    /// The chosen server, as displayed, while it does not answer; the person picks what next.
     private(set) var serversDown: String?
-    /// Servers already moved behind their failover group once (adoption), so a refused select is
-    /// not retried on every refresh.
-    private var adopted: Set<String> = []
 
     private static let chosenKey = "chosenServer"
-    private static let switchKey = "lastFailover"
-
-    /// Shown in the status line for an hour after the switch, while connected.
-    var recentSwitch: Failover.Switch? {
-        guard coreRunning, let lastSwitch, lastSwitch.isRecent(now: Date()) else { return nil }
-        return lastSwitch
-    }
-
-    /// When `chosenServer` last changed in this run: a list read right after may show the old host.
-    private var chosenAt: Date?
 
     private func setChosen(_ name: String?) {
         chosenServer = name
-        chosenAt = Date()
         UserDefaults.standard.set(name, forKey: Self.chosenKey)
     }
 
-    private static func loadSwitch() -> Failover.Switch? {
-        UserDefaults.standard.data(forKey: switchKey).flatMap { try? JSONDecoder().decode(Failover.Switch.self, from: $0) }
-    }
-
-    /// After every server list from the core: puts a server picked straight in the main selector
-    /// behind its group, notices a switch the core made by itself and a country that went silent.
-    /// Only passwordless `ks core select`; never another country.
-    private func checkFailover(_ proxies: CoreProxies) {
-        if let steps = Failover.adoption(proxies), let server = steps.first?.proxy, !adopted.contains(server) {
-            adopted.insert(server)
-            setChosen(server)   // the main selector points at it: it is the current pick
-            Task {
-                for step in steps {
-                    guard case .ok = await callHelper(["core", "select", step.group, step.proxy], interactive: false) else { break }
-                }
-                loadProxies(force: true)
-            }
-            return
-        }
-        switch Failover.state(chosen: chosenServer, proxies: proxies, pickedAt: chosenAt) {
-        case .fine:
-            serversDown = nil
-        case .switched(let from, let to):
-            serversDown = nil
-            let change = Failover.Switch(from: ServerName.display(from), to: ServerName.display(to), at: Date())
-            lastSwitch = change
-            if let data = try? JSONEncoder().encode(change) { UserDefaults.standard.set(data, forKey: Self.switchKey) }
-            setChosen(to)   // the last good one, also for the next connection
-            notify(.serverSwitched(from: change.from, to: change.to))
-            if let group = Failover.group(of: to, in: proxies) {
-                Task { _ = await callHelper(["core", "select", group.name, to], interactive: false) }
-            }
-        case .countryDown(let country):
-            if serversDown != country { notify(.serversDown(country: country)) }
-            serversDown = country
-        }
+    /// After every server list from the core: tells once when the chosen server stopped answering.
+    private func checkServers(_ proxies: CoreProxies) {
+        let server = NetworkCause.serverDown(chosen: chosenServer, proxies: proxies)
+        if let server, serversDown != server { notify(.serversDown(server: server)) }
+        serversDown = server
     }
 
     // MARK: why nothing works (NetworkCause, ADR 0006)
@@ -581,7 +530,6 @@ final class KillSwitchControl {
     /// The core's API comes up a moment after `ks core on`: a few tries, then give up quietly
     /// (the core keeps its own last choice).
     private func applyPendingChoice() async {
-        adopted = []
         guard let entry = pendingChoice else { return }
         pendingChoice = nil
         UserDefaults.standard.removeObject(forKey: Self.pendingKey)
@@ -768,7 +716,7 @@ final class KillSwitchControl {
                 if let parsed = try? CoreProxies(data: Data(output.utf8), order: order) {
                     proxiesError = nil
                     if parsed != proxies { proxies = parsed }
-                    checkFailover(parsed)
+                    checkServers(parsed)
                     checkNetwork(parsed)
                     if let server = currentServer, server != lastServer {
                         lastServer = server
@@ -1199,7 +1147,6 @@ final class KillSwitchControl {
         ownDoH = values["doh"].flatMap { $0.isEmpty ? nil : $0 }
         ownHosts = (values["hosts"] ?? "").split(separator: ",").map(String.init)
         diagVerbose = (values["diag"] ?? "0") == "1"
-        autoSwitch = (values["failover"] ?? "1") == "1"
         escalate = (values["escalate"] ?? "1") == "1"
         splitApps = SplitApps.parse(setting: values["splitapps"])
         tunnelMTU = TunnelMTU.value(setting: values["mtu"])

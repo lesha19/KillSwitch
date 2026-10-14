@@ -93,7 +93,7 @@ struct RoutingReport: Decodable, Equatable, Sendable {
         var address: String
     }
 
-    /// One thing KillSwitch put in or changed: `kind` (dns-group, dns-servers, failover, pinning,
+    /// One thing KillSwitch put in or changed: `kind` (dns-group, dns-servers, pinning,
     /// overrides, unbound, provider-path, provider-proxy, sniffer, adblock, doh, splitapps, multihop,
     /// default-rule), a name and its items (names, rules, or host → address for pinning).
     struct Added: Decodable, Equatable, Sendable {
@@ -271,7 +271,6 @@ extension RoutingReport.Added {
         switch kind {
         case "dns-group": String(localized: "Группа \(name ?? "KS-DNS") для DNS")
         case "dns-servers": String(localized: "DNS через VPN")
-        case "failover": String(localized: "Запасная группа \(name ?? "")")
         case "pinning": String(localized: "Адреса серверов закреплены")
         case "overrides": String(localized: "Свои настройки серверов")
         case "unbound": String(localized: "Убрана привязка к сетевому интерфейсу")
@@ -297,8 +296,6 @@ extension RoutingReport.Added {
             String(localized: "DNS-запросы и загрузка наборов правил идут только через серверы подписки. Даже если в группе подписки выбрать «Напрямую», они останутся в VPN.")
         case "dns-servers":
             String(localized: "Остальные имена сайтов узнаются через DNS-over-HTTPS внутри VPN: провайдер не видит, куда ты заходишь.")
-        case "failover":
-            String(localized: "Если выбранный сервер перестанет отвечать, ядро само перейдёт на соседний в той же стране. Куда идут сайты, это не меняет.")
         case "pinning":
             String(localized: "Защита пускает трафик только к известным адресам серверов, поэтому имя сервера заменено его адресом. Шифрование по-прежнему проверяет имя.")
         case "overrides":

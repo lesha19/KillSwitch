@@ -198,12 +198,13 @@ final class HelperCommandTests: XCTestCase {
     }
 
     func testSwitchKeys() {
-        for key in ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag", "failover", "escalate",
+        for key in ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag", "escalate",
                     "blockadult", "blocksocial", "blockbetting"] {
             XCTAssertTrue(HelperCommand.setSwitch(key, true).isValid, key)
         }
-        // «Российские сайты напрямую» is gone (ADR 0013): ks refuses it, so the daemon does too
-        for key in ["", "coredirect", "splitapps", "multihop", "LAN", "lan ", "x"] {
+        // «Российские сайты напрямую» (ADR 0013) and the automatic server switch (ADR 0036) are
+        // gone: ks refuses them, so the daemon does too
+        for key in ["", "coredirect", "failover", "splitapps", "multihop", "LAN", "lan ", "x"] {
             XCTAssertFalse(HelperCommand.setSwitch(key, true).isValid, key)
         }
     }

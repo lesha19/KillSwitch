@@ -1,6 +1,6 @@
 # ADR 0023: Xray ping through the observatory, failover by the watchdog
 
-- Status: accepted (Unreleased, issue #32)
+- Status: accepted (Unreleased, issue #32); the failover part superseded by ADR 0036 (0.20.0: no automatic server replacement), the ping through the observatory stays
 - Date: 2026-10-11
 - Owner's default decision (#43): switch when the probe fails 3 times in a row or the latency is
   above 3× the median for 2 minutes; never leave the protected state while switching.

@@ -1,6 +1,6 @@
 # ADR 0030: transport escalation with Xray, inside the failover pass
 
-- Status: accepted (Unreleased, issue #20)
+- Status: accepted (Unreleased, issue #20); steps 3 and 4 of the ladder dropped by ADR 0036: step 3 (another host at the same address) and step 4 (another server) are server changes, and the owner decided (2026-10-14) not to keep step 3 either: the subscription's config must work by itself, the app does not manage it. The pass escalates within the running host only (fingerprint, then its other outbound)
 - Date: 2026-10-11
 - Decided by the agent («разрабатывай без спроса», roadmap #43); the owner may change any of it.
 

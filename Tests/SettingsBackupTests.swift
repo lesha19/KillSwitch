@@ -34,7 +34,7 @@ final class SettingsBackupTests: XCTestCase {
 
     private let root = SettingsBackup.Root(core: .xray,
                                            switches: ["lan": true, "tailscale": true, "dns": false, "wifiguard": true,
-                                                      "direct": false, "adblock": false, "diag": false, "failover": true,
+                                                      "direct": false, "adblock": false, "diag": false,
                                                       "escalate": true],
                                            exceptions: ["10.8.0.0/24"], manualServers: [], splitApps: ["Telegram"])
 
@@ -317,20 +317,16 @@ final class SettingsBackupTests: XCTestCase {
 
     // MARK: reset
 
-    func testAutomaticServerSwitchTravels() throws {
-        var current = root
-        current.switches?["failover"] = true
-        var new = root
-        new.switches?["failover"] = false
-        let read = try SettingsBackup.read(file(root: ["switches": ["failover": false]]))
-        XCTAssertEqual(read.root?.switches, ["failover": false])
-        let changes = SettingsBackup.changes(from: .init(app: [:], root: current), to: .init(app: [:], root: new))
-        XCTAssertEqual(changes.map(\.key), ["failover"])
-        XCTAssertEqual(changes.first?.title, "Переключать сервер, если он перестал отвечать")
-        XCTAssertEqual(SettingsBackup.rootCommands(helper: helper, current: current, new: new), [[helper, "set", "failover", "0"]])
-        XCTAssertEqual(SettingsBackup.reset.root?.switches?["failover"], true, "on by default, as in ks (ADR 0023)")
-        XCTAssertEqual(SettingsBackup.rootCommands(helper: helper, current: new, new: try XCTUnwrap(SettingsBackup.reset.root)).first,
-                       [helper, "set", "failover", "1"])
+    /// The automatic server switch is gone (ADR 0036): a file saved before 0.20 still loads, its
+    /// «failover» dropped, and nothing asks ks for it (ks refuses the key now).
+    func testOldAutomaticServerSwitchIsDropped() throws {
+        let read = try SettingsBackup.read(file(root: ["switches": ["failover": false, "lan": false]]))
+        XCTAssertEqual(read.root?.switches, ["lan": false])
+        XCTAssertEqual(try SettingsBackup.read(file(root: ["switches": ["failover": true]])).root?.switches, [:])
+        XCTAssertNil(SettingsBackup.reset.root?.switches?["failover"])
+        XCTAssertFalse(SettingsBackup.rootCommands(helper: helper, current: root, new: try XCTUnwrap(SettingsBackup.reset.root))
+            .contains { $0.contains("failover") })
+        XCTAssertNil(root.switches?["failover"])
     }
 
     /// «Пробовать другой отпечаток и транспорт» (ADR 0030): saved, loaded, on after a reset.

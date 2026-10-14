@@ -6,18 +6,14 @@ struct CoreProxies: Equatable {
         let name: String
         let type: String
         let now: String?
-        /// Members to show and test: without our failover groups (Failover).
+        /// Members to show and test.
         let all: [String]
-        /// Every member the core offers, failover groups included.
-        var offers: [String] = []
         var id: String { name }
         /// Only Selector groups take a manual choice; url-test/fallback pick by themselves.
         var selectable: Bool { type == "Selector" }
     }
 
     private(set) var groups: [Group] = []
-    /// The helper's hidden fallback groups `KS-FO-<n>` (Failover), apart from the list.
-    private(set) var failover: [Group] = []
     private var nowByName: [String: String] = [:]
     private var delays: [String: Int] = [:]
     /// The core's last health check of each proxy; true until the first one.
@@ -56,17 +52,12 @@ struct CoreProxies: Equatable {
             if let now { nowByName[name] = now }
             if name == "GLOBAL" { continue }   // mihomo's built-in group, used only in global mode
             let members = info["all"] as? [String] ?? []
-            if Failover.isGroup(name) {
-                failover.append(Group(name: name, type: type, now: now, all: members, offers: members))
-                continue
-            }
             // the helper's DNS group (Helper/ks KS_DNS) and groups the profile hides are not server choices
             if name == Self.helperDNSGroup || info["hidden"] as? Bool == true { continue }
-            groups.append(Group(name: name, type: type, now: now, all: members.filter { !Failover.isGroup($0) }, offers: members))
+            groups.append(Group(name: name, type: type, now: now, all: members))
         }
-        failover.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         // without an order, a selector no other group offers is the one the rules use
-        let offered = Set(groups.flatMap(\.offers))
+        let offered = Set(groups.flatMap(\.all))
         groups.sort { a, b in
             let ia = order.firstIndex(of: a.name) ?? Int.max, ib = order.firstIndex(of: b.name) ?? Int.max
             if ia != ib { return ia < ib }
@@ -91,13 +82,13 @@ struct CoreProxies: Equatable {
             guard let name = group["name"] as? String, let type = types[(group["type"] as? String ?? "").lowercased()],
                   name != Self.helperDNSGroup, group["hidden"] as? Bool != true else { continue }
             let members = group["proxies"] as? [String] ?? []
-            groups.append(Group(name: name, type: type, now: nil, all: members, offers: members))
+            groups.append(Group(name: name, type: type, now: nil, all: members))
         }
     }
 
     /// With Xray before the core runs: the hosts of the panel's config (XrayProfile).
     init(xrayServers: [String]) {
-        groups = [Group(name: Self.xrayGroup, type: "Selector", now: nil, all: xrayServers, offers: xrayServers)]
+        groups = [Group(name: Self.xrayGroup, type: "Selector", now: nil, all: xrayServers)]
     }
 
     func delay(_ name: String) -> Int? { delays[name] }

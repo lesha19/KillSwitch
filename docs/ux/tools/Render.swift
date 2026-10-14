@@ -90,7 +90,6 @@ func routingReport() -> RoutingReport {
      "proxies":[{"name":"🇱🇹 Литва","type":"vless"},{"name":"🇩🇪 Германия","type":"vless"}],
      "added":[{"kind":"dns-group","name":"KS-DNS","items":["🇱🇹 Литва","🇩🇪 Германия"]},
               {"kind":"dns-servers","items":["https://1.1.1.1/dns-query#KS-DNS","https://8.8.8.8/dns-query#KS-DNS"]},
-              {"kind":"failover","name":"🇱🇹 Литва ↻","items":["🇱🇹 Литва","🇱🇹 Литва 2"]},
               {"kind":"pinning","items":[{"host":"lt.example.net","address":"1.2.3.10"}]},
               {"kind":"provider-proxy","items":["ru-blocked"]},
               {"kind":"sniffer","items":[]},
@@ -336,18 +335,11 @@ func main() {
         w.client.lastError = UserError.from(raw: "HTTP 404", context: .subscription)
         window("16-window-subscription-expired", height: 1000, w)
     }
-    do { // 17 failover: switched to another server of the country (status line)
+    do { // 18 the chosen server is down (no server is switched by itself, ADR 0036)
         let w = World()
         w.subscribe()
         w.connect(selected: "🇱🇹 Литва")
-        w.control.lastSwitch = Failover.Switch(from: "🇱🇹 Литва 1", to: "🇱🇹 Литва 2", at: Date().addingTimeInterval(-12 * 60))
-        window("17-window-failover-switched", height: 760, w)
-    }
-    do { // 18 the whole chosen country is down
-        let w = World()
-        w.subscribe()
-        w.connect(selected: "🇱🇹 Литва")
-        w.control.serversDown = "Литва"
+        w.control.serversDown = "🇱🇹 Литва"
         window("18-window-country-down", height: 860, w)
     }
     do { // 19 nothing answers: mobile «white lists»

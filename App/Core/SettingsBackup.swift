@@ -55,10 +55,13 @@ enum SettingsBackup {
     /// What Settings shows, with ks's own defaults (Helper/ks `setting`, KillSwitchControl.readSettings).
     static let defaultSwitches: [String: Bool] = [
         "lan": true, "tailscale": true, "wifiguard": true, "dns": false, "direct": false, "adblock": false, "diag": false,
-        "failover": true, "escalate": true, "blockadult": false, "blocksocial": false, "blockbetting": false,
+        "escalate": true, "blockadult": false, "blocksocial": false, "blockbetting": false,
     ]
+    /// Switches files from older versions carry that are gone: skipped on load. «failover», the
+    /// automatic server switch (0.10–0.19, ADR 0036).
+    private static let retiredSwitches: Set<String> = ["failover"]
     private static let switchOrder = ["lan", "dns", "tailscale", "wifiguard", "direct", "adblock", "blockadult", "blocksocial",
-                                      "blockbetting", "diag", "failover", "escalate"]
+                                      "blockbetting", "diag", "escalate"]
 
     /// «Сбросить»: every app setting to its default; the root switches to ks's defaults and the
     /// lists emptied. The way of connecting stays (changing it imports the subscription again).
@@ -228,7 +231,7 @@ enum SettingsBackup {
         if let switches = part["switches"] {
             guard let dict = switches as? [String: Any] else { throw Problem.damaged(String(localized: "Что можно без VPN")) }
             var result: [String: Bool] = [:]
-            for (key, value) in dict {
+            for (key, value) in dict where !retiredSwitches.contains(key) {
                 guard HelperCommand.switchKeys.contains(key), let on = flag(value) else { throw Problem.damaged(switchTitle(key)) }
                 result[key] = on
             }
@@ -526,7 +529,6 @@ enum SettingsBackup {
         case "blocksocial": String(localized: "Блокировать соцсети")
         case "blockbetting": String(localized: "Блокировать букмекеров")
         case "diag": String(localized: "Подробная диагностика (все соединения)")
-        case "failover": String(localized: "Переключать сервер, если он перестал отвечать")
         case "escalate": String(localized: "Пробовать другой отпечаток и транспорт, если сервер не отвечает")
         default: key
         }

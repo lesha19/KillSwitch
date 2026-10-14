@@ -1,7 +1,7 @@
 #!/bin/bash
 # shellcheck disable=SC2034 # globals here are read by the sourced Helper/ks
 # Root's files that several ks processes write at once (#50): settings (put_setting, drop_setting,
-# "ks set" and the failover's xrayserver), the off/pause flag and events.log. Each write is a
+# "ks set" and a server pick), the off/pause flag and events.log. Each write is a
 # whole new file moved into place, under a lock where it reads the old one first, through a
 # temporary file of its own: no update is lost, no reader sees a half-written file, and a stray
 # file at an old fixed temporary name changes nothing. Nothing is loaded; pfctl is a fake.

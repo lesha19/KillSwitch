@@ -276,7 +276,7 @@ enum HelperCommand: Equatable, Sendable {
     /// «Подробная диагностика» (diag, ADR 0021) too: it changes what the core records.
     /// «Пробовать другой отпечаток и транспорт» (escalate, ADR 0030) too: it changes the core's config.
     /// The blocked categories (ADR 0031) are switches too: adblock, blockadult, blocksocial, blockbetting.
-    static let switchKeys: Set<String> = ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag", "failover", "escalate",
+    static let switchKeys: Set<String> = ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag", "escalate",
                                           "blockadult", "blocksocial", "blockbetting"]
 
     /// ks hosts_parse (ADR 0033): at most 50 "name=IPv4" entries.

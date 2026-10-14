@@ -7,8 +7,8 @@ enum HomeNotice: Equatable {
     case otherVPN
     /// Nothing answers and `ks probe` says why (NetworkCause).
     case network(NetworkCause)
-    /// No server of the chosen country answers (Failover.State.countryDown).
-    case serversDown(country: String)
+    /// The chosen server stopped answering (NetworkCause.serverDown); nothing switches by itself.
+    case serversDown(server: String)
     case expired
     case ending(days: Int)
     case trafficLow(used: Int64, total: Int64)
@@ -39,7 +39,7 @@ enum HomeNotice: Equatable {
         /// «Не напоминать» on the filter notice.
         var filterDismissed: Bool
         var now: Date
-        /// The country whose servers all stopped answering.
+        /// The chosen server, as displayed, while it does not answer.
         var serversDown: String?
         var networkCause: NetworkCause? = nil
         var filterUpdateWaiting = false
@@ -56,7 +56,7 @@ enum HomeNotice: Equatable {
         if input.rulesMissing { return .rulesMissing }
         if input.otherVPN { return .otherVPN }
         if let cause = input.networkCause { return .network(cause) }
-        if let country = input.serversDown { return .serversDown(country: country) }
+        if let server = input.serversDown { return .serversDown(server: server) }
         if let expire = input.usage?.expire {
             let left = expire.timeIntervalSince(input.now)
             if left <= 0 { return .expired }
@@ -81,7 +81,7 @@ enum HomeNotice: Equatable {
         case .rulesMissing: String(localized: "Трафик может идти мимо VPN.")
         case .otherVPN: String(localized: "Работает другой VPN.")
         case .network(let cause): cause.title + "."
-        case .serversDown(let country): String(localized: "Серверы «\(country)» не отвечают.")
+        case .serversDown(let server): String(localized: "Сервер «\(server)» не отвечает.")
         case .expired: String(localized: "Подписка закончилась.")
         case .ending(let days): String(localized: "Подписка кончается через \(Russian.plural(days, String(localized: "день"), String(localized: "дня"), String(localized: "дней"))).")
         case .trafficLow(let used, let total): String(localized: "Трафик почти закончился: \(Russian.traffic(used: used, total: total)).")
@@ -102,7 +102,7 @@ enum HomeNotice: Equatable {
         case .rulesMissing: String(localized: "VPN включён, но правила защиты не загружены. Восстанови службу.")
         case .otherVPN: String(localized: "Отключи его: два VPN мешают друг другу.")
         case .network(let cause): cause.message
-        case .serversDown: String(localized: "Другие страны KillSwitch сам не включает: выбери страну или «Самый быстрый».")
+        case .serversDown: String(localized: "Выбери другой сервер.")
         case .expired: String(localized: "VPN работает со старыми серверами, пока они пускают.")
         case .ending, .trafficLow: ""
         case .newServers: String(localized: "Разреши им работать при включённой защите.")

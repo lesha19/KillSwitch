@@ -769,11 +769,11 @@ final class VPNClient {
         return false
     }
 
-    /// What goes to the helper: the subscription with the own servers, plus the same-country sets
-    /// the helper turns into failover groups (Failover) and the transport overrides (Transport).
+    /// What goes to the helper: the subscription with the own servers, plus the transport
+    /// overrides (Transport).
     private func forCore(_ subscription: Profile?) -> Profile? {
         ProfileMerger.merge(subscription: subscription, manual: manual.compactMap(Self.proxy))
-            .map { RoutingProfiles.adding(RoutingProfiles.active(), to: Transport.adding(transportOverrides, to: Failover.adding(to: $0))) }
+            .map { RoutingProfiles.adding(RoutingProfiles.active(), to: Transport.adding(transportOverrides, to: $0)) }
     }
 
     private func reloadProfileProxies() {

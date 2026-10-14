@@ -22,11 +22,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   old rules work until then. IPv6 addresses and ranges are taken. A profile link is fetched within a minute. Profile links are kept in the keychain; a subscription cannot bring a profile of
   its own; a geosite or geoip code the shipped geodata lacks is left out (shown in «Трафик») rather
   than refusing every update.
-- Xray: transport escalation (#20, ADR 0030). When the running server stops answering, before
-  another server KillSwitch tries the same one another way, only what the subscription offers and
-  only when Xray's own probe of that way answers: another TLS fingerprint, then another transport
-  of that server (xHTTP instead of TCP), then another host at the same address, then another
-  server of the country as before. The other ways are probed only while the server fails (from
+- Xray: transport escalation (#20, ADR 0030). When the running server stops answering, KillSwitch
+  tries the same one another way, only what the subscription offers and only when Xray's own probe
+  of that way answers: another TLS fingerprint, then another transport of that server (xHTTP
+  instead of TCP). It never moves to another server (ADR 0036). The other ways are probed only while the server fails (from
   the 2nd failed check). Each step once per outage, never two within 3 minutes, never back to a
   way just left for 6 hours, never for being slow, at most 3 restarts an hour and 10 a day per
   server; a server picked by hand stays picked. What worked is remembered per server until the
@@ -34,8 +33,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   Nothing new goes past the VPN (the same servers and DIRECT); the protection
   stays on (about a second of restart, pf blocks). Журнал защиты tells each step. Settings ›
   Способ подключения «Пробовать другой отпечаток и транспорт, если сервер не отвечает», on by
-  default (`ks set escalate 0|1`). A server switch the protection refuses (KS-10) is not tried
-  again for 30 minutes and leaves a server picked by hand picked by hand.
+  default (`ks set escalate 0|1`).
 - Settings › Дополнительно «Размер пакетов VPN (MTU)» (#18, ADR 0032), a troubleshooting setting:
   «Авто» (as before: 1500 with the main way, 9000 with the fallback way) or 1500…1280, for both ways
   of connecting. A smaller value may help calls or games that freeze through the VPN; it mostly
@@ -56,11 +54,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   after the restart (logged). An entry that later disappears from the subscription or stops
   fitting turns double VPN off: it never blocks the config, and it is said in Журнал защиты and by
   a notification «Двойной VPN выключен». The entry is never
-  the exit (not offered, refused by the helper, never picked by failover; failover waits while the
-  entry is dead). Changing the way of connecting, and an upgrade that finds a setting left from the
+  the exit (not offered, refused by the helper; escalation waits while the entry is dead). Changing the way of connecting, and an upgrade that finds a setting left from the
   fallback way, turn it off.
 - Xray: own servers added by link work with the main way (#33, ADR 0027): each is a server of its
-  own in the list, «<имя> (свой)», everything and DNS through it; never a failover target. Those
+  own in the list, «<имя> (свой)», everything and DNS through it. Those
   the main way cannot use (hysteria2, TUIC, WireGuard, a Shadowsocks plugin, IPv6, a server name
   with odd characters, a skipped certificate check…) say so in Settings, keep working with the
   fallback way and never block the import of the others. Names lose control characters and are
@@ -141,6 +138,18 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   report lists `x-ks-routing` among what it left out).
 
 ### Removed
+- Automatic server replacement (failover, #61, ADR 0036) with both ways of connecting: KillSwitch
+  never moves the connection to another server by itself. Gone: the hidden `KS-FO-<n>` fallback
+  groups of the fallback way (ADR 0005), the watchdog's switch to another server of the country
+  with the main way (ADR 0023), Settings › Способ подключения «Переключать сервер, если он
+  перестал отвечать», `ks set failover`, the «VPN переключился на другой сервер» notification,
+  the status line about a switch and the «Запасная группа» item of «Трафик». A subscription's own
+  automatic group («Самый быстрый», url-test, balancer) keeps working as it defines it, and the
+  escalation to another fingerprint or transport of the same server stays. When the chosen server
+  stops answering, the banner and notification say «Сервер «…» не отвечает. Выбери другой сервер.»
+  The old `failover=` line and the switch's state are dropped on upgrade (ignored until then); a
+  settings file saved before still loads, without it; a profile still carrying `x-ks-failover`
+  is imported as without it.
 - The backup subscription link (#62, ADR 0036): no «Резервная ссылка» row in Settings › Подписка
   and no mention of it when adding a link. The subscription is fetched directly, then through the
   VPN when it is on (ADR 0016). A backup link kept by an older version is deleted from the
