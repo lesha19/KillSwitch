@@ -79,6 +79,28 @@ final class SettingsBackupTests: XCTestCase {
         XCTAssertEqual(fresh.string(forKey: "recentServers"), ServerID(subscription: "new", name: "🇩🇪 Germany").stored)
     }
 
+    /// #75 review: the file names the servers of the subscription in use and the own ones; reading
+    /// it replaces those and keeps the other subscriptions' favourites and recents. A name that is
+    /// both an own server and one of the subscription's cannot be told apart: it goes to both.
+    func testImportKeepsOtherSubscriptionsServers() throws {
+        defaults.set(["s2\t🇳🇱 NL", "s1\tOld", "own\tGone"].joined(separator: "\n"), forKey: "favouriteServers")
+        defaults.set(["s1\tOld", "s2\t🇳🇱 NL"].joined(separator: "\n"), forKey: "recentServers")
+        let read = try SettingsBackup.read(file(app: ["favouriteServers": ["Литва", "Дом"], "recentServers": ["Литва"]]))
+        SettingsBackup.apply(read.app, to: defaults, subscription: "s1", own: ["Дом", "Литва"], names: ["Литва", "Old"])
+        XCTAssertEqual(ServerRecents.list(defaults.string(forKey: "favouriteServers") ?? ""),
+                       ["s1\tЛитва", "own\tЛитва", "own\tДом", "s2\t🇳🇱 NL"])
+        XCTAssertEqual(ServerRecents.list(defaults.string(forKey: "recentServers") ?? ""), ["s1\tЛитва", "own\tЛитва", "s2\t🇳🇱 NL"])
+    }
+
+    /// PR 79 review: «Сбросить» empties favourites and recents of every subscription.
+    func testResetEmptiesEverySubscriptionsServers() {
+        defaults.set(["s2\t🇳🇱 NL", "s1\tOld", "own\tДом"].joined(separator: "\n"), forKey: "favouriteServers")
+        defaults.set("s2\t🇳🇱 NL", forKey: "recentServers")
+        SettingsBackup.apply(SettingsBackup.reset.app, to: defaults, subscription: "s1", resetting: true)
+        XCTAssertEqual(defaults.string(forKey: "favouriteServers"), "")
+        XCTAssertEqual(defaults.string(forKey: "recentServers"), "")
+    }
+
     func testExportReadsBackTheSame() throws {
         defaults.set(false, forKey: "autoConnect")
         defaults.set(["Дом"], forKey: "trustedNetworks")

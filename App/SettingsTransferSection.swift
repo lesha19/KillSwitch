@@ -21,6 +21,8 @@ struct SettingsTransferSection: View {
         let title: String
         let settings: SettingsBackup.Settings
         let changes: [SettingsBackup.Change]
+        /// «Сбросить»: every subscription's favourites and recents go, not only those the file names.
+        var resetting = false
         /// The file has root settings, but the service is not installed.
         let rootSkipped: Bool
     }
@@ -41,7 +43,7 @@ struct SettingsTransferSection: View {
                 }
                 Button("Загрузить из файла…") { importing = true }
                 Spacer()
-                Button("Сбросить…") { show(SettingsBackup.reset, title: String(localized: "Сбросить настройки?")) }
+                Button("Сбросить…") { show(SettingsBackup.reset, title: String(localized: "Сбросить настройки?"), resetting: true) }
             }
             .disabled(control.busy)
             Text("Ссылка подписки, свои серверы и ключи в файл не попадают: на новом Mac их добавляют заново. Названия сетей Wi‑Fi в файле есть.")
@@ -59,7 +61,7 @@ struct SettingsTransferSection: View {
             load(url)
         }
         .sheet(item: $review) { review in
-            ReviewSheet(review: review) { apply(review.settings) }
+            ReviewSheet(review: review) { apply(review.settings, resetting: review.resetting) }
         }
     }
 
@@ -77,7 +79,7 @@ struct SettingsTransferSection: View {
         }
     }
 
-    private func show(_ settings: SettingsBackup.Settings, title: String) {
+    private func show(_ settings: SettingsBackup.Settings, title: String, resetting: Bool = false) {
         let changes = SettingsBackup.changes(from: current, to: settings)
         let rootSkipped = !installed && settings.root != nil
         guard !changes.isEmpty else {
@@ -85,22 +87,23 @@ struct SettingsTransferSection: View {
             return
         }
         note = nil
-        review = Review(title: title, settings: settings, changes: changes, rootSkipped: rootSkipped)
+        review = Review(title: title, settings: settings, changes: changes, resetting: resetting, rootSkipped: rootSkipped)
     }
 
     /// The root settings behind the password first, and the app's only once they are in: a
     /// cancelled or failed password leaves nothing half applied. Then the way of connecting.
     /// Without root settings to change (or without the service) the app's apply at once.
-    private func apply(_ settings: SettingsBackup.Settings) {
-        guard installed, let root = settings.root else { return applyApp(settings.app) }
+    private func apply(_ settings: SettingsBackup.Settings, resetting: Bool) {
+        guard installed, let root = settings.root else { return applyApp(settings.app, resetting: resetting) }
         control.applySettings(root) { [client] in
-            applyApp(settings.app)
+            applyApp(settings.app, resetting: resetting)
             if let core = root.core { client.switchCore(to: core) }
         }
     }
 
-    private func applyApp(_ app: [String: SettingsBackup.Value]) {
-        SettingsBackup.apply(app, to: .standard, subscription: client.activeID, own: Set(client.manual.map(\.name)))
+    private func applyApp(_ app: [String: SettingsBackup.Value], resetting: Bool) {
+        SettingsBackup.apply(app, to: .standard, subscription: client.activeID, own: Set(client.manual.map(\.name)),
+                             names: Set(client.profileProxies?.servers ?? []), resetting: resetting)
         auto.reloadSettings()
         let interval = UserDefaults.standard.integer(forKey: "subscriptionIntervalHours")
         if client.intervalHours != interval { client.intervalHours = interval }

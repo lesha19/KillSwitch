@@ -146,14 +146,25 @@ enum SettingsBackup {
 
     /// Writes where the app reads them (AppStorage, AutoConnector, Updater). Favourites and recents
     /// go to `subscription` (the one in use), the names in `own` and Xray's «… (свой)» to «Свои
-    /// серверы» (ADR 0036).
-    static func apply(_ app: [String: Value], to defaults: UserDefaults, subscription: String = ServerID.own, own: Set<String> = []) {
+    /// серверы» (ADR 0036); a name of both (`names`: the subscription's servers) to both. They replace
+    /// those two's lines; the other subscriptions' stay, except when `resetting` («Сбросить»).
+    static func apply(_ app: [String: Value], to defaults: UserDefaults, subscription: String = ServerID.own, own: Set<String> = [],
+                      names: Set<String> = [], resetting: Bool = false) {
         for field in fields {
             var value = app[field.key]
-            if [Subscriptions.favouritesKey, Subscriptions.recentsKey].contains(field.key), case .list(let names) = value {
-                value = .list(names.map { name in
-                    ServerID(subscription: own.contains(name) || name.hasSuffix(XrayManual.mark) ? ServerID.own : subscription, name: name).stored
-                })
+            if [Subscriptions.favouritesKey, Subscriptions.recentsKey].contains(field.key), case .list(let list) = value {
+                var lines: [String] = []
+                for name in list {
+                    let isOwn = own.contains(name) || name.hasSuffix(XrayManual.mark)
+                    let ids = isOwn ? (names.contains(name) ? [subscription, ServerID.own] : [ServerID.own]) : [subscription]
+                    for id in ids where !lines.contains(ServerID(subscription: id, name: name).stored) {
+                        lines.append(ServerID(subscription: id, name: name).stored)
+                    }
+                }
+                let others = resetting ? [] : ServerRecents.list(defaults.string(forKey: field.key) ?? "").filter { line in
+                    ServerID(stored: line).map { $0.subscription != subscription && !$0.isOwn } ?? false
+                }
+                value = .list(lines + others)
             }
             switch value {
             case .bool(let on): defaults.set(on, forKey: field.key)

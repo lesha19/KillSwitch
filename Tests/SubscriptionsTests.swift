@@ -201,6 +201,18 @@ final class SubscriptionsTests: XCTestCase {
         XCTAssertEqual(Subscriptions.load(store).count, 2)
     }
 
+    /// #75 review: a keychain that does not answer is no «no link»; the same link could slip past
+    /// the duplicate check, so nothing is added.
+    func testAKeychainThatDoesNotAnswerAddsNothing() throws {
+        _ = try Subscriptions.add("https://stork.example/sub/token", store).get()
+        struct Locked: Error {}
+        var locked = store!
+        locked.read = { _ in throw Locked() }
+        XCTAssertEqual(Subscriptions.add("https://stork.example/sub/token", locked), .failure(.notKept))
+        XCTAssertEqual(Subscriptions.load(store).count, 1)
+        XCTAssertEqual(box.secrets.count, 1)
+    }
+
     /// Deleting takes its link and caches; the others stay.
     func testRemovingTakesItsLinkAndCaches() throws {
         let first = try Subscriptions.add("https://stork.example/sub/token", store).get()

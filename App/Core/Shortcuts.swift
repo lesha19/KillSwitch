@@ -50,17 +50,23 @@ enum Shortcuts {
                          : String(localized: "Выбран сервер \(server). Он включится при следующем подключении.")
     }
 
-    /// The parameter of «Сменить страну»: the list of «Серверы» (ServerPicker) of the subscription
-    /// the helper runs (`subscription`; all subscriptions: #66).
-    static func servers(_ proxies: CoreProxies?, subscription: String = ServerID.own) -> [ServerPicker.Entry] {
-        proxies.map { ServerPicker.entries($0, subscription: subscription) } ?? []
+    /// The parameter of «Сменить страну»: the list of «Серверы» (ServerPicker) of every
+    /// subscription (#66); an entity's id is its ServerID.stored.
+    static func servers(_ blocks: [ServerPicker.Block]) -> [ServerPicker.Entry] {
+        blocks.flatMap(\.entries)
     }
 
-    static func servers(_ proxies: CoreProxies?, subscription: String = ServerID.own, matching query: String) -> [ServerPicker.Entry] {
-        ServerPicker.search(servers(proxies, subscription: subscription), query)
+    static func servers(_ blocks: [ServerPicker.Block], matching query: String) -> [ServerPicker.Entry] {
+        ServerPicker.search(servers(blocks), query)
     }
 
-    static func servers(_ proxies: CoreProxies?, subscription: String = ServerID.own, named names: [String]) -> [ServerPicker.Entry] {
-        servers(proxies, subscription: subscription).filter { names.contains($0.name) }
+    /// By id; a bare name (a shortcut saved before 0.20) is a server of `active`, the subscription in use.
+    static func servers(_ blocks: [ServerPicker.Block], named ids: [String], active: String) -> [ServerPicker.Entry] {
+        servers(blocks).filter { ids.contains($0.id) || ($0.subscription == active && ids.contains($0.name)) }
+    }
+
+    /// «🇱🇹 Литва — Stork».
+    static func title(_ entry: ServerPicker.Entry, in blocks: [ServerPicker.Block]) -> String {
+        blocks.first { $0.id == entry.subscription }.map { "\(entry.title) — \($0.title)" } ?? entry.title
     }
 }

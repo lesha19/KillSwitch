@@ -196,15 +196,23 @@ extension Status.Action {
     var isConnection: Bool { self == .connect || self == .disconnect || self == .disconnectVPN || self == .cancel || self == .replaceOtherVPN }
 }
 
-/// «🇱🇹 Литва   37 мс  ›»: opens the server choice.
+/// «🇱🇹 Литва · Stork   37 мс  ›»: opens the server choice.
 private struct ServerRow: View {
     let action: () -> Void
     @Environment(KillSwitchControl.self) private var control
+    @Environment(VPNClient.self) private var client
+
+    /// Whose server the row names (#66).
+    private var subscription: String? {
+        let id = control.coreRunning ? control.activeSubscription : control.pendingChoice?.subscription ?? control.lastServer?.subscription
+        return id.flatMap(client.title(of:))
+    }
 
     var body: some View {
         let server = control.currentServer
-        let title = control.coreRunning ? server.map(ServerName.display)
-            : control.pendingChoice?.title ?? control.lastServer.map { ServerName.display($0.name) }
+        let title = (control.coreRunning ? server.map(ServerName.display)
+            : control.pendingChoice?.title ?? control.lastServer.map { ServerName.display($0.name) })
+            .map { ServerPicker.label($0, subscription: subscription) }
         Button(action: action) {
             HStack {
                 Text(title ?? String(localized: "Выбрать сервер")).lineLimit(1)
@@ -220,7 +228,7 @@ private struct ServerRow: View {
         }
         .buttonStyle(.plain)
         .keyboardShortcut("l")
-        .accessibilityLabel(String(localized: "Сервер: \(title.map { _ in spoken } ?? String(localized: "не выбран"))"))
+        .accessibilityLabel(String(localized: "Сервер: \(title.map { _ in ServerPicker.label(spoken, subscription: subscription) } ?? String(localized: "не выбран"))"))
         .accessibilityHint("Открыть выбор сервера")
         .help("Выбрать сервер (⌘L)")
     }

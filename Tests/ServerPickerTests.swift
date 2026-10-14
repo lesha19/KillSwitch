@@ -23,6 +23,12 @@ final class ServerPickerTests: XCTestCase {
         try CoreProxies(data: Data(json.utf8), order: ["🚀 Выбор сервера", "⚡ Авто", "Свои серверы"])
     }
 
+    /// #66: the menu bar and the home screen name the server's subscription.
+    func testLabelNamesTheSubscription() {
+        XCTAssertEqual(ServerPicker.label("🇱🇹 Литва", subscription: "Stork"), "🇱🇹 Литва · Stork")
+        XCTAssertEqual(ServerPicker.label("🇱🇹 Литва", subscription: nil), "🇱🇹 Литва")
+    }
+
     func testFlatListFromTheMainGroup() throws {
         let entries = ServerPicker.entries(try proxies())
         XCTAssertEqual(entries.map(\.name), ["⚡ Авто", "🇱🇹 Литва", "🇩🇪 Германия", "LT-Vilnius", "🇵🇱 Варшава", "Дом"])

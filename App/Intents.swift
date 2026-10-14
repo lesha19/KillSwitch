@@ -89,43 +89,46 @@ struct StatusIntent: AppIntent {
     }
 }
 
-/// A row of «Серверы»: a country, an own server or «Самый быстрый».
+/// A row of «Серверы» of any subscription: a country, an own server or «Самый быстрый».
 struct ServerEntity: AppEntity {
     static let typeDisplayRepresentation: TypeDisplayRepresentation = "Сервер"
     static let defaultQuery = ServerQuery()
 
+    /// ServerID.stored: «Литва» of two subscriptions are two entities.
     let id: String
     let title: String
     var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(title)") }
 
-    init(_ entry: ServerPicker.Entry) {
-        id = entry.name
-        title = entry.title
+    init(_ entry: ServerPicker.Entry, in blocks: [ServerPicker.Block]) {
+        id = entry.id
+        title = Shortcuts.title(entry, in: blocks)
     }
 }
 
 struct ServerQuery: EntityStringQuery {
+    /// Every subscription's servers (#66); the running one's from the core.
     @MainActor
-    private static var proxies: CoreProxies? {
-        ShortcutTarget.control?.proxies ?? ShortcutTarget.client?.profileProxies
+    static var blocks: [ServerPicker.Block] {
+        ShortcutTarget.client?.serverBlocks(live: ShortcutTarget.control?.proxies) ?? []
     }
 
     @MainActor
-    static var subscription: String { ShortcutTarget.client?.activeID ?? ServerID.own }
-
-    @MainActor
     func entities(for identifiers: [String]) async throws -> [ServerEntity] {
-        Shortcuts.servers(Self.proxies, subscription: Self.subscription, named: identifiers).map(ServerEntity.init)
+        let blocks = Self.blocks
+        return Shortcuts.servers(blocks, named: identifiers, active: ShortcutTarget.client?.activeID ?? ServerID.own)
+            .map { ServerEntity($0, in: blocks) }
     }
 
     @MainActor
     func entities(matching string: String) async throws -> [ServerEntity] {
-        Shortcuts.servers(Self.proxies, subscription: Self.subscription, matching: string).map(ServerEntity.init)
+        let blocks = Self.blocks
+        return Shortcuts.servers(blocks, matching: string).map { ServerEntity($0, in: blocks) }
     }
 
     @MainActor
     func suggestedEntities() async throws -> [ServerEntity] {
-        Shortcuts.servers(Self.proxies, subscription: Self.subscription).map(ServerEntity.init)
+        let blocks = Self.blocks
+        return Shortcuts.servers(blocks).map { ServerEntity($0, in: blocks) }
     }
 }
 
@@ -141,12 +144,15 @@ struct ChooseServerIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let (control, client) = try await ShortcutTarget.ready()
-        let proxies = control.proxies ?? client.profileProxies
-        guard let entry = Shortcuts.servers(proxies, subscription: client.activeID, named: [server.id]).first else {
+        guard let entry = Shortcuts.servers(ServerQuery.blocks, named: [server.id], active: client.activeID).first else {
             throw ShortcutError.refused(String(localized: "Такого сервера больше нет в списке."))
         }
-        if control.busy { throw ShortcutError.refused(Shortcuts.busy) }
-        control.choose(entry)
+        if control.busy || client.updating { throw ShortcutError.refused(Shortcuts.busy) }
+        // as in «Серверы»: a server of another subscription hands the helper that subscription
+        await client.choose(entry)
+        guard client.activeID == entry.subscription else {
+            throw ShortcutError.refused(client.lastError?.message ?? String(localized: "Сервер не выбран. Открой KillSwitch."))
+        }
         return ShortcutTarget.said(Shortcuts.chosen(entry.isFastest ? entry.title : entry.name, connected: control.coreRunning))
     }
 }

@@ -90,6 +90,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   any subscription are approved with one password for all. A subscription whose profile is not
   taken stays unapproved without failing the others. The approval of 0.19 stays valid for the
   first subscription.
+- Shortcuts, the CLI and the home screen know the subscription (#66, ADR 0036): «Сменить страну»
+  lists every subscription's servers as «server — subscription» and switches subscriptions like
+  «Серверы» (a shortcut saved before keeps its server of the subscription in use). `killswitch
+  server list` shows `subscription/server` and its JSON (and `status --json`) has `subscription`;
+  `server select` refuses a name several subscriptions have, listing `subscription/server`, which
+  it takes; `fastest` is the running subscription's. A server of a subscription the VPN does not
+  run is chosen in the app: the CLI says so.
+  Home and the menu bar show «server · subscription». Loading a settings file keeps the other
+  subscriptions' favourites and recents.
 
 ### Changed
 - The VPN blocks everything outside it from «Подключить» to «Отключить», whatever «защита» says

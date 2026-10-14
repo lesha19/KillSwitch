@@ -56,7 +56,7 @@ enum Subscriptions {
         case notALink
         /// This link is in the list already.
         case duplicate
-        /// The keychain did not take it.
+        /// The keychain did not take it, or did not answer.
         case notKept
     }
 
@@ -65,7 +65,11 @@ enum Subscriptions {
         let url = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let key = normalised(url) else { return .failure(.notALink) }
         var list = load(store)
-        guard !list.contains(where: { link(of: $0.id, store).flatMap(normalised) == key }) else { return .failure(.duplicate) }
+        // a keychain that does not answer is no «no link»: the same link could be added twice
+        guard let links = try? list.map({ try store.read(account($0.id)) }) else { return .failure(.notKept) }
+        guard !links.contains(where: { $0.flatMap { String(data: $0, encoding: .utf8) }.flatMap(normalised) == key }) else {
+            return .failure(.duplicate)
+        }
         let subscription = Subscription(id: UUID().uuidString, host: URLComponents(string: url)?.host ?? url)
         guard store.write(account(subscription.id), Data(url.utf8)) else { return .failure(.notKept) }
         list.append(subscription)

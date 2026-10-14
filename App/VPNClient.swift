@@ -22,7 +22,10 @@ final class VPNClient {
     private(set) var updating = false
     private(set) var lastError: UserError?
     /// The servers of each subscription with a cached profile, then «Свои серверы» (ADR 0036).
-    private(set) var blocks: [Block] = []
+    private(set) var blocks: [Block] = [] {
+        // the CLI tells same-name servers of several subscriptions apart by it (#66)
+        didSet { UserDefaults.standard.set(try? JSONEncoder().encode(serverBlocks(live: nil)), forKey: CLI.serversKey) }
+    }
     /// An automatic update found a new profile, but applying it needs the admin password
     /// (the installed helper does not allow `core refresh` without one).
     private(set) var needsPassword = false
@@ -76,6 +79,18 @@ final class VPNClient {
     var activeBlock: Block? { blocks.first { $0.id == activeID } }
     /// Groups of the profile the helper runs, from its cache, for choosing a server before connecting.
     var profileProxies: CoreProxies? { activeBlock?.proxies }
+
+    /// The servers of every subscription as «Серверы» lists them: the running one's from the core
+    /// (`live`) when it runs, the others from their caches.
+    func serverBlocks(live: CoreProxies?) -> [ServerPicker.Block] {
+        blocks.map { block in
+            let proxies = block.id == activeID ? live ?? block.proxies : block.proxies
+            return ServerPicker.Block(id: block.id, title: block.title, entries: ServerPicker.entries(proxies, subscription: block.id))
+        }
+    }
+
+    /// «Stork», «Свои серверы»: the title of a subscription's block.
+    func title(of subscription: String) -> String? { blocks.first { $0.id == subscription }?.title }
 
     /// Hours between automatic updates; 0 = what the subscription asks for.
     var intervalHours = UserDefaults.standard.integer(forKey: "subscriptionIntervalHours") {
@@ -341,8 +356,8 @@ final class VPNClient {
             do {
                 let (body, headers) = try await Self.fetch(url, viaVPN: source.viaVPN)
                 let read = try await ProfileConverter.readInBackground(subscription: body)   // off the main actor (#50)
-                if id == activeID { UserDefaults.standard.set(read.leftOut, forKey: RoutingReport.leftOutKey) }
                 guard subscriptions.contains(where: { $0.id == id }) else { return nil }   // deleted meanwhile
+                if id == activeID { UserDefaults.standard.set(read.leftOut, forKey: RoutingReport.leftOutKey) }
                 if let json = read.json { Self.cache(json, to: Subscriptions.cache(of: id, xray: false, Self.store)) }
                 took(headers, source: source, for: id)
                 return read.profile

@@ -174,8 +174,13 @@ enum ServerPicker {
                         all: servers.filter { !favourites.contains($0.name) })
     }
 
+    /// «🇱🇹 Литва · Stork»: the menu bar and the home screen name the server's subscription (#66).
+    static func label(_ server: String, subscription: String?) -> String {
+        subscription.map { "\(server) · \($0)" } ?? server
+    }
+
     /// One block of the list (ADR 0036): a subscription's servers, or «Свои серверы».
-    struct Block: Equatable, Identifiable {
+    struct Block: Codable, Equatable, Identifiable {
         /// Subscription.id, or ServerID.own.
         var id: String
         var title: String

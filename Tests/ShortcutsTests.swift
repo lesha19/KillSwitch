@@ -73,9 +73,28 @@ final class ShortcutsTests: XCTestCase {
     /// The parameter of «Сменить страну»: the list of «Серверы», found by name or by country in
     /// Russian; an unknown name finds nothing.
     func testServersOfTheList() throws {
-        let all = Shortcuts.servers(try proxies())
+        let blocks = [try block("s1", "Stork")]
+        let all = Shortcuts.servers(blocks)
         XCTAssertEqual(all.map(\.title), ["Самый быстрый", ServerName.display("🇩🇪 Germany"), ServerName.display("🇱🇹 LT-Vilnius")])
-        XCTAssertEqual(Shortcuts.servers(try proxies(), matching: "литва").map(\.name), ["🇱🇹 LT-Vilnius"])
-        XCTAssertEqual(Shortcuts.servers(try proxies(), named: ["🇩🇪 Germany", "🇺🇸 USA"]).map(\.name), ["🇩🇪 Germany"])
+        XCTAssertEqual(Shortcuts.servers(blocks, matching: "литва").map(\.name), ["🇱🇹 LT-Vilnius"])
+        XCTAssertEqual(Shortcuts.servers(blocks, named: [ServerID(subscription: "s1", name: "🇩🇪 Germany").stored, "s1\t🇺🇸 USA"],
+                                         active: "s1").map(\.name), ["🇩🇪 Germany"])
+    }
+
+    private func block(_ id: String, _ title: String) throws -> ServerPicker.Block {
+        ServerPicker.Block(id: id, title: title, entries: ServerPicker.entries(try proxies(), subscription: id))
+    }
+
+    /// #66: the servers of every subscription, «server — subscription», each its own entity (the id
+    /// is the ServerID), so «Germany» of Stork and of iVPN are two choices. A shortcut saved before
+    /// 0.20 names a bare server: the one of the subscription in use.
+    func testSameNameServersOfTwoSubscriptions() throws {
+        let blocks = [try block("s1", "Stork"), try block("s2", "iVPN")]
+        let germanies = Shortcuts.servers(blocks).filter { $0.name == "🇩🇪 Germany" }
+        XCTAssertEqual(germanies.map(\.subscription), ["s1", "s2"])
+        XCTAssertEqual(Set(Shortcuts.servers(blocks).map(\.id)).count, 6)
+        XCTAssertEqual(Shortcuts.title(germanies[1], in: blocks), ServerName.display("🇩🇪 Germany") + " — iVPN")
+        XCTAssertEqual(Shortcuts.servers(blocks, named: [germanies[1].id], active: "s1").map(\.server), [germanies[1].server])
+        XCTAssertEqual(Shortcuts.servers(blocks, named: ["🇩🇪 Germany"], active: "s2").map(\.server), [germanies[1].server])
     }
 }

@@ -11,8 +11,9 @@ enum CLI {
       disconnect               disconnect the VPN (protection stays as it is)
       protection on|off        turn protection on; off asks for an administrator
       pause <minutes>          pause protection for 1-9999 minutes; asks for an administrator
-      server list [--json]     servers of the connected VPN, * marks the current one
-      server select <name>     switch to a server: its name, part of it, or "fastest"
+      server list [--json]     servers of every subscription, * marks the current one
+      server select <name>     switch to a server: its name, part of it, "fastest",
+                               or subscription/name when several have it
       version
     """
 
@@ -99,6 +100,8 @@ enum CLI {
         var vpn: Bool
         /// The server the traffic goes through now (ServerPicker.selected); nil while the VPN is off.
         var server: String?
+        /// The title of the server's subscription (ADR 0036).
+        var subscription: String?
     }
 
     /// Exit codes from sysexits(3).
@@ -120,7 +123,7 @@ enum CLI {
     static func json(_ status: Status) -> String {
         struct Out: Encodable {
             let status: Status
-            enum Key: String, CodingKey { case protection, paused_until, vpn, server }
+            enum Key: String, CodingKey { case protection, paused_until, vpn, server, subscription }
             func encode(to encoder: Encoder) throws {
                 var out = encoder.container(keyedBy: Key.self)
                 let until: String? = if case .paused(let date) = status.protection {
@@ -132,6 +135,7 @@ enum CLI {
                 try out.encode(until, forKey: .paused_until)
                 try out.encode(status.vpn ? "on" : "off", forKey: .vpn)
                 try out.encode(status.server, forKey: .server)
+                try out.encode(status.subscription, forKey: .subscription)
             }
         }
         return encode(Out(status: status))
@@ -173,47 +177,105 @@ enum CLI {
 
     enum SelectionError: Error, Equatable {
         case notFound
-        /// Several servers match: their names, in list order.
+        /// Several servers match: «subscription/server» of each, in list order.
         case ambiguous([String])
+        /// «Title/…» where several subscriptions have that title.
+        case sameTitle(String)
     }
 
-    /// The `core select` steps for a server named by the person: the exact name, «fastest», a
-    /// name or title in any case, else the one entry ServerPicker.search finds.
-    static func selection(_ query: String, in proxies: CoreProxies) -> Result<[ServerPicker.Selection], SelectionError> {
-        let entries = ServerPicker.entries(proxies)
-        let lowered = query.lowercased()
-        let found = entries.first { $0.name == query }
-            ?? (lowered == "fastest" ? entries.first(where: \.isFastest) : nil)
-            ?? unique(entries.filter { $0.name.lowercased() == lowered || $0.title.lowercased() == lowered })
-        if let found { return .success(found.path) }
-        let matches = ServerPicker.search(entries, query)
-        switch matches.count {
-        case 0: return .failure(.notFound)
-        case 1: return .success(matches[0].path)
-        default: return .failure(.ambiguous(matches.map(\.name)))
+    /// The `core select` steps of a server of the running subscription, by the path the core
+    /// gives now (never one of the app's list); nil for another subscription's or a gone server.
+    static func steps(_ entry: ServerPicker.Entry, running: String, proxies: CoreProxies) -> [ServerPicker.Selection]? {
+        guard entry.subscription == running else { return nil }
+        return ServerPicker.entries(proxies, subscription: running).first { $0.name == entry.name }?.path
+    }
+
+    /// A subscription's title; nil when the app's list does not name it.
+    static func title(of id: String, in blocks: [ServerPicker.Block]) -> String? {
+        blocks.first { $0.id == id }.map(\.title).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// Subscriptions.activeKey: whose profile the helper runs.
+    static let activeKey = "activeSubscription"
+    /// The app's server list, a block per subscription (VPNClient): the daemon knows only the
+    /// running subscription's servers.
+    static let serversKey = "cliServers"
+
+    /// The app's list (`serversKey`) with the running subscription's servers from the core
+    /// (`proxies`, `ks core proxies`); a running subscription the list does not have goes first,
+    /// untitled. Each entry is of its block, whatever the list says.
+    static func blocks(_ data: Data?, running: String, proxies: CoreProxies) -> [ServerPicker.Block] {
+        var blocks = (data.flatMap { try? JSONDecoder().decode([ServerPicker.Block].self, from: $0) } ?? []).map { block in
+            var block = block
+            block.entries = block.entries.map { var entry = $0; entry.subscription = block.id; return entry }
+            return block
         }
+        let live = ServerPicker.entries(proxies, subscription: running)
+        if let index = blocks.firstIndex(where: { $0.id == running }) {
+            blocks[index].entries = live
+        } else {
+            blocks.insert(ServerPicker.Block(id: running, title: "", entries: live), at: 0)
+        }
+        return blocks
     }
 
-    private static func unique(_ entries: [ServerPicker.Entry]) -> ServerPicker.Entry? {
-        entries.count == 1 ? entries[0] : nil
+    /// «Stork/🇱🇹 Литва»: what `server list` shows and `server select` takes; the name alone when
+    /// the subscription has no title.
+    static func label(_ entry: ServerPicker.Entry, in blocks: [ServerPicker.Block]) -> String {
+        title(of: entry.subscription, in: blocks).map { $0 + "/" + entry.name } ?? entry.name
     }
 
-    /// One line per server: `*` marks the current one; the title follows when it differs.
-    static func text(_ entries: [ServerPicker.Entry], current: String?) -> String {
-        entries.map { entry in
-            (entry.name == current ? "* " : "  ") + entry.name + (entry.title == entry.name ? "" : " — \(entry.title)")
+    /// The server named by the person, in any subscription (ADR 0036): the exact name,
+    /// «subscription/server» (the longest title in any case), «fastest» (the running
+    /// subscription's), a name or title in any case, else the one entry ServerPicker.search finds.
+    /// Found in several: ambiguous.
+    static func selection(_ query: String, in blocks: [ServerPicker.Block], running: String) -> Result<ServerPicker.Entry, SelectionError> {
+        let entries = blocks.flatMap(\.entries)
+        let lowered = query.lowercased()
+        func one(_ found: [ServerPicker.Entry]) -> Result<ServerPicker.Entry, SelectionError>? {
+            switch found.count {
+            case 0: nil
+            case 1: .success(found[0])
+            default: .failure(.ambiguous(found.map { label($0, in: blocks) }))
+            }
+        }
+        if let exact = one(entries.filter { $0.name == query }) { return exact }
+        let titled = blocks.filter { !$0.title.isEmpty && lowered.hasPrefix($0.title.lowercased() + "/") }
+        if let longest = titled.map(\.title.count).max() {
+            let named = titled.filter { $0.title.count == longest }
+            guard named.count == 1 else { return .failure(.sameTitle(named[0].title)) }
+            return selection(String(query.dropFirst(longest + 1)), in: named, running: running)
+        }
+        // «fastest»: the running subscription's, or the one named before «/»
+        if lowered == "fastest", let fastest = one(entries.filter { $0.isFastest && ($0.subscription == running || blocks.count == 1) }) {
+            return fastest
+        }
+        return one(entries.filter { $0.name.lowercased() == lowered || $0.title.lowercased() == lowered })
+            ?? one(ServerPicker.search(entries, query)) ?? .failure(.notFound)
+    }
+
+    /// One line per server, «subscription/server»: `*` marks the current one; the title follows
+    /// when it differs.
+    static func text(_ blocks: [ServerPicker.Block], current: ServerID?) -> String {
+        blocks.flatMap(\.entries).map { entry in
+            (entry.server == current ? "* " : "  ") + label(entry, in: blocks) + (entry.title == entry.name ? "" : " — \(entry.title)")
         }.joined(separator: "\n")
     }
 
-    static func json(_ entries: [ServerPicker.Entry], current: String?) -> String {
+    static func json(_ blocks: [ServerPicker.Block], current: ServerID?) -> String {
         struct Row: Encodable {
             let current: Bool
             let fastest: Bool
             let name: String
             let own: Bool
+            /// Its subscription's title; left out when the app's list does not name it.
+            let subscription: String?
             let title: String
         }
-        return encode(entries.map { Row(current: $0.name == current, fastest: $0.isFastest, name: $0.name, own: $0.own, title: $0.title) })
+        return encode(blocks.flatMap { block in
+            block.entries.map { Row(current: $0.server == current, fastest: $0.isFastest, name: $0.name, own: $0.own,
+                                    subscription: title(of: block.id, in: blocks), title: $0.title) }
+        })
     }
 
     private static func encode(_ value: some Encodable) -> String {
@@ -225,10 +287,11 @@ enum CLI {
 }
 
 extension CLI.Status {
-    /// From the answers of `ks state`, `ks core state` and (when the core runs) `ks core proxies`.
-    init(state: String, coreState: String, proxies: CoreProxies?) {
+    /// From the answers of `ks state`, `ks core state` and (when the core runs) `ks core proxies`;
+    /// `subscription`: the running subscription's title.
+    init(state: String, coreState: String, proxies: CoreProxies?, subscription: String? = nil) {
         let running = coreState.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("on")
-        self.init(protection: DaemonState.protection(state), vpn: running,
-                  server: running ? proxies.flatMap(ServerPicker.selected) : nil)
+        let server = running ? proxies.flatMap(ServerPicker.selected) : nil
+        self.init(protection: DaemonState.protection(state), vpn: running, server: server, subscription: server == nil ? nil : subscription)
     }
 }
