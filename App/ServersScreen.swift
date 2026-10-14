@@ -20,6 +20,7 @@ struct ServersScreen: View {
     @State private var filter = ServerPicker.Filter()
     @State private var highlighted: String?
     @State private var choosingEntry = false
+    @State private var choice = ServerChoice(interval: NSEvent.doubleClickInterval)
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -218,6 +219,7 @@ struct ServersScreen: View {
     }
 
     private func choose(_ entry: ServerPicker.Entry) {
+        guard choice.accept() else { return }
         if choosingEntry {
             control.setMultihop(entry: entry.name)
         } else {
