@@ -6,19 +6,25 @@ final class ServerChoiceTests: XCTestCase {
     /// double-click lands on the neighbour and must not switch again.
     func testTheSecondClickOfADoubleClickIsIgnored() {
         var choice = ServerChoice(interval: 0.5)
-        let start = Date(timeIntervalSince1970: 1000)
-        XCTAssertTrue(choice.accept(at: start))
-        XCTAssertFalse(choice.accept(at: start.addingTimeInterval(0.3)))
-        XCTAssertFalse(choice.accept(at: start.addingTimeInterval(0.5)))
+        XCTAssertTrue(choice.accept(at: 1000))
+        XCTAssertFalse(choice.accept(at: 1000.3))
+        XCTAssertFalse(choice.accept(at: 1000.5))
     }
 
     func testAClickAfterTheIntervalChooses() {
         var choice = ServerChoice(interval: 0.5)
-        let start = Date(timeIntervalSince1970: 1000)
-        XCTAssertTrue(choice.accept(at: start))
-        XCTAssertTrue(choice.accept(at: start.addingTimeInterval(0.6)))
+        XCTAssertTrue(choice.accept(at: 1000))
+        XCTAssertTrue(choice.accept(at: 1000.6))
         // an ignored click does not extend the window: a triple-click chooses once, a later click again
-        XCTAssertFalse(choice.accept(at: start.addingTimeInterval(0.9)))
-        XCTAssertTrue(choice.accept(at: start.addingTimeInterval(1.2)))
+        XCTAssertFalse(choice.accept(at: 1000.9))
+        XCTAssertTrue(choice.accept(at: 1001.2))
+    }
+
+    /// A time before the last choice (a clock that went back) never swallows the clicks after it.
+    func testAnEarlierTimeChooses() {
+        var choice = ServerChoice(interval: 0.5)
+        XCTAssertTrue(choice.accept(at: 1000))
+        XCTAssertTrue(choice.accept(at: 10))
+        XCTAssertFalse(choice.accept(at: 10.2))
     }
 }

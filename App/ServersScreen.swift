@@ -20,7 +20,9 @@ struct ServersScreen: View {
     @State private var filter = ServerPicker.Filter()
     @State private var highlighted: String?
     @State private var choosingEntry = false
-    @State private var choice = ServerChoice(interval: NSEvent.doubleClickInterval)
+    /// At most 1 s: Accessibility allows a double-click interval up to ~5 s, which would swallow
+    /// a deliberate quick correction of a misclick.
+    @State private var choice = ServerChoice(interval: min(NSEvent.doubleClickInterval, 1))
     @FocusState private var searchFocused: Bool
 
     var body: some View {
