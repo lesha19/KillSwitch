@@ -141,6 +141,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   report lists `x-ks-routing` among what it left out).
 
 ### Fixed
+- A double-click on a server in «Серверы» switches once, to the server clicked. The first click
+  added it to «Недавние» and moved the rows below, so the second one chose the neighbour and
+  restarted the core again (with Xray ~20 s without internet instead of ~10).
 - Xray: with only split apps (or a routing profile) going direct, the subscription's freedom
   outbound they use was not in the DIRECT signature, so a passwordless refresh could change where
   that traffic goes (a `redirect`). It is now, at the same place as before. The update's own
