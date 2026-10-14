@@ -17,8 +17,6 @@ enum UserNotice: Equatable {
     case newServers
     /// KS-12: the update changes what goes past the VPN, not the servers.
     case routingChanged
-    /// The same from the person's routing profile (ADR 0034): a change of it waits for the password.
-    case profileRouting
     case pauseEnded
     case serviceOff
     case macOSUpdated
@@ -63,7 +61,6 @@ enum UserNotice: Equatable {
         case .trafficLow: "traffic"
         case .newServers: "newServers"
         case .routingChanged: "routingChanged"
-        case .profileRouting: "profileRouting"
         case .pauseEnded: "pauseEnded"
         case .serviceOff: "serviceOff"
         case .macOSUpdated: "macOS"
@@ -74,7 +71,7 @@ enum UserNotice: Equatable {
     var setting: Setting? {
         switch self {
         case .vpnDropped, .reconnected, .autoConnectNeedsPassword, .serversDown, .otherVPN, .doubleVPNOff: .connection
-        case .subscriptionEnding, .trafficLow, .newServers, .routingChanged, .profileRouting: .subscription
+        case .subscriptionEnding, .trafficLow, .newServers, .routingChanged: .subscription
         case .pauseEnded: .pause
         case .serviceOff: .service
         case .macOSUpdated, .updateInstalled: nil
@@ -86,7 +83,7 @@ enum UserNotice: Equatable {
         case .vpnDropped: .connect
         case .autoConnectNeedsPassword, .serversDown, .otherVPN, .doubleVPNOff: .openApp
         case .subscriptionEnding: .renew
-        case .newServers, .routingChanged, .profileRouting: .approve
+        case .newServers, .routingChanged: .approve
         case .serviceOff: .openLoginItems
         case .macOSUpdated: .check
         case .reconnected, .trafficLow, .pauseEnded, .updateInstalled: nil
@@ -105,7 +102,6 @@ enum UserNotice: Equatable {
         case .trafficLow: String(localized: "Трафик почти закончился")
         case .newServers: String(localized: "В подписке новые серверы")
         case .routingChanged: String(localized: "Подписка меняет правила «напрямую»")
-        case .profileRouting: String(localized: "Профиль маршрутизации ждёт пароля")
         case .pauseEnded: String(localized: "Защита снова включена")
         case .serviceOff: String(localized: "Служба KillSwitch выключена")
         case .macOSUpdated: String(localized: "macOS обновилась")
@@ -130,7 +126,6 @@ enum UserNotice: Equatable {
         case .trafficLow(let used, let total): Russian.traffic(used: used, total: total) + "."
         case .newServers: String(localized: "Разреши их, чтобы обновление применилось.")
         case .routingChanged: String(localized: "Часть трафика пойдёт мимо VPN. Проверь, прежде чем разрешать.")
-        case .profileRouting: String(localized: "Изменение может прийти и от профиля, и от подписки, куда он отправляет сайты. До подтверждения действуют прежние правила.")
         case .pauseEnded: String(localized: "Пауза закончилась.")
         case .serviceOff: String(localized: "Включи её в Объектах входа.")
         case .macOSUpdated: String(localized: "Перезагрузи Mac и запусти проверку утечек.")

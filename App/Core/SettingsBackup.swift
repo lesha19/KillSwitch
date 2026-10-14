@@ -26,8 +26,6 @@ enum SettingsBackup {
         var splitApps: [String]?
         /// The own DNS-over-HTTPS server (ADR 0031); "" = none.
         var doh: String?
-        /// Own addresses of sites (ADR 0033), "name=IPv4" each.
-        var hosts: [String]?
         /// The TUN's MTU, 0 = «Авто» (ADR 0032); nil: not named.
         var mtu: Int?
     }
@@ -67,7 +65,7 @@ enum SettingsBackup {
     /// lists emptied. The way of connecting stays (changing it imports the subscription again).
     static var reset: Settings {
         Settings(app: Dictionary(uniqueKeysWithValues: fields.map { ($0.key, $0.fallback) }),
-                 root: Root(core: nil, switches: defaultSwitches, exceptions: [], manualServers: [], splitApps: [], doh: "", hosts: [], mtu: 0))
+                 root: Root(core: nil, switches: defaultSwitches, exceptions: [], manualServers: [], splitApps: [], doh: "", mtu: 0))
     }
 
     // MARK: app settings
@@ -214,14 +212,14 @@ enum SettingsBackup {
             if let servers = root.manualServers { part["manualServers"] = servers }
             if let apps = root.splitApps { part["splitApps"] = apps }
             if let doh = root.doh { part["doh"] = doh }
-            if let hosts = root.hosts { part["hosts"] = hosts }
             if let mtu = root.mtu { part["mtu"] = mtu == 0 ? HelperCommand.mtuAuto as Any : mtu as Any }
             object["root"] = part
         }
         return (try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])) ?? Data()
     }
 
-    /// The whole file checked; what it does not name is nil (left as it is), unknown keys ignored.
+    /// The whole file checked; what it does not name is nil (left as it is), unknown keys ignored
+    /// (root "hosts" of unreleased 0.20.0 builds among them, #73).
     static func read(_ data: Data) throws -> Settings {
         guard data.count <= maxBytes, let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               object["format"] as? String == format, let fileVersion = number(object["version"]), fileVersion >= 1 else {
@@ -272,10 +270,6 @@ enum SettingsBackup {
         if let raw = part["doh"] {
             guard let url = raw as? String, url.isEmpty || HelperCommand.isDoH(url) else { throw Problem.damaged(dohTitle) }
             root.doh = url
-        }
-        if let raw = part["hosts"] {
-            guard let list = raw as? [String], HelperCommand.setHosts(list).isValid else { throw Problem.damaged(hostsTitle) }
-            root.hosts = list
         }
         if let raw = part["mtu"] {
             if raw as? String == HelperCommand.mtuAuto {
@@ -452,7 +446,6 @@ enum SettingsBackup {
             ("exceptions", String(localized: "Адреса без VPN"), now.exceptions, root.exceptions, true),
             ("manualServers", String(localized: "Адреса серверов для других VPN-программ"), now.manualServers, root.manualServers, true),
             ("splitApps", String(localized: "Программы без VPN"), now.splitApps, root.splitApps, false),
-            ("hosts", hostsTitle, now.hosts, root.hosts, false),
         ]
         if let doh = root.doh, doh != (now.doh ?? "") {
             result.append(Change(key: "doh", title: dohTitle, old: dohText(now.doh ?? ""), new: dohText(doh), root: true))
@@ -489,9 +482,6 @@ enum SettingsBackup {
         if let doh = new.doh, doh != (current.doh ?? "") {
             commands.append([helper, "set", "doh", doh])
         }
-        if let hosts = new.hosts, Set(hosts) != Set(current.hosts ?? []) {
-            commands.append([helper, "set", "hosts", hosts.joined(separator: ",")])
-        }
         if let mtu = new.mtu, mtu != (current.mtu ?? 0) {
             commands.append([helper] + HelperCommand.setMTU(mtu == 0 ? nil : mtu).arguments)
         }
@@ -508,7 +498,6 @@ enum SettingsBackup {
         }
     }
 
-    private static var hostsTitle: String { String(localized: "Свои адреса сайтов") }
     private static var dohTitle: String { String(localized: "Свой сервер DNS-over-HTTPS") }
     private static func dohText(_ url: String) -> String { url.isEmpty ? String(localized: "нет") : url }
     static let mtuTitle = String(localized: "Размер пакетов VPN (MTU)")

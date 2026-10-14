@@ -1,6 +1,8 @@
 # 0033. Own addresses of sites (hosts) inside the protected DNS
 
-Status: accepted — decided by the agent, the owner may change it (#28, 2026-10-12).
+Status: superseded by ADR 0036 (owner, 2026-10-14: the rules, DNS and groups in force are the
+selected subscription's alone). Removed before 0.20.0 shipped (#73); a `hosts=` line left by an
+unreleased build is ignored and dropped by install.sh. Was: accepted — decided by the agent (#28, 2026-10-12).
 
 ## Context
 

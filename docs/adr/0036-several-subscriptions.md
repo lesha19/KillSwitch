@@ -44,7 +44,9 @@ recents, favourites, multihop, Shortcuts).
 4. The rules, DNS and groups in force are those of the subscription whose server is selected; the
    app adds nothing and merges nothing across subscriptions. Choosing a server of another
    subscription reconnects with that subscription's configuration; blocking holds throughout
-   (ADR 0035).
+   (ADR 0035). So the person's own routing profiles (ADR 0034) and own site addresses (ADR 0033)
+   are removed before 0.20.0 ships (#73, owner 2026-10-14); blocking categories and the own DoH
+   server (ADR 0031) stay, as protection on top of any subscription.
 5. No automatic server replacement: the app never moves the connection to another server on its
    own. A subscription's own automatic group («самый быстрый», url-test, balancer) works as the
    subscription defines it.

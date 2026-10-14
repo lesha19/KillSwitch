@@ -80,9 +80,6 @@ final class Endpoint: NSObject, HelperProtocol, Sendable {
     func setDoH(url: String?, authorization: Data, reply: @escaping Reply) {
         Executor.perform(.setDoH(url), authorization: authorization, caller: uid, reply: reply)
     }
-    func setHosts(entries: [String], authorization: Data, reply: @escaping Reply) {
-        Executor.perform(.setHosts(entries), authorization: authorization, caller: uid, reply: reply)
-    }
     func setCore(name: String, authorization: Data, reply: @escaping Reply) {
         guard let core = CoreChoice(rawValue: name) else {
             reply(HelperReply.refused, "", "usage: ks set core xray|mihomo")

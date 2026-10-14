@@ -323,7 +323,7 @@ private struct NoticeBanner: View {
         }
         let notice = HomeNotice.pick(HomeNotice.Input(
             otherVPN: control.otherVPNActive,
-            usage: client.status.usage, newServers: client.needsConfirmation, routingChanged: client.routingChanged, routingSource: client.routingSource, routingProfileName: client.routingProfileName,
+            usage: client.status.usage, newServers: client.needsConfirmation, routingChanged: client.routingChanged,
             filterIncomplete: filterIncomplete, filterDismissed: filterDismissed, now: Date(),
             serversDown: control.serversDown, networkCause: control.networkCause,
             filterUpdateWaiting: control.filter.updateWaitingForApproval,
@@ -365,7 +365,7 @@ private struct NoticeBanner: View {
                 }
             case .trafficLow:
                 Banner(icon: "gauge.with.dots.needle.100percent", title: notice.title, message: notice.message) { EmptyView() }
-            case .newServers, .routingChanged, .profileRouting:
+            case .newServers, .routingChanged:
                 Banner(icon: notice == .newServers ? "server.rack" : "arrow.triangle.branch", title: notice.title, message: notice.message) {
                     Button("Разрешить…") { Task { await client.confirmNewServers() } }.disabled(client.updating)
                 }

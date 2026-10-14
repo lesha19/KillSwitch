@@ -33,8 +33,6 @@ final class HelperCommandTests: XCTestCase {
             (.setSwitch("blockadult", true), ["set", "blockadult", "1"]), (.setSwitch("blocksocial", false), ["set", "blocksocial", "0"]),
             (.setSwitch("blockbetting", true), ["set", "blockbetting", "1"]),
             (.setDoH("https://dns.example.com/dns-query"), ["set", "doh", "https://dns.example.com/dns-query"]), (.setDoH(nil), ["set", "doh", ""]),
-            (.setHosts(["nas.lan=192.168.1.10", "dns.example.com=203.0.113.53"]), ["set", "hosts", "nas.lan=192.168.1.10,dns.example.com=203.0.113.53"]),
-            (.setHosts([]), ["set", "hosts", ""]),
         ]
         for (command, arguments) in cases {
             XCTAssertEqual(command.program, .ks, "\(command)")
@@ -118,7 +116,7 @@ final class HelperCommandTests: XCTestCase {
             .setMultihop(nil), .setCore(.xray), .setMTU(1400),
             .allow("192.0.2.1"), .unallow("192.0.2.1"), .serverAdd("192.0.2.1"), .serverRemove("192.0.2.1"),
             .coreImport(profile: "/tmp/p.json"), .install(user: "alex", servers: []), .uninstall, .repair,
-            .setSwitch("diag", true), .diagReport(directory: "/Users/me/Desktop"), .setDoH(nil), .setSwitch("blockadult", true), .setHosts([]),
+            .setSwitch("diag", true), .diagReport(directory: "/Users/me/Desktop"), .setDoH(nil), .setSwitch("blockadult", true),
         ]
         let twoWords: Set<String> = ["core", "diag"]
         for command in all {
@@ -232,27 +230,10 @@ final class HelperCommandTests: XCTestCase {
         XCTAssertTrue(HelperCommand.setDoH(nil).needsAuthorization)
     }
 
-    /// ADR 0033: own addresses of sites as Helper/ks hosts_parse takes them (Helper/tests/hosts.sh has the same list).
-    func testHostsEntries() {
-        for entry in ["nas.home.arpa=192.168.1.10", "NAS.Lan=10.0.0.5", "dns.example.com=203.0.113.53", "tailnet.example=100.101.102.103"] {
-            XCTAssertTrue(HelperCommand.isHostsEntry(entry), entry)
-        }
-        for entry in ["nas=192.168.1.10", "*.example.com=203.0.113.1", "+.example.com=203.0.113.1", "example.com=2001:db8::1",
-                      "example.com=127.0.0.1", "example.com=0.0.0.0", "example.com=198.18.0.5", "example.com=198.19.1.1",
-                      "example.com=224.0.0.1", "example.com=255.255.255.255", "example.com=169.254.1.1", "example.com=256.1.1.1",
-                      "example.com=010.1.1.1", "example.com=", "=203.0.113.1", "example.com", "example.com=203.0.113.1=x",
-                      "exa mple.com=203.0.113.1", "example.local=192.168.1.2", "localhost=127.0.0.1", "x.localhost=192.168.1.2",
-                      "-bad.example.com=203.0.113.1", "example.123=203.0.113.1", "github.com=203.0.113.1", "api.github.com=203.0.113.1",
-                      "objects.githubusercontent.com=203.0.113.1", "cp.cloudflare.com=203.0.113.1", "api.ipify.org=203.0.113.1",
-                      "ipv4.am.i.mullvad.net=203.0.113.1", "x.bash.ws=203.0.113.1", "a,b.example.com=203.0.113.1",
-                      String(repeating: "a", count: 250) + ".com=203.0.113.1"] {
-            XCTAssertFalse(HelperCommand.isHostsEntry(entry), entry)
-        }
-        XCTAssertFalse(HelperCommand.setHosts(["a.example.com=203.0.113.1", "A.example.com=203.0.113.2"]).isValid, "one name twice")
-        XCTAssertFalse(HelperCommand.setHosts((1...51).map { "h\($0).example.com=203.0.113.1" }).isValid, "more than 50")
-        XCTAssertTrue(HelperCommand.setHosts((1...50).map { "h\($0).example.com=203.0.113.1" }).isValid)
-        XCTAssertNil(HelperCommand(ks: ["set", "hosts", "nas=1.2.3.4"]))
-        XCTAssertTrue(HelperCommand.setHosts([]).needsAuthorization)
+    /// #73: own addresses of sites are gone, so is «ks set hosts».
+    func testNoHostsCommand() {
+        XCTAssertNil(HelperCommand(ks: ["set", "hosts", "nas.lan=192.168.1.10"]))
+        XCTAssertNil(HelperCommand(ks: ["set", "hosts", ""]))
     }
 
     /// «Собрать отчёт» (ADR 0021): an absolute folder, one line; anything else is not a report.

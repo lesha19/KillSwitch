@@ -81,8 +81,6 @@ final class KillSwitchControl {
     private(set) var blockBetting = false
     /// The own DNS-over-HTTPS server (`doh=`, ADR 0031), used by the core through the VPN; nil = none.
     private(set) var ownDoH: String?
-    /// Own addresses of sites (`hosts=`, ADR 0033), "name=IPv4" each, answered by the core's DNS.
-    private(set) var ownHosts: [String] = []
     /// «Подробная диагностика» (diag, ADR 0021): Xray records every connection in the local journal.
     private(set) var diagVerbose = false
     /// Xray: a server that stops answering is tried with another TLS fingerprint or another transport
@@ -302,8 +300,6 @@ final class KillSwitchControl {
     func setSplitApps(_ names: [String]) { runAsAdmin([helper, "set", "splitapps", SplitApps.argument(names)]) }
     /// The own DNS-over-HTTPS server; nil clears it. Always a click.
     func setDoH(_ url: String?) { runAsAdmin([helper, "set", "doh", url ?? ""]) }
-    /// The edited list of own addresses of sites, one password.
-    func setHosts(_ entries: [String]) { runAsAdmin([helper, "set", "hosts", entries.joined(separator: ",")]) }
     /// `entry` nil turns «Двойной VPN» off. Always a click.
     func setMultihop(entry: String?) {
         multihopAskedAt = Date()
@@ -332,7 +328,7 @@ final class KillSwitchControl {
         .init(core: coreChoice, switches: switches.merging(["direct": allowDirect, "adblock": adBlock, "diag": diagVerbose,
                                                       "escalate": escalate, "blockadult": blockAdult, "blocksocial": blockSocial,
                                                       "blockbetting": blockBetting]) { $1 },
-              exceptions: exceptions, manualServers: manualServers, splitApps: splitApps, doh: ownDoH ?? "", hosts: ownHosts, mtu: tunnelMTU ?? 0)
+              exceptions: exceptions, manualServers: manualServers, splitApps: splitApps, doh: ownDoH ?? "", mtu: tunnelMTU ?? 0)
     }
     /// A loaded or reset set of root settings: the commands of their own screens, one password;
     /// `done` after they went through (nothing to run: at once).
@@ -1176,7 +1172,6 @@ final class KillSwitchControl {
         blockSocial = (values["blocksocial"] ?? "0") == "1"
         blockBetting = (values["blockbetting"] ?? "0") == "1"
         ownDoH = values["doh"].flatMap { $0.isEmpty ? nil : $0 }
-        ownHosts = (values["hosts"] ?? "").split(separator: ",").map(String.init)
         diagVerbose = (values["diag"] ?? "0") == "1"
         escalate = (values["escalate"] ?? "1") == "1"
         splitApps = SplitApps.parse(setting: values["splitapps"])

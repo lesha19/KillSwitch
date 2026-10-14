@@ -30,7 +30,7 @@ reset() { rm -rf "$SETTINGS" "$ALLOW" "$SERVERS" "$SERVERS_MANUAL" "$SERVERS_COR
 # --- what is fine
 reset
 expect_open "no settings file at all (the defaults)"
-printf 'lan=1\ntailscale=0\ndns=1\ndirect=0\nwifiguard=1\nadblock=1\nblockadult=1\nblocksocial=0\nblockbetting=1\ndoh=https://dns.example.com/dns-query\nhosts=nas.lan=192.168.1.10\nsplitapps=/Applications/Telegram.app,curl\nmultihop=Germany 1\n' > "$SETTINGS"
+printf 'lan=1\ntailscale=0\ndns=1\ndirect=0\nwifiguard=1\nadblock=1\nblockadult=1\nblocksocial=0\nblockbetting=1\ndoh=https://dns.example.com/dns-query\nsplitapps=/Applications/Telegram.app,curl\nmultihop=Germany 1\n' > "$SETTINGS"
 expect_open "every key ks writes, valid values"
 printf 'multihop=off\nsplitapps=\n' > "$SETTINGS"
 expect_open "multihop off, splitapps cleared"
@@ -42,6 +42,8 @@ printf 'coredirect=1\nlan=1\n' > "$SETTINGS"
 expect_open "coredirect from before 0.15 (install.sh drops it, ignored meanwhile)"
 printf 'failover=1\nlan=1\n' > "$SETTINGS"
 expect_open "failover from before 0.20 (ADR 0036: install.sh drops it, ignored meanwhile)"
+printf 'hosts=nas.lan=192.168.1.10\nhosts=not a list\nlan=1\n' > "$SETTINGS"
+expect_open "hosts from an unreleased 0.20.0 build (#73: install.sh drops it, ignored meanwhile)"
 printf 'lan=1' > "$SETTINGS"
 expect_open "no newline at the end"
 : > "$SETTINGS"

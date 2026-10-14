@@ -1,6 +1,8 @@
 # ADR 0034: named routing profiles, chosen by the person, approved like the subscription's DIRECT
 
-- Status: accepted (Unreleased, issue #30)
+- Status: superseded by ADR 0036 (owner, 2026-10-14: the rules, DNS and groups in force are the
+  selected subscription's alone). Removed from the app before 0.20.0 shipped (#73). Was: accepted
+  (Unreleased, issue #30)
 - Date: 2026-10-12
 - Decided by the agent («разрабатывай без спроса», roadmap #43); the owner may change any of it.
 

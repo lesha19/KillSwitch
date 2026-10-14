@@ -28,7 +28,8 @@ same() { cmp -s "$1" "$2"; }
 same_json() { [ "$(j 'JSON::PP->new->canonical->encode($c)' "$1")" = "$(j 'JSON::PP->new->canonical->encode($c)' "$2")" ]; }
 PROFILE='{ name => "Всё сразу", block => { sites => ["domain:ads.example.com"] }, proxy => { sites => ["full:www.example.org"] },
   direct => { sites => ["domain:ru", "keyword:yandex"], ips => ["geoip:ru", "10.0.0.0/8"] } }'
-# all <file>: every new setting on, besides the core and double VPN's entry ($2)
+# all <file>: every new setting on, besides the core and double VPN's entry ($2); plus an old
+# hosts= line of unreleased 0.20.0 builds, ignored (#73)
 all() {
   printf 'core=%s\nmultihop=%s\nmtu=1380\ndoh=https://dns.example.com/dns-query\nhosts=nas.home.arpa=192.168.1.10,files.example.net=203.0.113.77\nadblock=1\nblockadult=1\nblocksocial=1\nblockbetting=1\nescalate=1\n' "$1" "$2" > "$SETTINGS"
 }
@@ -57,8 +58,8 @@ c="$T/x-all"
 [ "$(j '$c->{dns}{servers}[0]{address} . " " . $c->{dns}{servers}[0]{tag}' "$c")" = "https://dns.example.com/dns-query ks-doh" ] &&
   [ "$(j 'my ($r) = grep { ref $_->{inboundTag} && $_->{inboundTag}[0] eq "ks-doh" } @{ $c->{routing}{rules} }; $r->{outboundTag}' "$c")" != direct ] &&
   ok "  own DoH first, its queries to a server" || bad "  doh: $(j '$c->{dns}' "$c")"
-[ "$(j '$c->{dns}{hosts}{"full:nas.home.arpa"} . " " . $c->{dns}{hosts}{"full:files.example.net"}' "$c")" = "192.168.1.10 203.0.113.77" ] &&
-  ok "  own site addresses in the DNS hosts" || bad "  hosts: $(j '$c->{dns}{hosts}' "$c")"
+[ "$(j 'exists $c->{dns}{hosts}{"full:nas.home.arpa"} ? 1 : 0' "$c")" = 0 ] &&
+  ok "  an old hosts= line ignored (#73)" || bad "  hosts: $(j '$c->{dns}{hosts}' "$c")"
 if [ -s "$CORE_DIR/geosite.dat" ]; then
   [ "$(j 'my ($r) = grep { ref $_->{domain} && grep { $_ eq "geosite:category-porn" } @{ $_->{domain} } } @{ $c->{routing}{rules} }; my ($o) = grep { $_->{tag} eq $r->{outboundTag} } @{ $c->{outbounds} }; $o->{protocol}' "$c")" = blackhole ] &&
     ok "  blocked categories to a blackhole" || bad "  block: $(j '$c->{routing}{rules}' "$c")"
@@ -89,7 +90,7 @@ gm "$T/mp.json" m-all || bad "mihomo, everything on: $(cat "$T/err")"
 c="$T/m-all"
 [ "$(j '$c->{tun}{mtu}' "$c")" = 1380 ] && ok "mihomo: tun.mtu 1380" || bad "mihomo mtu: $(j '$c->{tun}' "$c")"
 [ "$(j '$c->{dns}{nameserver}[0]' "$c")" = "https://dns.example.com/dns-query#$KS_DNS" ] && ok "  own DoH through KillSwitch's group" || bad "  doh: $(j '$c->{dns}' "$c")"
-[ "$(j '$c->{hosts}{"nas.home.arpa"}' "$c")" = 192.168.1.10 ] && ok "  own site addresses" || bad "  hosts: $(j '$c->{hosts}' "$c")"
+[ "$(j 'exists $c->{hosts} ? 1 : 0' "$c")" = 0 ] && ok "  an old hosts= line ignored (#73)" || bad "  hosts: $(j '$c->{hosts}' "$c")"
 if [ -s "$CORE_DIR/geosite.dat" ]; then
   j 'join "\n", @{ $c->{rules} }' "$c" | grep -qx 'GEOSITE,category-porn,REJECT' && ok "  blocked categories rejected" || bad "  block: $(j '$c->{rules}' "$c")"
 else echo "skip  blocked categories (no shipped geosite.dat)"; fi

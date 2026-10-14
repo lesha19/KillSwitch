@@ -8,7 +8,7 @@ enum RefreshOutcome: Equatable {
     case newServers
     /// Exit 3 too (KS-12), but the profile changes what goes past the VPN (DIRECT rules, DNS
     /// outside the tunnel): the admin approves that, not new servers (ADR 0013).
-    case routingChanged(RoutingChangeSource)
+    case routingChanged
     /// sudoers does not allow `core refresh` (helper older than 0.7).
     case needsPassword
     case failed(String)
@@ -20,20 +20,13 @@ enum RefreshOutcome: Equatable {
         if status == 0 {
             self = .applied
         } else if status == 3 {
-            self = output.contains(Self.routingMarker) ? .routingChanged(Self.routingSource(output)) : .newServers
+            self = output.contains(Self.routingMarker) ? .routingChanged : .newServers
         } else if Self.sudoWantsPassword(output) {
             self = .needsPassword
         } else {
             let message = output.trimmingCharacters(in: .whitespacesAndNewlines)
             self = .failed(message.isEmpty ? String(localized: "Не получилось") : message)
         }
-    }
-
-    /// The part ks names after the marker (direct_parts); none from an older helper.
-    static func routingSource(_ output: String) -> RoutingChangeSource {
-        if output.contains("\(routingMarker) [profile,subscription]") { return .both }
-        if output.contains("\(routingMarker) [profile]") { return .profile }
-        return .subscription
     }
 
     static func sudoWantsPassword(_ output: String) -> Bool {

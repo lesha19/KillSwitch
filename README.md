@@ -9,7 +9,7 @@ Rules are loaded at boot, before login.
 
 - `Helper/ks` — root helper: generates the pf rules from settings and loads them into anchor
   `com.apple/killswitch` (`/etc/pf.conf` untouched). `status | state | on | off | pause [min] |
-  set lan|tailscale|dns|direct|wifiguard|adblock|blockadult|blocksocial|blockbetting 0|1 | set doh <url> | set hosts <name=ip,…> | allow <addr> | unallow <addr> | server-add <ip> |
+  set lan|tailscale|dns|direct|wifiguard|adblock|blockadult|blocksocial|blockbetting 0|1 | set doh <url> | allow <addr> | unallow <addr> | server-add <ip> |
   server-remove <ip> | core … | apply | repair | watch`. Tests (no root, nothing on the system changes):
   `for t in Helper/tests/*.sh; do bash "$t"; done`. Before a push, also as CI runs them (no
   cores, no geodata, a copy of the tracked files): `scripts/test-helper-ci.sh /bin/bash` and
@@ -145,9 +145,8 @@ what transport escalation remembered per server, ADR 0030).
   control characters; also their `<name> Helper…` processes; `""` clears), DIRECT; blocked
   categories (ADR 0031: `adblock`, `blockadult`, `blocksocial`, `blockbetting` = `category-ads-all`,
   `category-porn`, `category-social-media-!cn`, `category-betting-ru`) go first as `GEOSITE,…,REJECT`;
-  the own DoH server (`ks set doh <https url>`) is asked through the VPN only (Xray: Cloudflare DoH after it; mihomo: alone);
-  own addresses of sites (`ks set hosts <name=IPv4,…>`, ADR 0033) go into the core's hosts table. Both are the user's own choices and are
-  reported as such. `core/geosite.dat` and `core/geoip.metadb` (`Helper/fetch-geodata.sh`,
+  the own DoH server (`ks set doh <https url>`) is asked through the VPN only (Xray: Cloudflare DoH after it; mihomo: alone).
+  Both are the user's own choices and are reported as such. `core/geosite.dat` and `core/geoip.metadb` (`Helper/fetch-geodata.sh`,
   sha256-pinned, shipped in the app) serve the profile's `GEOSITE`/`GEOIP` rules; without them such
   rules are left out. The core never downloads geodata (`geo-auto-update: false`).
   Every generation writes `core/routing.json` (644, no secrets): the rules in order, what was left out

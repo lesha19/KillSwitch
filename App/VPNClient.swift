@@ -31,13 +31,6 @@ final class VPNClient {
     private(set) var needsConfirmation = false
     /// KS-12: what waits for the admin is a change of what goes past the VPN (DIRECT, DNS), not servers.
     private(set) var routingChanged = false
-    /// Which part of that change is the routing profile's, as the helper says (re-review F4), and
-    /// the profile in use then (nil: «Как в подписке»).
-    private(set) var routingSource: RoutingChangeSource = .subscription
-    private(set) var routingProfileName: String?
-    /// Settings › «Маршрутизация» (ADR 0034): the profiles added, the one in use (nil: «Как в подписке»).
-    private(set) var routingProfiles = RoutingProfiles.load(links: .keychain)
-    private(set) var activeRoutingProfile = UserDefaults.standard.string(forKey: RoutingProfiles.activeKey).flatMap(UUID.init(uuidString:))
     /// Settings › «Дополнительно»: fingerprint and multiplexing per server (Transport, ADR 0007).
     private(set) var transportOverrides = Transport.decode(UserDefaults.standard.data(forKey: Transport.storeKey))
     /// Servers of the cached profile whose transport can be changed, with the subscription's values.
@@ -206,12 +199,6 @@ final class VPNClient {
         reloadProfileProxies()
     }
 
-    /// The hosts of the subscription links (lower-cased): «Свои адреса сайтов» (ADR 0033) may not
-    /// redirect them. Never shown or logged.
-    func subscriptionHosts() -> Set<String> {
-        Set(subscriptions.compactMap { Subscriptions.link(of: $0.id, Self.store).flatMap { URLComponents(string: $0)?.host?.lowercased() } })
-    }
-
     private static let notALink = UserError(title: String(localized: "Это не ссылка на подписку"), message: String(localized: "Нужна ссылка вида https://…"))
 
     /// Its link, caches, status and what was kept of its servers go (Subscriptions.remove). The
@@ -301,112 +288,12 @@ final class VPNClient {
         await applyCurrent(interactive: false)
     }
 
-    // MARK: routing profiles (ADR 0034)
-
-    /// A link (https, fetched without the device's headers) or the profile itself (JSON, base64, a
-    /// happ:// or incy:// routing link). The error to show, nil when added. Adding uses nothing yet.
-    func addRoutingProfile(_ text: String) async -> String? {
-        var profile: RoutingProfile
-        do {
-            if let url = RoutingProfile.sourceURL(text) {
-                profile = try RoutingProfile.parse(try await Self.fetchRoutingProfile(url))
-                profile.url = url.absoluteString
-                profile.fetched = Date()
-            } else {
-                profile = try RoutingProfile.parse(text)
-            }
-        } catch let problem as RoutingProfile.Problem {
-            return problem.message
-        } catch {
-            return String(localized: "Не удалось скачать профиль: \(Self.describe(error))")
-        }
-        routingProfiles.append(profile)
-        RoutingProfiles.save(routingProfiles, links: .keychain)
-        return nil
-    }
-
-    /// Puts a profile to use (nil: «Как в подписке») and hands the config over without a password;
-    /// one that changes what goes past the VPN waits for «Подтвердить» with the admin's password,
-    /// as a subscription's DIRECT change does (needsConfirmation, routingChanged).
-    func useRoutingProfile(_ id: UUID?) async {
-        guard !updating else { return }   // the picker waits for it too
-        activeRoutingProfile = id
-        UserDefaults.standard.set(id?.uuidString, forKey: RoutingProfiles.activeKey)
-        await applyRouting()
-    }
-
-    func removeRoutingProfile(_ id: UUID) async {
-        guard !updating else { return }   // a fetch puts its result back by id; the button waits too
-        routingProfiles.removeAll { $0.id == id }
-        RoutingProfiles.save(routingProfiles, links: .keychain)
-        if activeRoutingProfile == id { await useRoutingProfile(nil) }
-    }
-
-    /// The profiles with a link, once a day (or all now, `force`); the one in use is handed over
-    /// again when it changed. One run at a time, as `updating` (the picker and «Удалить профиль»
-    /// wait for it); each result goes back by id, since the list may change during a fetch.
-    func updateRoutingProfiles(force: Bool = false) async {
-        guard !updating else { return }
-        updating = true
-        var changedActive = false
-        let due = routingProfiles.filter { $0.url != nil && (force || $0.due(now: Date())) }
-        for profile in due {
-            guard let url = profile.url.flatMap(RoutingProfile.sourceURL) else { continue }
-            let fetched: Result<RoutingProfile, Error>
-            do { fetched = .success(try RoutingProfile.parse(try await Self.fetchRoutingProfile(url))) } catch { fetched = .failure(error) }
-            routingProfiles = RoutingProfiles.changing(profile.id, in: routingProfiles) { current in
-                switch fetched {
-                case .success(let body):
-                    let new = current.updated(with: body, at: Date())
-                    if new.hint as NSDictionary != current.hint as NSDictionary, current.id == activeRoutingProfile { changedActive = true }
-                    current = new
-                case .failure(let problem as RoutingProfile.Problem):
-                    current.error = problem.message
-                    current.fetched = Date()
-                case .failure(let error):
-                    current.error = String(localized: "Не удалось скачать профиль: \(Self.describe(error))")
-                    current.fetched = Date()
-                }
-            }
-        }
-        RoutingProfiles.save(routingProfiles, links: .keychain)
-        updating = false
-        if changedActive { await applyRouting() }
-    }
-
-    private func applyRouting() async {
-        guard control.coreConfigured, !updating else { return }
-        updating = true
-        defer { updating = false }
-        await applyCurrent(interactive: false)
-    }
-
-    /// A routing profile's link: a plain GET, no device headers (the link is not the provider's),
-    /// no cookies or cache, the redirect and size limits of a subscription fetch.
-    private static func fetchRoutingProfile(_ url: URL) async throws -> String {
-        let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
-        let session = URLSession(configuration: RoutingProfile.fetchConfiguration())
-        defer { session.finishTasksAndInvalidate() }
-        let (bytes, response) = try await session.bytes(for: request, delegate: SubscriptionFetch.RedirectGuard(original: url))
-        let data = try await SubscriptionFetch.collect(bytes)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw FetchError.status((response as? HTTPURLResponse)?.statusCode ?? 0, nil)
-        }
-        return String(decoding: data, as: UTF8.self)
-    }
-
     // MARK: updating
 
     func updateIfDue() {
         guard !updating else { return }
-        let profilesDue = routingProfiles.contains { $0.due(now: Date()) }
-        let subscriptionDue = hasURL && schedule.isDue(interval: effectiveInterval, now: Date())
-        guard profilesDue || subscriptionDue else { return }
-        // one after the other: both take `updating`, so side by side one would be skipped
-        Task {
-            if profilesDue { await updateRoutingProfiles() }
-            if subscriptionDue { await update(interactive: false) }
-        }
+        guard hasURL, schedule.isDue(interval: effectiveInterval, now: Date()) else { return }
+        Task { await update(interactive: false) }
     }
 
     /// Fetches every subscription and hands the profile the helper runs over again. On any failure
@@ -509,7 +396,7 @@ final class VPNClient {
             lastError = nil
             return true
         }
-        let data = RoutingProfiles.addingXray(RoutingProfiles.active(), to: config)
+        let data = RoutingHint.strippingXray(config)
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-xray-\(UUID().uuidString).json")
         do {
             try data.write(to: file, options: .atomic)
@@ -728,7 +615,7 @@ final class VPNClient {
         let server = ServerID(subscription: setupSubscription ?? activeID, name: "")
         if (setupCore ?? control.coreChoice) == .xray {
             guard let config = Subscriptions.xray(for: server, configs: Self.cachedXray(subscriptions), own: manualProxies) else { return nil }
-            let data = RoutingProfiles.addingXray(RoutingProfiles.active(), to: config)
+            let data = RoutingHint.strippingXray(config)
             let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-xray-\(UUID().uuidString).json")
             do {
                 try data.write(to: file, options: .atomic)
@@ -815,17 +702,12 @@ final class VPNClient {
                 return true
             case .newServers, .routingChanged:
                 lastError = nil
-                var source = RoutingChangeSource.subscription
-                if case .routingChanged(let part) = outcome { source = part }
                 let routing = outcome != .newServers
-                if !needsConfirmation || routing != routingChanged || source != routingSource {
-                    // the provider's part is told as the provider's
-                    Notifier.shared.post(!routing ? .newServers : source == .profile ? .profileRouting : .routingChanged)
+                if !needsConfirmation || routing != routingChanged {
+                    Notifier.shared.post(routing ? .routingChanged : .newServers)
                 }
                 needsConfirmation = true
                 routingChanged = routing
-                routingSource = source
-                routingProfileName = RoutingProfiles.active()?.name
             case .needsPassword: needsPassword = true
             case .failed(let message): lastError = UserError.from(raw: message, context: .subscription)
             }
@@ -849,7 +731,7 @@ final class VPNClient {
     /// (Subscriptions.profile), plus the transport overrides (Transport).
     private func forCore(_ server: ServerID) -> Profile? {
         Subscriptions.profile(for: server, profiles: Self.cachedProfiles(subscriptions), own: manual.compactMap(Self.proxy))
-            .map { RoutingProfiles.adding(RoutingProfiles.active(), to: Transport.adding(transportOverrides, to: $0)) }
+            .map { RoutingHint.stripping(Transport.adding(transportOverrides, to: $0)) }
     }
 
     /// The blocks of the servers list from the caches, in the format of the way the helper runs.

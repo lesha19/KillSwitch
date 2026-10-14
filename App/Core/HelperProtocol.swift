@@ -59,8 +59,6 @@ enum HelperIdentity {
     func setMultihop(entry: String?, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     /// ADR 0031: the own DNS-over-HTTPS server; nil clears it (HelperCommand.setDoH).
     func setDoH(url: String?, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
-    /// ADR 0033: own addresses of sites, "name=IPv4" each; [] clears them (HelperCommand.setHosts).
-    func setHosts(entries: [String], authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func setCore(name: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     /// 0: «Авто».
     func setMTU(value: Int, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
@@ -83,7 +81,6 @@ extension HelperIdentity {
         let interface = NSXPCInterface(with: HelperProtocol.self)
         let strings = NSSet(objects: NSArray.self, NSString.self) as! Set<AnyHashable>
         for selector in [#selector(HelperProtocol.setSplitApps(names:authorization:reply:)),
-                         #selector(HelperProtocol.setHosts(entries:authorization:reply:)),
                          #selector(HelperProtocol.install(servers:authorization:reply:))] {
             interface.setClasses(strings, for: selector, argumentIndex: 0, ofReply: false)
         }

@@ -112,7 +112,7 @@ setup() {  # setup <name>: a fresh installed system and bundle
   cp "$here/../local.killswitch.plist" "$here/../local.killswitch.core.plist" "$root/bundle/"
   cp "$here/../local.killswitch.plist" "$root/ld/local.killswitch.plist"
   cp "$here/../local.killswitch.core.plist" "$root/ld/local.killswitch.core.plist"
-  printf 'lan=0\ncoredirect=1\nfailover=1\nadblock=1\n' > "$root/lib/settings"
+  printf 'lan=0\ncoredirect=1\nfailover=1\nhosts=nas.lan=192.168.1.10\nadblock=1\n' > "$root/lib/settings"
   # the running watchdog is a 0.19 one (no vpn= line), protection off: our anchor is empty
   printf 'pid=1\nprotection=off\ncore=on\ntunnels=vpn:utun9 ts:\nstandby=0\n' > "$root/lib/daemon-state"
   : > "$root/anchor"
@@ -219,7 +219,7 @@ check "upgrade: the core config regenerated under the lock" "$(grep -c '^ks _reg
 check "upgrade: pf and the network never touched" "$(grep -cE '^(pfctl|networksetup)' "$root/calls")" 0
 check "upgrade: says the core kept running" "$(grep -c '^core: kept$' <<<"$out")" 1
 check "upgrade: sudoers kept for the same user" "$(grep -c '^someone ALL=(root) NOPASSWD:' "$root/sudoers")" 1
-check "upgrade: settings kept, coredirect (ADR 0013) and failover (ADR 0036) dropped" "$(paste -sd, - < "$root/lib/settings")" "lan=0,adblock=1"
+check "upgrade: settings kept, coredirect (ADR 0013), failover (ADR 0036) and hosts (#73) dropped" "$(paste -sd, - < "$root/lib/settings")" "lan=0,adblock=1"
 check "upgrade: the old failover state gone (ADR 0036)" "$(ls "$root/lib/core" | grep -c '^failover')" 0
 
 check "upgrade: the completion marker names the new ks" "$(sed -n 's/^sha256 //p' "$root/lib/installed" 2>/dev/null)" "$(shasum -a 256 "$root/lib/ks" | cut -d' ' -f1)"

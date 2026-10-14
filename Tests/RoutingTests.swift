@@ -96,13 +96,6 @@ final class RoutingReportTests: XCTestCase {
         XCTAssertFalse(added.why.isEmpty)
     }
 
-    /// ADR 0033: own addresses of sites, named as the person's choice.
-    func testOwnHostsAddition() throws {
-        let added = try JSONDecoder().decode(RoutingReport.Added.self, from: Data(#"{"kind":"hosts","items":["nas.lan → 192.168.1.10"]}"#.utf8))
-        XCTAssertEqual(added.title, "Свои адреса сайтов — твой выбор")
-        XCTAssertFalse(added.why.isEmpty)
-    }
-
     func testDroppedReasonsInWords() throws {
         let report = try RoutingReport(data: Self.sample)
         XCTAssertEqual(report.dropped.map(\.reasonText), [
@@ -113,9 +106,8 @@ final class RoutingReportTests: XCTestCase {
             "Значение не прошло проверку",
         ])
         XCTAssertEqual(RoutingReport.Dropped.reasonText("something-new"), "something-new")
-        // the own DoH and own addresses of sites replace the template's (ADR 0031, 0033): never the raw code
+        // the own DoH replaces the template's (ADR 0031): never the raw code
         XCTAssertEqual(RoutingReport.Dropped.reasonText("own-doh"), "Вместо него — твой DNS-over-HTTPS")
-        XCTAssertEqual(RoutingReport.Dropped.reasonText("own-hosts"), "Подходила под твой адрес сайта — убрана для всех имён")
         // a routing profile's code the shipped geodata lacks (ADR 0034)
         XCTAssertEqual(RoutingReport.Dropped.reasonText("geodata-code:geosite"), "Такой категории сайтов нет в базе (geosite)")
         XCTAssertEqual(RoutingReport.Dropped.reasonText("geodata-code:geoip"), "Такой страны нет в базе стран (geoip)")

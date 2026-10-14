@@ -272,28 +272,17 @@ final class SettingsBackupTests: XCTestCase {
         XCTAssertEqual(SettingsBackup.reset.root?.switches?["blockadult"], false)
     }
 
-    /// ADR 0033: own addresses of sites travel as a root list, through `ks set hosts`; a bad entry refuses the file.
-    func testOwnHostsTravel() throws {
-        let read = try SettingsBackup.read(file(root: ["hosts": ["nas.lan=192.168.1.10", "dns.example.com=203.0.113.53"]]))
-        XCTAssertEqual(read.root?.hosts, ["nas.lan=192.168.1.10", "dns.example.com=203.0.113.53"])
-        let change = try XCTUnwrap(SettingsBackup.changes(from: .init(app: [:], root: root), to: read).first)
-        XCTAssertEqual(change.key, "hosts")
-        XCTAssertEqual(change.title, "Свои адреса сайтов")
-        XCTAssertEqual(change.added, ["nas.lan=192.168.1.10", "dns.example.com=203.0.113.53"])
-        XCTAssertTrue(change.root)
-        let commands = SettingsBackup.rootCommands(helper: helper, current: root, new: read.root!)
-        XCTAssertEqual(commands, [[helper, "set", "hosts", "nas.lan=192.168.1.10,dns.example.com=203.0.113.53"]])
-        XCTAssertTrue(commands.allSatisfy { HelperCommand(command: $0, helper: helper)?.isValid == true })
-        for bad: Any in [["nas=1.2.3.4"], ["github.com=1.2.3.4"], "nas.lan=192.168.1.10", [1]] {
-            XCTAssertThrowsError(try SettingsBackup.read(file(root: ["hosts": bad])), "\(bad)") {
-                guard case .damaged = $0 as? SettingsBackup.Problem else { return XCTFail("\(bad): \($0)") }
-            }
+    /// #73: own addresses of sites are gone; a file of an unreleased 0.20.0 build that carries them,
+    /// valid or not, still imports, and they change nothing.
+    func testOldOwnHostsIgnored() throws {
+        for old: Any in [["nas.lan=192.168.1.10"], ["github.com=1.2.3.4"], "nas.lan=192.168.1.10", [1]] {
+            let read = try SettingsBackup.read(file(root: ["hosts": old, "doh": ""]))
+            XCTAssertEqual(read.root?.doh, "", "\(old)")
+            XCTAssertTrue(SettingsBackup.changes(from: .init(app: [:], root: root), to: read).allSatisfy { $0.key != "hosts" }, "\(old)")
+            XCTAssertTrue(SettingsBackup.rootCommands(helper: helper, current: root, new: read.root!).allSatisfy { !$0.contains("hosts") }, "\(old)")
         }
-        var full = root
-        full.hosts = ["nas.lan=192.168.1.10"]
-        XCTAssertEqual(try SettingsBackup.read(SettingsBackup.export(.init(app: [:], root: full), appVersion: "0.20.0", date: Date())).root, full)
-        XCTAssertEqual(SettingsBackup.reset.root?.hosts, [])
-        XCTAssertEqual(SettingsBackup.rootCommands(helper: helper, current: full, new: SettingsBackup.reset.root!).last, [helper, "set", "hosts", ""])
+        let exported = try JSONSerialization.jsonObject(with: SettingsBackup.export(SettingsBackup.reset, appVersion: "0.20.0", date: Date())) as? [String: Any]
+        XCTAssertNil((exported?["root"] as? [String: Any])?["hosts"])
     }
 
     /// The same entries in another order change nothing, in the sheet and in the commands.

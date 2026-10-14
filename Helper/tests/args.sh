@@ -54,7 +54,6 @@ takes set lan 0
 takes set adblock 1
 takes set blockadult 1
 takes set doh https://dns.example.com/dns-query
-takes set hosts nas.lan=192.168.1.10
 takes core import /x.json
 
 # --- install.sh: the user it writes into sudoers
@@ -69,10 +68,11 @@ done
 
 # every command that writes the core's config runs under the core lock (rotation, refresh and
 # import write the same files): ks's own dispatch asks core_lock_wanted (ADR 0023)
-for c in "core import /f" "core refresh /f" "set splitapps x" "set multihop off" "set diag 1" "set adblock 1" "set blockadult 1" "set blocksocial 0" "set blockbetting 1" "set doh https://dns.example.com/q" "set hosts nas.lan=192.168.1.10" "_regen" "repair" "core select Сервер DE"; do
+for c in "core import /f" "core refresh /f" "set splitapps x" "set multihop off" "set diag 1" "set adblock 1" "set blockadult 1" "set blocksocial 0" "set blockbetting 1" "set doh https://dns.example.com/q" "_regen" "repair" "core select Сервер DE"; do
   # shellcheck disable=SC2086 # the command's words
   core_lock_wanted $c && ok "under the core lock: ks $c" || bad "not under the core lock: ks $c"
 done
+core_lock_wanted set hosts nas.lan=192.168.1.10 && bad "ks set hosts still a command (#73 removed it)" || ok "no ks set hosts (#73)"
 core_lock_wanted core state && bad "ks core state waits for the core lock" || ok "not under the core lock: ks core state"
 # the usage shown for bad arguments: the whole command list at the top of ks, however long it grows
 u=$(ks_usage 2>&1)

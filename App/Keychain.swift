@@ -60,12 +60,3 @@ enum Keychain {
         SecItemDelete(match as CFDictionary)
     }
 }
-
-extension RoutingProfiles.LinkStore {
-    /// The routing profiles' links (review N1), {id: url} as JSON.
-    static let keychain = Self(read: { try Keychain.readChecked(account) }, write: { data in
-        guard let data else { Keychain.delete(account); return true }
-        return Keychain.write(account, data)
-    })
-    private static let account = "routingProfileLinks"
-}

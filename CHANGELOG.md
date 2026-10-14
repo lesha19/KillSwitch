@@ -7,21 +7,6 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 ## [0.20.0] - 2026-10-12
 
 ### Added
-- Settings › «Маршрутизация»: named routing profiles (#30, ADR 0034) in the Happ/INCY format —
-  sites and addresses to block, to send through the VPN or direct — added by an https link
-  (updated once a day) or pasted (JSON, base64, happ:// or incy:// routing links). One in use or
-  «Как в подписке» (default). Their rules go before the subscription's and are marked «профиль» in
-  «Трафик» › «Правила». A profile that sends anything past the VPN needs the admin's password, as
-  a subscription's DIRECT does; one that only blocks or sends through the VPN does not. The
-  format's own DNS, geodata links and «everything else direct» are not taken. A profile that goes
-  direct is approved whole, its block and through-the-VPN exceptions and their order included;
-  turning it off, or switching to one that only blocks or sends through the VPN, needs no
-  password while nothing else changed since the password was last entered (the subscription's
-  part, split apps). A change that waits for the password
-  says whether it is the profile's, the subscription's or both (the helper tells), and that the
-  old rules work until then. IPv6 addresses and ranges are taken. A profile link is fetched within a minute. Profile links are kept in the keychain; a subscription cannot bring a profile of
-  its own; a geosite or geoip code the shipped geodata lacks is left out (shown in «Трафик») rather
-  than refusing every update.
 - Xray: transport escalation (#20, ADR 0030). When the running server stops answering, KillSwitch
   tries the same one another way, only what the subscription offers and only when Xray's own probe
   of that way answers: another TLS fingerprint, then another transport of that server (xHTTP
@@ -89,13 +74,6 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   that go directly or that address rules need, with no one else asked when it does not answer. The
   DoH server's own name is resolved at the VPN exit. Only `https://` addresses of public servers, without a
   login, `?` or `#` (`ks set doh <url>`, `""` clears). Both new settings travel with «Перенос настроек».
-- «Свои адреса сайтов» (#28, ADR 0033): up to 50 «name → IPv4» pairs that the VPN's DNS answers
-  with your address (a home server, a service your DNS gets wrong). Only the answer changes: where
-  the connection goes is still up to the subscription's rules, and the protection lets nothing new
-  out; home and Tailscale addresses go past the VPN only with «Доступ к домашней сети» /
-  «Tailscale, NetBird». Not for the own DoH server's name (it is resolved at the VPN exit). Exact names only; not IPv6, 127.x, the VPN's servers, the subscription link or the hosts the
-  app needs for updates and checks (`ks set hosts <name=ip,…>`, `""` clears). Travels with
-  «Перенос настроек».
 - Several subscriptions (#63, ADR 0036): adding a link (Settings, a QR code, `killswitch://add`)
   adds a subscription and never replaces one; the same link again is refused. «Серверы» shows
   «Недавние», «Избранное» (each row names its subscription), one block per subscription titled by
@@ -139,11 +117,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 - Going back to 0.19 or older after changing any of the new settings blocks all traffic until
   Settings › «Сбросить настройки»: the older helper refuses a settings file with a line it does not
   know. Those are the blocking categories (`blockadult=`, `blocksocial=`, `blockbetting=`, even
-  turned back off), the own DoH server (`doh=`), own site addresses (`hosts=`), a packet size other
+  turned back off), the own DoH server (`doh=`), a packet size other
   than «Авто» (`mtu=`) and «Пробовать другой отпечаток и транспорт» (`escalate=`, on or off). Reset
-  the settings after a downgrade. A routing profile is not refused but ignored there: the
-  subscription still imports and refreshes, without the profile's rules (with Xray the routing
-  report lists `x-ks-routing` among what it left out).
+  the settings after a downgrade.
 
 ### Removed
 - Automatic server replacement (failover, #61, ADR 0036) with both ways of connecting: KillSwitch
@@ -161,15 +137,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 - The backup subscription link (#62, ADR 0036): no «Резервная ссылка» row in Settings › Подписка
   and no mention of it when adding a link. The subscription is fetched directly, then through the
   VPN when it is on (ADR 0016). A backup link kept by an older version is deleted from the
-  keychain at launch, and its host no longer counts among the subscription's hosts in «Свои
-  адреса сайтов». A status saved after an update from the backup link still loads (without its
+  keychain at launch. A status saved after an update from the backup link still loads (without its
   «Откуда»).
 
 ### Fixed
 - A double-click on a server in «Серверы» switches once, to the server clicked. The first click
   added it to «Недавние» and moved the rows below, so the second one chose the neighbour and
   restarted the core again (with Xray ~20 s without internet instead of ~10).
-- Xray: with only split apps (or a routing profile) going direct, the subscription's freedom
+- Xray: with only split apps going direct, the subscription's freedom
   outbound they use was not in the DIRECT signature, so a passwordless refresh could change where
   that traffic goes (a `redirect`). It is now, at the same place as before. The update's own
   rebuild writes that signature as the running one, so the next refresh needs no password either;

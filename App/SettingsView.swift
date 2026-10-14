@@ -574,7 +574,6 @@ private struct AdvancedSettings: View {
     @State private var editingExceptions = false
     @State private var editingServers = false
     @State private var editingDoH = false
-    @State private var editingHosts = false
 
     var body: some View {
         SettingsForm {
@@ -622,7 +621,7 @@ private struct AdvancedSettings: View {
             Section {
                 Text(control.ownDoH ?? String(localized: "Нет")).monospaced().foregroundStyle(.secondary).lineLimit(2)
                 Footnote(text: String(localized: "Спрашивается только через VPN — никогда напрямую и не у провайдера."),
-                         more: String(localized: "Например, NextDNS или AdGuard DNS со своими настройками. Адрес вида https://сервер/путь. Запросы к нему всегда идут через сервер VPN и никогда — напрямую или к провайдеру. Имя самого сервера узнаёт сервер VPN, «Свои адреса сайтов» на него не действуют. Домены, для которых подписка задала свой DNS, спрашиваются у DNS подписки, а не у твоего сервера. С основным способом подключения остальные сайты узнаёт твой сервер; не отвечает — KillSwitch спрашивает DNS Cloudflare, тоже через VPN. С запасным способом сайты, которые идут через VPN, узнаёт сервер VPN, а твой сервер — только те, что идут напрямую или нужны правилам по адресам; не отвечает — другие серверы не спрашиваются."))
+                         more: String(localized: "Например, NextDNS или AdGuard DNS со своими настройками. Адрес вида https://сервер/путь. Запросы к нему всегда идут через сервер VPN и никогда — напрямую или к провайдеру. Имя самого сервера узнаёт сервер VPN. Домены, для которых подписка задала свой DNS, спрашиваются у DNS подписки, а не у твоего сервера. С основным способом подключения остальные сайты узнаёт твой сервер; не отвечает — KillSwitch спрашивает DNS Cloudflare, тоже через VPN. С запасным способом сайты, которые идут через VPN, узнаёт сервер VPN, а твой сервер — только те, что идут напрямую или нужны правилам по адресам; не отвечает — другие серверы не спрашиваются."))
             } header: {
                 HStack {
                     Text("Свой сервер DNS-over-HTTPS")
@@ -631,22 +630,6 @@ private struct AdvancedSettings: View {
                 }
             }
             .disabled(control.busy || control.state == .notInstalled)
-
-            Section {
-                Text(control.ownHosts.isEmpty ? String(localized: "Нет") : control.ownHosts.map(HostsSheet.shown).joined(separator: ", "))
-                    .monospaced().foregroundStyle(.secondary).lineLimit(3)
-                Footnote(text: String(localized: "Для этих имён DNS через VPN ответит твоим адресом."),
-                         more: String(localized: "Например, nas.home.arpa → 192.168.1.10 для своего сервера дома. Работает только пока подключён VPN KillSwitch: ответ даёт само ядро. Меняется только адрес, а пойдёт ли соединение через VPN или напрямую, решают правила подписки, как для любого адреса; защита ничего нового не пропускает. Кроме домашних адресов (10.x, 172.16–31.x, 192.168.x) и Tailscale (100.64–127.x): с запасным способом подключения они идут мимо VPN, с основным — те, к которым у Mac есть свой маршрут, например твоя домашняя сеть; дойдёт до них, только если включены «Доступ к домашней сети» или «Tailscale, NetBird», и раздел «Блокировка» на них не действует. Нельзя: адреса IPv6, имена с * и адреса, которые нужны самой программе, — серверы VPN, ссылка на подписку, обновления, проверки."))
-            } header: {
-                HStack {
-                    Text("Свои адреса сайтов")
-                    Spacer()
-                    Button("Изменить…") { editingHosts = true }
-                }
-            }
-            .disabled(control.busy || control.state == .notInstalled)
-
-            RoutingProfilesSection()
 
             TransportSection()
 
@@ -687,103 +670,12 @@ private struct AdvancedSettings: View {
                       apply: control.setExceptions)
         }
         .sheet(isPresented: $editingDoH) { DoHSheet() }
-        .sheet(isPresented: $editingHosts) { HostsSheet() }
         .sheet(isPresented: $editingServers) {
             ListSheet(title: String(localized: "Адреса серверов для других VPN-программ"),
                       note: String(localized: "К этим адресам сможет подключиться любая программа. Серверы подписки сюда добавлять не нужно."),
                       placeholder: String(localized: "Адрес сервера"), original: control.manualServers,
                       apply: control.setManualServers)
         }
-    }
-}
-
-/// «Маршрутизация» (ADR 0034): named routing profiles the person added, «Как в подписке» by default.
-/// A profile whose direct part changes what goes past the VPN waits for the admin's password
-/// (the notice of a subscription's DIRECT change).
-private struct RoutingProfilesSection: View {
-    @Environment(VPNClient.self) private var client
-    @State private var adding = false
-
-    var body: some View {
-        Section("Маршрутизация") {
-            Picker("Профиль", selection: Binding(get: { client.activeRoutingProfile },
-                                                 set: { id in Task { await client.useRoutingProfile(id) } })) {
-                Text("Как в подписке").tag(UUID?.none)
-                ForEach(client.routingProfiles) { profile in Text(profile.name).tag(UUID?.some(profile.id)) }
-            }
-            .disabled(client.updating)
-            if client.needsConfirmation, client.routingChanged, client.routingSource != .subscription {
-                HStack {
-                    Label { Text("Ждёт пароля администратора: до подтверждения действуют прежние правила.") } icon: {
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    }.font(.caption)
-                    Spacer()
-                    Button("Подтвердить…") { Task { await client.confirmNewServers() } }.controlSize(.small).disabled(client.updating)
-                }
-            }
-            if let id = client.activeRoutingProfile, let profile = client.routingProfiles.first(where: { $0.id == id }) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Блокировать: \(profile.block.sites.count + profile.block.ips.count) · через VPN: \(profile.proxy.sites.count + profile.proxy.ips.count) · напрямую: \(profile.direct.sites.count + profile.direct.ips.count)")
-                        .font(.callout).foregroundStyle(.secondary)
-                    if let fetched = profile.fetched {
-                        Text("Обновлён \(fetched.formatted(date: .abbreviated, time: .shortened)), по ссылке раз в сутки").font(.caption).foregroundStyle(.secondary)
-                    }
-                    if !profile.ignored.isEmpty {
-                        Text("Не используется: \(profile.ignored.joined(separator: ", ")) — остальное решает подписка").font(.caption).foregroundStyle(.secondary)
-                    }
-                    if let error = profile.error {
-                        Label { Text(error) } icon: { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange) }.font(.caption)
-                    }
-                }
-                HStack {
-                    if profile.url != nil {
-                        Button("Обновить") { Task { await client.updateRoutingProfiles(force: true) } }.disabled(client.updating)
-                    }
-                    Button("Удалить профиль", role: .destructive) { Task { await client.removeRoutingProfile(profile.id) } }
-                        .disabled(client.updating)
-                }
-            }
-            Button("Добавить профиль…") { adding = true }
-            Footnote(text: String(localized: "Правила профиля идут раньше правил подписки. Если профиль меняет, что идёт мимо VPN, KillSwitch попросит пароль администратора."),
-                     more: String(localized: "Профиль маршрутизации — списки сайтов и адресов: что блокировать, что пускать через VPN и что напрямую, в формате Happ и INCY. Всё, чего нет в профиле, идёт так, как решает подписка. Свои DNS, ссылки на базы стран и «всё остальное напрямую» из профиля не берутся. Профиль по ссылке обновляется раз в сутки; если он начнёт пускать мимо VPN что-то новое, это снова подтверждается паролем. Пароль нужен и для правил «через VPN», если подписка отправляет их в группу, где есть «напрямую». Пока пароль не введён, действуют прежние правила. Выключить профиль можно без пароля, если подписка за это время не поменяла свои правила «напрямую». Какие правила пришли из профиля, видно в «Трафик» › «Правила»."))
-        }
-        .sheet(isPresented: $adding) { AddRoutingProfileSheet(isPresented: $adding) }
-    }
-}
-
-private struct AddRoutingProfileSheet: View {
-    @Environment(VPNClient.self) private var client
-    @Binding var isPresented: Bool
-    @State private var text = ""
-    @State private var problem: String?
-    @State private var working = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Добавить профиль маршрутизации").font(.headline)
-            Text("Ссылка https на профиль или сам профиль (JSON, ссылка happ://routing/… или incy://routing/…).")
-                .font(.callout).foregroundStyle(.secondary)
-            TextEditor(text: $text).font(.callout.monospaced()).frame(minHeight: 100)
-                .overlay(RoundedRectangle(cornerRadius: 4).stroke(.separator))
-            if let problem {
-                Label { Text(problem) } icon: { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange) }.font(.callout)
-            }
-            HStack {
-                Spacer()
-                Button("Отмена", role: .cancel) { isPresented = false }.keyboardShortcut(.cancelAction)
-                Button("Добавить") {
-                    working = true
-                    Task {
-                        problem = await client.addRoutingProfile(text)
-                        working = false
-                        if problem == nil { isPresented = false }
-                    }
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(working || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(20).frame(width: 460)
     }
 }
 
@@ -995,68 +887,6 @@ private struct DoHSheet: View {
             }
         }
         .onAppear { draft = control.ownDoH ?? "" }
-    }
-}
-
-/// «Свои адреса сайтов» (ADR 0033): «имя → адрес» pairs, checked as Helper/ks checks them; the
-/// subscription's own hosts are refused here too (ks does not know them).
-private struct HostsSheet: View {
-    @Environment(KillSwitchControl.self) private var control
-    @Environment(VPNClient.self) private var client
-    @State private var draft: [String] = []
-    @State private var name = ""
-    @State private var address = ""
-    @State private var problem: String?
-
-    static func shown(_ entry: String) -> String { entry.replacingOccurrences(of: "=", with: " → ") }
-
-    var body: some View {
-        BatchSheet(title: String(localized: "Свои адреса сайтов"), changed: draft != control.ownHosts,
-                   apply: { control.setHosts(draft) }) {
-            Text("DNS через VPN ответит на эти имена твоим адресом. Только точные имена и адреса IPv4.")
-                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            List {
-                if draft.isEmpty { Text("Пусто").foregroundStyle(.secondary) }
-                ForEach(draft, id: \.self) { entry in
-                    HStack {
-                        Text(Self.shown(entry)).monospaced()
-                        Spacer()
-                        Button("Убрать") { draft.removeAll { $0 == entry } }
-                            .buttonStyle(.borderless)
-                            .accessibilityLabel("Убрать \(Self.shown(entry))")
-                    }
-                }
-            }
-            .frame(height: 180)
-            HStack {
-                TextField(String(localized: "Имя, например nas.home.arpa"), text: $name)
-                TextField(String(localized: "Адрес, например 192.168.1.10"), text: $address).onSubmit(add)
-                Button("Добавить", action: add).disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            if let problem {
-                StatusLabel(problem, systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.caption)
-            }
-        }
-        .onAppear { draft = control.ownHosts }
-    }
-
-    private func add() {
-        let host = name.trimmingCharacters(in: .whitespaces).lowercased()
-        let entry = host + "=" + address.trimmingCharacters(in: .whitespaces)
-        if client.subscriptionHosts().contains(host) {
-            problem = String(localized: "Это адрес подписки: его менять нельзя.")
-        } else if !HelperCommand.isHostsEntry(entry) {
-            problem = String(localized: "Нужно точное имя сайта и адрес IPv4, не адрес самой программы или локальный 127.x.")
-        } else if draft.contains(where: { $0.hasPrefix(host + "=") }) {
-            problem = String(localized: "Это имя уже есть в списке.")
-        } else if draft.count >= HelperCommand.maxHosts {
-            problem = String(localized: "Не больше 50 адресов.")
-        } else {
-            problem = nil
-            draft.append(entry)
-            name = ""
-            address = ""
-        }
     }
 }
 

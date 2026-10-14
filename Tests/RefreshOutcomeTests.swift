@@ -23,7 +23,7 @@ final class RefreshOutcomeTests: XCTestCase {
     /// the VPN (DIRECT rules, DNS); the second must reach the admin as what it is.
     func testRoutingChangeIsNotNewServers() {
         let output = "Профиль меняет, что идёт мимо VPN (DIRECT): нужно подтверждение паролем администратора\n"
-        XCTAssertEqual(RefreshOutcome(status: 3, output: output), .routingChanged(.subscription))
+        XCTAssertEqual(RefreshOutcome(status: 3, output: output), .routingChanged)
         XCTAssertEqual(RefreshOutcome(status: 3, output: ""), .newServers)
     }
 

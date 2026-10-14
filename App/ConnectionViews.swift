@@ -283,13 +283,7 @@ struct SubscriptionSummary: View {
             }
             if client.needsConfirmation {
                 HStack {
-                    if client.routingChanged, client.routingSource == .profile {
-                        StatusLabel("Нужно подтверждение: профиль маршрутизации меняет, что идёт мимо VPN; до подтверждения действуют прежние правила",
-                                    systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.caption)
-                    } else if client.routingChanged, client.routingSource == .both {
-                        StatusLabel("Нужно подтверждение: подписка и профиль маршрутизации меняют, что идёт мимо VPN; до подтверждения действуют прежние правила",
-                                    systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.caption)
-                    } else if client.routingChanged {
+                    if client.routingChanged {
                         StatusLabel("Нужно подтверждение: подписка меняет правила «напрямую», часть трафика пойдёт мимо VPN",
                                     systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.caption)
                     } else {
@@ -300,7 +294,6 @@ struct SubscriptionSummary: View {
                         .controlSize(.small)
                         .disabled(client.updating)
                         .help(!client.routingChanged ? "Разрешить новые серверы подписки (спросит пароль)"
-                              : client.routingSource == .profile ? "Применить профиль маршрутизации (спросит пароль)"
                               : "Разрешить новые правила «напрямую» подписки (спросит пароль)")
                 }
             }

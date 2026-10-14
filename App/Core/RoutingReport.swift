@@ -170,7 +170,6 @@ struct RoutingReport: Decodable, Equatable, Sendable {
 
     var subscriptionRules: [Rule] { rules.filter { $0.from == .subscription } }
     var ownRules: [Rule] { rules.filter { $0.from == .killswitch } }
-    var profileRules: [Rule] { rules.filter { $0.from == .profile } }
 
     func provider(_ name: String) -> Provider? { providers.first { $0.name == name } }
 
@@ -251,7 +250,6 @@ extension RoutingReport.Dropped {
         case "bad-value": return String(localized: "Значение не прошло проверку")
         case "parse": return String(localized: "Не удалось разобрать правило")
         case "own-doh": return String(localized: "Вместо него — твой DNS-over-HTTPS")
-        case "own-hosts": return String(localized: "Подходила под твой адрес сайта — убрана для всех имён")
         // a host of an Xray subscription left out (section "servers")
         case "address": return String(localized: "Адрес сервера не годится (например, 0.0.0.0 — заглушка панели)")
         case "tag": return String(localized: "Тег ks-… занят KillSwitch")
@@ -279,7 +277,6 @@ extension RoutingReport.Added {
         case "sniffer": String(localized: "Распознавание сайтов")
         case "adblock": String(localized: "Блокировка — твой выбор")
         case "doh": String(localized: "Свой DNS-over-HTTPS — твой выбор")
-        case "hosts": String(localized: "Свои адреса сайтов — твой выбор")
         case "splitapps": String(localized: "Программы без VPN — твой выбор")
         case "multihop": String(localized: "Двойной VPN — твой выбор")
         case "default-rule": String(localized: "Правило по умолчанию")
@@ -310,8 +307,6 @@ extension RoutingReport.Added {
             String(localized: "В подписке его нет. Без него правила по доменам не срабатывают для программ, которые сами узнают адреса (DNS-over-HTTPS в Firefox). Адрес соединения не меняется, имя нужно только для выбора правила.")
         case "adblock":
             String(localized: "Включено в «Дополнительно»: выбранные категории сайтов из базы KillSwitch блокируются раньше правил подписки.")
-        case "hosts":
-            String(localized: "Выбрано в «Дополнительно»: на эти имена DNS отвечает твоим адресом. Куда пойдёт соединение — через VPN или напрямую — решают правила подписки, как для любого адреса; адреса домашней сети и Tailscale могут идти мимо VPN, если защита это разрешает.")
         case "doh":
             String(localized: "Выбрано в «Дополнительно»: KillSwitch спрашивает адреса сайтов у твоего сервера, всегда через VPN, никогда напрямую и не у провайдера. Домены, для которых подписка задала свой DNS, спрашиваются у DNS подписки, а не у твоего сервера; с запасным способом подключения большинство сайтов узнаёт сервер VPN.")
         case "splitapps":
