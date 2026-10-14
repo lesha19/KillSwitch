@@ -1,6 +1,7 @@
 # ADR 0020: Xray is the main core, mihomo the fallback
 
-- Status: accepted (Unreleased); research `docs/research/xray-core-2026-10.md`
+- Status: accepted (Unreleased); research `docs/research/xray-core-2026-10.md`. The choice in
+  Settings is gone with 0.20.0: the core follows the subscription (ADR 0036, #65)
 - Date: 2026-10-10
 - Owner decision 2026-10-10: pure Xray-TUN as the main core (like Happ), mihomo kept as a choice in
   Settings; no connections list in «Трафик» with Xray is accepted. Xray-core v26.9.30 pinned.

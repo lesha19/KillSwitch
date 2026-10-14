@@ -72,7 +72,10 @@ run "$fx/xray-panel.json" import
 rm -f "$tmp/xray-fails"
 echo '{"proxies":[{"name":"a","type":"ss","server":"203.0.113.9","port":1,"cipher":"aes-128-gcm","password":"x"}]}' > "$tmp/m.json"
 run "$tmp/m.json" import
-[ "$rc" != 0 ] && grep -q Xray "$tmp/err" && ok "a mihomo profile while core=xray: refused with the reason" || bad "mihomo profile: $rc $(cat "$tmp/err")"
+[ "$rc" = 0 ] && [ "$(core_kind)" = mihomo ] && cmp -s "$CORE_DIR/xray.json" "$tmp/before" &&
+  ok "a mihomo profile while core=xray: the core follows it (#65), Xray's config kept" || bad "mihomo profile: $rc $(core_kind) $(cat "$tmp/err")"
+run "$fx/xray-panel.json" import
+[ "$rc" = 0 ] && [ "$(core_kind)" = xray ] && ok "  and back to Xray with the panel's JSON" || bad "  back to xray: $rc $(core_kind)"
 
 # --- refresh (passwordless) measures against the approval, as with mihomo
 run "$fx/xray-panel.json" refresh

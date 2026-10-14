@@ -18,8 +18,8 @@ enum SettingsBackup {
     }
 
     /// Settings in /Library/KillSwitch, as Settings shows them. Nil = not in the file, left alone.
+    /// No core: it follows the subscription (#65); a file's "core" from before is ignored.
     struct Root: Equatable, Sendable {
-        var core: CoreChoice?
         var switches: [String: Bool]?
         var exceptions: [String]?
         var manualServers: [String]?
@@ -62,10 +62,10 @@ enum SettingsBackup {
                                       "blockbetting", "diag", "escalate"]
 
     /// «Сбросить»: every app setting to its default; the root switches to ks's defaults and the
-    /// lists emptied. The way of connecting stays (changing it imports the subscription again).
+    /// lists emptied. The core follows the subscription (#65).
     static var reset: Settings {
         Settings(app: Dictionary(uniqueKeysWithValues: fields.map { ($0.key, $0.fallback) }),
-                 root: Root(core: nil, switches: defaultSwitches, exceptions: [], manualServers: [], splitApps: [], doh: "", mtu: 0))
+                 root: Root(switches: defaultSwitches, exceptions: [], manualServers: [], splitApps: [], doh: "", mtu: 0))
     }
 
     // MARK: app settings
@@ -217,7 +217,6 @@ enum SettingsBackup {
         ]
         if let root = settings.root {
             var part: [String: Any] = [:]
-            if let core = root.core { part["core"] = core.rawValue }
             if let switches = root.switches { part["switches"] = switches }
             if let exceptions = root.exceptions { part["exceptions"] = exceptions }
             if let servers = root.manualServers { part["manualServers"] = servers }
@@ -253,10 +252,6 @@ enum SettingsBackup {
     private static func readRoot(_ raw: Any) throws -> Root {
         guard let part = raw as? [String: Any] else { throw Problem.damaged(String(localized: "Защита и служба")) }
         var root = Root()
-        if let core = part["core"] {
-            guard let choice = (core as? String).flatMap(CoreChoice.init(rawValue:)) else { throw Problem.damaged(String(localized: "Способ подключения")) }
-            root.core = choice
-        }
         if let switches = part["switches"] {
             guard let dict = switches as? [String: Any] else { throw Problem.damaged(String(localized: "Что можно без VPN")) }
             var result: [String: Bool] = [:]
@@ -442,10 +437,6 @@ enum SettingsBackup {
                                  new: describe(value, field), root: false))
         }
         guard let root = new.root, let now = current.root else { return result }
-        if let core = root.core, core != now.core {
-            result.append(Change(key: "core", title: String(localized: "Способ подключения"), old: now.core.map(coreTitle) ?? "—",
-                                 new: coreTitle(core), root: true))
-        }
         for key in switchOrder {
             guard let on = root.switches?[key], on != (now.switches?[key] ?? defaultSwitches[key]) else { continue }
             result.append(Change(key: key, title: switchTitle(key), old: onOff(!on), new: onOff(on), root: true))
@@ -473,8 +464,7 @@ enum SettingsBackup {
         return result
     }
 
-    /// The `ks` commands that turn `current` into `new`, as Settings builds them (Batch); the way
-    /// of connecting is not among them: VPNClient.switchCore runs it and imports the subscription.
+    /// The `ks` commands that turn `current` into `new`, as Settings builds them (Batch).
     static func rootCommands(helper: String, current: Root, new: Root) -> [[String]] {
         var commands: [[String]] = []
         if let switches = new.switches {
@@ -531,10 +521,6 @@ enum SettingsBackup {
         guard !list.isEmpty else { return String(localized: "нет") }
         let shown = list.prefix(3).joined(separator: ", ")
         return list.count > 3 ? shown + " " + String(localized: "и ещё \(list.count - 3)") : shown
-    }
-
-    private static func coreTitle(_ core: CoreChoice) -> String {
-        core == .xray ? String(localized: "Основной") : String(localized: "Запасной")
     }
 
     private static func switchTitle(_ key: String) -> String {

@@ -68,6 +68,36 @@ final class SubscriptionsTests: XCTestCase {
         XCTAssertFalse(Subscriptions.needsImport(after: .failed("x")))
     }
 
+    /// #65: the core follows the subscription: Xray when it offers Xray configs and Xray is
+    /// installed, else mihomo; nil when no installed core can run what it offers.
+    func testTheCoreFollowsWhatTheSubscriptionOffers() {
+        let both: Set<CoreChoice> = [.xray, .mihomo]
+        XCTAssertEqual(Subscriptions.core(offers: both, installed: both), .xray)
+        XCTAssertEqual(Subscriptions.core(offers: [.xray], installed: both), .xray)
+        XCTAssertEqual(Subscriptions.core(offers: [.mihomo], installed: both), .mihomo)
+        XCTAssertEqual(Subscriptions.core(offers: both, installed: [.mihomo]), .mihomo)
+        XCTAssertEqual(Subscriptions.core(offers: both, installed: [.xray]), .xray)
+        XCTAssertNil(Subscriptions.core(offers: [.xray], installed: [.mihomo]))
+        XCTAssertNil(Subscriptions.core(offers: [.mihomo], installed: [.xray]))
+        XCTAssertNil(Subscriptions.core(offers: [], installed: both))
+    }
+
+    /// Review of #65: only an answer that says «no Xray here» (not an Xray config, 404) moves a
+    /// subscription to mihomo for good; an outage, a 503 or nothing at all does not.
+    func testOnlyANoXrayAnswerCountsAsNoXray() {
+        XCTAssertTrue(Subscriptions.saysNoXray(XrayProfile.Failure.notXray.errorDescription))
+        XCTAssertTrue(Subscriptions.saysNoXray("HTTP 404"))
+        XCTAssertFalse(Subscriptions.saysNoXray("HTTP 503"))
+        XCTAssertFalse(Subscriptions.saysNoXray("offline"))
+        XCTAssertFalse(Subscriptions.saysNoXray(nil))
+    }
+
+    /// Review of #65: a subscription no installed core runs says so instead of reaching the helper.
+    func testASubscriptionNoCoreRunsHasItsOwnError() {
+        XCTAssertEqual(Subscriptions.noCore.title, "Подписку не запустить")
+        XCTAssertEqual(Subscriptions.noCore.message, "Для её серверов в KillSwitch нет нужного VPN. Переустанови KillSwitch.")
+    }
+
     func testOwnServersGetTheProfileWithoutASubscription() throws {
         let profile = try XCTUnwrap(Subscriptions.profile(for: ServerID(subscription: ServerID.own, name: "Дом"),
                                                           profiles: ["s1": stork], own: own))

@@ -139,6 +139,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   the settings after a downgrade.
 
 ### Removed
+- Settings › «Способ подключения» (#65, ADR 0036): the core follows the subscription. Each
+  subscription is fetched as Xray configs (`<link>/json`) first and as a mihomo profile when it has
+  none; it runs in Xray when installed, else in mihomo. Choosing a server of a subscription in the
+  other core switches the core without the password (its hosts were approved with the others),
+  blocking throughout; a core that does not start gives the old one back. An install with the
+  fallback way moves to Xray for the subscriptions that offer it at the next password. The
+  settings transfer no longer saves the core; an older file with it still loads. «Пробовать другой
+  отпечаток и транспорт…» stays while Xray runs.
 - Automatic server replacement (failover, #61, ADR 0036) with both ways of connecting: KillSwitch
   never moves the connection to another server by itself. Gone: the hidden `KS-FO-<n>` fallback
   groups of the fallback way (ADR 0005), the watchdog's switch to another server of the country

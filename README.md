@@ -206,7 +206,8 @@ what transport escalation remembered per server, ADR 0030).
 - Rules and settings are root-owned. Passwordless sudo covers only `ks state`, `ks on`, `ks core
   state|on|off|restart|proxies`, `ks core select|delay …`, `ks core refresh …` (refused if it brings new
   server names or addresses or changes what goes DIRECT) and `ks core use …` (another subscription's
-  profile, refused unless the last import approved its servers and DIRECT), none of which can widen the rules; turning off, pausing, `ks core import` and
+  profile, refused unless one entry the last import approved takes all its servers and DIRECT; a
+  profile of the other core swaps the core under blocking, ADR 0036), none of which can widen the rules; turning off, pausing, `ks core import` and
   every setting change ask for the admin password.
 - Watchdog (`ks watch`, pf every 2 s and tunnels every second, honours off / pause while the VPN is off): checks that pf is enabled, that the main
   ruleset still references the `com.apple/*` anchor (otherwise reloads `/etc/pf.conf`), that the

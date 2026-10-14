@@ -2728,7 +2728,7 @@ approval_write() {
 approval_more() {
   local set=$1 n=1 f why in="$CORE_DIR/approve-profile.new" out="$CORE_DIR/approve.tmp" srv="$CORE_DIR/approve-servers.tmp" s="$CORE_DIR/approve-settings.tmp"
   shift
-  rm -f "$s"; ( umask 077; grep -vE '^(multihop|xrayserver)=' "$SETTINGS" > "$s" 2>/dev/null; : )
+  rm -f "$s" "$s.base"; ( umask 077; grep -vE '^(multihop|xrayserver)=' "$SETTINGS" > "$s.base" 2>/dev/null; : > "$s" )
   for f; do
     n=$((n + 1))
     # one that is not taken stays unapproved, the others are not affected (ADR 0036, decision 7):
@@ -2736,13 +2736,14 @@ approval_more() {
     # the journal gets the step only: the errors name hosts, paths and addresses
     why=""
     if ! profile_read "$f" "$in" 2>/dev/null; then why=unreadable
+    elif ! { grep -vE '^core=' "$s.base" > "$s"; echo "core=$(profile_kind "$in")" >> "$s"; }; then why="not written"
     elif ! SETTINGS=$s KS_APPROVE_ALL=1 core_generate "$in" "$out" "$srv" "$SERVERS_MANUAL" 2>/dev/null; then why="refused by the generator"
-    elif ! { chmod 600 "$out"; core_test "$out" >/dev/null 2>&1; }; then why="refused by the core"
-    elif ! approval_write "$set/$n" "$out" "$srv"; then why="not written"; fi
+    elif ! { chmod 600 "$out"; SETTINGS=$s core_test "$out" >/dev/null 2>&1; }; then why="refused by the core"
+    elif ! SETTINGS=$s approval_write "$set/$n" "$out" "$srv"; then why="not written"; fi
     if [ -n "$why" ]; then rm -rf "${set:?}/$n"; log_event "approval: profile $n of the import skipped: $why"; fi
     core_clean "$out" "$srv"; rm -f "$in"
   done
-  rm -f "$s"
+  rm -f "$s" "$s.base"
 }
 
 # approval_find <servers> <pins> <direct>: the entry of the set that approves all of a generated
@@ -2764,17 +2765,38 @@ approval_find() {
   return 3
 }
 
+# profile_kind <profile.json>: the core a profile is for: an Xray config (an array of them, or one
+# with outbounds) is Xray's, anything else mihomo's (whose generator refuses what is not a profile)
+profile_kind() {
+  /usr/bin/perl -MJSON::PP -0777 -ne 'my $j = eval { JSON::PP->new->decode($_) };
+    print ref $j eq "ARRAY" || (ref $j eq "HASH" && exists $j->{outbounds}) ? "xray" : "mihomo"' -- "$1"
+}
+
 # core_import <profile.json> [import|refresh|use] [profile.json…]: "import" (the admin password)
 # approves the first profile and the later ones (the other subscriptions) and runs the first;
 # "refresh" (passwordless) takes a newer copy of the running one, "use" (passwordless) another
 # approved one: neither may let out anything the admin did not approve. The copy is kept for rebuilds.
 core_import() {
-  local src=${1:-} mode=${2:-import} prof conf in tmp srv="$SERVERS_CORE.tmp" rc set="$CORE_DIR/approved" e="" s=$SETTINGS mh=""
-  prof=$(core_profile); conf=$(core_conf); in="$prof.new"; tmp="$conf.tmp"
+  local src=${1:-} mode=${2:-import} prof conf in="$CORE_DIR/profile-in.new" tmp srv="$SERVERS_CORE.tmp" rc set="$CORE_DIR/approved" e="" s mh="" k real=$SETTINGS ks=""
   servers_migrate
   install -d -o root -g wheel -m 700 "$CORE_DIR/ctl"
   [ -n "$src" ] && { [ $# -le 2 ] || { [ "$mode" = import ] && [ $# -le 66 ]; }; } || { echo "usage: ks core import <json> [json…]" >&2; return 1; }
   profile_read "$src" "$in" || return 1
+  # the core follows the subscription (ADR 0036, #65): the profile runs in the core of its own
+  # format, read from it, never from the caller. Another kind is built on settings that name it
+  # (double VPN off: its entry is in the other core's format, ADR 0027), kept once it is in place.
+  k=$(profile_kind "$in")
+  if [ "$k" != "$(core_kind)" ]; then
+    [ "$mode" != refresh ] || { rm -f "$in"; echo "Подписка теперь для ядра $k: нужно подтверждение паролем администратора" >&2; return 3; }
+    [ -x "$CORE_DIR/$k" ] || { rm -f "$in"; echo "Ядро $k не установлено" >&2; return 1; }
+    # an install from before 0.20 has the files of one import: of the running core only
+    [ "$mode" != use ] || [ -d "$set" ] || { rm -f "$in"; echo "Подписка не подтверждена для ядра $k: нужно подтверждение паролем администратора" >&2; return 3; }
+    ks="$CORE_DIR/kind-settings.tmp"; rm -f "$ks"
+    ( umask 077; { grep -vE '^(core|multihop)=' "$real" 2>/dev/null; echo "core=$k"; } > "$ks" )
+    local SETTINGS=$ks
+  fi
+  s=$SETTINGS
+  prof=$(core_profile); conf=$(core_conf); tmp="$conf.tmp"
   if [ "$mode" != import ]; then
     # use: on a copy of the settings, so a refused one changes none (the generator turns double
     # VPN off when its entry is not in that subscription); kept below once it runs
@@ -2782,12 +2804,12 @@ core_import() {
       s="$CORE_DIR/use-settings.tmp"; rm -f "$s"; ( umask 077; cp "$SETTINGS" "$s" 2>/dev/null || : > "$s" )
     fi
     SETTINGS=$s KS_STRICT_DNS=1 core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" ||
-      { core_clean "$tmp" "$srv"; rm -f "$in"; [ "$s" = "$SETTINGS" ] || rm -f "$s"; return 1; }
+      { core_clean "$tmp" "$srv"; rm -f "$in" "$ks"; [ "$s" = "$SETTINGS" ] || rm -f "$s"; return 1; }
     # refresh and use are passwordless (subscription auto-update, another approved subscription):
     # nothing new may be let out
     if [ "$mode" = use ]; then e=$(approval_find "$srv" "$tmp.pins" "$tmp.direct")
     else refresh_check "$srv" "$tmp.pins" "$tmp.direct"; fi ||
-      { rc=$?; core_clean "$tmp" "$srv"; rm -f "$in"; [ "$s" = "$SETTINGS" ] || rm -f "$s"; return "$rc"; }
+      { rc=$?; core_clean "$tmp" "$srv"; rm -f "$in" "$ks"; [ "$s" = "$SETTINGS" ] || rm -f "$s"; return "$rc"; }
     # what refresh and an Xray server switch measure against from now: the entry that approved it
     if [ -n "$e" ]; then
       rm -f "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new"
@@ -2795,19 +2817,25 @@ core_import() {
     fi
     if [ "$s" != "$SETTINGS" ]; then mh=$(SETTINGS=$s setting multihop off); rm -f "$s"; fi
   else
-    KS_APPROVE_ALL=1 core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; rm -f "$in"; return 1; }
+    KS_APPROVE_ALL=1 core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; rm -f "$in" "$ks"; return 1; }
     # what the admin just approved: refresh and rotation measure against it, an Xray server
     # switch against every host's DIRECT (approved-switch, KS-10), use against the set
     rm -rf "$set.new" "$set.old"; rm -f "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new"
     if ! ( umask 077; mkdir "$set.new" ) || ! approval_write "$set.new/1" "$tmp" "$srv" || ! approval_more "$set.new" "${@:3}"; then
-      core_clean "$tmp" "$srv"; rm -rf "$in" "$set.new"; return 1
+      core_clean "$tmp" "$srv"; rm -rf "$in" "$set.new" "$ks"; return 1
     fi
     ( umask 077; cp "$set.new/1/hosts" "$APPROVED_HOSTS.new"; cp "$set.new/1/direct" "$APPROVED_DIRECT.new"
       cp "$set.new/1/switch" "$CORE_DIR/approved-switch.new" )
   fi
-  core_commit "$tmp" "$srv" || { rm -rf "$in" "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new" "$set.new"; return 1; }
+  [ -z "$ks" ] || take_save "$real"
+  core_commit "$tmp" "$srv" || { rm -rf "$in" "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new" "$set.new" "$ks"; take_drop; return 1; }
   mv "$in" "$prof"
   [ -z "$mh" ] || [ "$mh" = "$(setting multihop off)" ] || put_setting multihop "$mh"
+  if [ -n "$ks" ]; then
+    SETTINGS=$real put_setting multihop off; SETTINGS=$real put_setting core "$k"; rm -f "$ks"
+    ( umask 077; cp "$real" "$CORE_DIR/take-settings-done" )
+    log_event "core: $k (the subscription's)"
+  fi
   if [ "$mode" = import ] || [ -n "$e" ]; then
     mv "$APPROVED_HOSTS.new" "$APPROVED_HOSTS"; mv "$APPROVED_DIRECT.new" "$APPROVED_DIRECT"
     mv "$CORE_DIR/approved-switch.new" "$CORE_DIR/approved-switch"
@@ -2826,12 +2854,62 @@ core_clean() { rm -f "$1" "$1.pins" "$1.direct" "$1.egress" "$1.report" "$1.appr
 # core_take <profile.json> <import|refresh|use> [profile.json…]: core_import, then pf and the core
 # follow. pf is reloaded with the new servers, never flushed, before the core restarts: blocking
 # holds throughout a switch to another subscription (ADR 0035, 0036).
+# A profile of the other core (#65) swaps the launchd job the way "core on" does, the anchor loaded
+# throughout, when the VPN is on (its target, or its job loaded); with the VPN off the next "core on"
+# starts it. When the new core does not run, what the switch replaced comes back (take_back) and the
+# old core runs again (or, its job not loaded before, none): still blocked, never without the rules.
 core_take() {
+  local was job=0
+  take_drop   # copies of a switch cut short (its import had committed): the state they replaced is gone
+  was=$(core_kind)
+  launchctl print "$CORE_JOB" >/dev/null 2>&1 && job=1
   core_import "$@" || return $?
   reload_if_on   # the servers list changed
-  launchctl print "$CORE_JOB" >/dev/null 2>&1 && launchctl kickstart -k "$CORE_JOB"
+  if [ ! -e "$CORE_DIR/take" ]; then
+    [ "$job" = 0 ] || launchctl kickstart -k "$CORE_JOB"
+  elif { [ "$job" = 1 ] || vpn_on; } && ! core_on; then
+    take_back; reload_if_on
+    if [ "$job" = 1 ]; then core_on
+    else launchctl bootout "$CORE_JOB" 2>/dev/null; job_gone "$CORE_JOB"; core_plist_sync 2>/dev/null; fi
+    log_event "core: back to $was, $(core_kind_other "$was") did not start"
+    echo "Ядро $(core_kind_other "$was") не запустилось: работает прежнее" >&2
+    return 1
+  fi
+  take_drop
   log_event "core config imported"
 }
+
+# What a switch of the core replaces, kept as <file>.take (not set_mtu's .prev) by take_save just
+# before the import commits: the servers, pins and what pf and the app read, the running approval
+# and the approved set, both cores' configs and profiles; the settings as they were (core/take-settings)
+# and as the import left them (take-settings-done). take_back puts the files back (a file that was not
+# there goes) and only the keys the switch changed (settings_merge, as set_mtu does): a "ks set"
+# meanwhile stays. core/take marks a switch under way.
+take_files() {
+  printf '%s\n' "$SERVERS" "$SERVERS_CORE" "$PINS" "$CORE_EGRESS" "$REPORT" "$CORE_DIR/direct" "$APPROVED_HOSTS" "$APPROVED_DIRECT" \
+    "$CORE_DIR/approved-switch" "$CORE_DIR/config.yaml" "$CORE_DIR/xray.json" "$CORE_PROFILE" "$CORE_DIR/profile-xray.json"
+}
+take_save() {  # take_save <settings as they are>
+  local f
+  take_drop
+  while IFS= read -r f; do [ ! -f "$f" ] || cp -p "$f" "$f.take"; done < <(take_files)
+  [ ! -d "$CORE_DIR/approved" ] || cp -Rp "$CORE_DIR/approved" "$CORE_DIR/approved.take"
+  [ ! -f "$1" ] || cp -p "$1" "$CORE_DIR/take-settings"
+  : > "$CORE_DIR/take"
+}
+take_back() {
+  local f
+  while IFS= read -r f; do if [ -f "$f.take" ]; then mv "$f.take" "$f"; else rm -f "$f"; fi; done < <(take_files)
+  rm -rf "$CORE_DIR/approved"; [ ! -d "$CORE_DIR/approved.take" ] || mv "$CORE_DIR/approved.take" "$CORE_DIR/approved"
+  [ ! -f "$CORE_DIR/take-settings-done" ] || settings_merge "$CORE_DIR/take-settings-done" "$CORE_DIR/take-settings"
+  take_drop
+}
+take_drop() {
+  local f
+  while IFS= read -r f; do rm -f "$f.take"; done < <(take_files)
+  rm -rf "$CORE_DIR/approved.take"; rm -f "$CORE_DIR/take-settings" "$CORE_DIR/take-settings-done" "$CORE_DIR/take"
+}
+core_kind_other() { if [ "$1" = xray ]; then echo mihomo; else echo xray; fi; }
 
 # core_publish <config.tmp>: the world-readable companions of an accepted config (egress for pf,
 # the report for the app) into place. Fails (1) when egress stayed the same, so a caller knows
@@ -3203,7 +3281,7 @@ CORE_PLIST="/Library/LaunchDaemons/local.killswitch.core.plist"
 core_plist_sync() {
   local src
   src="$CORE_DIR/plist.$(core_kind)"
-  [ -s "$src" ] || { echo "Нет задания launchd для ядра $(core_kind): переустанови KillSwitch" >&2; return 1; }
+  [ -s "$src" ] || { echo "Нет задания launchd для ядра $(core_kind): переустанови KillSwitch" >&2; return 2; }
   cmp -s "$src" "$CORE_PLIST" && return 1
   cp "$src" "$CORE_PLIST.tmp" && chmod 644 "$CORE_PLIST.tmp" && mv "$CORE_PLIST.tmp" "$CORE_PLIST"
 }
@@ -3254,7 +3332,7 @@ watchdog_handover() {
 
 # "ks core on" (passwordless)
 core_on() {
-  local t wrote=0
+  local t wrote=0 sync
   [ -x "$CORE_DIR/$(core_kind)" ] || { echo "Ядро не установлено" >&2; return 1; }
   [ -s "$(core_conf)" ] || { echo "Нет конфига ядра: сначала возьми подписку" >&2; return 1; }
   # two TUNs fight over routes and DNS: the other VPN has to be off first
@@ -3276,8 +3354,10 @@ core_on() {
   # loaded job of the other core (mihomo to Xray) goes; not while Xray itself runs (a restart)
   if { ! core_running || ! cmp -s "$CORE_DIR/plist.xray" "$CORE_PLIST"; } && xray_api_check; then ( core_regen ) >/dev/null 2>&1 || true; fi   # under the core lock already
   launchctl enable "$CORE_JOB"
-  # the job of the chosen core (ADR 0020); a loaded job of the other one goes first
-  if core_plist_sync 2>/dev/null; then launchctl bootout "$CORE_JOB" 2>/dev/null; job_gone "$CORE_JOB"; fi
+  # the job of the chosen core (ADR 0020); a loaded job of the other one goes first; none for it: an error
+  sync=0; core_plist_sync || sync=$?
+  [ "$sync" != 2 ] || return 1
+  if [ "$sync" = 0 ]; then launchctl bootout "$CORE_JOB" 2>/dev/null; job_gone "$CORE_JOB"; fi
   launchctl bootstrap system "$CORE_PLIST" 2>/dev/null ||
     launchctl kickstart "$CORE_JOB"
   # DNS goes to the core only once it runs; otherwise the Mac would be left without names

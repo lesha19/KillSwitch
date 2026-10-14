@@ -260,7 +260,7 @@ private struct VPNSettings: View {
             }
             .disabled(control.busy || control.state == .notInstalled)
 
-            CoreChoiceSection()
+            EscalateSection()
 
             Section("Вид") {
                 Toggle("Показывать группы подписки в списке серверов", isOn: $showProfileGroups)
@@ -283,25 +283,14 @@ private struct VPNSettings: View {
     }
 }
 
-/// «Способ подключения» (ADR 0020): the main way (Xray, the same as in Happ) or the fallback one
-/// (mihomo, with the connections list). Switching asks the password once and takes the
-/// subscription again in that way's format.
-private struct CoreChoiceSection: View {
+/// The core follows the subscription (ADR 0036, #65): no choice of it here. What stays is Xray's
+/// own retry with another fingerprint or transport, shown while Xray runs.
+private struct EscalateSection: View {
     @Environment(KillSwitchControl.self) private var control
-    @Environment(VPNClient.self) private var client
 
     var body: some View {
-        Section("Способ подключения") {
-            Picker("Способ подключения", selection: Binding(get: { control.coreChoice }, set: { client.switchCore(to: $0) })) {
-                Text("Основной — как в Happ").tag(CoreChoice.xray)
-                Text("Запасной").tag(CoreChoice.mihomo)
-            }
-            .pickerStyle(.radioGroup).labelsHidden()
-            .disabled(control.busy || client.updating || control.state == .notInstalled
-                      || !FileManager.default.fileExists(atPath: CoreChoice.xray.binary))
-            Footnote(text: String(localized: "Если сайты открываются через раз, попробуй другой способ. Смена спросит пароль и заново возьмёт подписку."),
-                     more: String(localized: "Основной способ работает так же, как Happ. Запасной умеет показывать соединения в окне «Трафик», но у некоторых сайты в нём открываются хуже."))
-            if control.coreChoice == .xray {
+        if control.coreChoice == .xray {
+            Section {
                 Toggle(isOn: Binding(get: { control.escalate }, set: { control.set("escalate", $0) })) {
                     Text("Пробовать другой отпечаток и транспорт, если сервер не отвечает")
                     Text("Сначала тот же сервер с другим отпечатком TLS, потом с другим транспортом из подписки (например, xHTTP вместо TCP). Сервер KillSwitch сам не меняет. Что сработало, запоминается до смены сети.")

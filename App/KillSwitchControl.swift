@@ -307,15 +307,6 @@ final class KillSwitchControl {
     }
     /// `ks set mtu`: the config rebuilt and the VPN restarted (about a second, the protection blocks).
     func setMTU(_ mtu: Int?) { runAsAdmin([helper] + HelperCommand.setMTU(mtu).arguments) }
-    /// `ks set core` (one password); `then` imports the subscription for it (VPNClient.switchCore).
-    func setCore(_ choice: CoreChoice, then done: @escaping @MainActor () async -> Void) {
-        multihopAskedAt = Date()
-        runAsAdmin(batch: [[helper, "set", "core", choice.rawValue]]) { [self] in
-            coreChoice = choice
-            await done()
-        }
-    }
-
     /// «Адреса серверов для других VPN-программ»: VPN servers are reachable by any process (Happ's
     /// tunnel runs as the ordinary user and cannot be told apart from other apps), so only these
     /// addresses are let out. The edited list, one password.
@@ -325,7 +316,7 @@ final class KillSwitchControl {
 
     /// «Перенос настроек» (SettingsBackup, ADR 0024): the root settings as Settings shows them.
     var rootSettings: SettingsBackup.Root {
-        .init(core: coreChoice, switches: switches.merging(["direct": allowDirect, "adblock": adBlock, "diag": diagVerbose,
+        .init(switches: switches.merging(["direct": allowDirect, "adblock": adBlock, "diag": diagVerbose,
                                                       "escalate": escalate, "blockadult": blockAdult, "blocksocial": blockSocial,
                                                       "blockbetting": blockBetting]) { $1 },
               exceptions: exceptions, manualServers: manualServers, splitApps: splitApps, doh: ownDoH ?? "", mtu: tunnelMTU ?? 0)

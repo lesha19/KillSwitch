@@ -41,9 +41,7 @@ final class VPNClient {
     /// Server name → identity (ServerIdentity) in the profile the helper runs: what per-server
     /// settings are kept under, so they survive a rename.
     var serverKeys: [String: String] { activeBlock?.keys ?? [:] }
-    /// «Начало работы»: the way of connecting the checked subscription was fetched for (ADR 0020).
-    private var setupCore: CoreChoice?
-    /// The raw reason the last Xray fetch failed, for the setup's fallback.
+    /// The raw reason the last Xray fetch failed: a subscription without Xray configs runs in mihomo.
     private var lastXrayFailure: String?
 
     /// «Избранные» of the server list, by (subscription, identity) (ServerRecents).
@@ -340,14 +338,63 @@ final class VPNClient {
         schedule.record(applied ? .applied : .notApplied, now: Date())
     }
 
-    /// Downloads and caches one subscription in the format of the way the helper runs, without
+    /// Downloads and caches one subscription in the format of its core (core(of:)), without
     /// handing it to the helper. The cache is what «Разрешить…» (confirmNewServers) and a switch
     /// build on, so it is the last fetched profile, applied or not. A failed fetch, or one without
     /// servers, leaves the cache alone. #11: tried in SubscriptionSource.order; the first error is shown.
     @discardableResult
     private func fetch(_ id: String) async -> Bool {
-        usesXray ? await fetchXray(id) != nil : await fetchProfile(id) != nil
+        await fetchEither(id) != nil
     }
+
+    private enum Fetched { case xray(XrayProfile), mihomo(Profile) }
+
+    /// The core follows the subscription (ADR 0036, #65): its Xray configs at `<link>/json` when
+    /// Xray is installed, else (none there, or none fetched yet) its mihomo profile. One that says
+    /// it has no Xray configs (Subscriptions.saysNoXray) loses its old ones once its mihomo profile
+    /// came, so it runs in mihomo from then on; a failed fetch keeps them. One no installed core runs
+    /// is kept with Subscriptions.noCore as its error.
+    private func fetchEither(_ id: String) async -> Fetched? {
+        lastXrayFailure = nil
+        let fetched: Fetched?
+        if installedCores.contains(.xray), let xray = await fetchXray(id) {
+            fetched = .xray(xray)
+        } else {
+            let xrayCache = Subscriptions.cache(of: id, xray: true, Self.store)
+            let none = Subscriptions.saysNoXray(lastXrayFailure)
+            guard lastXrayFailure == nil || none || !FileManager.default.fileExists(atPath: xrayCache.path) else { return nil }
+            if lastXrayFailure != nil { lastError = nil }
+            guard let profile = await fetchProfile(id) else { return nil }
+            if none { try? FileManager.default.removeItem(at: xrayCache) }
+            fetched = .mihomo(profile)
+        }
+        if unusable(id) { lastError = Subscriptions.noCore }
+        return fetched
+    }
+
+    /// The cores the helper has (or the app carries for its install, ADR 0020).
+    private var installedCores: Set<CoreChoice> {
+        Set(CoreChoice.allCases.filter {
+            FileManager.default.fileExists(atPath: $0.binary) || Bundle.main.path(forResource: $0.rawValue, ofType: nil, inDirectory: "Helper") != nil
+        })
+    }
+
+    /// The core a subscription runs in (Subscriptions.core): what its last fetch cached. «Свои
+    /// серверы» run in Xray unless it can use none of them (ADR 0027).
+    private func core(of id: String) -> CoreChoice? {
+        Subscriptions.core(offers: offers(of: id), installed: installedCores)
+    }
+
+    private func offers(of id: String) -> Set<CoreChoice> {
+        if id == ServerID.own {
+            if manual.isEmpty { return [] }
+            return manual.allSatisfy({ (try? ProxyLink.parse($0.link)).flatMap(XrayManual.unsupported) != nil }) ? [.mihomo] : [.xray, .mihomo]
+        }
+        return Set(CoreChoice.allCases.filter { FileManager.default.fileExists(atPath: Subscriptions.cache(of: id, xray: $0 == .xray, Self.store).path) })
+    }
+
+    /// It has servers, but in no format an installed core runs: never handed to the helper.
+    private func unusable(_ id: String) -> Bool { core(of: id) == nil && !offers(of: id).isEmpty }
 
     private func fetchProfile(_ id: String) async -> Profile? {
         guard let url = Subscriptions.link(of: id, Self.store).flatMap(URL.init(string:)) else { return nil }
@@ -375,9 +422,6 @@ final class VPNClient {
     }
 
     // MARK: the main way of connecting (ADR 0020)
-
-    /// The helper runs Xray: the subscription is the panel's Xray config (XrayProfile).
-    private var usesXray: Bool { control.coreChoice == .xray }
 
     /// The same sources and order as fetchProfile; the link plus XrayProfile.pathComponent.
     private func fetchXray(_ id: String) async -> XrayProfile? {
@@ -442,9 +486,9 @@ final class VPNClient {
     }
 
     /// Why the main way cannot use this own server (it then works only with the other way); nil
-    /// when it can, or when the helper runs the other way.
+    /// when it can, or when the own servers run the other way.
     func mainWayCannotUse(_ server: ManualServer) -> String? {
-        guard usesXray, let proxy = try? ProxyLink.parse(server.link) else { return nil }
+        guard core(of: ServerID.own) == .xray, let proxy = try? ProxyLink.parse(server.link) else { return nil }
         return XrayManual.unsupported(proxy)
     }
 
@@ -459,10 +503,14 @@ final class VPNClient {
         await apply(to: selected, interactive: interactive)
     }
 
-    /// The profile of the server's subscription (Subscriptions.profile), in the format of the way
-    /// the helper runs.
+    /// The profile of the server's subscription (Subscriptions.profile), in the format of its core:
+    /// the helper switches to that core by the profile (#65).
     private func apply(to server: ServerID, interactive: Bool) async -> Bool {
-        usesXray ? await applyXray(server, interactive: interactive) : await apply(server, interactive: interactive)
+        if unusable(server.subscription) {
+            lastError = Subscriptions.noCore
+            return false
+        }
+        return core(of: server.subscription) == .xray ? await applyXray(server, interactive: interactive) : await apply(server, interactive: interactive)
     }
 
     /// «Выбор сервера» (ADR 0036): a server of the subscription the helper runs is chosen at once;
@@ -486,18 +534,6 @@ final class VPNClient {
         let keys = blocks.first { $0.id == entry.subscription }?.keys ?? [:]
         let recents = ServerRecents.list(UserDefaults.standard.string(forKey: ServerRecents.key) ?? "")
         UserDefaults.standard.set(ServerRecents.text(ServerRecents.adding(entry.server, keys: keys, to: recents)), forKey: ServerRecents.key)
-    }
-
-    /// Settings › «Способ подключения»: the helper switches (one password) and the subscriptions are
-    /// fetched again in that way's format and imported; a VPN that was on comes back.
-    func switchCore(to choice: CoreChoice) {
-        guard choice != control.coreChoice, !updating else { return }
-        let wasOn = control.coreRunning
-        control.setCore(choice) { [self] in
-            reloadProfileProxies()
-            await update(interactive: true)
-            if wasOn, control.coreConfigured { control.coreOn() }
-        }
     }
 
     private func took(_ headers: [String: String], source: SubscriptionSource, for id: String) {
@@ -573,22 +609,13 @@ final class VPNClient {
             }
             updating = true
             defer { updating = false }
-            setupCore = nil
-            lastXrayFailure = nil
             let status = { [self] in subscriptions.first { $0.id == id }?.status ?? Status() }
-            if usesXray {
-                if let xray = await fetchXray(id) {
-                    setupCore = .xray
-                    return Onboarding.Found(title: status().title, servers: xray.servers.count, expire: status().usage?.expire)
-                }
-                // ADR 0020: a service without the main way's format still works the other way;
-                // only while setting up, before anything was imported
-                guard !control.coreConfigured, let failure = lastXrayFailure,
-                      failure == XrayProfile.Failure.notXray.errorDescription || failure.hasPrefix("HTTP 404") else { return failed() }
-                lastError = nil
+            let profile: Profile
+            switch await fetchEither(id) {
+            case .xray(let xray): return Onboarding.Found(title: status().title, servers: xray.servers.count, expire: status().usage?.expire)
+            case .mihomo(let fetched): profile = fetched
+            case nil: return failed()
             }
-            guard let profile = await fetchProfile(id) else { return failed() }
-            setupCore = usesXray ? .mihomo : nil
             let found = Onboarding.Found(title: status().title, servers: (profile["proxies"] as? [Any])?.count ?? 0,
                                          expire: status().usage?.expire)
             if !found.ready { lastError = UserError.from(raw: "empty", context: .subscription) }
@@ -601,8 +628,6 @@ final class VPNClient {
         manual += added
         saveManual()
         setupSubscription = hasURL ? nil : ServerID.own
-        // ADR 0027: own servers the main way cannot use at all are set up with the other way
-        setupCore = usesXray && !hasURL && !control.coreConfigured && manual.allSatisfy({ mainWayCannotUse($0) != nil }) ? .mihomo : nil
         reloadProfileProxies()
         return Onboarding.Found(title: nil, servers: manual.count, expire: nil, ownServers: true)
     }
@@ -629,7 +654,12 @@ final class VPNClient {
 
     func prepareImport() -> Prepared? {
         let server = ServerID(subscription: setupSubscription ?? activeID, name: "")
-        if (setupCore ?? control.coreChoice) == .xray {
+        if unusable(server.subscription) {
+            lastError = Subscriptions.noCore
+            return nil
+        }
+        let core = core(of: server.subscription)
+        if core == .xray {
             guard let config = Subscriptions.xray(for: server, configs: Self.cachedXray(subscriptions), own: manualProxies) else { return nil }
             let data = RoutingHint.strippingXray(config)
             let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-xray-\(UUID().uuidString).json")
@@ -643,7 +673,7 @@ final class VPNClient {
             return Prepared(file: file, hash: Self.hash(data), core: .xray, profile: nil, subscription: server.subscription)
         }
         guard let profile = forCore(server), let written = write(profile) else { return nil }
-        return Prepared(file: written.file, hash: written.hash, core: setupCore, profile: profile, subscription: server.subscription)
+        return Prepared(file: written.file, hash: written.hash, core: core, profile: profile, subscription: server.subscription)
     }
 
     func didImport(_ prepared: Prepared) {
@@ -652,7 +682,6 @@ final class VPNClient {
         } else {
             importedXray(hash: prepared.hash, subscription: prepared.subscription)
         }
-        setupCore = nil
         setupSubscription = nil
         // the wizard fetched the subscription a moment ago (check)
         if hasURL { schedule.record(.applied, now: Date()) }
@@ -766,8 +795,8 @@ final class VPNClient {
         return Subscriptions.approvalNote(titles: Subscriptions.approvalOrder(running: activeID, all: all).compactMap { titles[$0] })
     }
 
-    /// The other subscriptions' profiles (and the own servers'), in the format of the way the helper
-    /// runs, for it to approve with the one it runs (Subscriptions.approvalOrder). One that cannot be
+    /// The other subscriptions' profiles (and the own servers'), each in the format of its core
+    /// (#65), for it to approve with the one it runs (Subscriptions.approvalOrder). One that cannot be
     /// written is left out: it stays unapproved, and a switch to it asks again.
     private func approvalFiles(besides subscription: String) -> [URL] {
         let all = subscriptions.map(\.id) + (manual.isEmpty ? [] : [ServerID.own])
@@ -777,9 +806,11 @@ final class VPNClient {
         }
         return order.dropFirst().compactMap { id in
             let server = ServerID(subscription: id, name: "")
-            let data = usesXray
-                ? Subscriptions.xray(for: server, configs: Self.cachedXray(subscriptions), own: manualProxies).map(RoutingHint.strippingXray)
-                : forCore(server).flatMap { try? ProfileConverter.json($0) }
+            let data: Data? = switch core(of: id) {
+            case .xray: Subscriptions.xray(for: server, configs: Self.cachedXray(subscriptions), own: manualProxies).map(RoutingHint.strippingXray)
+            case .mihomo: forCore(server).flatMap { try? ProfileConverter.json($0) }
+            case nil: nil   // no installed core runs it: left unapproved
+            }
             guard let data else { return nil }
             // the servers' passwords: the user's only from the first byte
             let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-approve-\(UUID().uuidString).json")
@@ -804,29 +835,22 @@ final class VPNClient {
             .map { RoutingHint.stripping(Transport.adding(transportOverrides, to: $0)) }
     }
 
-    /// The blocks of the servers list from the caches, in the format of the way the helper runs.
+    /// The blocks of the servers list from the caches, each in the format of its core (#65).
     private func reloadProfileProxies() {
         var result: [Block] = []
-        let own = String(localized: "Свои серверы")
-        if usesXray {
-            let configs = Self.cachedXray(subscriptions)
-            for subscription in subscriptions {
-                guard let servers = configs[subscription.id].flatMap({ XrayManual.merge(subscription: $0, manual: [])?.servers }) else { continue }
-                result.append(Block(id: subscription.id, title: subscription.title, proxies: CoreProxies(xrayServers: servers), keys: [:]))
-            }
-            if let servers = XrayManual.merge(subscription: nil, manual: manualProxies)?.servers {
-                result.append(Block(id: ServerID.own, title: own, proxies: CoreProxies(xrayServers: servers), keys: [:]))
-            }
-            transportServers = []
-        } else {
-            var profiles = Self.cachedProfiles(subscriptions)
-            profiles[ServerID.own] = ProfileMerger.merge(subscription: nil, manual: manual.compactMap(Self.proxy))
-            for (id, title) in subscriptions.map({ ($0.id, $0.title) }) + [(ServerID.own, own)] {
-                guard let profile = profiles[id] else { continue }
+        let configs = Self.cachedXray(subscriptions)
+        var profiles = Self.cachedProfiles(subscriptions)
+        profiles[ServerID.own] = ProfileMerger.merge(subscription: nil, manual: manual.compactMap(Self.proxy))
+        for (id, title) in subscriptions.map({ ($0.id, $0.title) }) + [(ServerID.own, String(localized: "Свои серверы"))] {
+            if core(of: id) == .xray {
+                let config = id == ServerID.own ? XrayManual.merge(subscription: nil, manual: manualProxies) : configs[id].flatMap { XrayManual.merge(subscription: $0, manual: []) }
+                guard let servers = config?.servers else { continue }
+                result.append(Block(id: id, title: title, proxies: CoreProxies(xrayServers: servers), keys: [:]))
+            } else if core(of: id) == .mihomo, let profile = profiles[id] {
                 result.append(Block(id: id, title: title, proxies: CoreProxies(profile: profile), keys: ServerIdentity.keys(profile)))
             }
-            transportServers = profiles[activeID].map(Transport.servers) ?? []
         }
+        transportServers = core(of: activeID) == .xray ? [] : profiles[activeID].map(Transport.servers) ?? []
         blocks = result
         migrateToServerKeys()
         // «Сменить страну на …» in Spotlight and Siri knows the new list

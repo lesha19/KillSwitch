@@ -32,8 +32,7 @@ final class SettingsBackupTests: XCTestCase {
         return json(object)
     }
 
-    private let root = SettingsBackup.Root(core: .xray,
-                                           switches: ["lan": true, "tailscale": true, "dns": false, "wifiguard": true,
+    private let root = SettingsBackup.Root(switches: ["lan": true, "tailscale": true, "dns": false, "wifiguard": true,
                                                       "direct": false, "adblock": false, "diag": false,
                                                       "escalate": true],
                                            exceptions: ["10.8.0.0/24"], manualServers: [], splitApps: ["Telegram"])
@@ -149,7 +148,7 @@ final class SettingsBackupTests: XCTestCase {
             }
         }
         let badRoot: [[String: Any]] = [
-            ["core": "wireguard"], ["switches": ["pf": true]], ["switches": ["lan": 1]], ["exceptions": ["example.com"]],
+            ["switches": ["pf": true]], ["switches": ["lan": 1]], ["exceptions": ["example.com"]],
             ["manualServers": ["1.2.3.4; rm -rf /"]], ["splitApps": ["a,b"]],
         ]
         for root in badRoot {
@@ -157,6 +156,18 @@ final class SettingsBackupTests: XCTestCase {
                 guard case .damaged = $0 as? SettingsBackup.Problem else { return XCTFail("\(root): \($0)") }
             }
         }
+    }
+
+    /// #65: the core follows the subscription, so «Способ подключения» left the file; one saved
+    /// before still loads, the key ignored whatever it holds.
+    func testAnOldFileWithTheCoreStillLoads() throws {
+        for core in ["mihomo", "xray", "wireguard"] {
+            let read = try SettingsBackup.read(file(root: ["core": core, "switches": ["lan": true]]))
+            XCTAssertEqual(read.root?.switches, ["lan": true], core)
+            XCTAssertEqual(SettingsBackup.changes(from: .init(app: [:], root: root), to: read).map(\.key), [], core)
+        }
+        let written = try XCTUnwrap(JSONSerialization.jsonObject(with: SettingsBackup.export(.init(app: [:], root: root), appVersion: "0.20.0", date: Date())) as? [String: Any])
+        XCTAssertNil((written["root"] as? [String: Any])?["core"])
     }
 
     func testIgnoresWhatItDoesNotKnow() throws {
@@ -176,7 +187,6 @@ final class SettingsBackupTests: XCTestCase {
         let current = SettingsBackup.Settings(app: ["pauseShort": .int(5), "autoConnect": .bool(true)], root: root)
         var newRoot = root
         newRoot.switches?["adblock"] = true
-        newRoot.core = nil
         let new = SettingsBackup.Settings(app: ["pauseShort": .int(5), "autoConnect": .bool(false)], root: newRoot)
         let changes = SettingsBackup.changes(from: current, to: new)
         XCTAssertEqual(changes.map(\.key), ["autoConnect", "adblock"])
@@ -335,14 +345,13 @@ final class SettingsBackupTests: XCTestCase {
         new.exceptions = ["1.1.1.1"]
         new.manualServers = ["5.6.7.8"]
         new.splitApps = ["Telegram", "Safari"]
-        new.core = .mihomo
         let commands = SettingsBackup.rootCommands(helper: helper, current: root, new: new)
         XCTAssertEqual(commands, [
             [helper, "set", "adblock", "1"], [helper, "set", "lan", "0"],
             [helper, "unallow", "10.8.0.0/24"], [helper, "allow", "1.1.1.1"],
             [helper, "server-add", "5.6.7.8"],
             [helper, "set", "splitapps", "Telegram,Safari"],
-        ], "the core goes through VPNClient.switchCore, which imports the subscription again")
+        ])
         XCTAssertTrue(commands.allSatisfy { HelperCommand(command: $0, helper: helper)?.isValid == true })
         XCTAssertEqual(SettingsBackup.rootCommands(helper: helper, current: root, new: .init()), [])
     }
@@ -408,7 +417,6 @@ final class SettingsBackupTests: XCTestCase {
         XCTAssertEqual(defaults.object(forKey: "notifyVPNDropped") as? Bool, true)
 
         let reset = try XCTUnwrap(SettingsBackup.reset.root)
-        XCTAssertNil(reset.core, "the way of connecting stays")
         XCTAssertEqual(SettingsBackup.rootCommands(helper: helper, current: root, new: reset), [
             [helper, "unallow", "10.8.0.0/24"], [helper, "set", "splitapps", ""],
         ])

@@ -216,6 +216,24 @@ enum Subscriptions {
         }
     }
 
+    /// The core a subscription runs in (ADR 0036, #65): Xray when it offers Xray configs and Xray is
+    /// installed, else mihomo; nil when no installed core takes what it offers.
+    static func core(offers: Set<CoreChoice>, installed: Set<CoreChoice>) -> CoreChoice? {
+        [CoreChoice.xray, .mihomo].first { offers.contains($0) && installed.contains($0) }
+    }
+
+    /// A subscription whose formats no installed core runs (core(offers:installed:) nil): kept,
+    /// never handed to the helper.
+    static let noCore = UserError(title: String(localized: "Подписку не запустить"),
+                                  message: String(localized: "Для её серверов в KillSwitch нет нужного VPN. Переустанови KillSwitch."))
+
+    /// The answer at `<link>/json` says the subscription has no Xray configs (not an Xray config, or
+    /// 404), unlike an outage or a server error.
+    static func saysNoXray(_ failure: String?) -> Bool {
+        guard let failure else { return false }
+        return failure == XrayProfile.Failure.notXray.errorDescription || failure.hasPrefix("HTTP 404")
+    }
+
     /// The same with Xray: the subscription's panel config as it came, or the own servers as hosts
     /// of their own (XrayManual).
     static func xray(for server: ServerID, configs: [String: Data], own: [(name: String, proxy: [String: Any])]) -> Data? {

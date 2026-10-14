@@ -102,3 +102,21 @@ recents, favourites, multihop, Shortcuts).
   lists per profile its host count and DIRECT hash. «Подтвердить…» names the subscriptions one
   password approves. An entry of the other core kind is
   refused until #65.
+- The core follows the subscription (#65): the helper reads the kind from the profile (an Xray
+  config, an array of them or one with `outbounds`, else mihomo), never from the caller; an
+  import approves each profile in its own kind, and runs the first in its own core. `ks core use`
+  of the other kind takes an entry of that kind only, matched in full as before (a mihomo profile
+  with servers approved only for Xray, or the other way round, exits 3), then swaps the launchd
+  job the way `ks core on` does, the anchor loaded throughout; when the new core does not run,
+  the servers, approval and settings the import replaced come back and the old core runs again.
+  A refresh of the other kind exits 3 (the password). The app fetches every subscription as Xray
+  configs first and falls back to its mihomo profile; one that says it has none (not Xray, 404)
+  loses its old Xray cache. `ks set core` stays for the setup wizard; Settings, the CLI and the
+  settings transfer have no core choice (an old file's `core` is ignored).
+  Accepted costs (owner): a mihomo-only subscription costs one extra `/json` request per update;
+  an install with `core=mihomo` moves to Xray at the next update with one password prompt (the
+  refresh of the other kind exits 3). Review: the Xray cache goes only after the mihomo profile
+  came; a subscription no installed core runs is kept with «Подписку не запустить» and never
+  handed to the helper; a failed switch restores what it replaced (`.take` copies: the shared
+  files, both cores' configs and profiles, the approved set) and only the settings keys it
+  changed; without an approved set (before 0.20) a profile of the other kind exits 3.

@@ -153,6 +153,38 @@ run "$B" use
 [ "$rc" != 0 ] && cmp -s "$CORE_DIR/xray.json" "$tmp/xray.p" && ok "xray: a mihomo profile refused, config untouched" || bad "xray use of a mihomo profile: $rc"
 rm -f "$SETTINGS"
 
+# --- the core follows the subscription (#65): each profile approved and run in its own core's
+# format, the kind read from the profile; a use of the other kind switches the core. Q4: Q on an
+# address no mihomo entry has
+Q4="$tmp/q4.json"; sed 's/203\.0\.113\.30/203.0.113.40/' "$Q" > "$Q4"
+run "$A" import "$Q4"
+[ "$rc" = 0 ] && [ "$(cat "$APPROVED_SET/1/kind")" = mihomo ] && [ "$(cat "$APPROVED_SET/2/kind")" = xray ] && [ "$(core_kind)" = mihomo ] &&
+  ok "mixed import: each entry of its own profile's kind" || bad "mixed import: $rc $(cat "$APPROVED_SET"/*/kind 2>/dev/null | paste -sd' ' -) $(cat "$tmp/err")"
+cp "$cfg" "$tmp/cfg.a"
+run "$Q4" use
+[ "$rc" = 0 ] && [ "$(core_kind)" = xray ] && grep -q 203.0.113.40 "$CORE_DIR/xray.json" && grep -q 203.0.113.40 "$SERVERS" && ! grep -q 203.0.113.20 "$SERVERS" &&
+  ok "use of the other kind: the core is switched, the servers are its own" || bad "use Q4 from mihomo: $rc $(core_kind) $(cat "$tmp/err")"
+cmp -s "$cfg" "$tmp/cfg.a" && cmp -s "$APPROVED_DIRECT" "$APPROVED_SET/2/direct" && ok "  the other core's config kept, approval now the entry's" || bad "  config.yaml or approved-direct"
+run "$A" use
+[ "$rc" = 0 ] && [ "$(core_kind)" = mihomo ] && running 203.0.113.20 && ok "  and back to mihomo" || bad "use A from xray: $rc $(core_kind) $(cat "$tmp/err")"
+edit 'push @{$j->{proxies}}, {name=>"Q", type=>"trojan", server=>"203.0.113.40", port=>443, password=>"p"}' < "$A" > "$tmp/aq.json"
+sed 's/203\.0\.113\.40/203.0.113.20/' "$Q4" > "$tmp/qa.json"
+run "$tmp/aq.json" use
+[ "$rc" = 3 ] && [ "$(core_kind)" = mihomo ] && ok "use: a mihomo profile with a server approved only for Xray refused (3)" || bad "use AQ: $rc $(core_kind)"
+run "$tmp/qa.json" use
+[ "$rc" = 3 ] && [ "$(core_kind)" = mihomo ] && running 203.0.113.20 && ok "use: an Xray profile with a server approved only for mihomo refused (3)" || bad "use Q4A: $rc $(core_kind)"
+run "$Q4" refresh
+[ "$rc" = 3 ] && [ "$(core_kind)" = mihomo ] && ok "refresh: a profile of the other kind needs the password (3)" || bad "refresh Q4 from mihomo: $rc $(core_kind)"
+printf 'multihop=DE trojan\n' > "$SETTINGS"
+run "$Q4" import "$A"
+[ "$rc" = 0 ] && [ "$(core_kind)" = xray ] && [ "$(setting multihop off)" = off ] && [ "$(cat "$APPROVED_SET/1/kind")" = xray ] && [ "$(cat "$APPROVED_SET/2/kind")" = mihomo ] &&
+  ok "import whose running profile is of the other kind: the core follows it, double VPN off" || bad "import Q4 A from mihomo: $rc $(core_kind) $(cat "$SETTINGS") $(cat "$tmp/err")"
+mv "$CORE_DIR/xray" "$tmp/xray.bin"; rm -f "$SETTINGS"; run "$A" use
+run "$Q4" use
+[ "$rc" = 1 ] && [ "$(core_kind)" = mihomo ] && grep -q 'Ядро xray не установлено' "$tmp/err" && ok "use: the other core not installed: refused, nothing changed" || bad "use Q4 without xray: $rc $(cat "$tmp/err")"
+mv "$tmp/xray.bin" "$CORE_DIR/xray"
+rm -f "$SETTINGS"
+
 # --- blocking holds through use (ADR 0035): the anchor is never flushed, the core restarts under it
 run "$A" import "$B"
 : > "$tmp/anchor.calls"; echo 'block drop out quick all' > "$tmp/anchor"
@@ -171,6 +203,84 @@ rc=0; core_take "$B" use 2>"$tmp/err" || rc=$?
 [ "$rc" = 0 ] && running 203.0.113.60 && ok "use with the kill switch on" || bad "use with pf: $rc $(cat "$tmp/err")"
 grep -q 'launchctl kickstart' "$tmp/anchor.calls" && ! grep -q 'anchor=empty' "$tmp/anchor.calls" && ! grep -q -- '-F' "$tmp/anchor.calls" &&
   paste -sd"|" "$tmp/anchor.calls" | grep -q -- "-f -|.*launchctl kickstart" && ok "  pf anchor loaded throughout, reloaded before the core restarts" || bad "  pf: $(paste -sd'|' "$tmp/anchor.calls")"
+
+# --- a switch of the core under blocking (ADR 0035, #65): the other core's launchd job replaces the
+# running one with the anchor loaded throughout; when the new core does not run, the old one is
+# back with its servers, approval and settings
+rm -f "$SETTINGS"; run "$A" import "$Q4"
+CORE_PLIST="$tmp/core.plist"; echo mihomo > "$CORE_DIR/plist.mihomo"; echo xray > "$CORE_DIR/plist.xray"; cp "$CORE_DIR/plist.mihomo" "$CORE_PLIST"
+VPN_PASS=1
+watchdog_handover() { :; }; core_log_tidy() { :; }; diag_dir() { :; }; dns_locked() { :; }; xray_api_check() { return 1; }
+job_gone() { :; }; sleep() { :; }
+core_running() { [ ! -e "$tmp/new-fails" ] || cmp -s "$CORE_PLIST" "$CORE_DIR/plist.mihomo"; }
+launchctl() { echo "launchctl $* anchor=$([ -s "$tmp/anchor" ] && echo rules || echo empty) plist=$(cat "$CORE_PLIST")" >> "$tmp/anchor.calls"; return 0; }
+: > "$tmp/anchor.calls"
+rc=0; core_take "$Q4" use 2>"$tmp/err" || rc=$?
+[ "$rc" = 0 ] && [ "$(core_kind)" = xray ] && cmp -s "$CORE_PLIST" "$CORE_DIR/plist.xray" && grep -q 'launchctl bootstrap .* plist=xray' "$tmp/anchor.calls" &&
+  ok "use of the other kind with the VPN on: Xray's job runs" || bad "switch to xray: $rc $(core_kind) $(paste -sd'|' "$tmp/anchor.calls") $(cat "$tmp/err")"
+! grep -q 'anchor=empty' "$tmp/anchor.calls" && ! grep -q -- '-F' "$tmp/anchor.calls" && ok "  pf anchor loaded throughout the switch" || bad "  pf: $(paste -sd'|' "$tmp/anchor.calls")"
+rc=0; core_take "$A" use 2>"$tmp/err" || rc=$?
+[ "$rc" = 0 ] && [ "$(core_kind)" = mihomo ] && cmp -s "$CORE_PLIST" "$CORE_DIR/plist.mihomo" && ok "  and back to mihomo's job" || bad "switch back: $rc $(core_kind) $(cat "$tmp/err")"
+cp "$SERVERS" "$tmp/servers.a"; cp "$APPROVED_DIRECT" "$tmp/direct.a"
+touch "$tmp/new-fails"; : > "$tmp/anchor.calls"
+rc=0; core_take "$Q4" use 2>"$tmp/err" || rc=$?
+[ "$rc" != 0 ] && [ "$(core_kind)" = mihomo ] && cmp -s "$CORE_PLIST" "$CORE_DIR/plist.mihomo" && core_running &&
+  ok "the other core does not start: mihomo runs again" || bad "failed switch: $rc $(core_kind) $(cat "$CORE_PLIST") $(cat "$tmp/err")"
+cmp -s "$SERVERS" "$tmp/servers.a" && cmp -s "$APPROVED_DIRECT" "$tmp/direct.a" && running 203.0.113.20 &&
+  ok "  with its servers, approval and config" || bad "  servers or approval not restored: $(paste -sd' ' "$SERVERS")"
+! grep -q 'anchor=empty' "$tmp/anchor.calls" && ! grep -q -- '-F' "$tmp/anchor.calls" && ok "  pf anchor loaded throughout" || bad "  pf: $(paste -sd'|' "$tmp/anchor.calls")"
+[ -z "$(find "$DIR" -name '*.prev' -o -name '*.take' -o -name 'take*')" ] && ok "  no backups left" || bad "  left: $(find "$DIR" -name '*.prev' -o -name '*.take' -o -name 'take*')"
+rm -f "$tmp/new-fails"
+
+# --- review of #65: the rollback keeps a "ks set" made meanwhile, never uses set_mtu's copies,
+# and puts back all an import replaced (its approved set, the other core's files)
+[ -z "$(setting lan "")" ] || bad "lan set before the test"
+cp "$CORE_DIR/xray.json" "$tmp/xray.before" 2>/dev/null; cp "$CORE_DIR/profile-xray.json" "$tmp/pxray.before" 2>/dev/null
+launchctl() {
+  echo "launchctl $* anchor=$([ -s "$tmp/anchor" ] && echo rules || echo empty) plist=$(cat "$CORE_PLIST")" >> "$tmp/anchor.calls"
+  case "$1" in
+    bootstrap) find "$DIR" -name '*.prev' >> "$tmp/prev.seen"; [ "$(cat "$CORE_PLIST")" = mihomo ] || put_setting lan 1 ;;
+    print) [ ! -e "$tmp/job-gone" ] || return 1 ;;
+  esac
+  return 0
+}
+touch "$tmp/new-fails"; : > "$tmp/prev.seen"
+rc=0; core_take "$Q4" import 2>"$tmp/err" || rc=$?
+[ "$rc" != 0 ] && [ "$(core_kind)" = mihomo ] && [ "$(setting lan "")" = 1 ] &&
+  ok "a failed switch keeps a «ks set» made while the new core started" || bad "settings after the rollback: $rc $(cat "$SETTINGS")"
+[ ! -s "$tmp/prev.seen" ] && ok "  set_mtu's .prev copies neither made nor used" || bad "  .prev seen: $(cat "$tmp/prev.seen")"
+[ "$(find "$APPROVED_SET" -name kind | wc -l | tr -d ' ')" = 2 ] && cmp -s "$CORE_DIR/xray.json" "$tmp/xray.before" && cmp -s "$CORE_DIR/profile-xray.json" "$tmp/pxray.before" &&
+  ok "  a failed import that switched: its approved set and the other core's files as before" || bad "  set or xray files: $(find "$APPROVED_SET" -name kind | paste -sd' ' -)"
+rm -f "$tmp/new-fails"; run "$A" use
+[ "$rc" = 0 ] && ok "  the old subscription is used without the password again" || bad "  use A after the failed import: $rc $(cat "$tmp/err")"
+drop_setting lan
+
+# the VPN on but its job gone (crashed and booted out): the switch starts the new core; when it does
+# not run, the old state is back and nothing is left running
+touch "$tmp/new-fails" "$tmp/job-gone"; : > "$tmp/anchor.calls"
+rc=0; core_take "$Q4" use 2>"$tmp/err" || rc=$?
+[ "$rc" != 0 ] && [ "$(core_kind)" = mihomo ] && cmp -s "$SERVERS" "$tmp/servers.a" && cmp -s "$CORE_PLIST" "$CORE_DIR/plist.mihomo" &&
+  grep -q 'launchctl bootout' "$tmp/anchor.calls" && ok "a failed switch with the job not loaded: back, the new job booted out" ||
+  bad "failed switch, no job: $rc $(core_kind) $(paste -sd'|' "$tmp/anchor.calls") $(cat "$tmp/err")"
+# the VPN off: nothing is started, the next «Подключить» starts the new core
+rm -f "$tmp/new-fails"; VPN_PASS=0; : > "$tmp/anchor.calls"
+rc=0; core_take "$Q4" use 2>"$tmp/err" || rc=$?
+[ "$rc" = 0 ] && [ "$(core_kind)" = xray ] && ! grep -q 'launchctl bootstrap' "$tmp/anchor.calls" && ok "with the VPN off: switched, nothing started" ||
+  bad "switch with the VPN off: $rc $(core_kind) $(paste -sd'|' "$tmp/anchor.calls")"
+rc=0; core_take "$A" use 2>"$tmp/err" || rc=$?
+VPN_PASS=1; rm -f "$tmp/job-gone"
+
+# the other core's launchd job missing: an error, not «already right»
+mv "$CORE_DIR/plist.xray" "$tmp/plist.xray"
+rc=0; core_take "$Q4" use 2>"$tmp/err" || rc=$?
+[ "$rc" != 0 ] && [ "$(core_kind)" = mihomo ] && cmp -s "$CORE_PLIST" "$CORE_DIR/plist.mihomo" && grep -q 'Нет задания launchd для ядра xray' "$tmp/err" &&
+  ok "the other core's job missing: refused, mihomo runs" || bad "missing plist: $rc $(core_kind) $(cat "$tmp/err")"
+mv "$tmp/plist.xray" "$CORE_DIR/plist.xray"
+
+# an install from before 0.20 (no approved set): its one import never approves the other kind
+rm -rf "$APPROVED_SET"
+rc=0; core_take "$Q4" use 2>"$tmp/err" || rc=$?
+[ "$rc" = 3 ] && [ "$(core_kind)" = mihomo ] && ok "no approved set: a profile of the other kind refused (3)" || bad "no set, use Q4: $rc $(core_kind) $(cat "$tmp/err")"
 
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

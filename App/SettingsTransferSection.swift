@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 /// Settings › Дополнительно › «Перенос настроек» (#15, ADR 0024): save the settings to a JSON
 /// file without the subscription and keys, load them back, or reset them. Loading and resetting
 /// show what changes first; the root settings then go through the same commands and password as
-/// their own screens (KillSwitchControl.applySettings), the way of connecting through switchCore.
+/// their own screens (KillSwitchControl.applySettings).
 struct SettingsTransferSection: View {
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
@@ -91,13 +91,12 @@ struct SettingsTransferSection: View {
     }
 
     /// The root settings behind the password first, and the app's only once they are in: a
-    /// cancelled or failed password leaves nothing half applied. Then the way of connecting.
+    /// cancelled or failed password leaves nothing half applied.
     /// Without root settings to change (or without the service) the app's apply at once.
     private func apply(_ settings: SettingsBackup.Settings, resetting: Bool) {
         guard installed, let root = settings.root else { return applyApp(settings.app, resetting: resetting) }
-        control.applySettings(root) { [client] in
+        control.applySettings(root) {
             applyApp(settings.app, resetting: resetting)
-            if let core = root.core { client.switchCore(to: core) }
         }
     }
 
