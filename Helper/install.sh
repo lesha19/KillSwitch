@@ -311,6 +311,9 @@ main() {
   # the diagnostics journal (ADR 0021): root-only, the app gets it redacted through «Собрать отчёт»
   install -d -o root -g wheel -m 700 "$DIR/diag"
   vpn_migrate
+  # a mark of the boot window guard: the network it turned off back on, checked, by the new ks
+  # before the watchdog changes (one before 0.20.0 dropped the mark without a check, ADR 0037)
+  [ ! -f "$DIR/wifi-off-by-ks" ] || ks_run netrestore || true
   watchdog_update "$ks_new" "$plist_new"
   watchdog_takeover
   if [ -f mihomo ] || [ -f xray ]; then core_update; fi

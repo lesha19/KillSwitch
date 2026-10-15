@@ -226,6 +226,15 @@ check "upgrade: the completion marker names the new ks" "$(sed -n 's/^sha256 //p
 check "upgrade: the marker says the version" "$(sed -n 's/^version //p' "$root/lib/installed" 2>/dev/null)" "0.14"
 check "upgrade: the marker is 644" "$(stat -f %Lp "$root/lib/installed" 2>/dev/null)" 644
 
+check "upgrade without a boot guard mark: no netrestore" "$(grep -c '^ks netrestore$' "$root/calls")" 0
+
+# a mark the boot window guard left (ADR 0037): the new ks turns the network back on before the watchdog changes
+setup netmark
+printf 'Wi-Fi\ten0\n' > "$root/lib/wifi-off-by-ks"
+upgrade --upgrade >/dev/null 2>&1
+check "upgrade with a boot guard mark: ks netrestore, then the watchdog's HUP" \
+  "$(grep -E '^(ks netrestore|launchctl kill HUP system/local.killswitch)$' "$root/calls" | paste -sd'|' -)" "ks netrestore|launchctl kill HUP system/local.killswitch"
+
 # install.sh stopping half-way (here: sudoers refused) leaves no marker, not even an earlier one
 setup halfway
 echo "version 0.14" > "$root/lib/installed"

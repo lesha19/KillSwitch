@@ -6,7 +6,7 @@
 #   ks on                   enable (also after reboot)
 #   ks off                  disable until "ks on" (while the VPN is on it keeps blocking)
 #   ks pause [min]          disable for N minutes (default 5), e.g. for a captive Wi-Fi portal
-#   ks netrestore           network services turned off at shutdown back on (if the watchdog is gone)
+#   ks netrestore           network services turned off at shutdown back on (if the watchdog is gone or has not in 20 s)
 #   ks set <key> <0|1>      lan, tailscale, dns, direct (see rules() below), wifiguard,
 #                           escalate (Xray: another fingerprint or transport first, ADR 0030), and the
 #                           blocked categories adblock, blockadult, blocksocial, blockbetting (ADR 0031)
@@ -89,6 +89,7 @@ HASHF="$DIR/rules.sha256" # hash of the anchor as loaded by us
 FILESF="$DIR/rules.files" # the files below as they were when the rules were loaded (root_files_sig)
 INVALIDF="$DIR/invalid"   # world-readable: what made the last load block everything (#17), absent when fine
 WIFI_MARK="$DIR/wifi-off-by-ks" # Wi-Fi was switched off by us at shutdown
+NET_SEEN="$DIR/net-guard-seen" # world-readable "<boot id> <epoch>": when this boot's mark was first seen (ADR 0037)
 SIGF="$DIR/tunnels"      # tunnel interfaces the loaded rules were built for
 TSRELAYS="$DIR/tsrelays" # Tailscale DERP relays + control plane, root-owned
 NB_GROUP="_ksnetbird"    # NetBird's daemon runs with this gid when tailscale=1 (netbird_sync)
@@ -356,11 +357,127 @@ rules() {  # rules [allow-file] [servers-file] [manual-servers-file]
 pf_enabled() { pfctl -s info 2>/dev/null | grep -q 'Status: Enabled'; }
 rules_hash() { pfctl -a "$ANCHOR" -s rules 2>/dev/null | shasum -a 256 | cut -d' ' -f1; }
 
-# Enabled network services bound to a physical port (en*, bridge*), one name per line.
-physical_services() {
-  networksetup -listnetworkserviceorder | awk '
-    /^\([0-9]+\) / { sub(/^\([0-9]+\) /, ""); name = $0 }
-    /Device: (en|bridge)[0-9]+\)/ { if (name != "") print name; name = "" }'
+# networksetup killed after NS_TIMEOUT seconds: the watchdog's one-second loop never hangs on it.
+# A subshell, not an exec, so a function of the same name (the tests' fake) is what runs.
+NS_TIMEOUT=3
+ns() {
+  (
+    networksetup "$@" 2>/dev/null & p=$!
+    perl -e 'sleep shift; kill 9, shift' "$NS_TIMEOUT" "$p" >/dev/null 2>&1 & k=$!
+    wait "$p"; rc=$?
+    kill "$k" 2>/dev/null
+    exit "$rc"
+  )
+}
+# Every network service bound to a physical port (en*, bridge*): "on|off<TAB>name<TAB>device".
+# Disabled ones are listed as "(*) Name". A name with a control character (a tab) could not be told
+# from its device: "bad<TAB><TAB>device", left alone. A name with a newline is not listed at all.
+service_list() {
+  ns -listnetworkserviceorder | awk '
+    /^\(([0-9]+|\*)\) / { on = ($0 !~ /^\(\*\)/); sub(/^\(([0-9]+|\*)\) /, ""); name = $0; next }
+    match($0, /Device: (en|bridge)[0-9]+\)/) {
+      if (name != "") print (name ~ /[[:cntrl:]]/ ? "bad\t" : (on ? "on" : "off") "\t" name) "\t" substr($0, RSTART + 8, RLENGTH - 9) }
+    { name = "" }'
+}
+# Interfaces configd knows (State:/Network/Interface), one per line. The kernel can have one
+# (ifconfig -l) and networksetup call it Enabled while configd does not know it yet: then nothing
+# comes up on it (the 15.10.2026 incident).
+configd_ifs() { echo 'show State:/Network/Interface' | scutil 2>/dev/null | awk '$2 == ":" && $1 ~ /^[0-9]+$/ { print $3 }'; }
+net_now() { date +%s; }
+
+# The boot window guard's mark ($WIFI_MARK): "name<TAB>device" per service ks turned off (a mark
+# from before 0.20.0 has names only). Never truncated, never written from a stale copy: every change
+# is a locked_rewrite of the file as it is (a shutdown and "ks netrestore" can run next to the
+# watchdog), one line per device and per name, the first one winning; empty, it is removed (ADR 0037).
+NET_MARK_PL='my (%d, %n, @M);
+  for (@L) { next unless length; my ($nm, $dv) = split /\t/, $_, 2; $dv = "" unless defined $dv;
+    next if ($dv ne "" && exists $d{$dv}) || exists $n{$nm}; $d{$dv} = 1 if $dv ne ""; $n{$nm} = 1; push @M, $_ }
+  @L = @M; unless (@L) { unlink $f; exit 0 }'
+# mark_add <lines>: these first (a shutdown: the name each device has now), then the mark's own
+mark_add() { locked_rewrite_wait 5 "" "$WIFI_MARK" '@L = ((split /\n/, $ARGV[0]), @L); '"$NET_MARK_PL" "$1"; }
+# mark_change <old> <new> ...: each line <old> becomes <new>, or goes when <new> is empty; lines
+# added meanwhile stay. The first-seen time goes with the mark.
+mark_change() {
+  locked_rewrite_wait 2 "" "$WIFI_MARK" 'my %r; while (@ARGV) { my ($o, $w) = splice @ARGV, 0, 2; $r{$o} = $w }
+    @L = map { exists $r{$_} ? $r{$_} : $_ } @L; '"$NET_MARK_PL" "$@" || return 1
+  [ -f "$WIFI_MARK" ] || rm -f "$NET_SEEN"
+}
+# net_seen_age: seconds since the mark was first seen in this boot (by the watchdog, or by
+# "ks netrestore" if it came first). In $NET_SEEN, not in the process: a watchdog restarted (HUP,
+# a crash and KeepAlive) goes on counting; another boot starts again. The mark's own time says
+# nothing: it is the shutdown's.
+net_seen_age() {
+  local boot b="" t="" now
+  boot=$(boot_id 2>/dev/null); boot=${boot:-unknown}; now=$(net_now)
+  read -r b t 2>/dev/null < "$NET_SEEN"
+  if [[ "$t" =~ ^[0-9]{1,12}$ ]]; then t=$((10#$t)); else t=""; fi   # 10#: "0118005" is not octal
+  if [ "$b" != "$boot" ] || [ -z "$t" ] || [ "$t" -gt "$now" ]; then
+    t=$now
+    printf '%s %s\n' "$boot" "$t" > "$NET_SEEN.$$" && chmod 644 "$NET_SEEN.$$" && mv -f "$NET_SEEN.$$" "$NET_SEEN"
+  fi
+  echo $((now - t))
+}
+# net_back: every service in the mark on again, and checked. A line leaves the mark only when it was
+# seen on twice, NET_CONFIRM seconds apart: networksetup says Enabled and configd knows its device
+# (when the mark has one). A device the kernel does not have either (an adapter unplugged during the
+# restart) gets 90 s from the first-seen time to come, then Enabled is enough. A service renamed
+# since is found by its device; one that is gone (neither name nor device) is dropped.
+# 0 once the mark is gone; 2 when what is left only waits for its second look; else 1. NET_LEFT
+# says what is left.
+NET_LEFT=""; NET_OK=""; NET_CONFIRM=3   # NET_OK: "<epoch><TAB>name<TAB>device" seen on once
+net_back() {
+  local all line name dev svc st key t ok now age kern conf seen="" left="" wait=0 off=0 ops=()
+  NET_LEFT=""
+  [ -f "$WIFI_MARK" ] || { NET_OK=""; return 0; }
+  all=$(service_list)
+  [ -n "$all" ] || { NET_LEFT=$(cut -f1 "$WIFI_MARK" | paste -sd, -); return 1; }
+  now=$(net_now); age=$(net_seen_age)
+  kern=" $(ifconfig -l 2>/dev/null) "; conf=" $(configd_ifs | paste -sd' ' -) "
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    IFS=$'\t' read -r name dev _ <<< "$line"
+    svc=""
+    [ -z "$name" ] || svc=$(k=$name awk -F'\t' '$1 != "bad" && $2 == ENVIRON["k"] { print $2; exit }' <<< "$all")
+    [ -n "$svc" ] || [ -z "$dev" ] || svc=$(k=$dev awk -F'\t' '$1 != "bad" && $3 == ENVIRON["k"] { print $2; exit }' <<< "$all")
+    if [ -z "$svc" ]; then
+      log_event "network service $name${dev:+ ($dev)} is gone: dropped from the mark"; ops+=("$line" ""); continue
+    fi
+    st=$(ns -getnetworkserviceenabled "$svc")
+    [ "$st" = Enabled ] || { ns -setnetworkserviceenabled "$svc" on >/dev/null; st=$(ns -getnetworkserviceenabled "$svc"); }
+    ok=0
+    if [ "$st" = Enabled ]; then
+      if [ -z "$dev" ] || [[ "$conf" == *" $dev "* ]]; then ok=1
+      elif [[ "$kern" != *" $dev "* ]] && [ "$age" -ge 90 ]; then ok=1
+      elif [ "$age" -ge 300 ]; then ok=1; log_event "network service $svc ($dev) never known to configd in 300 s: Enabled accepted"
+      fi
+    fi
+    key="$svc"$'\t'"$dev"
+    if [ "$ok" = 1 ]; then
+      t=$(k=$key awk -F'\t' '$2 "\t" $3 == ENVIRON["k"] { print $1; exit }' <<< "$NET_OK")
+      [[ "$t" =~ ^[0-9]{1,12}$ ]] && t=$((10#$t)) || t=""
+      if [ -n "$t" ] && [ $((now - t)) -ge "$NET_CONFIRM" ]; then ops+=("$line" ""); continue; fi
+      seen+="${t:-$now}"$'\t'"$key"$'\n'; wait=1
+    else
+      off=1
+    fi
+    left+="$svc,"
+    [ "$svc" = "$name" ] || ops+=("$line" "$svc${dev:+$'\t'$dev}")
+  done < "$WIFI_MARK"
+  NET_OK=$seen
+  if [ "${#ops[@]}" -gt 0 ]; then mark_change "${ops[@]}" || off=1; fi
+  [ -f "$WIFI_MARK" ] || { NET_OK=""; return 0; }
+  NET_LEFT=${left%,}
+  [ -n "$NET_LEFT" ] || NET_LEFT=$(cut -f1 "$WIFI_MARK" | paste -sd, -)   # added meanwhile: next time
+  [ "$off" = 0 ] && [ "$wait" = 1 ] && return 2
+  return 1
+}
+# net_back_wait: net_back, and the second look NET_CONFIRM seconds later if that is all it needs
+# (ks netrestore, the Login Items branch: no next pass to do it).
+net_back_wait() {
+  local rc
+  net_back; rc=$?
+  [ "$rc" = 2 ] || return "$rc"
+  sleep "$NET_CONFIRM"; net_back
 }
 
 log_event() {  # the line and the trim to 500 lines under one lock (locked_rewrite, #50); a lock
@@ -549,18 +666,56 @@ watch_pass() {
   if [ $(($1 % 2)) = 0 ] || [ "$flag" != "$LAST_FLAG" ]; then mode=full; fi
   LAST_FLAG=$flag
   guard "$mode"
+  # right after the rules, before what may take long (the core, DNS): the network back (ADR 0037)
+  [ -f "$WIFI_MARK" ] && net_guard
   [ $(($1 % 2)) = 0 ] && core_guard
   gap_track
   [ $(($1 % 10)) = 5 ] && netbird_bg
-  if [ -f "$WIFI_MARK" ] && { { [ -f "$FLAG" ] && ! vpn_on; } || [ "$BLOCKING" = 1 ]; }; then
-    while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" on; done < "$WIFI_MARK"
-    rm -f "$WIFI_MARK"; log_event "rules up: network on"
-  fi
   publish_state
   diag_tick
   [ $(($1 % 10)) = 5 ] && diag_bg
   # Xray: the running host still answers, or another way to it does? (ADR 0030)
   [ $(($1 % 20)) = 15 ] && [ "$CORE_STATE" = on ] && [ "$BLOCKING" = 1 ] && [ "${STANDBY:-0}" != 1 ] && escalate_bg
+}
+
+# The network services the boot window guard turned off, back on once the rules are up; tried on
+# every pass until networksetup and configd confirm it (the 15.10.2026 incident: the first "on" came
+# before configd knew en0 and did nothing). Whatever the rules do, 90 s after the mark was first
+# seen in this boot (net_seen_age: a restarted watchdog does not start the count again) the network
+# goes back on anyway: a Mac without network is worse than an open boot window (ADR 0037).
+# Failures logged every 30 s, or as NETWORK STILL OFF every minute once past that point.
+NET_LOGGED=-100; NET_FORCED=0
+# net_guard_start: the watchdog (re)starts; its wall-clock start is the reference for forced_ok
+net_guard_start() { NET_START=$(net_now); }
+# forced_ok: the 90 s are up. Seen-age alone is wall clock: a bad RTC corrected by NTP jumps it
+# forward and would open the network before the rules. So it also takes 90 s of this watchdog's own
+# uptime (SECONDS, immune to jumps), or a first-seen time that already predates this watchdog's start
+# by 90 s (a restart: the age at start is age - (now - NET_START), also jump-neutral after start).
+forced_ok() {
+  local now age
+  now=$(net_now); age=$(net_seen_age)
+  [ "$age" -ge 90 ] || return 1
+  [ "$SECONDS" -ge 90 ] || [ $((age - (now - ${NET_START:-$now}))) -ge 90 ]
+}
+net_guard() {
+  local forced=0 rc
+  if { [ -f "$FLAG" ] && ! vpn_on; } || [ "$BLOCKING" = 1 ]; then :
+  elif forced_ok; then forced=1
+  else return 0
+  fi
+  if [ "$forced" = 1 ] && [ "$NET_FORCED" = 0 ]; then
+    NET_FORCED=1; log_event "boot guard: rules not up after 90 s, network turned on anyway"
+  fi
+  net_back; rc=$?
+  if [ "$rc" = 0 ]; then log_event "$([ "$forced" = 1 ] && echo "network on without the rules" || echo "rules up: network on")"; return 0; fi
+  [ "$rc" = 2 ] && return 0
+  if [ "$forced" = 1 ]; then
+    [ $((SECONDS - NET_LOGGED)) -ge 60 ] || return 0
+    NET_LOGGED=$SECONDS; log_event "NETWORK STILL OFF: $NET_LEFT could not be turned on"
+  else
+    [ $((SECONDS - NET_LOGGED)) -ge 30 ] || return 0
+    NET_LOGGED=$SECONDS; log_event "network not back yet: $NET_LEFT, trying again"
+  fi
 }
 
 # A gap (ADR 0035): the VPN on and not connected, so the internet closed. Its start is kept in
@@ -758,31 +913,46 @@ netbird_sync() {  # netbird_sync [now]: nothing to do unless the plist, binary o
 # disabled before it stops it.
 watch_disabled() { launchctl print-disabled system 2>/dev/null | grep -qE "\"${WATCH_JOB#system/}\" => (disabled|true)"; }
 shutdown_guard() {
-  local svc
+  local all now bad name
   # damaged settings saying wifiguard=0 are not believed
   # off by hand blocks nothing at boot, unless the VPN is on (ADR 0035)
   { [ ! -f "$FLAG" ] || vpn_on; } && { [ "$(setting wifiguard 1)" = 1 ] || ! root_file_ok "$SETTINGS" settings; } || return 0
   if watch_disabled; then
-    log_event "watchdog switched off (Login Items): network left on"
+    # nothing would start it again: what an earlier shutdown turned off comes back now
+    if [ ! -f "$WIFI_MARK" ]; then log_event "watchdog switched off (Login Items): network left on"
+    elif net_back_wait; then log_event "watchdog switched off (Login Items): network turned back on"
+    else log_event "watchdog switched off (Login Items): NETWORK STILL OFF: $NET_LEFT"; fi
     return 0
   fi
-  physical_services > "$WIFI_MARK"
-  while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" off; done < "$WIFI_MARK"
-  log_event "shutdown: network off ($(paste -sd, - < "$WIFI_MARK"))"
+  all=$(service_list)
+  now=$(awk -F'\t' -v OFS='\t' '$1 == "on" { print $2, $3 }' <<< "$all")
+  for bad in $(awk -F'\t' '$1 == "bad" { print $3 }' <<< "$all"); do
+    log_event "network service on $bad has a control character in its name: left on"
+  done
+  # a mark of its own for this shutdown: the 90 s count starts at the next boot's first look
+  [ -f "$WIFI_MARK" ] || rm -f "$NET_SEEN"
+  # merged: the services turned off now first, by the name each device has now, then the mark's
+  [ -n "$now" ] && mark_add "$now"
+  while IFS=$'\t' read -r name _; do [ -n "$name" ] && ns -setnetworkserviceenabled "$name" off >/dev/null; done <<< "$now"
+  log_event "shutdown: network off ($(cut -f1 "$WIFI_MARK" 2>/dev/null | paste -sd, -))"
 }
 
 # "ks netrestore" (passwordless): the services the boot guard turned off, on again, for when the
-# watchdog that would do it is gone. While it runs it does that itself once the rules are up, so
-# before that this refuses: the boot window stays closed.
+# watchdog that would do it is gone or failed. While it runs it does that itself once the rules are
+# up, so for the first 20 s after the mark was first seen in this boot (net_seen_age) this refuses:
+# the boot window stays closed. Fails while a service is still off.
 net_restore() {
-  local svc
   [ -f "$WIFI_MARK" ] || return 0
-  if launchctl print "$WATCH_JOB" >/dev/null 2>&1 && { [ ! -f "$FLAG" ] || vpn_on; } && ! loaded; then
+  if [ "$(net_seen_age)" -lt 20 ] && launchctl print "$WATCH_JOB" >/dev/null 2>&1 &&
+    { [ ! -f "$FLAG" ] || vpn_on; } && ! loaded; then
     echo "Сеть включит служба защиты, как только загрузит правила" >&2
     return 1
   fi
-  while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" on; done < "$WIFI_MARK"
-  rm -f "$WIFI_MARK"
+  if ! net_back_wait; then
+    log_event "netrestore: NETWORK STILL OFF: $NET_LEFT"
+    echo "Не удалось включить: $NET_LEFT" >&2
+    return 1
+  fi
   log_event "network turned back on by hand"
 }
 
@@ -3563,7 +3733,8 @@ multihop_stale_drop() {
 # system meanwhile (DHCP renew, another network) becomes the new original, then is overridden
 # again. Unlike Mullvad only ServerAddresses is replaced, so search domains stay, and only
 # services on a physical port are touched: Tailscale's MagicDNS keeps its own resolver.
-boot_id() { sysctl -n kern.boottime | sed 's/.*sec = \([0-9]*\).*/\1/'; }
+# kern.bootsessionuuid: kern.boottime moves when the clock is stepped early in boot. An old numeric id on disk reads as another boot.
+boot_id() { sysctl -n kern.bootsessionuuid; }
 
 # "<key>\t<addresses>" for those keys; addresses space separated, "-" or "!" as above.
 dns_snapshot() {
@@ -4527,6 +4698,7 @@ watch_main() {
   local n=0
   trap on_term TERM
   trap on_hup HUP
+  net_guard_start
   diag_dir
   while :; do
     watch_pass "$n"; n=$((n + 1))

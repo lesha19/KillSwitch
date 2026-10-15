@@ -9,7 +9,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 DIR="$tmp"; FLAG="$DIR/disabled"; SETTINGS="$DIR/settings"; ALLOW="$DIR/allow"; TSRELAYS="$DIR/none"; VPN_ON="$DIR/vpn-on"; GAPF="$DIR/vpn-gap"
 SERVERS="$DIR/servers"; SERVERS_MANUAL="$DIR/servers-manual"; EVENTS="$DIR/events.log"
-HASHF="$DIR/rules.sha256"; SIGF="$DIR/tunnels"; FILESF="$DIR/rules.files"; INVALIDF="$DIR/invalid"; CORE_EGRESS="$DIR/none"; WIFI_MARK="$DIR/wifi-off-by-ks"; STATEF="$DIR/daemon-state"
+HASHF="$DIR/rules.sha256"; SIGF="$DIR/tunnels"; FILESF="$DIR/rules.files"; INVALIDF="$DIR/invalid"; CORE_EGRESS="$DIR/none"; WIFI_MARK="$DIR/wifi-off-by-ks"; NET_SEEN="$DIR/net-guard-seen"; STATEF="$DIR/daemon-state"
 NB_PLIST="$DIR/none"   # no NetBird: netbird_sync has its own test
 PF_CONF="$tmp/pf.conf"; echo 'anchor "com.apple/*"' > "$PF_CONF"
 dscl() { return 1; }   # no core group: fewer rules, same logic
@@ -205,8 +205,17 @@ rm -f "$FLAG"
 
 # --- the boot-window guard at TERM: shutdown vs. being switched off in Login Items
 rm -f "$FLAG"
-networksetup() { echo "networksetup $*" >> "$tmp/net"; }
-physical_services() { printf 'Wi-Fi\nUSB 10/100/1000 LAN\n'; }
+networksetup() {  # every "on" works (netguard.sh has the one that fails)
+  echo "networksetup $*" >> "$tmp/net"
+  case "$1" in
+    -listnetworkserviceorder) printf '(*) Wi-Fi\n(Hardware Port: Wi-Fi, Device: en0)\n(*) USB 10/100/1000 LAN\n(Hardware Port: USB 10/100/1000 LAN, Device: en7)\n' ;;
+    -getnetworkserviceenabled) grep -qx "networksetup -setnetworkserviceenabled $2 on" "$tmp/net" && echo Enabled || echo Disabled ;;
+  esac
+}
+ifconfig() { echo "lo0 en0 en7"; }   # only "ifconfig -l": utun_addrs is a fake above
+configd_ifs() { printf 'lo0\nen0\nen7\n'; }
+NET_CONFIRM=0   # the second look on the next pass (netguard.sh has the 3 s)
+service_list() { printf 'on\tWi-Fi\ten0\non\tUSB 10/100/1000 LAN\ten7\n'; }
 JOB=loaded; DISABLED='	"local.killswitch" => enabled'
 launchctl() {
   case "$*" in
@@ -216,7 +225,7 @@ launchctl() {
   esac
 }
 : > "$tmp/net"; shutdown_guard
-[ "$(paste -sd'|' "$WIFI_MARK")" = "Wi-Fi|USB 10/100/1000 LAN" ] && [ "$(grep -c ' off$' "$tmp/net")" = 2 ] &&
+[ "$(cut -f1 "$WIFI_MARK" | paste -sd'|' -)" = "Wi-Fi|USB 10/100/1000 LAN" ] && [ "$(grep -c ' off$' "$tmp/net")" = 2 ] &&
   ok "shutdown: physical services off, remembered" || bad "shutdown: $(cat "$tmp/net")"
 rm -f "$WIFI_MARK"; : > "$tmp/net"
 DISABLED='	"local.killswitch" => disabled'
@@ -236,10 +245,10 @@ shutdown_guard
   bad "VPN on, off: $(cat "$tmp/net")"
 # the boot (or a crash) with the VPN on: the rules before anything else, then the network back
 : > "$tmp/anchor"; rm -f "$HASHF"; : > "$tmp/calls"; LAST_FLAG=""
-passes 0 0
+passes 0 1
 [ "$(grep -E '^(pfctl -a .* -f -|core_guard)$' "$tmp/calls" | head -1)" = "pfctl -a $ANCHOR -f -" ] && grep -q utun4 "$tmp/anchor" &&
   ok "watchdog start, VPN on, protection off: the rules loaded first" || bad "start: $(paste -sd'|' "$tmp/calls")"
-[ ! -e "$WIFI_MARK" ] && ok "  then the network back on" || bad "  network still off"
+[ ! -e "$WIFI_MARK" ] && ok "  then the network back on (and looked at twice)" || bad "  network still off"
 rm -f "$FLAG" "$VPN_ON"
 
 # --- ks netrestore: the network back on when the watchdog cannot do it

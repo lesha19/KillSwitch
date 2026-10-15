@@ -11,7 +11,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 core_running() { return 0; }   # no standby (ADR 0018)
 DIR="$tmp"; FLAG="$DIR/disabled"; SETTINGS="$DIR/settings"; ALLOW="$DIR/allow"; TSRELAYS="$DIR/tsrelays"
 SERVERS="$DIR/servers"; SERVERS_MANUAL="$DIR/servers-manual"; SERVERS_CORE="$DIR/servers-core"; EVENTS="$DIR/events.log"
-HASHF="$DIR/rules.sha256"; SIGF="$DIR/tunnels"; FILESF="$DIR/rules.files"; INVALIDF="$DIR/invalid"; WIFI_MARK="$DIR/wifi-off-by-ks"; STATEF="$DIR/daemon-state"
+HASHF="$DIR/rules.sha256"; SIGF="$DIR/tunnels"; FILESF="$DIR/rules.files"; INVALIDF="$DIR/invalid"; WIFI_MARK="$DIR/wifi-off-by-ks"; NET_SEEN="$DIR/net-guard-seen"; STATEF="$DIR/daemon-state"
 NB_PLIST="$DIR/none"   # never the real NetBird plist (netbird.sh tests netbird_sync)
 CORE_DIR="$DIR/core"; mkdir "$CORE_DIR"; CORE_EGRESS="$CORE_DIR/egress"; CORE_PROFILE="$CORE_DIR/none"
 PF_CONF="$tmp/pf.conf"; echo 'anchor "com.apple/*"' > "$PF_CONF"
@@ -219,7 +219,7 @@ grep -q 'unreadable' "$EVENTS" && ok "  logged" || bad "  not logged"
 
 # --- the boot window guard does not trust damaged settings either
 networksetup() { echo "networksetup $*" >> "$tmp/net"; }
-physical_services() { echo Wi-Fi; }
+service_list() { printf 'on\tWi-Fi\ten0\n'; }
 launchctl() { case "$*" in "print-disabled system") echo '{}' ;; *) return 0 ;; esac; }
 : > "$tmp/net"; printf 'wifiguard=0\nbogus\n' > "$SETTINGS"
 shutdown_guard

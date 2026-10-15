@@ -10,7 +10,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 DIR="$tmp"; FLAG="$DIR/disabled"; SETTINGS="$DIR/settings"; ALLOW="$DIR/allow"; TSRELAYS="$DIR/none"
 SERVERS="$DIR/servers"; SERVERS_MANUAL="$DIR/servers-manual"; EVENTS="$DIR/events.log"; VPN_ON="$DIR/vpn-on"; GAPF="$DIR/vpn-gap"
 HASHF="$DIR/rules.sha256"; SIGF="$DIR/tunnels"; FILESF="$DIR/rules.files"; INVALIDF="$DIR/invalid"; CORE_EGRESS="$DIR/none"
-WIFI_MARK="$DIR/wifi-off-by-ks"; STATEF="$DIR/daemon-state"; NB_PLIST="$DIR/none"; DIAG="$tmp/diag"
+WIFI_MARK="$DIR/wifi-off-by-ks"; NET_SEEN="$DIR/net-guard-seen"; STATEF="$DIR/daemon-state"; NB_PLIST="$DIR/none"; DIAG="$tmp/diag"
 CORE_DIR="$tmp/core"; mkdir -p "$CORE_DIR"; CORE_PLIST="$tmp/core.plist"
 printf '#!/bin/sh\nexit 0\n' > "$CORE_DIR/xray"; chmod 755 "$CORE_DIR/xray"; echo '{}' > "$CORE_DIR/xray.json"
 echo core=xray > "$SETTINGS"

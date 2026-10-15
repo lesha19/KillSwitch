@@ -197,6 +197,8 @@ final class KillSwitchControl {
     private var daemonStateLive = false
     /// The error the last failed state read showed: the next good read clears it, not an action's.
     private var statePollError: UserError?
+    /// A refresh when a boot guard mark's 20 s are up (NetworkMark.recheck): the timer may be 30 s away.
+    private var markRecheck: Task<Void, Never>?
 
     init() {
         notifyIfMacOSUpdated()
@@ -1227,7 +1229,16 @@ final class KillSwitchControl {
 
     private func daemonRuns(_ runs: Bool) {
         daemonProblem = !runs
-        networkLeftOff = !runs && FileManager.default.fileExists(atPath: "/Library/KillSwitch/wifi-off-by-ks")
+        let markAge = NetworkMark.age()
+        networkLeftOff = NetworkMark.leftOff(age: markAge, daemonRuns: runs)
+        markRecheck?.cancel()
+        markRecheck = NetworkMark.recheck(age: markAge, daemonRuns: runs).map { delay in
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled else { return }
+                self?.refresh()
+            }
+        }
         let defaults = UserDefaults.standard
         if daemonProblem {
             if !defaults.bool(forKey: "daemonWarned") {
