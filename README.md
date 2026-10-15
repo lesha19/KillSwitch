@@ -14,6 +14,8 @@ Rules are loaded at boot, before login.
   `for t in Helper/tests/*.sh; do bash "$t"; done`. Before a push, also as CI runs them (no
   cores, no geodata, a copy of the tracked files): `scripts/test-helper-ci.sh /bin/bash` and
   `scripts/test-helper-ci.sh "$(brew --prefix)/bin/bash"`.
+  Merge gate (Actions is not paid): `scripts/ci-local.sh <commit> [--pr N]` runs the ci.yml steps
+  on a clean worktree of that commit; merge only on its `green`.
 - `Helper/local.killswitch.plist` — LaunchDaemon: runs `ks watch` (RunAtLoad + KeepAlive), so rules
   are loaded at boot, before login, and checked every 2 s (tunnels every second). `AssociatedBundleIdentifiers` makes it
   show up under the app's name in System Settings → Login Items & Extensions.
