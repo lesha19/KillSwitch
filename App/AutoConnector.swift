@@ -194,7 +194,7 @@ final class AutoConnector: NSObject, CLLocationManagerDelegate {
     private func preferredServer() -> ServerPicker.Entry? {
         let rule = network.wifi ? WiFiRules.rule(for: network.ssid, in: rules) : nil
         let entries = (control.proxies ?? client.profileProxies).map { ServerPicker.entries($0, subscription: client.activeID) } ?? []
-        switch WiFiRules.server(for: rule, entries: entries, current: control.pickedServer) {
+        switch WiFiRules.server(for: rule, entries: entries, current: control.pickedServer, active: client.activeID) {
         case .keep:
             return nil
         case .select(let entry):

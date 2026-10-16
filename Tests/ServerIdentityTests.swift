@@ -74,7 +74,7 @@ final class ServerIdentityTests: XCTestCase {
         var renamed = lithuania
         renamed["name"] = "LT new"
         let sent = try XCTUnwrap(Transport.adding([key: .init(fingerprint: "firefox", mux: nil)],
-                                                  to: ["proxies": [renamed]])[Transport.hintKey] as? [String: [String: Any]])
+                                                  to: ["proxies": [renamed]], subscription: "s1")[Transport.hintKey] as? [String: [String: Any]])
         XCTAssertEqual(sent["LT new"]?["client-fingerprint"] as? String, "firefox")
     }
 }

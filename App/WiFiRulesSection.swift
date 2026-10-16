@@ -79,13 +79,18 @@ struct WiFiRulesSection: View {
                 Text("Даже если общее «Подключаться автоматически» выключено.")
             }
             .accessibilityLabel("Подключаться автоматически в сети «\(rule.ssid)»")
-            Picker("Предпочитаемый сервер", selection: binding(rule, \.server)) {
-                Text("Не менять").tag(String?.none)
+            Picker("Предпочитаемый сервер", selection: server(rule)) {
+                Text("Не менять").tag(ServerID?.none)
                 ForEach(entries) { entry in
-                    Text(entry.title).tag(String?.some(entry.name))
+                    Text(entry.title).tag(ServerID?.some(entry.server))
                 }
-                if let name = rule.server, !entries.contains(where: { $0.name == name }) {
-                    Text("\(ServerName.display(name)) — нет в подписке").tag(String?.some(name))
+                if let id = server(rule).wrappedValue, !entries.contains(where: { $0.server == id }) {
+                    // a server of another subscription is chosen while that one is in use (ADR 0036)
+                    if let title = client.blocks.first(where: { $0.id == id.subscription && id.subscription != client.activeID })?.title {
+                        Text(verbatim: "\(ServerName.display(id.name)) — \(title)").tag(ServerID?.some(id))
+                    } else {
+                        Text("\(ServerName.display(id.name)) — нет в подписке").tag(ServerID?.some(id))
+                    }
                 }
             }
             .accessibilityLabel("Предпочитаемый сервер в сети «\(rule.ssid)»")
@@ -94,6 +99,16 @@ struct WiFiRulesSection: View {
 
     private var entries: [ServerPicker.Entry] {
         (control.proxies ?? client.profileProxies).map { ServerPicker.entries($0, subscription: client.activeID) } ?? []
+    }
+
+    /// The rule's server as (subscription, server); one kept without a subscription is of the one in use.
+    private func server(_ rule: WiFiRules.Rule) -> Binding<ServerID?> {
+        Binding(get: { rule.server.map { ServerID(subscription: rule.subscription ?? client.activeID, name: $0) } }, set: { id in
+            var changed = rule
+            changed.server = id?.name
+            changed.subscription = id?.subscription
+            auto.update(changed)
+        })
     }
 
     private func binding<Value>(_ rule: WiFiRules.Rule, _ field: WritableKeyPath<WiFiRules.Rule, Value>) -> Binding<Value> {

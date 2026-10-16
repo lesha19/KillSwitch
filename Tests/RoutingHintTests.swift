@@ -17,6 +17,13 @@ final class RoutingHintTests: XCTestCase {
         XCTAssertEqual(RoutingHint.strippingXray(Data("{}".utf8)), Data("{}".utf8), "not an array: left alone")
     }
 
+    func testXrayProviderSwitchMarkIsStripped() throws {
+        let panel = try JSONSerialization.data(withJSONObject: [["remarks": "A", "outbounds": [], "x-ks-switch": true]])
+        let out = try XCTUnwrap(JSONSerialization.jsonObject(with: RoutingHint.strippingXray(panel)) as? [[String: Any]])
+        XCTAssertEqual(out.map { $0["remarks"] as? String }, ["A"])
+        XCTAssertNil(out[0]["x-ks-switch"])
+    }
+
     func testMihomoProfileLosesIt() {
         let profile: Profile = ["proxies": [], "rules": ["MATCH,DIRECT"], "x-ks-routing": theirs]
         let out = RoutingHint.stripping(profile)

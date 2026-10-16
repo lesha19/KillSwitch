@@ -203,6 +203,54 @@ final class SubscriptionsTests: XCTestCase {
         XCTAssertEqual(Subscriptions.load(store), list)
     }
 
+    /// A password import that switches subscription marks the profile (#74): ks turns double VPN off
+    /// in that run. mihomo's at the top, Xray's in its first config; not a profile: nil.
+    func testASwitchingImportIsMarked() throws {
+        let mihomo = try XCTUnwrap(Subscriptions.markedSwitching(Data(#"{"proxies":[]}"#.utf8)))
+        XCTAssertEqual((try JSONSerialization.jsonObject(with: mihomo) as? [String: Any])?["x-ks-switch"] as? Bool, true)
+        let xray = try XCTUnwrap(Subscriptions.markedSwitching(Data(#"[{"outbounds":[]},{"outbounds":[]}]"#.utf8)))
+        let configs = try XCTUnwrap(JSONSerialization.jsonObject(with: xray) as? [[String: Any]])
+        XCTAssertEqual(configs.map { $0["x-ks-switch"] as? Bool }, [true, nil])
+        XCTAssertNil(Subscriptions.markedSwitching(Data("[]".utf8)))
+        XCTAssertNil(Subscriptions.markedSwitching(Data("not json".utf8)))
+    }
+
+    /// 0.19's Wi‑Fi rules and «Способ подключения» belong to its one subscription (or own servers):
+    /// once moved, a same-name server of a subscription added later takes neither.
+    func testRulesAndTransportOverridesGoToTheFirstSubscription() throws {
+        let defaults = store.defaults
+        box.secrets["subscription-url"] = Data("https://stork.example/sub/token".utf8)
+        let homeKey = try XCTUnwrap(ServerIdentity.key(own[0]))
+        let rules = [WiFiRules.Rule(ssid: "home", server: "🇱🇹 Литва"), WiFiRules.Rule(ssid: "dacha", server: "Дом"),
+                     WiFiRules.Rule(ssid: "cafe"), WiFiRules.Rule(ssid: "office", server: "🇱🇹 Литва", subscription: "1")]
+        defaults.set(WiFiRules.encode(rules), forKey: WiFiRules.key)
+        let fp = Transport.Override(fingerprint: "chrome"), mux = Transport.Override(mux: "h2mux")
+        let ltKey = "id:vless|lt.stork.example|443|aa"
+        defaults.set(Transport.encode(["🇱🇹 Литва": fp, ltKey: mux, homeKey: fp]), forKey: Transport.storeKey)
+
+        XCTAssertTrue(Subscriptions.migrate(store, own: own))
+
+        let first = try XCTUnwrap(Subscriptions.load(store).first).id
+        let moved = WiFiRules.decode(defaults.data(forKey: WiFiRules.key))
+        XCTAssertEqual(moved.map(\.subscription), [first, ServerID.own, nil, "1"])
+        XCTAssertEqual(moved.map(\.server), ["🇱🇹 Литва", "Дом", nil, "🇱🇹 Литва"])
+        let overrides = Transport.decode(defaults.data(forKey: Transport.storeKey))
+        XCTAssertEqual(overrides, [ServerID(subscription: first, name: "🇱🇹 Литва").stored: fp,
+                                   ServerID(subscription: first, name: ltKey).stored: mux,
+                                   ServerID(subscription: ServerID.own, name: homeKey).stored: fp])
+
+        // a second subscription's «🇱🇹 Литва» (even of the same identity) takes neither the rule nor the override
+        let lt = ServerPicker.Entry(name: "🇱🇹 Литва", title: "🇱🇹 Литва", path: [.init(group: "B", proxy: "🇱🇹 Литва")], subscription: "2")
+        XCTAssertEqual(WiFiRules.server(for: moved[0], entries: [lt], current: nil, active: "2"), .keep)
+        XCTAssertNil(Transport.override(in: overrides, for: "🇱🇹 Литва", key: ltKey, subscription: "2"))
+        XCTAssertEqual(Transport.override(in: overrides, for: "🇱🇹 Литва", key: ltKey, subscription: first), mux)
+
+        // once
+        XCTAssertFalse(Subscriptions.migrate(store, own: own))
+        XCTAssertEqual(WiFiRules.decode(defaults.data(forKey: WiFiRules.key)), moved)
+        XCTAssertEqual(Transport.decode(defaults.data(forKey: Transport.storeKey)), overrides)
+    }
+
     /// No subscription before: an empty list, own servers' entries to «Свои серверы», which is the
     /// one in use.
     func testWithoutASubscriptionOwnServersAreInUse() {

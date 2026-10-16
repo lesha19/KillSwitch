@@ -3016,16 +3016,30 @@ profile_kind() {
     print ref $j eq "ARRAY" || (ref $j eq "HASH" && exists $j->{outbounds}) ? "xray" : "mihomo"' -- "$1"
 }
 
+# profile_unmark <profile.json>: takes the app's "x-ks-switch" out of a profile (mihomo's, or the
+# first config of an Xray one) and prints 1 when it was there
+profile_unmark() {
+  /usr/bin/perl -MJSON::PP -0777 -e 'my $c = JSON::PP->new->utf8; open my $f, "<", $ARGV[0] or exit 1;
+    my $j = eval { $c->decode(scalar <$f>) }; close $f; defined $j or exit 1;
+    my $h = ref $j eq "ARRAY" ? $j->[0] : $j; ref $h eq "HASH" && exists $h->{"x-ks-switch"} or exit 0;
+    delete $h->{"x-ks-switch"}; open $f, ">", $ARGV[0] or exit 1; print $f $c->encode($j); close $f or exit 1; print 1' -- "$1"
+}
+
 # core_import <profile.json> [import|refresh|use] [profile.json…]: "import" (the admin password)
 # approves the first profile and the later ones (the other subscriptions) and runs the first;
 # "refresh" (passwordless) takes a newer copy of the running one, "use" (passwordless) another
 # approved one: neither may let out anything the admin did not approve. The copy is kept for rebuilds.
 core_import() {
-  local src=${1:-} mode=${2:-import} prof conf in="$CORE_DIR/profile-in.new" tmp srv="$SERVERS_CORE.tmp" rc set="$CORE_DIR/approved" e="" s mh="" k real=$SETTINGS ks=""
+  local src=${1:-} mode=${2:-import} prof conf in="$CORE_DIR/profile-in.new" tmp srv="$SERVERS_CORE.tmp" rc set="$CORE_DIR/approved" e="" s mh="" k real=$SETTINGS ks="" sw=""
   servers_migrate
   install -d -o root -g wheel -m 700 "$CORE_DIR/ctl"
   [ -n "$src" ] && { [ $# -le 2 ] || { [ "$mode" = import ] && [ $# -le 66 ]; }; } || { echo "usage: ks core import <json> [json…]" >&2; return 1; }
   profile_read "$src" "$in" || return 1
+  # a password import that switches subscription (#74): the app marks the profile; double VPN goes
+  # off in this run (its entry was the one before's server). The mark is taken out, never kept.
+  if [ "$mode" = import ] && grep -qF '"x-ks-switch"' "$in"; then
+    sw=$(profile_unmark "$in") || { rm -f "$in"; echo "Профиль не разобрать" >&2; return 1; }
+  fi
   # the core follows the subscription (ADR 0036, #65): the profile runs in the core of its own
   # format, read from it, never from the caller. Another kind is built on settings that name it
   # (double VPN off: its entry is in the other core's format, ADR 0027), kept once it is in place.
@@ -3042,10 +3056,10 @@ core_import() {
   s=$SETTINGS
   prof=$(core_profile); conf=$(core_conf); tmp="$conf.tmp"
   if [ "$mode" != import ]; then
-    # use: on a copy of the settings, so a refused one changes none (the generator turns double
-    # VPN off when its entry is not in that subscription); kept below once it runs
+    # use: on a copy of the settings, so a refused one changes none; kept below once it runs. A use
+    # is another subscription: double VPN goes off, its entry was the one before's server (#74)
     if [ "$mode" = use ]; then
-      s="$CORE_DIR/use-settings.tmp"; rm -f "$s"; ( umask 077; cp "$SETTINGS" "$s" 2>/dev/null || : > "$s" )
+      s="$CORE_DIR/use-settings.tmp"; rm -f "$s"; ( umask 077; grep -v '^multihop=' "$SETTINGS" > "$s" 2>/dev/null || : )
     fi
     SETTINGS=$s KS_STRICT_DNS=1 core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" ||
       { core_clean "$tmp" "$srv"; rm -f "$in" "$ks"; [ "$s" = "$SETTINGS" ] || rm -f "$s"; return 1; }
@@ -3061,7 +3075,12 @@ core_import() {
     fi
     if [ "$s" != "$SETTINGS" ]; then mh=$(SETTINGS=$s setting multihop off); rm -f "$s"; fi
   else
-    KS_APPROVE_ALL=1 core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; rm -f "$in" "$ks"; return 1; }
+    if [ -n "$sw" ]; then
+      s="$CORE_DIR/use-settings.tmp"; rm -f "$s"; ( umask 077; grep -v '^multihop=' "$SETTINGS" > "$s" 2>/dev/null || : )
+    fi
+    SETTINGS=$s KS_APPROVE_ALL=1 core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" ||
+      { core_clean "$tmp" "$srv"; rm -f "$in" "$ks"; [ "$s" = "$SETTINGS" ] || rm -f "$s"; return 1; }
+    if [ "$s" != "$SETTINGS" ]; then mh=off; rm -f "$s"; fi
     # what the admin just approved: refresh and rotation measure against it, an Xray server
     # switch against every host's DIRECT (approved-switch, KS-10), use against the set
     rm -rf "$set.new" "$set.old"; rm -f "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new"
@@ -3074,7 +3093,8 @@ core_import() {
   [ -z "$ks" ] || take_save "$real"
   core_commit "$tmp" "$srv" || { rm -rf "$in" "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new" "$set.new" "$ks"; take_drop; return 1; }
   mv "$in" "$prof"
-  [ -z "$mh" ] || [ "$mh" = "$(setting multihop off)" ] || put_setting multihop "$mh"
+  # another subscription's (use, a switching import): the journal says double VPN went off
+  [ -z "$mh" ] || [ "$mh" = "$(setting multihop off)" ] || { put_setting multihop "$mh" && log_event "double VPN: $mh"; }
   if [ -n "$ks" ]; then
     SETTINGS=$real put_setting multihop off; SETTINGS=$real put_setting core "$k"; rm -f "$ks"
     ( umask 077; cp "$real" "$CORE_DIR/take-settings-done" )

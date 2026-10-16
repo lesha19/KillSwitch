@@ -291,9 +291,7 @@ final class VPNClient {
     /// Saves the choice and hands the profile to the core by a passwordless refresh: the servers
     /// stay the same. Not connected yet: the next import takes it.
     func setTransport(_ override: Transport.Override, for server: String) async {
-        let key = serverKeys[server] ?? server
-        transportOverrides[server] = nil
-        transportOverrides[key] = override.isEmpty ? nil : override
+        transportOverrides = Transport.setting(override, for: server, key: serverKeys[server], subscription: activeID, in: transportOverrides)
         UserDefaults.standard.set(Transport.encode(transportOverrides), forKey: Transport.storeKey)
         guard control.coreConfigured, !updating else { return }
         updating = true
@@ -741,7 +739,8 @@ final class VPNClient {
             done(hash)   // the subscription it is, too
             return true
         }
-        let step = Subscriptions.handOver(interactive: interactive, switching: subscription != control.activeSubscription)
+        let switching = subscription != control.activeSubscription
+        let step = Subscriptions.handOver(interactive: interactive, switching: switching)
         if step == .use {
             let outcome = await control.coreUse(file: file.path)
             if outcome == .applied {
@@ -772,9 +771,16 @@ final class VPNClient {
             }
             return false
         }
+        // «Двойной VPN» off in the same password run as the switch (#74); the file stays the user's 0600 one
+        var marked = false
+        if switching, let data = (try? Data(contentsOf: file)).flatMap(Subscriptions.markedSwitching),
+           (try? data.write(to: file, options: .atomic)) != nil {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            marked = true
+        }
         let others = approvalFiles(besides: subscription)
         defer { others.forEach { try? FileManager.default.removeItem(at: $0) } }
-        switch await control.coreImport(file: file.path, others: others.map(\.path), allowPassword: true) {
+        switch await control.coreImport(file: file.path, others: others.map(\.path), allowPassword: true, switching: marked) {
         case .ok:
             done(hash)
             return true
@@ -832,7 +838,7 @@ final class VPNClient {
     /// (Subscriptions.profile), plus the transport overrides (Transport).
     private func forCore(_ server: ServerID) -> Profile? {
         Subscriptions.profile(for: server, profiles: Self.cachedProfiles(subscriptions), own: manual.compactMap(Self.proxy))
-            .map { RoutingHint.stripping(Transport.adding(transportOverrides, to: $0)) }
+            .map { RoutingHint.stripping(Transport.adding(transportOverrides, to: $0, subscription: server.subscription)) }
     }
 
     /// The blocks of the servers list from the caches, each in the format of its core (#65).
@@ -857,9 +863,9 @@ final class VPNClient {
         KillSwitchShortcuts.updateAppShortcutParameters()
     }
 
-    /// The override for a server of the list, by its identity (or, not migrated yet, its name).
+    /// The override for a server of the subscription in use (Transport.override).
     func transportOverride(for server: String) -> Transport.Override? {
-        serverKeys[server].flatMap { transportOverrides[$0] } ?? transportOverrides[server]
+        Transport.override(in: transportOverrides, for: server, key: serverKeys[server], subscription: activeID)
     }
 
     /// Settings kept by server name before 0.13 move to the server's identity once it is known.

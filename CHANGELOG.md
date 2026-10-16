@@ -6,6 +6,18 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 
 ## [Unreleased]
 
+### Changed
+- Several subscriptions with servers of the same name (#74, ADR 0036): a Wi‑Fi rule's preferred
+  server remembers its subscription and is chosen only while that subscription is in use (a rule
+  never switches subscriptions); «Способ подключения» set for a server is kept per subscription;
+  switching to another subscription turns «Двойной VPN» off, also when it needs the password (the
+  same prompt; the journal says «Двойной VPN выключен», no notification). Wi‑Fi rules and «Способ
+  подключения» of 0.19 go to its subscription. «Перенос настроек» names a favourite,
+  a recent or a rule's server with its subscription's title (never its link): on another Mac each
+  goes to the subscription of that title, and a subscription it does not have takes none. Files
+  of 0.20.0 still load; this version's files are «newer» for 0.20.0. A subscription titled «own» or
+  sharing its title with another one travels with none of these.
+
 ### Fixed
 - Установщик больше не печатает лишнюю строку ошибки «exit 141» (SIGPIPE от `ks status | head -1`); установка и раньше проходила успешно.
 

@@ -2,15 +2,17 @@ import Foundation
 
 /// «Перенос настроек» (#15, ADR 0024): the app's settings and the root ones as a JSON file, read
 /// back on another Mac or after a reinstall, and «Сбросить» to the defaults through the same path.
-/// Never in the file: the subscription link, own servers and keys (Keychain), server identities
-/// (they carry a hash of the server's secret: favourites and recents go by name), per-server
-/// transport overrides and «Двойной VPN» (both name servers of one subscription). The own DoH
-/// server (ADR 0031) is in it: the person's setting, like the exceptions.
+/// Never in the file: the subscription links and ids, own servers and keys (Keychain), server
+/// identities (they carry a hash of the server's secret: favourites, recents and a Wi‑Fi rule's
+/// server go by subscription title and server name, #74), per-server transport overrides and
+/// «Двойной VPN». The own DoH server (ADR 0031) is in it: the person's setting, like the
+/// exceptions. Version 2 (0.20.1) names subscriptions by title: an older app says «newer», not
+/// «damaged».
 /// A file is checked whole before anything changes; root settings change only through the `ks`
 /// commands the Settings screens run (`rootCommands`), behind the same authorization.
 enum SettingsBackup {
     static let format = "killswitch-settings"
-    static let version = 1
+    static let version = 2
     static let maxBytes = 1 << 20
 
     enum Value: Equatable, Sendable {
@@ -109,22 +111,28 @@ enum SettingsBackup {
         ]
     }
 
-    /// Every field as the app has it now. Server identities become the servers' names now
-    /// (`serverKeys`, VPNClient); one no longer in the profile is left out. Favourites and recents
-    /// (kept by subscription, ADR 0036) travel as the names of the servers of `subscription` (the
-    /// one in use) and of «Свои серверы»; by subscription title: #66.
-    static func snapshot(_ defaults: UserDefaults, serverKeys: [String: String], subscription: String = ServerID.own,
-                         ownKeys: [String: String] = [:]) -> [String: Value] {
-        func byKey(_ keys: [String: String]) -> [String: String] {
-            var names: [String: String] = [:]
-            for (name, key) in keys where names[key] == nil || name < names[key]! { names[key] = name }
-            return names
-        }
-        let names = byKey(serverKeys), ownNames = byKey(ownKeys)
-        func name(_ line: Substring) -> String? {
-            guard let server = ServerID(stored: String(line)) else { return line.hasPrefix(ServerIdentity.prefix) ? names[String(line)] : String(line) }
-            guard server.subscription == subscription || server.isOwn else { return nil }
-            return server.name.hasPrefix(ServerIdentity.prefix) ? (server.isOwn ? ownNames : names)[server.name] : server.name
+    /// The titles (id → title) a subscription travels by: one that names it alone, never `own`
+    /// (own servers' word) or one two subscriptions share (#74).
+    private static func travelling(_ titles: [String: String]) -> [String: String] {
+        let counts = Dictionary(titles.values.map { ($0, 1) }, uniquingKeysWith: +)
+        return titles.filter { HelperCommand.isName($0.value) && $0.value != ServerID.own && counts[$0.value] == 1 }
+    }
+
+    /// Every field as the app has it now. Favourites and recents (kept by subscription, ADR 0036)
+    /// travel as `<subscription title>\t<name>` (`titles`: id → title; never the link or id, #74),
+    /// own servers as `own\t<name>`; server identities become names through that subscription's
+    /// `keys` (name → identity, VPNClient.blocks). A line of a subscription without a title, or an
+    /// identity no longer in it, is left out; a bare name kept before ADR 0036 stays as it is. A
+    /// Wi‑Fi rule's subscription goes by title too; one without a title loses its server.
+    static func snapshot(_ defaults: UserDefaults, titles: [String: String] = [:], keys: [String: [String: String]] = [:]) -> [String: Value] {
+        let usable = travelling(titles)
+        func titleOf(_ id: String) -> String? { id == ServerID.own ? ServerID.own : usable[id] }
+        func line(_ text: Substring) -> String? {
+            guard let server = ServerID(stored: String(text)) else { return text.hasPrefix(ServerIdentity.prefix) ? nil : String(text) }
+            guard let title = titleOf(server.subscription) else { return nil }
+            let name = server.name.hasPrefix(ServerIdentity.prefix)
+                ? keys[server.subscription]?.filter { $0.value == server.name }.keys.min() : server.name
+            return name.map { "\(title)\t\($0)" }
         }
         var result: [String: Value] = [:]
         for field in fields {
@@ -134,37 +142,67 @@ enum SettingsBackup {
             case (.text, _): defaults.string(forKey: field.key).map(Value.text)
             case (.list, .lines):
                 defaults.string(forKey: field.key).map { text in
-                    .list(text.split(separator: "\n").compactMap(name))
+                    .list(text.split(separator: "\n").compactMap(line))
                 }
             case (.list, _): defaults.stringArray(forKey: field.key).map(Value.list)
-            case (.rules, _): .rules(WiFiRules.decode(defaults.data(forKey: field.key)))
+            case (.rules, _):
+                .rules(WiFiRules.decode(defaults.data(forKey: field.key)).map { rule in
+                    var rule = rule
+                    if let id = rule.subscription {
+                        rule.subscription = titleOf(id)
+                        if rule.subscription == nil { rule.server = nil }
+                    }
+                    return rule
+                })
             }
             result[field.key] = stored.flatMap { checked($0, field) } ?? field.fallback
         }
         return result
     }
 
-    /// Writes where the app reads them (AppStorage, AutoConnector, Updater). Favourites and recents
-    /// go to `subscription` (the one in use), the names in `own` and Xray's «… (свой)» to «Свои
-    /// серверы» (ADR 0036); a name of both (`names`: the subscription's servers) to both. They replace
-    /// those two's lines; the other subscriptions' stay, except when `resetting` («Сбросить»).
+    /// Writes where the app reads them (AppStorage, AutoConnector, Updater). A `<title>\t<name>`
+    /// favourite or recent goes to the subscription of that title (`titles`: id → title; `own` is
+    /// «Свои серверы»), one of a title this Mac does not have is left out (#74). A bare name (a file
+    /// of 0.20.0) goes to `subscription` (the one in use), the names in `own` and Xray's «… (свой)»
+    /// to «Свои серверы» (ADR 0036); a name of both (`names`: the subscription's servers) to both.
+    /// They replace the lines of those and of every subscription the file names; the others' stay,
+    /// except when `resetting` («Сбросить»). A Wi‑Fi rule's subscription title becomes its id; a
+    /// title this Mac does not have clears the rule's server.
     static func apply(_ app: [String: Value], to defaults: UserDefaults, subscription: String = ServerID.own, own: Set<String> = [],
-                      names: Set<String> = [], resetting: Bool = false) {
+                      names: Set<String> = [], titles: [String: String] = [:], resetting: Bool = false) {
+        let ids = Dictionary(uniqueKeysWithValues: travelling(titles).map { ($1, $0) })
+        func idOf(_ title: String) -> String? { title == ServerID.own ? ServerID.own : ids[title] }
         for field in fields {
             var value = app[field.key]
             if [Subscriptions.favouritesKey, Subscriptions.recentsKey].contains(field.key), case .list(let list) = value {
-                var lines: [String] = []
-                for name in list {
-                    let isOwn = own.contains(name) || name.hasSuffix(XrayManual.mark)
-                    let ids = isOwn ? (names.contains(name) ? [subscription, ServerID.own] : [ServerID.own]) : [subscription]
-                    for id in ids where !lines.contains(ServerID(subscription: id, name: name).stored) {
-                        lines.append(ServerID(subscription: id, name: name).stored)
+                var lines: [String] = [], replaced: Set = [subscription, ServerID.own]
+                for item in list {
+                    let servers: [ServerID]
+                    if let named = ServerID(stored: item) {
+                        guard let id = idOf(named.subscription) else { continue }
+                        replaced.insert(id)
+                        servers = [ServerID(subscription: id, name: named.name)]
+                    } else {
+                        let isOwn = own.contains(item) || item.hasSuffix(XrayManual.mark)
+                        servers = (isOwn ? (names.contains(item) ? [subscription, ServerID.own] : [ServerID.own]) : [subscription])
+                            .map { ServerID(subscription: $0, name: item) }
                     }
+                    for server in servers where !lines.contains(server.stored) { lines.append(server.stored) }
                 }
                 let others = resetting ? [] : ServerRecents.list(defaults.string(forKey: field.key) ?? "").filter { line in
-                    ServerID(stored: line).map { $0.subscription != subscription && !$0.isOwn } ?? false
+                    ServerID(stored: line).map { !replaced.contains($0.subscription) } ?? false
                 }
                 value = .list(lines + others)
+            }
+            if case .rules(let rules) = value {
+                value = .rules(rules.map { rule in
+                    var rule = rule
+                    if let title = rule.subscription {
+                        rule.subscription = idOf(title)
+                        if rule.subscription == nil { rule.server = nil }
+                    }
+                    return rule
+                })
             }
             switch value {
             case .bool(let on): defaults.set(on, forKey: field.key)
@@ -184,10 +222,15 @@ enum SettingsBackup {
         case (.int(let number), .int): return field.allowed?.contains(String(number)) == false ? nil : value
         case (.text(let text), .text): return field.allowed?.contains(text) == false ? nil : value
         case (.list(let list), .list):
-            let kept = list.filter { !$0.hasPrefix(ServerIdentity.prefix) }
-            return kept.count <= 500 && kept.allSatisfy(HelperCommand.isName) ? .list(kept) : nil
+            // a server: a name, or a subscription's title and the name (#74)
+            let parts = list.map { field.storage == .lines ? $0.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false).map(String.init) : [$0] }
+            let kept = parts.filter { !$0.last!.hasPrefix(ServerIdentity.prefix) }
+            return kept.count <= 500 && kept.allSatisfy({ $0.allSatisfy(HelperCommand.isName) })
+                ? .list(kept.map { $0.joined(separator: "\t") }) : nil
         case (.rules(let rules), .rules):
-            let good = rules.count <= 500 && rules.allSatisfy { HelperCommand.isName($0.ssid) && ($0.server.map(HelperCommand.isName) ?? true) }
+            let good = rules.count <= 500 && rules.allSatisfy {
+                HelperCommand.isName($0.ssid) && ($0.server.map(HelperCommand.isName) ?? true) && ($0.subscription.map(HelperCommand.isName) ?? true)
+            }
             return good ? value : nil
         default: return nil
         }
@@ -207,6 +250,7 @@ enum SettingsBackup {
                 app[key] = rules.map { rule -> [String: Any] in
                     var object: [String: Any] = ["ssid": rule.ssid, "autoConnect": rule.autoConnect]
                     if let server = rule.server { object["server"] = server }
+                    if let subscription = rule.subscription { object["subscription"] = subscription }
                     return object
                 }
             }
@@ -301,9 +345,9 @@ enum SettingsBackup {
             for item in list {
                 guard let object = item as? [String: Any], let ssid = object["ssid"] as? String else { return nil }
                 let autoConnect = object["autoConnect"].map(flag) ?? true
-                let server = object["server"].map { $0 as? String }
-                guard let autoConnect, server != .some(nil) else { return nil }
-                rules.append(WiFiRules.Rule(ssid: ssid, autoConnect: autoConnect, server: server ?? nil))
+                let server = object["server"].map { $0 as? String }, subscription = object["subscription"].map { $0 as? String }
+                guard let autoConnect, server != .some(nil), subscription != .some(nil) else { return nil }
+                rules.append(WiFiRules.Rule(ssid: ssid, autoConnect: autoConnect, server: server ?? nil, subscription: subscription ?? nil))
             }
             return .rules(rules)
         }
@@ -511,15 +555,21 @@ enum SettingsBackup {
         guard !rules.isEmpty else { return String(localized: "нет") }
         let shown = rules.prefix(3).map { rule in
             let connect = rule.autoConnect ? String(localized: "подключаться") : String(localized: "не подключаться")
-            let server = rule.server.map { String(localized: "сервер \(ServerName.display($0))") }
+            let server = rule.server.map { String(localized: "сервер \(serverText(ServerName.display($0), rule.subscription))") }
             return "\(rule.ssid): " + ([connect] + (server.map { [$0] } ?? [])).joined(separator: ", ")
         }.joined(separator: "; ")
         return rules.count > 3 ? shown + " " + String(localized: "и ещё \(rules.count - 3)") : shown
     }
 
+    /// «🇱🇹 Литва — iVPN»: a server of a subscription named by title (#74).
+    private static func serverText(_ name: String, _ title: String?) -> String {
+        guard let title else { return name }
+        return "\(name) — " + (title == ServerID.own ? String(localized: "Свои серверы") : title)
+    }
+
     private static func listText(_ list: [String]) -> String {
         guard !list.isEmpty else { return String(localized: "нет") }
-        let shown = list.prefix(3).joined(separator: ", ")
+        let shown = list.prefix(3).map { item in ServerID(stored: item).map { serverText($0.name, $0.subscription) } ?? item }.joined(separator: ", ")
         return list.count > 3 ? shown + " " + String(localized: "и ещё \(list.count - 3)") : shown
     }
 

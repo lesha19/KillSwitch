@@ -40,11 +40,11 @@ final class SettingsBackupTests: XCTestCase {
     // MARK: export
 
     func testExportCarriesNoSecrets() throws {
-        defaults.set("\(germanyKey)\nGone", forKey: "favouriteServers")
-        defaults.set(germanyKey, forKey: "recentServers")
+        defaults.set("s1\t\(germanyKey)\ns1\tGone", forKey: "favouriteServers")
+        defaults.set("s1\t\(germanyKey)", forKey: "recentServers")
         defaults.set("https://sub.example.com/secret-token", forKey: "subscriptionStatus")
         defaults.set(10, forKey: "pauseShort")
-        let app = SettingsBackup.snapshot(defaults, serverKeys: ["🇩🇪 Germany": germanyKey])
+        let app = SettingsBackup.snapshot(defaults, titles: ["s1": "Stork"], keys: ["s1": ["🇩🇪 Germany": germanyKey]])
         let data = SettingsBackup.export(.init(app: app, root: root), appVersion: "0.18.1", date: Date(timeIntervalSince1970: 0))
         let text = try XCTUnwrap(String(data: data, encoding: .utf8))
 
@@ -57,20 +57,57 @@ final class SettingsBackupTests: XCTestCase {
         XCTAssertTrue(text.contains("\"format\" : \"killswitch-settings\""))
     }
 
-    /// ADR 0036: favourites and recents are kept by (subscription, server). The file names the
-    /// servers of the subscription in use and the own ones, by name (by subscription title: #66);
-    /// read back, own names go to «Свои серверы», the rest to the subscription in use.
-    func testServersOfTheSubscriptionInUseTravelByName() throws {
-        let home = ServerID(subscription: ServerID.own, name: "Дом").stored
-        defaults.set(["s1\t\(germanyKey)", home, "s2\t🇳🇱 NL", "s1\tGone-key-less"].joined(separator: "\n"), forKey: "favouriteServers")
-        defaults.set("s1\t\(germanyKey)", forKey: "recentServers")
-        let app = SettingsBackup.snapshot(defaults, serverKeys: ["🇩🇪 Germany": germanyKey], subscription: "s1")
-        XCTAssertEqual(app["favouriteServers"], .list(["🇩🇪 Germany", "Дом", "Gone-key-less"]))
-        XCTAssertEqual(app["recentServers"], .list(["🇩🇪 Germany"]))
+    /// #74: favourites, recents and a Wi‑Fi rule's server travel by subscription title, never by its
+    /// link or id: two subscriptions with «Литва» each keep their own on a Mac that has the same
+    /// subscriptions under other ids. Own servers go by name; a subscription that Mac does not
+    /// have (by title) takes nothing.
+    func testServersTravelBySubscriptionTitle() throws {
+        let lt = "🇱🇹 Литва"
+        defaults.set(["s1\t\(germanyKey)", "s2\t\(lt)", "own\tДом", "s1\t\(lt)", "gone\tX"].joined(separator: "\n"), forKey: "favouriteServers")
+        defaults.set(["s2\t\(lt)", "s1\t\(lt)"].joined(separator: "\n"), forKey: "recentServers")
+        defaults.set(WiFiRules.encode([.init(ssid: "Cafe", server: lt, subscription: "s2")]), forKey: WiFiRules.key)
+        let app = SettingsBackup.snapshot(defaults, titles: ["s1": "Stork", "s2": "iVPN"], keys: ["s1": ["🇩🇪 Germany": germanyKey]])
+        XCTAssertEqual(app["favouriteServers"], .list(["Stork\t🇩🇪 Germany", "iVPN\t\(lt)", "own\tДом", "Stork\t\(lt)"]))
+        XCTAssertEqual(app[WiFiRules.key], .rules([.init(ssid: "Cafe", server: lt, subscription: "iVPN")]))
+        let data = SettingsBackup.export(.init(app: app, root: nil), appVersion: "0.20.1", date: Date())
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("s2"), "no subscription ids")
 
+        let read = try SettingsBackup.read(data)
+        let (other, _) = fresh()
+        SettingsBackup.apply(read.app, to: other, subscription: "B", own: ["Дом"], titles: ["B": "iVPN", "A": "Stork"])
+        XCTAssertEqual(ServerRecents.list(other.string(forKey: "favouriteServers") ?? ""),
+                       ["A\t🇩🇪 Germany", "B\t\(lt)", "own\tДом", "A\t\(lt)"])
+        XCTAssertEqual(ServerRecents.list(other.string(forKey: "recentServers") ?? ""), ["B\t\(lt)", "A\t\(lt)"])
+        XCTAssertEqual(WiFiRules.decode(other.data(forKey: WiFiRules.key)), [.init(ssid: "Cafe", server: lt, subscription: "B")])
+
+        let (third, _) = fresh()
+        SettingsBackup.apply(read.app, to: third, subscription: "A", own: ["Дом"], titles: ["A": "Stork"])
+        XCTAssertEqual(ServerRecents.list(third.string(forKey: "favouriteServers") ?? ""), ["A\t🇩🇪 Germany", "own\tДом", "A\t\(lt)"])
+        XCTAssertEqual(WiFiRules.decode(third.data(forKey: WiFiRules.key)), [.init(ssid: "Cafe")], "no iVPN here: the server is not chosen")
+    }
+
+    /// A title that does not name one subscription (two share it, or it is «own», the word for own
+    /// servers) travels neither way: its lines are left out on export and taken by none on import.
+    func testAmbiguousTitlesTravelNeitherWay() throws {
+        defaults.set(["s1\tA", "s2\tB", "s3\tC", "s4\tD", "own\tДом"].joined(separator: "\n"), forKey: "favouriteServers")
+        defaults.set(WiFiRules.encode([.init(ssid: "Cafe", server: "A", subscription: "s1")]), forKey: WiFiRules.key)
+        let titles = ["s1": "own", "s2": "Twin", "s3": "Twin", "s4": "Stork"]
+        let app = SettingsBackup.snapshot(defaults, titles: titles)
+        XCTAssertEqual(app["favouriteServers"], .list(["Stork\tD", "own\tДом"]))
+        XCTAssertEqual(app[WiFiRules.key], .rules([.init(ssid: "Cafe")]))
+
+        let (other, _) = fresh()
+        let file: [String: SettingsBackup.Value] = ["favouriteServers": .list(["Twin\tB", "Stork\tD", "own\tДом"])]
+        SettingsBackup.apply(file, to: other, subscription: "x", titles: ["x": "Twin", "y": "Twin", "z": "Stork", "w": "own"])
+        XCTAssertEqual(ServerRecents.list(other.string(forKey: "favouriteServers") ?? ""), ["z\tD", "own\tДом"])
+    }
+
+    /// A file of 0.20.0 names the servers of the subscription in use and the own ones by name: own
+    /// names go to «Свои серверы», the rest to the subscription in use.
+    func testServersOfAnOldFileGoToTheSubscriptionInUse() throws {
+        let read = try SettingsBackup.read(file(app: ["favouriteServers": ["🇩🇪 Germany", "Дом", "Gone-key-less"], "recentServers": ["🇩🇪 Germany"]]))
         let fresh = UserDefaults(suiteName: suite + "-fresh")!
         defer { UserDefaults().removePersistentDomain(forName: suite + "-fresh") }
-        let read = try SettingsBackup.read(SettingsBackup.export(.init(app: app, root: root), appVersion: "0.20.0", date: Date()))
         SettingsBackup.apply(read.app, to: fresh, subscription: "new", own: ["Дом"])
         XCTAssertEqual(ServerRecents.list(fresh.string(forKey: "favouriteServers") ?? "").compactMap(ServerID.init(stored:)),
                        [ServerID(subscription: "new", name: "🇩🇪 Germany"), ServerID(subscription: ServerID.own, name: "Дом"),
@@ -105,7 +142,7 @@ final class SettingsBackupTests: XCTestCase {
         defaults.set(["Дом"], forKey: "trustedNetworks")
         defaults.set(WiFiRules.encode([.init(ssid: "Cafe", autoConnect: true, server: "NL")]), forKey: WiFiRules.key)
         defaults.set("ping", forKey: "serverSort")
-        let app = SettingsBackup.snapshot(defaults, serverKeys: [:])
+        let app = SettingsBackup.snapshot(defaults)
         let read = try SettingsBackup.read(SettingsBackup.export(.init(app: app, root: root), appVersion: "0.18.1", date: Date()))
         XCTAssertEqual(read, .init(app: app, root: root))
         XCTAssertEqual(read.app["wifiRules"], .rules([.init(ssid: "Cafe", autoConnect: true, server: "NL")]))
@@ -130,7 +167,7 @@ final class SettingsBackupTests: XCTestCase {
     func testRefusesWhatIsNotItsFile() {
         XCTAssertThrowsError(try SettingsBackup.read(Data("not json".utf8))) { XCTAssertEqual($0 as? SettingsBackup.Problem, .notSettings) }
         XCTAssertThrowsError(try SettingsBackup.read(json(["proxies": []]))) { XCTAssertEqual($0 as? SettingsBackup.Problem, .notSettings) }
-        XCTAssertThrowsError(try SettingsBackup.read(file(version: 2))) { XCTAssertEqual($0 as? SettingsBackup.Problem, .newer) }
+        XCTAssertThrowsError(try SettingsBackup.read(file(version: 3))) { XCTAssertEqual($0 as? SettingsBackup.Problem, .newer) }
         XCTAssertThrowsError(try SettingsBackup.read(Data(count: SettingsBackup.maxBytes + 1))) {
             XCTAssertEqual($0 as? SettingsBackup.Problem, .notSettings)
         }
@@ -413,7 +450,7 @@ final class SettingsBackupTests: XCTestCase {
         defaults.set(false, forKey: "notifyVPNDropped")
         defaults.set("NL", forKey: "favouriteServers")
         SettingsBackup.apply(SettingsBackup.reset.app, to: defaults)
-        XCTAssertEqual(SettingsBackup.snapshot(defaults, serverKeys: [:]), SettingsBackup.reset.app)
+        XCTAssertEqual(SettingsBackup.snapshot(defaults), SettingsBackup.reset.app)
         XCTAssertEqual(defaults.object(forKey: "notifyVPNDropped") as? Bool, true)
 
         let reset = try XCTUnwrap(SettingsBackup.reset.root)

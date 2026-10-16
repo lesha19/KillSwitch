@@ -13,6 +13,9 @@ enum WiFiRules {
         var autoConnect = true
         /// The server's name in the core (ServerPicker.Entry.name); nil = keep the current one.
         var server: String?
+        /// Whose server it is (ADR 0036): Subscription.id or ServerID.own; nil (a rule of 0.20.0) is the
+        /// subscription in use, as in 0.20.0. 0.19's rules go to the first subscription (Subscriptions.migrate).
+        var subscription: String?
         var id: String { ssid }
     }
 
@@ -35,9 +38,11 @@ enum WiFiRules {
         case missing(String)
     }
 
-    static func server(for rule: Rule?, entries: [ServerPicker.Entry], current: String?) -> ServerChoice {
-        guard let name = rule?.server, name != current else { return .keep }
-        guard let entry = entries.first(where: { $0.name == name }) else { return .missing(name) }
+    /// `entries` and `current` are of `active`, the subscription in use: a server of another one is
+    /// left alone, since a subscription switch is the person's (ADR 0036).
+    static func server(for rule: Rule?, entries: [ServerPicker.Entry], current: String?, active: String) -> ServerChoice {
+        guard let name = rule?.server, name != current, (rule?.subscription ?? active) == active else { return .keep }
+        guard let entry = entries.first(where: { $0.name == name && $0.subscription == active }) else { return .missing(name) }
         return .select(entry)
     }
 

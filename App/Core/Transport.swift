@@ -54,15 +54,35 @@ enum Transport {
         }
     }
 
-    /// The profile for the helper, with the overrides that still apply: a server gone from the
-    /// subscription or a value the helper would refuse is left out, so the import never fails on it.
-    /// Overrides are kept by server identity (ServerIdentity), so they follow a rename; the helper
-    /// gets them by the current name. A name key (before 0.13, not migrated yet) still counts.
-    static func adding(_ overrides: [String: Override], to profile: Profile) -> Profile {
+    /// The override of a server of `subscription`: kept by (subscription, server identity) (ADR 0036,
+    /// ServerIdentity: it follows a rename), else (subscription, name) for a server without one. One
+    /// kept by identity or name alone (before 0.20.1; a name before 0.13) still counts until set again.
+    static func override(in overrides: [String: Override], for name: String, key: String?, subscription: String) -> Override? {
+        let ids = [key, name].compactMap { $0 }
+        return (ids.map { ServerID(subscription: subscription, name: $0).stored } + ids).lazy.compactMap { overrides[$0] }.first
+    }
+
+    /// `overrides` with the server's new one, under (subscription, identity or name); what was kept
+    /// for it before goes. An empty one is no entry.
+    static func setting(_ override: Override, for name: String, key: String?, subscription: String,
+                        in overrides: [String: Override]) -> [String: Override] {
+        var result = overrides
+        for id in [key, name].compactMap({ $0 }) {
+            result[id] = nil
+            result[ServerID(subscription: subscription, name: id).stored] = nil
+        }
+        result[ServerID(subscription: subscription, name: key ?? name).stored] = override.isEmpty ? nil : override
+        return result
+    }
+
+    /// The profile of `subscription` for the helper, with the overrides that still apply: a server
+    /// gone from the subscription or a value the helper would refuse is left out, so the import never
+    /// fails on it. The helper gets them by the current name.
+    static func adding(_ overrides: [String: Override], to profile: Profile, subscription: String) -> Profile {
         var hint: [String: [String: Any]] = [:]
         let keys = ServerIdentity.keys(profile)
         for server in servers(profile) {
-            guard let o = keys[server.name].flatMap({ overrides[$0] }) ?? overrides[server.name] else { continue }
+            guard let o = override(in: overrides, for: server.name, key: keys[server.name], subscription: subscription) else { continue }
             var entry: [String: Any] = [:]
             if server.canFingerprint, let fp = o.fingerprint, fingerprints.contains(fp) { entry["client-fingerprint"] = fp }
             if server.canMux, let mux = o.mux {

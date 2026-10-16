@@ -100,6 +100,22 @@ for k in "$APPROVED_SET"/*/kind; do echo xray > "$k"; done
 run "$B" use
 [ "$rc" = 3 ] && cmp -s "$cfg" "$tmp/cfg.a" && ok "use: approved for the other core only: refused (#65)" || bad "use other kind: $rc $(cat "$tmp/err")"
 for k in "$APPROVED_SET"/*/kind; do echo mihomo > "$k"; done
+# a use is another subscription: «Двойной VPN» goes off, though B has a server of the entry's name (#74)
+printf 'multihop=FI ws\n' >> "$SETTINGS"
+run "$B" use
+[ "$rc" = 0 ] && [ "$(setting multihop off)" = off ] && ok "use: double VPN of the subscription before turned off" || bad "use with multihop: $rc $(cat "$SETTINGS") $(cat "$tmp/err")"
+run "$A" use
+# a password import that switches subscription (the app marks the profile "x-ks-switch", #74):
+# double VPN goes off in that run, the mark is not kept; an import without it keeps double VPN
+put_setting multihop "FI ws"
+run "$A" import "$B"
+[ "$rc" = 0 ] && [ "$(setting multihop off)" = "FI ws" ] && ok "import: double VPN kept" || bad "import with multihop: $rc $(cat "$tmp/err")"
+BS="$tmp/bs.json"; edit '$j->{"x-ks-switch"} = JSON::PP::true' < "$B" > "$BS"
+: > "$EVENTS"
+run "$BS" import "$A"
+[ "$rc" = 0 ] && running 203.0.113.60 && [ "$(setting multihop off)" = off ] && ! grep -rq x-ks-switch "$CORE_DIR" && grep -qx '.*double VPN: off' "$EVENTS" &&
+  ok "import switching subscription: double VPN off, the mark not kept" || bad "switching import: $rc $(setting multihop off) $(cat "$tmp/err")"
+run "$A" import "$B"
 
 # --- a bad later profile stays unapproved, the others are not affected (ADR 0036, decision 7)
 : > "$EVENTS"
@@ -149,6 +165,12 @@ run "$tmp/q2.json" use
 run "$Q" use
 [ "$rc" = 0 ] && [ "$(setting multihop off)" = off ] && ok "xray: a use that runs turns the gone double VPN off" || bad "xray use with multihop: $rc $(cat "$SETTINGS") $(cat "$tmp/err")"
 run "$P" use
+QS="$tmp/qs.json"; edit '$j->[0]{"x-ks-switch"} = JSON::PP::true' < "$Q" > "$QS"
+put_setting multihop "Нет такого"
+run "$QS" import "$P"
+[ "$rc" = 0 ] && grep -q 203.0.113.30 "$CORE_DIR/xray.json" && [ "$(setting multihop off)" = off ] && ! grep -rq x-ks-switch "$CORE_DIR" &&
+  ok "xray: import switching subscription: double VPN off, the mark not kept" || bad "xray switching import: $rc $(cat "$tmp/err")"
+run "$P" import "$Q"; cp "$CORE_DIR/xray.json" "$tmp/xray.p"
 run "$B" use
 [ "$rc" != 0 ] && cmp -s "$CORE_DIR/xray.json" "$tmp/xray.p" && ok "xray: a mihomo profile refused, config untouched" || bad "xray use of a mihomo profile: $rc"
 rm -f "$SETTINGS"

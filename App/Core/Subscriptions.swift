@@ -160,6 +160,16 @@ enum Subscriptions {
             entry["subscription"] = ServerID(stored: moved(name))?.subscription
             defaults.set(try? JSONSerialization.data(withJSONObject: entry), forKey: pendingKey)
         }
+        // a rule's server and «Способ подключения» were of the one subscription (or own servers)
+        var rules = WiFiRules.decode(defaults.data(forKey: WiFiRules.key))
+        for i in rules.indices where rules[i].subscription == nil {
+            rules[i].subscription = rules[i].server.flatMap { ServerID(stored: moved($0))?.subscription }
+        }
+        if !rules.isEmpty { defaults.set(WiFiRules.encode(rules), forKey: WiFiRules.key) }
+        let overrides = Transport.decode(defaults.data(forKey: Transport.storeKey))
+        if !overrides.isEmpty {
+            defaults.set(Transport.encode(Dictionary(overrides.map { (moved($0.key), $0.value) }) { kept, _ in kept }), forKey: Transport.storeKey)
+        }
         let chosen = defaults.string(forKey: chosenKey).flatMap(ServerID.init(stored:))
         defaults.set(chosen?.isOwn == true ? ServerID.own : subscription, forKey: activeKey)
         save(list, store)
@@ -213,6 +223,23 @@ enum Subscriptions {
         switch outcome {
         case .newServers, .routingChanged, .needsPassword: true
         case .applied, .failed: false
+        }
+    }
+
+    /// A password import that switches subscription (a refused `use`, #74): the profile marked, so ks
+    /// turns «Двойной VPN» off in that run (its entry was the one before's server) without a second
+    /// prompt. mihomo's at the top, Xray's in its first config; nil for what is neither.
+    static func markedSwitching(_ profile: Data) -> Data? {
+        let mark = "x-ks-switch"
+        switch try? JSONSerialization.jsonObject(with: profile) {
+        case var object as [String: Any]:
+            object[mark] = true
+            return try? JSONSerialization.data(withJSONObject: object)
+        case var configs as [[String: Any]] where !configs.isEmpty:
+            configs[0][mark] = true
+            return try? JSONSerialization.data(withJSONObject: configs)
+        default:
+            return nil
         }
     }
 

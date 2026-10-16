@@ -30,8 +30,9 @@ struct SettingsTransferSection: View {
     private var installed: Bool { control.state != .notInstalled }
 
     private var current: SettingsBackup.Settings {
-        .init(app: SettingsBackup.snapshot(.standard, serverKeys: client.serverKeys, subscription: client.activeID,
-                                         ownKeys: client.blocks.first { $0.id == ServerID.own }?.keys ?? [:]), root: installed ? control.rootSettings : nil)
+        .init(app: SettingsBackup.snapshot(.standard, titles: Dictionary(client.subscriptions.map { ($0.id, $0.title) }) { first, _ in first },
+                                         keys: Dictionary(client.blocks.map { ($0.id, $0.keys) }) { first, _ in first }),
+              root: installed ? control.rootSettings : nil)
     }
 
     var body: some View {
@@ -102,7 +103,8 @@ struct SettingsTransferSection: View {
 
     private func applyApp(_ app: [String: SettingsBackup.Value], resetting: Bool) {
         SettingsBackup.apply(app, to: .standard, subscription: client.activeID, own: Set(client.manual.map(\.name)),
-                             names: Set(client.profileProxies?.servers ?? []), resetting: resetting)
+                             names: Set(client.profileProxies?.servers ?? []),
+                             titles: Dictionary(client.subscriptions.map { ($0.id, $0.title) }) { first, _ in first }, resetting: resetting)
         auto.reloadSettings()
         let interval = UserDefaults.standard.integer(forKey: "subscriptionIntervalHours")
         if client.intervalHours != interval { client.intervalHours = interval }

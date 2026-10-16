@@ -606,8 +606,10 @@ final class KillSwitchControl {
     /// writes the full core config and lets the servers out. The config decides what goes around
     /// the VPN, so unless sudoers allows it, this asks for the password; `allowPassword: false`
     /// (automatic updates) never shows the prompt.
-    /// `others`: the other subscriptions' profiles, approved with this one (ADR 0036).
-    func coreImport(file: String, others: [String] = [], allowPassword: Bool) async -> ImportResult {
+    /// `others`: the other subscriptions' profiles, approved with this one (ADR 0036). `switching`:
+    /// to another subscription, which turns «Двойной VPN» off (#74): the person's, not told.
+    func coreImport(file: String, others: [String] = [], allowPassword: Bool, switching: Bool = false) async -> ImportResult {
+        if switching { multihopAskedAt = Date() }
         busy = true
         defer { busy = false; refresh() }
         switch await callHelper(["core", "import", file] + others, interactive: allowPassword) {
@@ -631,7 +633,9 @@ final class KillSwitchControl {
 
     /// Another subscription's profile, without a prompt: refused by the helper (exit 3) unless the
     /// last import approved its servers and DIRECT (ADR 0036).
+    /// It turns «Двойной VPN» off (#74): the person's switch, not told (the journal says so).
     func coreUse(file: String) async -> RefreshOutcome {
+        multihopAskedAt = Date()
         busy = true
         defer { busy = false; refresh() }
         let result = await readHelper(["core", "use", file])

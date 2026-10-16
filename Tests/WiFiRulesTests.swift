@@ -8,8 +8,8 @@ final class WiFiRulesTests: XCTestCase {
     private let cafe = AutoConnect.Network(online: true, wifi: true, ssid: "Cafe Free", interfaces: ["en0"])
     private let off = AutoConnect.Settings(enabled: false, skipTrusted: false, trusted: [])
 
-    private func entry(_ name: String) -> ServerPicker.Entry {
-        ServerPicker.Entry(name: name, title: name, path: [.init(group: "Proxy", proxy: name)])
+    private func entry(_ name: String, _ subscription: String = ServerID.own) -> ServerPicker.Entry {
+        ServerPicker.Entry(name: name, title: name, path: [.init(group: "Proxy", proxy: name)], subscription: subscription)
     }
 
     // MARK: matching
@@ -62,23 +62,37 @@ final class WiFiRulesTests: XCTestCase {
     func testPreferredServerIsPickedOnJoining() {
         let rule = WiFiRules.Rule(ssid: "Cafe Free", server: "NL-Amsterdam")
         let entries = [entry("DE-Berlin"), entry("NL-Amsterdam")]
-        XCTAssertEqual(WiFiRules.server(for: rule, entries: entries, current: "DE-Berlin"), .select(entry("NL-Amsterdam")))
+        XCTAssertEqual(WiFiRules.server(for: rule, entries: entries, current: "DE-Berlin", active: ServerID.own), .select(entry("NL-Amsterdam")))
     }
 
     func testPreferredServerAlreadyInUse() {
         let rule = WiFiRules.Rule(ssid: "Cafe Free", server: "NL-Amsterdam")
-        XCTAssertEqual(WiFiRules.server(for: rule, entries: [entry("NL-Amsterdam")], current: "NL-Amsterdam"), .keep)
+        XCTAssertEqual(WiFiRules.server(for: rule, entries: [entry("NL-Amsterdam")], current: "NL-Amsterdam", active: ServerID.own), .keep)
     }
 
     func testNoPreferredServer() {
-        XCTAssertEqual(WiFiRules.server(for: WiFiRules.Rule(ssid: "Cafe Free"), entries: [entry("DE-Berlin")], current: nil), .keep)
-        XCTAssertEqual(WiFiRules.server(for: nil, entries: [entry("DE-Berlin")], current: nil), .keep)
+        XCTAssertEqual(WiFiRules.server(for: WiFiRules.Rule(ssid: "Cafe Free"), entries: [entry("DE-Berlin")], current: nil, active: ServerID.own), .keep)
+        XCTAssertEqual(WiFiRules.server(for: nil, entries: [entry("DE-Berlin")], current: nil, active: ServerID.own), .keep)
     }
 
     /// Gone from the subscription: nothing changes, and Settings says the server is missing.
     func testPreferredServerMissing() {
         let rule = WiFiRules.Rule(ssid: "Cafe Free", server: "NL-Amsterdam")
-        XCTAssertEqual(WiFiRules.server(for: rule, entries: [entry("DE-Berlin")], current: "DE-Berlin"), .missing("NL-Amsterdam"))
+        XCTAssertEqual(WiFiRules.server(for: rule, entries: [entry("DE-Berlin")], current: "DE-Berlin", active: ServerID.own), .missing("NL-Amsterdam"))
+    }
+
+    /// ADR 0036 (#74): «Литва» of two subscriptions are two servers. A rule names the one of its
+    /// subscription; while another subscription is in use nothing changes (a rule never switches
+    /// subscriptions). A rule kept before ADR 0036 has no subscription: the one in use.
+    func testPreferredServerOfItsSubscription() {
+        let stork = entry("🇱🇹 Литва", "s1"), other = entry("🇱🇹 Литва", "s2")
+        let rule = WiFiRules.Rule(ssid: "Cafe Free", server: "🇱🇹 Литва", subscription: "s2")
+        XCTAssertEqual(WiFiRules.server(for: rule, entries: [other], current: "DE", active: "s2"), .select(other))
+        XCTAssertEqual(WiFiRules.server(for: rule, entries: [stork], current: "DE", active: "s1"), .keep)
+        XCTAssertEqual(WiFiRules.server(for: rule, entries: [stork], current: "🇱🇹 Литва", active: "s1"), .keep)
+        let old = WiFiRules.Rule(ssid: "Cafe Free", server: "🇱🇹 Литва")
+        XCTAssertEqual(WiFiRules.server(for: old, entries: [stork], current: "DE", active: "s1"), .select(stork))
+        XCTAssertEqual(WiFiRules.decode(WiFiRules.encode([rule])), [rule])
     }
 
     // MARK: editing and storage
