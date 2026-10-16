@@ -4,6 +4,11 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [Unreleased]
+
+### Fixed
+- Установщик больше не печатает лишнюю строку ошибки «exit 141» (SIGPIPE от `ks status | head -1`); установка и раньше проходила успешно.
+
 ## [0.20.0] - 2026-10-12
 
 ### Added

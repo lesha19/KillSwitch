@@ -45,5 +45,9 @@ listed=$(sed -nE 's/^SETTING_KEYS=" (.*) "$/\1/p' "$H/ks" | tr ' ' '\n' | sort -
 check "settings_lines_ok keys are all in SETTING_KEYS" "$(comm -23 <(echo "$okkeys") <(echo "$listed") | paste -sd' ' -)" ""
 check "the key scan found the case list" "$([ "$(echo "$okkeys" | wc -l)" -ge 15 ] && echo yes)" yes
 
+# --- a function run into `head` gets SIGPIPE (141) and the ERR trap (set -E) prints "exit 141": read all input (sed -n 1p)
+check "install.sh/uninstall.sh: no ks_run piped into head" \
+  "$({ code "$H/install.sh"; code "$H/uninstall.sh"; } | grep -E 'ks_run[^|]*\| *head' | head -3)" ""
+
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

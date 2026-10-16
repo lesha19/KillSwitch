@@ -332,7 +332,7 @@ main() {
   else
     sleep 1
     ks_run on
-    ks_run status | head -1
+    ks_run status | sed -n 1p
   fi
 
   # The app relies on this working without a password
