@@ -17,13 +17,15 @@ mkdir "$tmp/src" "$tmp/out"
 export XRAY=/nonexistent/xray MIHOMO=/nonexistent/mihomo
 cd "$tmp/src" || exit 1
 printf '%s\0' Helper/tests/*.sh | /usr/bin/xargs -0 -P 6 -I{} "$sh" -c \
-  'n=$(basename "$1" .sh); "$0" "$1" > "$2/$n.out" 2>&1; echo $? > "$2/$n.rc"' "$sh" {} "$tmp/out"
+  'n=$(basename "$1" .sh); s=$SECONDS; "$0" "$1" > "$2/$n.out" 2>&1; echo $? > "$2/$n.rc"
+   echo "time   $1: $((SECONDS - s))s" > "$2/$n.time"' "$sh" {} "$tmp/out"
 fails=0
-for r in "$tmp/out"/*.rc; do
-  n=$(basename "$r" .rc)
-  [ "$(cat "$r")" = 0 ] && continue
-  fails=$((fails + 1)); echo "== $n"; grep '^FAIL' "$tmp/out/$n.out" | cut -c1-300
+for t in Helper/tests/*.sh; do # a file with no exit status (killed, never run) fails too
+  n=$(basename "$t" .sh)
+  [ "$(cat "$tmp/out/$n.rc" 2>/dev/null)" = 0 ] && continue
+  fails=$((fails + 1)); echo "== $n"; if [ -f "$tmp/out/$n.out" ]; then grep '^FAIL' "$tmp/out/$n.out" | cut -c1-300; else echo "no result: it did not finish"; fi
 done
 echo "$("$sh" -c 'echo "$BASH_VERSION"'): $(ls "$tmp/out"/*.rc | wc -l | tr -d ' ') files, $(cat "$tmp/out"/*.out | grep -c '^ok') ok," \
   "$(cat "$tmp/out"/*.out | grep -c '^skip') skip, $fails failed"
+sort -t: -k2 -rn "$tmp/out"/*.time | head -5 # the slowest files
 [ "$fails" = 0 ]

@@ -16,6 +16,7 @@ Rules are loaded at boot, before login.
   `scripts/test-helper-ci.sh "$(brew --prefix)/bin/bash"`.
   Merge gate (Actions is not paid): `scripts/ci-local.sh <commit> [--pr N]` runs the ci.yml steps
   on a clean worktree of that commit; merge only on its `green`.
+  `scripts/vm.sh <commit> [--pr N]` runs the same gate inside the tart VM (never build or test on the host Mac).
 - `Helper/local.killswitch.plist` — LaunchDaemon: runs `ks watch` (RunAtLoad + KeepAlive), so rules
   are loaded at boot, before login, and checked every 2 s (tunnels every second). `AssociatedBundleIdentifiers` makes it
   show up under the app's name in System Settings → Login Items & Extensions.

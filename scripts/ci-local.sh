@@ -26,9 +26,12 @@ git -C "$root" worktree add -q --detach "$wt" "$sha" || { echo "could not add th
 echo "log: $log"
 
 step() { # step <name> <command...>: output to the log, tail on failure
-  local name=$1; shift
-  echo "== $name"; echo "== $name" >> "$log"
-  if (cd "$wt" && "$@") >> "$log" 2>&1; then return 0; fi
+  local name=$1 t0=$SECONDS from; shift
+  echo "== $name"; echo "== $name" >> "$log"; from=$(wc -l < "$log")
+  if (cd "$wt" && "$@") >> "$log" 2>&1; then
+    tail -n +$((from + 1)) "$log" | grep '^time ' # per-test times a step reports
+    echo "time $name: $((SECONDS - t0))s"; return 0
+  fi
   tail -n 40 "$log"; failed=$name; return 1
 }
 lint() {
@@ -37,12 +40,19 @@ lint() {
   shellcheck -S warning Helper/ks Helper/*.sh scripts/*.sh
 }
 mihomo_tests() { # ci.yml "Fetch mihomo" + "Helper tests": with the core when it can be fetched
-  local m=/nonexistent/mihomo t fails=0
+  local m=/nonexistent/mihomo out t n fails=0
   if Helper/fetch-mihomo.sh; then m=$PWD/Helper/mihomo
   else echo "warning: mihomo could not be fetched: the helper tests skip the mihomo -t and controller checks"; fi
-  for t in Helper/tests/*.sh; do
-    echo "== $t"
-    MIHOMO=$m bash "$t" || fails=$((fails + 1))
+  out=$(mktemp -d "$tmp/mihomo.XXXXXX")
+  # 6 at a time, as scripts/test-helper-ci.sh runs the same files
+  printf '%s\0' Helper/tests/*.sh | /usr/bin/xargs -0 -P 6 -I{} bash -c \
+    'n=$(basename "$1" .sh); s=$SECONDS; MIHOMO="$3" bash "$1" > "$2/$n.out" 2>&1; echo $? > "$2/$n.rc"
+     echo "time   $1: $((SECONDS - s))s" > "$2/$n.time"' _ {} "$out" "$m"
+  sort -t: -k2 -rn "$out"/*.time | head -5 # the slowest files
+  for t in Helper/tests/*.sh; do # a file with no exit status (killed, never run) fails too
+    n=$(basename "$t" .sh)
+    [ "$(cat "$out/$n.rc" 2>/dev/null)" = 0 ] && continue
+    fails=$((fails + 1)); echo "== $t"; cat "$out/$n.out" 2>/dev/null || echo "no result: it did not finish"
   done
   [ "$fails" = 0 ]
 }
