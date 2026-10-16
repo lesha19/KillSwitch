@@ -75,11 +75,11 @@ struct UserError: Equatable {
         message: String(localized: "Служба защиты остановлена и не включила Wi-Fi и другие сети обратно. Включи их здесь, а службу — в Объектах входа."),
         action: .restoreNetwork)
 
-    /// #17: a settings file of the service is damaged, so protection blocks everything (Helper/ks
+    /// #17: a settings file of the service is damaged, so protection blocks the internet (loopback, DHCP, local network still work, #83) (Helper/ks
     /// root_files_bad); `ks repair` puts the defaults back.
     static let settingsDamaged = UserError(
         title: String(localized: "Настройки защиты повреждены"),
-        message: String(localized: "Их не удалось прочитать, поэтому интернет заблокирован полностью — так безопаснее. Сброс вернёт обычные настройки защиты."),
+        message: String(localized: "Их не удалось прочитать, поэтому интернет заблокирован — так безопаснее. Домашняя сеть работает. Сброс вернёт обычные настройки защиты."),
         action: .resetSettings)
 
     /// The app bundle failed its signature check (BundleSignature): nothing from it runs as root.

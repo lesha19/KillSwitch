@@ -4,6 +4,249 @@ All notable changes to KillSwitch are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (0.x: no stability promise).
 
+## [0.20.0] - 2026-10-12
+
+### Added
+- Xray: transport escalation (#20, ADR 0030). When the running server stops answering, KillSwitch
+  tries the same one another way, only what the subscription offers and only when Xray's own probe
+  of that way answers: another TLS fingerprint, then another transport of that server (xHTTP
+  instead of TCP). It never moves to another server (ADR 0036). The other ways are probed only while the server fails (from
+  the 2nd failed check). Each step once per outage, never two within 3 minutes, never back to a
+  way just left for 6 hours, never for being slow, at most 3 restarts an hour and 10 a day per
+  server; a server picked by hand stays picked. What worked is remembered per server until the
+  network changes, and dropped once the subscription's own way has answered for 30 minutes.
+  Nothing new goes past the VPN (the same servers and DIRECT); the protection
+  stays on (about a second of restart, pf blocks). Журнал защиты tells each step. Settings ›
+  Способ подключения «Пробовать другой отпечаток и транспорт, если сервер не отвечает», on by
+  default (`ks set escalate 0|1`).
+- Settings › Дополнительно «Размер пакетов VPN (MTU)» (#18, ADR 0032), a troubleshooting setting:
+  «Авто» (as before: 1500 with the main way, 9000 with the fallback way) or 1500…1280, for both ways
+  of connecting. A smaller value may help calls or games that freeze through the VPN; it mostly
+  sizes UDP, since both cores carry TCP to the server on their own connection, so pages that load
+  half-way are unlikely to change (needs a live check). Changing it asks for the password and, with
+  the VPN on, restarts it once for about a second (the protection keeps blocking); if the VPN does
+  not come up with the new value, the previous one comes back. Only the tunnel's packet size
+  changes, nothing about what goes past the VPN. Carried by the settings file and named in
+  «Скопировать диагностику». `ks set mtu auto|1280…1500`. The inverse split tunnel («only these programs through the
+  VPN») is not built: on macOS it cannot keep the listed programs' traffic in the VPN when the core
+  cannot tell which program a connection belongs to (Safari's pages come from WebKit's own
+  process, for one), see ADR 0032.
+- Xray: «Двойной VPN» works with the main way of connecting (#33, ADR 0027). The entry is another
+  server of the subscription; the running server and the other servers' ping probes are reached
+  through it, so no exit sees the Mac's address. Nothing new goes past the VPN. Turning it on
+  refuses an entry that does not answer or that could only give one hop (with the reason), and,
+  with the VPN on, goes back to the previous entry — or one hop — if the new chain does not answer
+  after the restart (logged). An entry that later disappears from the subscription or stops
+  fitting turns double VPN off: it never blocks the config, and it is said in Журнал защиты and by
+  a notification «Двойной VPN выключен». The entry is never
+  the exit (not offered, refused by the helper; escalation waits while the entry is dead). Changing the way of connecting, and an upgrade that finds a setting left from the
+  fallback way, turn it off.
+- Xray: own servers added by link work with the main way (#33, ADR 0027): each is a server of its
+  own in the list, «<имя> (свой)», everything and DNS through it. Those
+  the main way cannot use (hysteria2, TUIC, WireGuard, a Shadowsocks plugin, IPv6, a server name
+  with odd characters, a skipped certificate check…) say so in Settings, keep working with the
+  fallback way and never block the import of the others. Names lose control characters and are
+  cut to 200 bytes; the helper refuses host names with control characters or over 256 bytes.
+- Xray: «Трафик» › «Проверить адрес» (#33, ADR 0027) walks Xray's rules from the routing report;
+  what cannot be told here (a program, the address a name gets, a rule too big for the report) is
+  listed as approximate. With a service of an older version it asks to update it instead of
+  answering. «Private» addresses also cover 0/8, 192.0.0/24, 198.18/15 and the documentation
+  networks.
+- `killswitch://` links that act (#23, ADR 0029): `connect` connects at once (no password prompt);
+  `disconnect` and `toggle` (when it would disconnect) ask «Отключить VPN?» in the window, and only
+  while protection is on — with protection off or paused they do nothing but open «Главная»;
+  `add?url=<https link>` always asks «Добавить подписку?» / «Заменить подписку?» and shows the
+  address with its port. No link turns protection off or pauses it; one link per 2 s; a question
+  nobody answered goes away and never blocks an update's restart; unknown links do nothing and are
+  logged without the link.
+- Settings › Дополнительно «Блокировка» (#14, ADR 0031): besides ads and trackers, «Блокировать сайты
+  для взрослых», «Блокировать соцсети» and «Блокировать букмекеров» (Russian bookmakers), from the
+  lists shipped in the app (`category-porn`, `category-social-media-!cn`, `category-betting-ru` of
+  the pinned geosite.dat); nothing is downloaded. Blocked sites are refused by both ways of
+  connecting before the subscription's rules; nothing goes anywhere, so the protection rules do not
+  change. Each switch asks for the administrator (`ks set blockadult|blocksocial|blockbetting 0|1`).
+  The ad blocking setting stays as it was. There is no malware list in that data, so no such switch.
+- «Свой сервер DNS-over-HTTPS» (#14, ADR 0031): your DoH server (NextDNS, AdGuard DNS…) is asked
+  always through the VPN, never directly or from the provider. With the main way of connecting
+  (Xray) it answers every name the subscription has no DNS of its own for; when it does not
+  answer, Cloudflare's DoH is asked, also through the VPN. With the fallback way (mihomo, fake-ip)
+  sites that go through the VPN are resolved by the VPN server, and your server answers only names
+  that go directly or that address rules need, with no one else asked when it does not answer. The
+  DoH server's own name is resolved at the VPN exit. Only `https://` addresses of public servers, without a
+  login, `?` or `#` (`ks set doh <url>`, `""` clears). Both new settings travel with «Перенос настроек».
+- Several subscriptions (#63, ADR 0036): adding a link (Settings, a QR code, `killswitch://add`)
+  adds a subscription and never replaces one; the same link again is refused. «Серверы» shows
+  «Недавние», «Избранное» (each row names its subscription), one block per subscription titled by
+  its `profile-title` (else the link's host), then «Свои серверы». A server is (subscription,
+  server): «Литва» of two subscriptions are two rows. Picking a server hands the helper its
+  subscription's profile alone (own servers only in «Свои серверы»); a server of another
+  subscription is switched to with the admin's password for now. The single subscription of 0.19
+  becomes the first of the list, with favourites, recents and the chosen server.
+- One administrator password approves every subscription (#64, ADR 0036): `ks core import` takes
+  the running profile and the others' after it and keeps one approval per profile
+  (`core/approved/<n>`: core kind, hosts, addresses, DIRECT); new `ks core use <json>` (passwordless)
+  runs another approved subscription's profile and refuses (exit 3) anything the import did not
+  approve. A server of another subscription is switched to without the password; new servers of
+  any subscription are approved with one password for all. A subscription whose profile is not
+  taken stays unapproved without failing the others. The approval of 0.19 stays valid for the
+  first subscription.
+- Shortcuts, the CLI and the home screen know the subscription (#66, ADR 0036): «Сменить страну»
+  lists every subscription's servers as «server — subscription» and switches subscriptions like
+  «Серверы» (a shortcut saved before keeps its server of the subscription in use). `killswitch
+  server list` shows `subscription/server` and its JSON (and `status --json`) has `subscription`;
+  `server select` refuses a name several subscriptions have, listing `subscription/server`, which
+  it takes; `fastest` is the running subscription's. A server of a subscription the VPN does not
+  run is chosen in the app: the CLI says so.
+  Home and the menu bar show «server · subscription». Loading a settings file keeps the other
+  subscriptions' favourites and recents.
+
+### Changed
+- The VPN blocks everything outside it from «Подключить» to «Отключить», whatever «защита» says
+  (#54, ADR 0035), like Mullvad: with protection off or paused, an update, a server switch, a
+  settings change, a crash or a reboot no longer sends traffic directly with the real IP for the
+  seconds the core restarts (measured 2026-10-11 and 2026-10-12). The helper keeps «VPN включён»
+  in `/Library/KillSwitch/vpn-on`, written by `ks core on`, removed only by `ks core off`; an
+  upgrade from 0.19 with the core loaded writes it. The update waits until the new watchdog runs
+  with the rules loaded before it touches the core (the 0.19 one removes them while protection is
+  off) and never disables the core while the VPN is on. No timeout: a VPN that cannot come back
+  keeps the internet closed until it does or «Отключить VPN». «Защита» is now the switch for
+  blocking while the VPN is off (Mullvad's lockdown mode); standby next to another VPN (ADR 0018)
+  only while ours is off. «Перезапустить VPN» restarts the core in place (`ks core restart`), the
+  VPN kept on. «Подключить», «Отключить» and the restart take the core lock, so a Disconnect cannot
+  land inside a Connect; a core that does not stop leaves the VPN on, its job enabled, and says so;
+  «Подключить» during an update waits until the new watchdog has the rules loaded. The main screen:
+  «Интернет закрыт: VPN переподключается» with «Отключить VPN» when the VPN is on and its tunnel,
+  up since «Подключить», is gone; the first connect stays «Подключение…» then «Подключение
+  затянулось», saying the internet is closed meanwhile, with «Отключить VPN» (a core that does not
+  start included; Shortcuts' «Подключить» then says to open KillSwitch); another VPN next to ours
+  turned on offers «Отключить VPN» too (main screen, menu bar); connected is «Защищено» whatever the switch («Подключено без защиты» is gone; connected
+  with neither the VPN target nor protection is «Трафик может идти мимо VPN», its main button
+  «Включить защиту»; with the VPN on and the rules not loaded it says so whatever the
+  connection, with «Восстановить службу…»); a red notice
+  «Трафик может идти мимо VPN» if the VPN is on and the rules are not loaded; «Журнал защиты» says
+  how long each gap was and why («Интернет был закрыт 8 с: обновление»). Automatic server switch
+  and transport escalation work with protection off too, now that a restart cannot leak.
+- Replacing the subscription link (Settings, QR, a `killswitch://` link, «Начало работы») keeps the
+  old one until the new one answered: a link that fails no longer costs the working subscription,
+  its status or servers (#23, ADR 0029). A successful replace removes the old subscription's backup
+  link; a replace whose import was not confirmed with the password says «Новая подписка сохранена,
+  но не применена» instead of nothing.
+- Going back to 0.19 or older after changing any of the new settings blocks all traffic until
+  Settings › «Сбросить настройки»: the older helper refuses a settings file with a line it does not
+  know. Those are the blocking categories (`blockadult=`, `blocksocial=`, `blockbetting=`, even
+  turned back off), the own DoH server (`doh=`), a packet size other
+  than «Авто» (`mtu=`) and «Пробовать другой отпечаток и транспорт» (`escalate=`, on or off). Reset
+  the settings after a downgrade.
+
+### Removed
+- Settings › «Способ подключения» (#65, ADR 0036): the core follows the subscription. Each
+  subscription is fetched as Xray configs (`<link>/json`) first and as a mihomo profile when it has
+  none; it runs in Xray when installed, else in mihomo. Choosing a server of a subscription in the
+  other core switches the core without the password (its hosts were approved with the others),
+  blocking throughout; a core that does not start gives the old one back. An install with the
+  fallback way moves to Xray for the subscriptions that offer it at the next password. The
+  settings transfer no longer saves the core; an older file with it still loads. «Пробовать другой
+  отпечаток и транспорт…» stays while Xray runs.
+- Automatic server replacement (failover, #61, ADR 0036) with both ways of connecting: KillSwitch
+  never moves the connection to another server by itself. Gone: the hidden `KS-FO-<n>` fallback
+  groups of the fallback way (ADR 0005), the watchdog's switch to another server of the country
+  with the main way (ADR 0023), Settings › Способ подключения «Переключать сервер, если он
+  перестал отвечать», `ks set failover`, the «VPN переключился на другой сервер» notification,
+  the status line about a switch and the «Запасная группа» item of «Трафик». A subscription's own
+  automatic group («Самый быстрый», url-test, balancer) keeps working as it defines it, and the
+  escalation to another fingerprint or transport of the same server stays. When the chosen server
+  stops answering, the banner and notification say «Сервер «…» не отвечает. Выбери другой сервер.»
+  The old `failover=` line and the switch's state are dropped on upgrade (ignored until then); a
+  settings file saved before still loads, without it; a profile still carrying `x-ks-failover`
+  is imported as without it.
+- The backup subscription link (#62, ADR 0036): no «Резервная ссылка» row in Settings › Подписка
+  and no mention of it when adding a link. The subscription is fetched directly, then through the
+  VPN when it is on (ADR 0016). A backup link kept by an older version is deleted from the
+  keychain at launch. A status saved after an update from the backup link still loads (without its
+  «Откуда»).
+
+### Fixed
+- VPN, который не может подключиться, больше не держит интернет закрытым молча (#85, #92). Включённый
+  VPN переживает перезагрузку и закрывает интернет, пока ядро не заработает (ADR 0035); если ядро так
+  и не запустилось, через 5 минут приходит уведомление «Интернет закрыт: VPN не подключается» с
+  подсказкой выбрать другой сервер или нажать «Отключить VPN» (всегда, переключатели уведомлений его
+  не выключают). Закрытым интернет остаётся — ничего не утекает. «Отключить VPN» добивает ядро, если
+  оно не остановилось само, и сообщает об ошибке, если системный DNS не удалось вернуть (служба
+  пробует снова сама).
+- Повреждённые настройки больше не отключают Мак от сети (#83, аудит 15.10 H2). Незнакомый ключ в
+  файле настроек (его записала другая версия) теперь пишется в журнал и не учитывается, а не включает
+  полную блокировку. Блокировка из‑за действительно испорченного файла (чужой владелец, неверное
+  значение) теперь пропускает DHCP и локальную сеть (без её DNS): Мак сохраняет адрес Wi‑Fi, в интернет
+  по‑прежнему не выходит ничего.
+  То же, когда pf отказывается принять обычные правила: запасной вариант теперь тоже пропускает DHCP
+  и локальную сеть.
+- Защита при перезагрузке больше не оставляет Мак без сети (ADR 0037, инцидент 15.10.2026). Раньше
+  после входа служба защиты один раз просила включить Wi‑Fi, не проверяла, получилось ли, и стирала
+  пометку; если Wi‑Fi в этот момент ещё не появилась в системе, она так и оставалась выключенной, а
+  удаление KillSwitch её тоже не включало. Теперь служба пробует каждую секунду, пока система не
+  подтвердит, что Wi‑Fi (и кабель, и мост) включены и устройство уже видно системе, и проверяет ещё раз
+  через 3 секунды; через 90 секунд (и 90 секунд работы самой службы: скачок часов вперёд сеть раньше правил не включит) включает сеть в любом случае, даже если правила не загрузились, и
+  пишет в журнал; устройство, которое так и не появилось у системы, через 300 секунд принимается по «Включено». Отсчёт идёт от первого раза за эту загрузку, когда служба увидела пометку (файл
+  net-guard-seen): перезапуск службы его не сбрасывает, а старая пометка после ночи с выключенным Маком
+  сеть сразу не включает. Пометка не теряется при второй перезагрузке
+  подряд, находит службу по устройству, если её переименовали, и включает сеть, если службу
+  защиты выключили в «Объектах входа». Баннер «Сеть выключена» появляется и когда служба работает,
+  но за 20 секунд от первого раза не справилась (приложение перепроверяет ровно через 20 секунд; если служба застряла и файла net-guard-seen нет, отсчёт идёт от загрузки или от пометки); кнопка «Включить сеть» после этих 20 секунд не отказывает.
+  Обновление сначала включает сеть, оставленную выключенной, удаление — тоже, а в крайнем случае
+  включает все выключенные Wi‑Fi, Ethernet и Thunderbolt‑мост.
+- KillSwitch.app в Корзине больше не оставляет невидимую блокировку (#84). Раньше служба защиты
+  и правила pf оставались включёнными, а выключить их было нечем. Теперь служба следит только за
+  программой в «Программах»: другая копия там под другим именем считается присутствующей. Если
+  программы нет 10 минут подряд, защита снимается как «Выключить» и «Отключить VPN» (правила, DNS,
+  ядро), служба ждёт, пока сеть после перезагрузки снова включена, пишет одну строку в журнал и
+  останавливается; при следующих загрузках она останавливается молча. Программа вернулась раньше
+  (обновление, восстановление из Корзины) — ничего не происходит. Вернулась поздно — защита остаётся
+  выключенной, и её нужно включить в приложении. Программа из образа диска, с внешнего диска или из
+  «Загрузок» не отслеживается.
+- A double-click on a server in «Серверы» switches once, to the server clicked. The first click
+  added it to «Недавние» and moved the rows below, so the second one chose the neighbour and
+  restarted the core again (with Xray ~20 s without internet instead of ~10).
+- Xray: with only split apps going direct, the subscription's freedom
+  outbound they use was not in the DIRECT signature, so a passwordless refresh could change where
+  that traffic goes (a `redirect`). It is now, at the same place as before. The update's own
+  rebuild writes that signature as the running one, so the next refresh needs no password either;
+  other signatures stay byte-identical (#30 review).
+- The shortcut «Отключить VPN» stopped the VPN while it was stuck on a server that does not answer;
+  it used to say «VPN и так не подключён» and leave the core running (#23).
+- A large subscription (~19 MB) no longer freezes the window while it is read (#50).
+- Settings changed at the same moment (a «ks set» and the automatic server switch) no longer
+  lose one another; the protection log and the pause are written whole (#50).
+- Subscriptions whose rule providers send request headers (`header`) are taken (#37).
+- Closing the window no longer quits KillSwitch: it stays in the menu bar, without a Dock icon
+  while the window is closed; opening the window brings the icon back. «Выйти» / «Выход» still
+  quit, and «Запускать без окна» starts without a Dock icon (#51, ADR 0011). Opening KillSwitch
+  again from Finder, Launchpad or Spotlight opens the window. An update installed while the window
+  is closed relaunches the app without the window; an update alert that needs an answer comes up
+  with the window instead of behind other apps.
+- Without the helper the content filter blocks nothing, and «Удалить KillSwitch из системы…»
+  switches the filter off before it reports done. A filter left enabled after the helper was
+  removed (the app quit, or not running) used to drop every connection while no VPN tunnel was up,
+  except the local network, Tailscale and NetBird (#55, ADR 0012 addendum).
+- Removing KillSwitch no longer leaves the Mac without DNS (#92). The VPN core's job is stopped too,
+  and if the helper is missing or cannot give the DNS back, every network service's DNS is set to
+  automatic before the KillSwitch folder is removed (DNS servers set by hand are lost in that case).
+  What failed is now said in the output instead of hidden.
+
+### Security
+- Password prompt: install.sh and uninstall.sh run from a copy of the app in a folder of root's
+  own, checked there against the daemon's signature requirement (#37, as ADR 0012). Nothing put
+  into the app between the app's check and the run can run as root.
+- `ks core import` through the password prompt reads the profile as the file's owner, never a
+  link or a file with a second name; root's own file only from folders only root can change (#37).
+- Lock files of the service are root's alone (0600): a local user can no longer hold one and stall
+  settings, the protection log and the watchdog; the log never waits more than 2 s (#50, review).
+- Password prompt: a script command in any other shape than the app's install.sh/uninstall.sh is
+  refused instead of run in place (#37, review).
+- `KS_NOW`, `KS_APPROVE_ALL` and `KS_LOCKED` never come from the caller; the core lock's re-exec
+  is believed only from its own lockf (#50).
+- NetBird: every link on the way to its binary is followed and its folder checked; a link in a
+  folder others can write is logged, not refused (#50, docs/security/hardening-0.20.md).
+
 ## [0.19.1] - 2026-10-12
 
 ### Security

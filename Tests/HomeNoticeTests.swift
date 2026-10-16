@@ -24,6 +24,14 @@ final class HomeNoticeTests: XCTestCase {
         XCTAssertNil(HomeNotice.pick(input { $0.usage = usage(used: 10 * gb, total: 100 * gb, expiresIn: 20) }))
     }
 
+    /// ADR 0035: the VPN on and the rules not loaded: red, before anything else.
+    func testRulesMissingComesFirst() {
+        let missing = input { $0.rulesMissing = true; $0.otherVPN = true; $0.newServers = true }
+        XCTAssertEqual(HomeNotice.pick(missing), .rulesMissing)
+        XCTAssertEqual(HomeNotice.rulesMissing.title, "Трафик может идти мимо VPN.")
+        XCTAssertEqual(HomeNotice.rulesMissing.message, "VPN включён, но правила защиты не загружены. Восстанови службу.")
+    }
+
     func testPriorities() {
         let everything = input {
             $0.otherVPN = true

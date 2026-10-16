@@ -7,6 +7,8 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=../ks
 . "$here/../ks"
+# the probes of the running host's alternatives (ADR 0030) are tested in core-xray-escalate.sh
+eval "ks_$(declare -f setting)"; setting() { if [ "$1" = escalate ]; then echo 0; else ks_setting "$@"; fi; }
 XRAY=${XRAY:-/Library/KillSwitch/core/xray}; [ -x "$XRAY" ] || [ ! -x "$here/../xray" ] || XRAY="$here/../xray"
 fx="$here/fixtures"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
@@ -78,6 +80,34 @@ gen "$fx/xray-panel.json"
 grep -qE '00000000-0000-4000|Z84J2Iel|0123abcd|fake-path' "$tmp/c.report" && bad "report holds a secret" || ok "report: no uuid, key, short id or path"
 [ "$(q 'join "|", map { $_->{from} . ":" . ($_->{index} // "") } @{ $r = $c->{rules} }[0..3]')" = "killswitch:|killswitch:|subscription:0|subscription:1" ] &&
   ok "report: our rules, then the subscription's with their index" || bad "report rules: $(q '[@{ $c->{rules} }[0..3]]')"
+# «Проверить адрес» with Xray (#33, ADR 0027): each rule as the core has it, and where each tag leads
+[ "$(q 'JSON::PP->new->canonical->encode($c->{rules}[0]{xray})')" = '{"inboundTag":["ks-dns"],"outboundTag":"dns-out"}' ] &&
+  [ "$(q 'JSON::PP->new->canonical->encode($c->{rules}[5]{xray})')" = '{"network":"udp","outboundTag":"block","port":"443","type":"field"}' ] &&
+  [ "$(q 'scalar grep { ref $_->{xray} ne "HASH" } @{ $c->{rules} }')" = 0 ] &&
+  ok "report: every rule also as the core's object (for «Проверить адрес»)" || bad "report xray rules: $(q '[@{ $c->{rules} }[0..5]]')"
+[ "$(q 'join ",", map { "$_:$c->{targets}{$_}" } sort keys %{ $c->{targets} }')" = "LT_1:vpn,LT_1_FB:vpn,block:block,direct:direct,dns-out:dns" ] &&
+  [ "$(q '$c->{fallback}')" = LT_1 ] &&
+  ok "report: where each outbound leads, and the one no rule takes (the first)" || bad "report targets: $(q '$c->{targets}') $(q '$c->{fallback}')"
+grep -qE '00000000-0000-4000|Z84J2Iel|0123abcd|fake-path' "$tmp/c.report" && bad "report holds a secret after the rule objects" || ok "  still no secret in the report"
+edit 'unshift @{ $a->[0]{outbounds} }, { protocol => "freedom" };
+  unshift @{ $a->[0]{routing}{rules} }, { domain => [ map { "domain:d$_.example" } 1 .. 2000 ], outboundTag => "block" }'
+gen "$tmp/p.json" || bad "untagged first freedom refused: $(cat "$tmp/err")"
+[ "$(q '"[$c->{fallback}]:" . $c->{targets}{$c->{fallback}}')" = "[]:direct" ] &&
+  ok "  an untagged freedom first: the fallback says direct, not nothing" || bad "  fallback: $(q '$c->{fallback}') $(q '$c->{targets}')"
+[ "$(q 'exists $c->{rules}[2]{xray} ? "kept" : "left out"')" = "left out" ] && [ "$(q 'exists $c->{rules}[3]{xray} ? "kept" : "left out"')" = kept ] &&
+  [ "$(wc -c < "$tmp/c.report")" -lt 200000 ] && ok "  a rule object over 16 KB is left out of the report (the app says it cannot tell)" ||
+  bad "  big rule: $(wc -c < "$tmp/c.report")"
+# a host's name ends up in settings (xrayserver=) and the report: control characters or more than
+# 256 bytes refuse the subscription, as a damaged one; a tab or a line break becomes a space (0.19.1,
+# #37: one name must not become two in the lists)
+edit '$a->[0]{remarks} = "Литва\tвход"'
+gen "$tmp/p.json" && [ "$(q '$c->{servers}[0]{name}')" = "Литва вход" ] && ok "a tab in a host name: a space" || bad "a tab in a host name: $(cat "$tmp/err") $(q '$c->{servers}')"
+edit '$a->[0]{remarks} = "x" x 257'
+gen "$tmp/p.json" && bad "a 257-byte host name accepted" || ok "a host name over 256 bytes: refused"
+edit '$a->[0]{remarks} = "x" . "я" x 200'
+gen "$tmp/p.json"; iconv -f UTF-8 -t UTF-8 < "$tmp/err" >/dev/null 2>&1 && grep -q 'я…' "$tmp/err" &&
+  ok "  the refusal names it cut on a character, not mid-letter" || bad "  cut: $(od -c < "$tmp/err" | head -3)"
+gen "$fx/xray-panel.json"
 [ "$(q 'join ",", map { "$_->{name}:$_->{type}" } @{ $c->{proxies} }')" = "LT_1:vless,LT_1_FB:vless" ] &&
   [ "$(q 'join ",", map { "$_->{name}:" . join "+", @{ $_->{proxies} } } @{ $c->{groups} }')" = "country-lb:LT_1+LT_1_FB" ] &&
   ok "report: servers and the balancer with its members" || bad "report proxies/groups: $(q '$c->{proxies}') $(q '$c->{groups}')"
@@ -176,6 +206,34 @@ rm -f "$SETTINGS" "$CORE_DIR/geosite.dat"
 printf 'adblock=1\n' > "$SETTINGS"
 gen "$fx/xray-panel.json" && [ "$(j '$c->{routing}{rules}[2]{inboundTag}[0]')" = direct-dns ] && ok "adblock without geosite.dat: no rule" ||
   bad "adblock without geodata: $(j '$c->{routing}{rules}[2]')"
+rm -f "$SETTINGS"
+
+# --- own servers added by link (#33, ADR 0027): the app appends each as a host of its own
+# (App/Core/XrayManual.swift, the shape of Tests/XrayManualTests.swift): one server, DNS through it
+resolve_host() { case "$1" in lt.example.com) echo 203.0.113.40 ;; pl.example.com) echo 203.0.113.50 ;; *) return 1 ;; esac; }
+edit 'push @$a,
+  { remarks => "Варшава (свой)", dns => { servers => ["1.1.1.1", "8.8.8.8"], queryStrategy => "UseIPv4" },
+    outbounds => [{ tag => "proxy", protocol => "trojan", settings => { servers => [{ address => "pl.example.com", port => 443, password => "pw" }] },
+                    streamSettings => { network => "tcp", security => "tls", tlsSettings => { serverName => "pl.example.com" } } }] },
+  { remarks => "Рига (свой)", dns => { servers => ["1.1.1.1", "8.8.8.8"], queryStrategy => "UseIPv4" },
+    outbounds => [{ tag => "proxy", protocol => "vless",
+                    settings => { vnext => [{ address => "203.0.113.60", port => 443, users => [{ id => "00000000-0000-4000-8000-000000000002", encryption => "none" }] }] },
+                    streamSettings => { network => "xhttp", security => "reality",
+                      realitySettings => { serverName => "www.example.com", fingerprint => "chrome", publicKey => "Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBrjqnAw", shortId => "ab12" },
+                      xhttpSettings => { path => "/p", mode => "packet-up", extra => { xPaddingBytes => "100-1000" } } } }] }'
+gen "$tmp/p.json" && [ "$(paste -sd' ' - < "$tmp/s")" = "203.0.113.10 203.0.113.50 203.0.113.60" ] &&
+  ok "own servers: checked and pinned with the subscription's hosts (a new one needs the admin, like any)" || bad "own servers: $(cat "$tmp/err") $(cat "$tmp/s")"
+printf 'xrayserver=Варшава (свой)\n' > "$SETTINGS"
+gen "$tmp/p.json" || bad "own server refused: $(cat "$tmp/err")"
+[ "$(j '"$c->{outbounds}[0]{tag}:$c->{outbounds}[0]{settings}{servers}[0]{address}"')" = proxy:203.0.113.50 ] &&
+  [ "$(j 'join ",", map { $_->{outboundTag} } @{ $c->{routing}{rules} }')" = ks-dns-out,proxy ] &&
+  ok "  running one: its server first (what no rule takes), only our two rules" || bad "  own: $(j '$c->{routing}')"
+[ ! -s "$tmp/c.egress" ] && [ ! -s "$tmp/c.direct" ] && ok "  nothing past the VPN: no egress, an empty DIRECT signature" ||
+  bad "  egress: $(cat "$tmp/c.egress") direct: $(cat "$tmp/c.direct")"
+[ "$(j 'join ",", map { ref $_ ? $_->{address} : $_ } @{ $c->{dns}{servers} }')" = 1.1.1.1,8.8.8.8 ] && ok "  its DNS servers, reached through it" || bad "  dns: $(j '$c->{dns}')"
+xtest "own trojan server" "$tmp/c"
+printf 'xrayserver=Рига (свой)\n' > "$SETTINGS"
+gen "$tmp/p.json" && xtest "own vless reality xhttp server" "$tmp/c" || bad "own vless: $(cat "$tmp/err")"
 rm -f "$SETTINGS"
 
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

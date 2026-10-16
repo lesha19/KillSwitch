@@ -4,23 +4,33 @@
 #   ks state                one word for the app: on | off | paused:<epoch>
 #   ks version              "<version> <sha256 of this file>", without root
 #   ks on                   enable (also after reboot)
-#   ks off                  disable until "ks on"
+#   ks off                  disable until "ks on" (while the VPN is on it keeps blocking)
 #   ks pause [min]          disable for N minutes (default 5), e.g. for a captive Wi-Fi portal
-#   ks netrestore           network services turned off at shutdown back on (if the watchdog is gone)
-#   ks set <key> <0|1>      lan, tailscale, dns, direct (see rules() below), wifiguard, adblock, failover
+#   ks netrestore           network services turned off at shutdown back on (if the watchdog is gone or has not in 20 s)
+#   ks set <key> <0|1>      lan, tailscale, dns, direct (see rules() below), wifiguard,
+#                           escalate (Xray: another fingerprint or transport first, ADR 0030), and the
+#                           blocked categories adblock, blockadult, blocksocial, blockbetting (ADR 0031)
+#   ks set doh <https url>  the own DNS-over-HTTPS server, used through the VPN only; "" clears (ADR 0031)
 #   ks set splitapps <a,b>  apps outside the VPN; "" clears
-#   ks set multihop <proxy>|off  double VPN: every other proxy is reached through this one
+#   ks set multihop <proxy>|off  double VPN: every other proxy (Xray: the running host) is reached through this one
 #   ks set core xray|mihomo the core that runs (ADR 0020); the subscription is imported again for it
 #   ks set diag 0|1         «Подробная диагностика»: Xray's access log in the journal (ADR 0021)
+#   ks set mtu auto|<n>     the TUN's MTU for both cores, 1280…1500 (ADR 0032); restarts the core
 #   ks allow <addr[/n]>     always let this address or network out without VPN
 #   ks unallow <addr[/n]>
 #   ks server-add <addr>    VPN server: reachable by any process (needed by Happ)
 #   ks server-remove <addr>
-#   ks core on|off|state    our own VPN core (Xray or mihomo, run by launchd as group _ksvpn)
-#   ks core import <json>   build the core's config: a mihomo profile converted to JSON, or with
-#                           core=xray the panel's Xray JSON (a list of Xray configs)
+#   ks core on|off|state    our own VPN core (Xray or mihomo, run by launchd as group _ksvpn); from
+#                           "core on" to "core off" the VPN is on and pf blocks whatever on/off/pause
+#                           say (ADR 0035)
+#   ks core restart         the core again, the VPN kept on («Перезапустить VPN»)
+#   ks core import <json> [json…]  build the core's config: a mihomo profile converted to JSON, or
+#                           with core=xray the panel's Xray JSON (a list of Xray configs); the later
+#                           ones (the other subscriptions) are approved with it (ADR 0036)
 #   ks core refresh <json>  the same, refused (exit 3) if it brings new server names or
 #                           addresses or changes what goes DIRECT
+#   ks core use <json>      another subscription's profile, refused (exit 3) unless the last import
+#                           approved its servers and what it sends DIRECT
 #   ks core proxies         groups and proxies of the running core (JSON)
 #   ks core select <group> <proxy> | delay <group|proxy>
 #   ks core traffic         "up=<bytes> down=<bytes>" through the core so far (the menu bar speed)
@@ -42,7 +52,14 @@ ks_clean_env() {
   PATH=/usr/bin:/bin:/usr/sbin:/sbin; export PATH
   HOME=/var/root; LC_ALL=C; TMPDIR=/private/tmp; export HOME LC_ALL TMPDIR
   IFS=$' \t\n'
-  unset CURL_HOME BASH_ENV ENV CDPATH GLOBIGNORE PS4 KS_PINS KS_STRICT_DNS
+  # The core lock's re-exec (below) marks its child with the pid of the lockf that ks became:
+  # believed only from that lockf, never from a caller (#50).
+  unset KS_LOCK_HELD; KS_LOCK_HELD=0
+  if [ -n "${KS_LOCKED:-}" ] && [ "$KS_LOCKED" = "$PPID" ]; then
+    case $(/bin/ps -o comm= -p "$PPID" 2>/dev/null) in lockf|*/lockf) KS_LOCK_HELD=1 ;; esac
+  fi
+  unset CURL_HOME BASH_ENV ENV CDPATH GLOBIGNORE PS4 KS_PINS KS_STRICT_DNS KS_NOW KS_APPROVE_ALL KS_LOCKED
+  unset KS_ESC_FILE KS_MULTIHOP_STRICT KS_MULTIHOP_BACK CHAIN_TRIES CHAIN_WAIT DIRECT_ONLY   # 0.20.0's hooks
   for v in $(compgen -e); do
     case "$v" in
       LANG|LC_ALL) ;;
@@ -55,7 +72,7 @@ ks_clean_env
 set -u
 umask 022
 
-KS_VERSION="0.19.1" # the app's version (project.yml); the app compares the whole file anyway
+KS_VERSION="0.20.0" # the app's version (project.yml); the app compares the whole file anyway
 DIR="/Library/KillSwitch"
 ANCHOR="com.apple/killswitch"
 FLAG="$DIR/disabled"     # contains epoch when to re-enable, 0 = never
@@ -65,11 +82,14 @@ SERVERS="$DIR/servers"   # VPN server addresses, one per line, root-owned: the t
 SERVERS_MANUAL="$DIR/servers-manual" # added by hand (server-add, install.sh)
 SERVERS_CORE="$DIR/servers-core"     # servers of the imported core profile, rewritten by import
 EVENTS="$DIR/events.log" # corrective actions of the watchdog, world-readable
+VPN_ON="$DIR/vpn-on"     # «VPN включён», world-readable: written by "ks core on", removed only by "ks core off" (ADR 0035)
+GAPF="$DIR/vpn-gap"      # the start of the current gap (VPN on, not connected): "<epoch> <boot id>"
 STATEF="$DIR/daemon-state" # the watchdog's view for the app, world-readable (publish_state)
 HASHF="$DIR/rules.sha256" # hash of the anchor as loaded by us
 FILESF="$DIR/rules.files" # the files below as they were when the rules were loaded (root_files_sig)
 INVALIDF="$DIR/invalid"   # world-readable: what made the last load block everything (#17), absent when fine
 WIFI_MARK="$DIR/wifi-off-by-ks" # Wi-Fi was switched off by us at shutdown
+NET_SEEN="$DIR/net-guard-seen" # world-readable "<boot id> <epoch>": when this boot's mark was first seen (ADR 0037)
 SIGF="$DIR/tunnels"      # tunnel interfaces the loaded rules were built for
 TSRELAYS="$DIR/tsrelays" # Tailscale DERP relays + control plane, root-owned
 NB_GROUP="_ksnetbird"    # NetBird's daemon runs with this gid when tailscale=1 (netbird_sync)
@@ -111,17 +131,72 @@ setting() {  # setting <key> <default>
 
 # Fail closed (#17, like Mullvad's lockdown on invalid settings): the files the rules are built
 # from must be ours (a regular file owned by whoever runs ks, that is root, not writable by group
-# or others) and hold only lines ks itself writes. A missing file means the defaults. Anything
-# else and rules() blocks everything but loopback until «Сбросить настройки» (ks repair): a
-# switch read wrong could open the home network or leave the boot window open.
+# or others) and hold only lines ks itself writes (unknown keys are ignored, #83). A missing file
+# means the defaults. Anything else and rules() blocks everything but loopback, DHCP and the LAN
+# until «Сбросить настройки» (ks repair): a switch read wrong could open the boot window.
 OWNER_UID=$EUID
 ADDR_LINE='[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?|[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*(/[0-9]{1,3})?'   # valid_addr
 HOST_LINE='[0-9]{1,3}(\.[0-9]{1,3}){3}|[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*'   # one address, no network (tsrelays, KS-19)
+# Content blocking (#14, ADR 0031): each switch and the list of the shipped geosite.dat it refuses.
+# Only lists that exist in that file (meta-rules-dat has no malware or phishing list); nothing is
+# ever downloaded. Refusing sends nothing anywhere, so pf and the DIRECT signature stay as they are.
+BLOCK_LISTS='adblock:category-ads-all blockadult:category-porn blocksocial:category-social-media-!cn blockbetting:category-betting-ru'
+block_geosites() {  # the lists the settings block, one per line; none without the shipped geosite.dat
+  local kv
+  [ -s "$CORE_DIR/geosite.dat" ] || return 0
+  for kv in $BLOCK_LISTS; do
+    if [ "$(setting "${kv%%:*}" 0)" = 1 ]; then echo "${kv#*:}"; fi
+  done
+}
+# a category switched on without the shipped geosite.dat blocks nothing: say so and log it
+block_geodata_note() {  # block_geodata_note <key> <0|1>
+  [ "$2" = 1 ] && [ ! -s "$CORE_DIR/geosite.dat" ] || return 0
+  log_event "blocking ${1}: no geosite.dat, nothing is blocked"
+  echo "Нет файла geosite.dat: блокировка ничего не блокирует, переустанови KillSwitch" >&2
+}
+# The own DNS-over-HTTPS server (ADR 0031): https, a public host name or IPv4 address, an optional
+# port and path; no user, query or fragment, nothing local (it is reached through a VPN server).
+DOH_RE='^https://([A-Za-z0-9.-]+)(:([0-9]{1,5}))?(/([A-Za-z0-9._/~-]|%[0-9A-Fa-f]{2})*)?$'   # % only as %XX
+DOH_NAME_RE='^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$'
+valid_doh() {  # valid_doh <url>
+  local h p a b
+  [ "${#1}" -le 256 ] && [[ "$1" =~ $DOH_RE ]] || return 1
+  h=${BASH_REMATCH[1]}; p=${BASH_REMATCH[3]}
+  if [ -n "$p" ]; then [ "$((10#$p))" -ge 1 ] && [ "$((10#$p))" -le 65535 ] || return 1; fi
+  if [[ "$h" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    # no leading zeros: Xray refuses such an address in a rule (mihomo takes it)
+    [[ "$h" =~ $HOST_ADDR_RE ]] || return 1
+    IFS=. read -r a b _ <<<"$h"
+    # this network, private, loopback, link-local, CGNAT (Tailscale), 198.18/15 (our TUN), multicast and up
+    case "$a" in 0|10|127) return 1 ;; esac
+    [ "$a" -lt 224 ] || return 1
+    if [ "$a" = 169 ] && [ "$b" = 254 ]; then return 1; fi
+    if [ "$a" = 172 ] && [ "$b" -ge 16 ] && [ "$b" -le 31 ]; then return 1; fi
+    if [ "$a" = 192 ] && [ "$b" = 168 ]; then return 1; fi
+    if [ "$a" = 100 ] && [ "$b" -ge 64 ] && [ "$b" -le 127 ]; then return 1; fi
+    if [ "$a" = 198 ] && { [ "$b" = 18 ] || [ "$b" = 19 ]; }; then return 1; fi
+    return 0
+  fi
+  [ "${#h}" -le 253 ] && [[ "$h" =~ $DOH_NAME_RE ]] || return 1
+  h=$(printf '%s' "$h" | tr 'A-Z' 'a-z')
+  case "$h" in *.local|*.localhost|*.internal|*.lan|*.home.arpa) return 1 ;; esac
+}
+doh_url() { local u; u=$(setting doh ""); if [ -n "$u" ] && valid_doh "$u"; then echo "$u"; fi; }   # empty: none (or not valid)
+doh_host() { local h=${1#https://}; h=${h%%/*}; echo "${h%%:*}"; }
+
+# an IPv4 address without leading zeros (valid_doh)
+HOST_OCTET='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+HOST_ADDR_RE="^${HOST_OCTET}[.]${HOST_OCTET}[.]${HOST_OCTET}[.]${HOST_OCTET}\$"
+
 settings_lines_ok() {
   local line
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       ""|lan=[01]|tailscale=[01]|dns=[01]|direct=[01]|wifiguard=[01]|adblock=[01]) ;;
+      blockadult=[01]|blocksocial=[01]|blockbetting=[01]) ;;   # ADR 0031
+      doh=) ;;
+      doh=*) valid_doh "${line#*=}" || return 1 ;;
+      hosts=*) ;;   # own site addresses of unreleased 0.20.0 builds (#73): ignored, install.sh drops it
       coredirect=[01]) ;;   # until 0.14 (ADR 0013): ignored, install.sh drops it
       splitapps=*) splitapps_parse "${line#*=}" >/dev/null 2>&1 || return 1 ;;
       multihop=*) [ "${line#*=}" = off ] || valid_name "${line#*=}" || return 1 ;;
@@ -129,10 +204,22 @@ settings_lines_ok() {
       xrayserver=) ;;   # no pick (an older ks wrote it after a refused switch): the first host
       xrayserver=*) valid_name "${line#*=}" || return 1 ;;
       diag=[01]) ;;   # «Подробная диагностика», ADR 0021
-      failover=[01]) ;;   # automatic server switch with Xray, ADR 0023
-      *) return 1 ;;
+      mtu=*) mtu_ok "${line#*=}" || return 1 ;;   # the TUN's MTU, ADR 0032
+      failover=[01]) ;;   # the automatic server switch until 0.19 (ADR 0023): ignored, install.sh drops it (ADR 0036)
+      escalate=[01]) ;;   # another fingerprint or transport of the same server first, ADR 0030
+      *) [ -n "$(settings_unknown <<<"$line")" ] || return 1 ;;   # a known key with a bad value, or not key=value
     esac
   done < "$1" 2>/dev/null
+}
+# Keys this ks does not know (another version wrote them): nothing reads them, so they are logged
+# and ignored, never a lockdown (#83). A known key with a bad value is still damage.
+SETTING_KEYS=" lan tailscale dns direct wifiguard adblock blockadult blocksocial blockbetting doh hosts coredirect splitapps multihop core xrayserver diag mtu failover escalate "
+settings_unknown() {  # settings_unknown < settings: the unknown keys, one per line
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    [[ "$line" =~ ^([a-z][a-z0-9_]*)= ]] && [[ "$SETTING_KEYS" != *" ${BASH_REMATCH[1]} "* ]] && echo "${BASH_REMATCH[1]}"
+  done
+  return 0
 }
 root_file_ok() {  # root_file_ok <file> settings|addrs|relays|any
   local m
@@ -155,7 +242,18 @@ root_files_bad() {  # root_files_bad [allow-file] [servers-file] [manual-servers
 }
 # what guard compares to notice a file changed behind ks's back (nanosecond times)
 root_files_sig() { stat -f '%N %i %Fm %z %u %Lp' "$SETTINGS" "$ALLOW" "$SERVERS" "$SERVERS_MANUAL" "$TSRELAYS" "$CORE_EGRESS" 2>/dev/null; }
-lockdown() { echo 'pass out quick on lo0 all flags any'; echo 'block drop out quick all'; }
+# Damaged files: nothing out but loopback, DHCP and the LAN (not its DNS), so the Mac keeps its
+# address and its printer while nothing reaches the internet (#83); the same lines as in rules().
+lockdown() {
+  echo 'pass out quick on lo0 all flags any'
+  echo 'pass out quick inet proto udp from any port 68 to any port 67 user 0 keep state'
+  echo 'pass out quick inet to { 169.254.0.0/16, 224.0.0.0/4, 255.255.255.255 } keep state'
+  echo 'block drop out quick inet6 proto { tcp udp } to { fe80::/10, ff00::/8 } port 53'
+  echo 'pass out quick inet6 to { fe80::/10, ff00::/8 } keep state'
+  echo 'block drop out quick proto { tcp udp } to { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } port 53'
+  echo 'pass out quick inet to { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } flags any keep state'
+  echo 'block drop out quick all'
+}
 
 # "interface address" for every utun that has an IPv4 address, sorted.
 utun_addrs() {
@@ -178,8 +276,9 @@ tunnel_sig() {
 # the core's group) and leave the Mac without any tunnel, while "ks core on" refuses to start
 # next to it. So the rules let everything out until that VPN goes (the watchdog sees the tunnel
 # list change within a second and loads the blocking rules) or our core comes up.
+# Never while our VPN is on (ADR 0035): its own restart would open everything to the other tunnel.
 vpn_standby() {
-  ! core_running &&
+  ! vpn_on && ! core_running &&
     utun_addrs | awk -v a="$CORE_TUN_ADDR" '$2 ~ /^198\.18\./ { v = 1 } $2 == a { o = 1 } END { exit !(v && !o) }'
 }
 
@@ -279,20 +378,135 @@ rules() {  # rules [allow-file] [servers-file] [manual-servers-file]
 pf_enabled() { pfctl -s info 2>/dev/null | grep -q 'Status: Enabled'; }
 rules_hash() { pfctl -a "$ANCHOR" -s rules 2>/dev/null | shasum -a 256 | cut -d' ' -f1; }
 
-# Enabled network services bound to a physical port (en*, bridge*), one name per line.
-physical_services() {
-  networksetup -listnetworkserviceorder | awk '
-    /^\([0-9]+\) / { sub(/^\([0-9]+\) /, ""); name = $0 }
-    /Device: (en|bridge)[0-9]+\)/ { if (name != "") print name; name = "" }'
+# networksetup killed after NS_TIMEOUT seconds: the watchdog's one-second loop never hangs on it.
+# A subshell, not an exec, so a function of the same name (the tests' fake) is what runs.
+NS_TIMEOUT=3
+ns() {
+  (
+    networksetup "$@" 2>/dev/null & p=$!
+    perl -e 'sleep shift; kill 9, shift' "$NS_TIMEOUT" "$p" >/dev/null 2>&1 & k=$!
+    wait "$p"; rc=$?
+    kill "$k" 2>/dev/null
+    exit "$rc"
+  )
+}
+# Every network service bound to a physical port (en*, bridge*): "on|off<TAB>name<TAB>device".
+# Disabled ones are listed as "(*) Name". A name with a control character (a tab) could not be told
+# from its device: "bad<TAB><TAB>device", left alone. A name with a newline is not listed at all.
+service_list() {
+  ns -listnetworkserviceorder | awk '
+    /^\(([0-9]+|\*)\) / { on = ($0 !~ /^\(\*\)/); sub(/^\(([0-9]+|\*)\) /, ""); name = $0; next }
+    match($0, /Device: (en|bridge)[0-9]+\)/) {
+      if (name != "") print (name ~ /[[:cntrl:]]/ ? "bad\t" : (on ? "on" : "off") "\t" name) "\t" substr($0, RSTART + 8, RLENGTH - 9) }
+    { name = "" }'
+}
+# Interfaces configd knows (State:/Network/Interface), one per line. The kernel can have one
+# (ifconfig -l) and networksetup call it Enabled while configd does not know it yet: then nothing
+# comes up on it (the 15.10.2026 incident).
+configd_ifs() { echo 'show State:/Network/Interface' | scutil 2>/dev/null | awk '$2 == ":" && $1 ~ /^[0-9]+$/ { print $3 }'; }
+net_now() { date +%s; }
+
+# The boot window guard's mark ($WIFI_MARK): "name<TAB>device" per service ks turned off (a mark
+# from before 0.20.0 has names only). Never truncated, never written from a stale copy: every change
+# is a locked_rewrite of the file as it is (a shutdown and "ks netrestore" can run next to the
+# watchdog), one line per device and per name, the first one winning; empty, it is removed (ADR 0037).
+NET_MARK_PL='my (%d, %n, @M);
+  for (@L) { next unless length; my ($nm, $dv) = split /\t/, $_, 2; $dv = "" unless defined $dv;
+    next if ($dv ne "" && exists $d{$dv}) || exists $n{$nm}; $d{$dv} = 1 if $dv ne ""; $n{$nm} = 1; push @M, $_ }
+  @L = @M; unless (@L) { unlink $f; exit 0 }'
+# mark_add <lines>: these first (a shutdown: the name each device has now), then the mark's own
+mark_add() { locked_rewrite_wait 5 "" "$WIFI_MARK" '@L = ((split /\n/, $ARGV[0]), @L); '"$NET_MARK_PL" "$1"; }
+# mark_change <old> <new> ...: each line <old> becomes <new>, or goes when <new> is empty; lines
+# added meanwhile stay. The first-seen time goes with the mark.
+mark_change() {
+  locked_rewrite_wait 2 "" "$WIFI_MARK" 'my %r; while (@ARGV) { my ($o, $w) = splice @ARGV, 0, 2; $r{$o} = $w }
+    @L = map { exists $r{$_} ? $r{$_} : $_ } @L; '"$NET_MARK_PL" "$@" || return 1
+  [ -f "$WIFI_MARK" ] || rm -f "$NET_SEEN"
+}
+# net_seen_age: seconds since the mark was first seen in this boot (by the watchdog, or by
+# "ks netrestore" if it came first). In $NET_SEEN, not in the process: a watchdog restarted (HUP,
+# a crash and KeepAlive) goes on counting; another boot starts again. The mark's own time says
+# nothing: it is the shutdown's.
+net_seen_age() {
+  local boot b="" t="" now
+  boot=$(boot_id 2>/dev/null); boot=${boot:-unknown}; now=$(net_now)
+  read -r b t 2>/dev/null < "$NET_SEEN"
+  if [[ "$t" =~ ^[0-9]{1,12}$ ]]; then t=$((10#$t)); else t=""; fi   # 10#: "0118005" is not octal
+  if [ "$b" != "$boot" ] || [ -z "$t" ] || [ "$t" -gt "$now" ]; then
+    t=$now
+    printf '%s %s\n' "$boot" "$t" > "$NET_SEEN.$$" && chmod 644 "$NET_SEEN.$$" && mv -f "$NET_SEEN.$$" "$NET_SEEN"
+  fi
+  echo $((now - t))
+}
+# net_back: every service in the mark on again, and checked. A line leaves the mark only when it was
+# seen on twice, NET_CONFIRM seconds apart: networksetup says Enabled and configd knows its device
+# (when the mark has one). A device the kernel does not have either (an adapter unplugged during the
+# restart) gets 90 s from the first-seen time to come, then Enabled is enough. A service renamed
+# since is found by its device; one that is gone (neither name nor device) is dropped.
+# 0 once the mark is gone; 2 when what is left only waits for its second look; else 1. NET_LEFT
+# says what is left.
+NET_LEFT=""; NET_OK=""; NET_CONFIRM=3   # NET_OK: "<epoch><TAB>name<TAB>device" seen on once
+net_back() {
+  local all line name dev svc st key t ok now age kern conf seen="" left="" wait=0 off=0 ops=()
+  NET_LEFT=""
+  [ -f "$WIFI_MARK" ] || { NET_OK=""; return 0; }
+  all=$(service_list)
+  [ -n "$all" ] || { NET_LEFT=$(cut -f1 "$WIFI_MARK" | paste -sd, -); return 1; }
+  now=$(net_now); age=$(net_seen_age)
+  kern=" $(ifconfig -l 2>/dev/null) "; conf=" $(configd_ifs | paste -sd' ' -) "
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    IFS=$'\t' read -r name dev _ <<< "$line"
+    svc=""
+    [ -z "$name" ] || svc=$(k=$name awk -F'\t' '$1 != "bad" && $2 == ENVIRON["k"] { print $2; exit }' <<< "$all")
+    [ -n "$svc" ] || [ -z "$dev" ] || svc=$(k=$dev awk -F'\t' '$1 != "bad" && $3 == ENVIRON["k"] { print $2; exit }' <<< "$all")
+    if [ -z "$svc" ]; then
+      log_event "network service $name${dev:+ ($dev)} is gone: dropped from the mark"; ops+=("$line" ""); continue
+    fi
+    st=$(ns -getnetworkserviceenabled "$svc")
+    [ "$st" = Enabled ] || { ns -setnetworkserviceenabled "$svc" on >/dev/null; st=$(ns -getnetworkserviceenabled "$svc"); }
+    ok=0
+    if [ "$st" = Enabled ]; then
+      if [ -z "$dev" ] || [[ "$conf" == *" $dev "* ]]; then ok=1
+      elif [[ "$kern" != *" $dev "* ]] && [ "$age" -ge 90 ]; then ok=1
+      elif [ "$age" -ge 300 ]; then ok=1; log_event "network service $svc ($dev) never known to configd in 300 s: Enabled accepted"
+      fi
+    fi
+    key="$svc"$'\t'"$dev"
+    if [ "$ok" = 1 ]; then
+      t=$(k=$key awk -F'\t' '$2 "\t" $3 == ENVIRON["k"] { print $1; exit }' <<< "$NET_OK")
+      [[ "$t" =~ ^[0-9]{1,12}$ ]] && t=$((10#$t)) || t=""
+      if [ -n "$t" ] && [ $((now - t)) -ge "$NET_CONFIRM" ]; then ops+=("$line" ""); continue; fi
+      seen+="${t:-$now}"$'\t'"$key"$'\n'; wait=1
+    else
+      off=1
+    fi
+    left+="$svc,"
+    [ "$svc" = "$name" ] || ops+=("$line" "$svc${dev:+$'\t'$dev}")
+  done < "$WIFI_MARK"
+  NET_OK=$seen
+  if [ "${#ops[@]}" -gt 0 ]; then mark_change "${ops[@]}" || off=1; fi
+  [ -f "$WIFI_MARK" ] || { NET_OK=""; return 0; }
+  NET_LEFT=${left%,}
+  [ -n "$NET_LEFT" ] || NET_LEFT=$(cut -f1 "$WIFI_MARK" | paste -sd, -)   # added meanwhile: next time
+  [ "$off" = 0 ] && [ "$wait" = 1 ] && return 2
+  return 1
+}
+# net_back_wait: net_back, and the second look NET_CONFIRM seconds later if that is all it needs
+# (ks netrestore, the Login Items branch: no next pass to do it).
+net_back_wait() {
+  local rc
+  net_back; rc=$?
+  [ "$rc" = 2 ] || return "$rc"
+  sleep "$NET_CONFIRM"; net_back
 }
 
-log_event() {
-  echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$EVENTS"
+log_event() {  # the line and the trim to 500 lines under one lock (locked_rewrite, #50); a lock
+  # held longer than 2 s (never by ks itself) gets the line appended untrimmed, the watchdog never waits
+  local line
+  line="$(date '+%Y-%m-%d %H:%M:%S') $*"
+  locked_rewrite_wait 2 "$line" "$EVENTS" 'push @L, $ARGV[0]; splice @L, 0, @L - 500 if @L > 500' "$line"
   diag_event log msg="$*"
-  chmod 644 "$EVENTS"
-  if [ "$(wc -l < "$EVENTS")" -gt 500 ]; then
-    tail -n 500 "$EVENTS" > "$EVENTS.tmp" && mv "$EVENTS.tmp" "$EVENTS"
-  fi
 }
 
 # Rules pf refuses (an address the check let through, 999.1.1.1) block everything too, instead
@@ -314,12 +528,18 @@ load_rules() {  # load_rules [lockdown]
   return 1
 }
 load() {  # load [tunnel_sig, if the caller has it]
-  [ -f "$FLAG" ] && return 0   # a switch-off raced with the watchdog
+  [ -f "$FLAG" ] && [ ! -f "$VPN_ON" ] && return 0   # a switch-off raced with the watchdog (the file itself, not the pass's read)
   pf_enabled || pfctl -E >/dev/null 2>&1   # enable first: loading can take a moment
-  local sig=${1:-} files bad
+  local sig=${1:-} files bad unknown
   [ -n "$sig" ] || sig=$(tunnel_sig)
   files=$(root_files_sig)
   bad=$(root_files_bad | paste -sd, -)
+  unknown=; [ -n "$bad" ] || unknown=$(settings_unknown 2>/dev/null < "$SETTINGS" | sort -u | paste -sd, -)   # a damaged file (a FIFO, a symlink) is never opened
+  # logged when the set changes, not on every load (the event log keeps 500 lines)
+  if [ -z "$unknown" ]; then rm -f "$DIR/unknown-logged"
+  elif [ "$(cat "$DIR/unknown-logged" 2>/dev/null)" != "$unknown" ]; then
+    log_event "unknown settings ignored: $unknown"; echo "$unknown" > "$DIR/unknown-logged" 2>/dev/null
+  fi
   STANDBY=0; [ -z "$bad" ] && vpn_standby && STANDBY=1
   if ! load_rules; then
     load_rules lockdown || { echo "rules failed to load" >&2; return 1; }
@@ -327,7 +547,7 @@ load() {  # load [tunnel_sig, if the caller has it]
   fi
   if [ -n "$bad" ]; then
     # a retry pf refused again is not news (every PF_RETRY seconds)
-    [ "${LOAD_RETRY:-0}" = 1 ] && [ "$bad" = rules ] || log_event "invalid $bad: everything blocked until repaired"
+    [ "${LOAD_RETRY:-0}" = 1 ] && [ "$bad" = rules ] || log_event "invalid $bad: internet blocked until repaired, local network and DHCP still work"
     echo "$bad" > "$INVALIDF.tmp" && chmod 644 "$INVALIDF.tmp" && mv "$INVALIDF.tmp" "$INVALIDF"
   else
     rm -f "$INVALIDF"
@@ -343,18 +563,27 @@ loaded() {
 
 reload_if_on() { if loaded; then load; fi; }
 
+# «VPN включён» (ADR 0035): while $VPN_ON is there pf blocks as with protection on, whatever the
+# switch, a pause or «выключено» say. A watchdog pass reads the file once ($VPN_PASS) for what it
+# reports, so its state file never says vpn=1 with the blocking of vpn=0; anything that would flush
+# or skip loading looks at the file itself.
+vpn_on() { if [ -n "${VPN_PASS:-}" ]; then [ "$VPN_PASS" = 1 ]; else [ -f "$VPN_ON" ]; fi; }
+
 disable() {
-  echo "$1" > "$FLAG"
-  pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
+  # a new file moved into place: guard never reads it empty (that would end the pause, #50)
+  local t
+  t=$(mktemp "$FLAG.XXXXXX") && echo "$1" > "$t" && chmod 644 "$t" && mv -f "$t" "$FLAG" || { rm -f "${t:-}"; return 1; }
+  vpn_on || pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1   # with the VPN on it keeps blocking (ADR 0035)
 }
 
 # One pass of the watchdog: respects pause / off, reloads if anything was tampered with.
 # guard [full|quick]: pause, off and the tunnels are checked every time (a file test and one
 # ifconfig); pf itself (three pfctl calls) only when full. Sets PROT (on, off, paused:<epoch>,
-# or "" while unknown) and TSIG (tunnel_sig) for the state file.
-PROT=""; TSIG=""; STANDBY=0
+# or "" while unknown), BLOCKING (1: our rules are in place) and TSIG (tunnel_sig) for the state file.
+# The switch off or paused with the VPN on (ADR 0035): PROT says so, the rules are kept as when on.
+PROT=""; TSIG=""; STANDBY=0; BLOCKING=0
 guard() {
-  local until why="" mode=${1:-full}
+  local until why="" mode=${1:-full} prot=on
   TSIG=$(tunnel_sig)
   if [ -f "$FLAG" ]; then
     until=$(cat "$FLAG" 2>/dev/null)
@@ -364,14 +593,18 @@ guard() {
     elif [ "$until" != 0 ] && [ "$(date +%s)" -ge "$until" ]; then
       rm -f "$FLAG"; log_event "pause ended"; mode=full
     else
-      if [ "$until" = 0 ]; then PROT=off; else PROT="paused:$until"; fi
-      # "ks off" flushes after writing the flag, but a reload that checked the flag just before
-      # can still land after that flush: rules loaded while off are flushed again here.
-      if [ "$mode" = full ] && [ -n "$(pfctl -a "$ANCHOR" -s rules 2>/dev/null)" ] && [ -f "$FLAG" ]; then
-        pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
-        log_event "rules found loaded while off: flushed"
+      if [ "$until" = 0 ]; then prot=off; else prot="paused:$until"; fi
+      if ! vpn_on; then
+        PROT=$prot; BLOCKING=0
+        # "ks off" flushes after writing the flag, but a reload that checked the flag just before
+        # can still land after that flush: rules loaded while off are flushed again here.
+        # the file itself, not the pass's read: «Подключить» may have loaded its rules meanwhile
+        if [ "$mode" = full ] && [ -n "$(pfctl -a "$ANCHOR" -s rules 2>/dev/null)" ] && [ -f "$FLAG" ] && [ ! -f "$VPN_ON" ]; then
+          pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
+          log_event "rules found loaded while off: flushed"
+        fi
+        return 0
       fi
-      return 0
     fi
   fi
   if [ ! -f "$HASHF" ]; then why="initial load"
@@ -386,16 +619,16 @@ guard() {
   elif standby_changed; then why="standby $([ "$STANDBY" = 1 ] && echo ended || echo began)"
   elif rules_retry_due; then why=retry
   fi
-  if [ -z "$why" ]; then PROT=on; return 0; fi
+  if [ -z "$why" ]; then PROT=$prot; BLOCKING=1; return 0; fi
   if [ "$why" = retry ]; then
     LOAD_RETRY=1
-    if load "$TSIG"; then PROT=on; else PROT=off; log_event "reload failed"; fi
+    if load "$TSIG"; then PROT=$prot; BLOCKING=1; else PROT=off; BLOCKING=0; log_event "reload failed"; fi
     LOAD_RETRY=0
     [ -f "$INVALIDF" ] || log_event "rules loaded again after pf had refused them"
     return 0
   fi
   log_event "$why: reloading"
-  if load "$TSIG"; then PROT=on; else PROT=off; log_event "reload failed"; fi
+  if load "$TSIG"; then PROT=$prot; BLOCKING=1; else PROT=off; BLOCKING=0; log_event "reload failed"; fi
 }
 # pf refused the rules (load): the lockdown holds, the rules are tried again every PF_RETRY seconds
 rules_retry_due() {
@@ -443,7 +676,8 @@ PUBLISHED=""
 publish_state() {
   local s
   [ -n "$PROT" ] || return 0
-  s=$(printf 'pid=%s\nprotection=%s\ncore=%s\ntunnels=%s\nstandby=%s' "$$" "$PROT" "${CORE_STATE:-off}" "$TSIG" "${STANDBY:-0}")
+  s=$(printf 'pid=%s\nprotection=%s\ncore=%s\ntunnels=%s\nstandby=%s\nvpn=%s\nblocking=%s\nstuck=%s' "$$" "$PROT" "${CORE_STATE:-off}" "$TSIG" "${STANDBY:-0}" \
+    "$(vpn_on && echo 1 || echo 0)" "$BLOCKING" "${VPN_STUCK:-0}")
   [ "$s" = "$PUBLISHED" ] && return 0
   printf '%s\n' "$s" > "$STATEF.tmp" && chmod 644 "$STATEF.tmp" && mv "$STATEF.tmp" "$STATEF" && PUBLISHED=$s
 }
@@ -452,22 +686,135 @@ publish_state() {
 # within 2 s), at once when off/pause just ended; the core every second pass.
 LAST_FLAG=""
 watch_pass() {
-  local mode=quick flag=0
+  local mode=quick flag=0 VPN_PASS=0
+  [ -f "$VPN_ON" ] && VPN_PASS=1
   [ -f "$FLAG" ] && flag=1
+  vpn_on && flag="$flag+vpn"   # the VPN on or off changes what blocks (ADR 0035): a full pass at once
   if [ $(($1 % 2)) = 0 ] || [ "$flag" != "$LAST_FLAG" ]; then mode=full; fi
   LAST_FLAG=$flag
   guard "$mode"
+  # right after the rules, before what may take long (the core, DNS): the network back (ADR 0037)
+  [ -f "$WIFI_MARK" ] && net_guard
   [ $(($1 % 2)) = 0 ] && core_guard
+  vpn_stuck
+  gap_track
   [ $(($1 % 10)) = 5 ] && netbird_bg
-  if [ -f "$WIFI_MARK" ] && { [ -f "$FLAG" ] || [ "$PROT" = on ]; }; then
-    while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" on; done < "$WIFI_MARK"
-    rm -f "$WIFI_MARK"; log_event "rules up: network on"
-  fi
   publish_state
   diag_tick
   [ $(($1 % 10)) = 5 ] && diag_bg
-  # Xray: the running host still answers? (ADR 0023)
-  [ $(($1 % 20)) = 15 ] && [ "$CORE_STATE" = on ] && [ "$PROT" = on ] && [ "${STANDBY:-0}" != 1 ] && failover_bg
+  # Xray: the running host still answers, or another way to it does? (ADR 0030)
+  [ $(($1 % 20)) = 15 ] && [ "$CORE_STATE" = on ] && [ "$BLOCKING" = 1 ] && [ "${STANDBY:-0}" != 1 ] && escalate_bg
+  [ $(($1 % 10)) = 7 ] && app_guard
+}
+
+# KillSwitch.app moved to the Trash (#84): nothing would be left to turn the block off. Its daemon
+# writes where the app is at every start ($APP_REC, so a moved app is followed), only for an app in
+# /Applications: one on another volume (a DMG, a disk not mounted yet) is never watched. Missing for
+# APP_GONE_AFTER s of this watchdog's uptime in a row (an update replacing the app: back in time,
+# nothing happens), and no app with our bundle id in /Applications under another name (then that is
+# recorded instead), protection goes as "ks off" plus "ks core off" leave it, and the job is booted
+# out once the boot guard's network is back (net_guard keeps at it). Only ENOENT counts as missing.
+# No record (installed before, or by the password prompt alone): nothing is watched. Once removed,
+# the job comes back at each boot and goes again without a word: nothing is left to remove.
+APP_REC="$DIR/app"; APPS_DIR="/Applications"; APP_ID="com.lesha19.KillSwitch"
+APP_GONE_AFTER=600; APP_MISSING=""; APP_GONE=0
+app_bundle_id() { /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1/Contents/Info.plist" 2>/dev/null; }
+app_find() {  # our app in /Applications under any name: recorded, 0
+  local a
+  for a in "$APPS_DIR"/*.app; do
+    [ -d "$a" ] && [ ! -L "$a" ] && [ "$(app_bundle_id "$a")" = "$APP_ID" ] || continue
+    echo "$a" > "$APP_REC.tmp" && chmod 644 "$APP_REC.tmp" && mv -f "$APP_REC.tmp" "$APP_REC"
+    return 0
+  done
+  return 1
+}
+app_guard() {
+  local app
+  root_file_ok "$APP_REC" any && app=$(head -1 "$APP_REC" 2>/dev/null) || return 0
+  [[ "$app" == "$APPS_DIR"/*.app && "$app" != */../* ]] || return 0
+  if /usr/bin/perl -e 'lstat $ARGV[0] or exit($!{ENOENT} ? 1 : 0)' -- "$app"; then APP_MISSING=""; return 0; fi
+  [ -n "$APP_MISSING" ] || APP_MISSING=$SECONDS
+  [ $((SECONDS - APP_MISSING)) -ge "$APP_GONE_AFTER" ] || return 0
+  if [ "$APP_GONE" = 0 ]; then
+    if app_find; then APP_MISSING=""; return 0; fi
+    APP_GONE=1
+    # an earlier boot removed it all: nothing to do, nothing to log
+    if [ "$(cat "$FLAG" 2>/dev/null)" != 0 ] || [ -f "$VPN_ON" ] || [ -n "$(pfctl -a "$ANCHOR" -s rules 2>/dev/null)" ]; then
+      disable 0
+      "$KS_SELF" core off >/dev/null 2>&1
+      pfctl -a "$ANCHOR" -F all >/dev/null 2>&1
+      log_event "app gone for $((APP_GONE_AFTER / 60)) min ($app): protection removed, watchdog stops"
+    fi
+  fi
+  [ "$APP_GONE" = 1 ] && [ ! -f "$WIFI_MARK" ] || return 0
+  APP_GONE=2
+  # launchd's TERM runs on_term: protection is off, so the shutdown guard leaves the network on
+  launchctl bootout "$WATCH_JOB" >/dev/null 2>&1 &
+}
+
+# The network services the boot window guard turned off, back on once the rules are up; tried on
+# every pass until networksetup and configd confirm it (the 15.10.2026 incident: the first "on" came
+# before configd knew en0 and did nothing). Whatever the rules do, 90 s after the mark was first
+# seen in this boot (net_seen_age: a restarted watchdog does not start the count again) the network
+# goes back on anyway: a Mac without network is worse than an open boot window (ADR 0037).
+# Failures logged every 30 s, or as NETWORK STILL OFF every minute once past that point.
+NET_LOGGED=-100; NET_FORCED=0
+# net_guard_start: the watchdog (re)starts; its wall-clock start is the reference for forced_ok
+net_guard_start() { NET_START=$(net_now); }
+# forced_ok: the 90 s are up. Seen-age alone is wall clock: a bad RTC corrected by NTP jumps it
+# forward and would open the network before the rules. So it also takes 90 s of this watchdog's own
+# uptime (SECONDS, immune to jumps), or a first-seen time that already predates this watchdog's start
+# by 90 s (a restart: the age at start is age - (now - NET_START), also jump-neutral after start).
+forced_ok() {
+  local now age
+  now=$(net_now); age=$(net_seen_age)
+  [ "$age" -ge 90 ] || return 1
+  [ "$SECONDS" -ge 90 ] || [ $((age - (now - ${NET_START:-$now}))) -ge 90 ]
+}
+net_guard() {
+  local forced=0 rc
+  if { [ -f "$FLAG" ] && ! vpn_on; } || [ "$BLOCKING" = 1 ]; then :
+  elif forced_ok; then forced=1
+  else return 0
+  fi
+  if [ "$forced" = 1 ] && [ "$NET_FORCED" = 0 ]; then
+    NET_FORCED=1; log_event "boot guard: rules not up after 90 s, network turned on anyway"
+  fi
+  net_back; rc=$?
+  if [ "$rc" = 0 ]; then log_event "$([ "$forced" = 1 ] && echo "network on without the rules" || echo "rules up: network on")"; return 0; fi
+  [ "$rc" = 2 ] && return 0
+  if [ "$forced" = 1 ]; then
+    [ $((SECONDS - NET_LOGGED)) -ge 60 ] || return 0
+    NET_LOGGED=$SECONDS; log_event "NETWORK STILL OFF: $NET_LEFT could not be turned on"
+  else
+    [ $((SECONDS - NET_LOGGED)) -ge 30 ] || return 0
+    NET_LOGGED=$SECONDS; log_event "network not back yet: $NET_LEFT, trying again"
+  fi
+}
+
+# A gap (ADR 0035): the VPN on and not connected, so the internet closed. Its start is kept in
+# $GAPF ("<epoch> <boot id>"), so a watchdog restarting in place (an update) goes on with it.
+# When it ends, one line for «Журнал защиты»: how long, and why from what the log says about the
+# time around it: an update (the new helper), a server switch, «Отключить VPN», else a reconnect.
+# A gap from before a reboot has no length anyone could trust: dropped.
+gap_track() {
+  local start boot now why since
+  if vpn_on && { [ "$CORE_STATE" != on ] || [[ "$TSIG" != vpn:utun* ]]; }; then
+    [ -f "$GAPF" ] || echo "$(date +%s) $(boot_id)" > "$GAPF"
+    return 0
+  fi
+  [ -f "$GAPF" ] || return 0
+  read -r start boot < "$GAPF"; rm -f "$GAPF"
+  [[ "$start" =~ ^[0-9]+$ ]] && [ "$boot" = "$(boot_id)" ] || return 0
+  now=$(date +%s)
+  # the last thing KillSwitch did from 30 s before the gap began (an update's restart follows its HUP)
+  since=$(date -r $((start - 30)) '+%Y-%m-%d %H:%M:%S')
+  if vpn_on; then
+    why=$(awk -v s="$since" '($1 " " $2) < s { next } /new helper/ { w = "update" }
+      /escalate \(|core: .* -> / { w = "server switch" } END { print w ? w : "reconnect" }' "$EVENTS" 2>/dev/null)
+  else why="VPN off"
+  fi
+  log_event "internet closed for $((now - start)) s: $why"
 }
 
 # NetBird binds its sockets (WireGuard, STUN, relays, management) to the physical interface, past
@@ -499,22 +846,58 @@ NB_TRUST_ROOT=/   # the walk goes up to here; set by ks itself, a test points it
 nb_user() { local u; u=$(stat -f %u /dev/console 2>/dev/null) && [[ "$u" =~ ^[0-9]+$ ]] && [ "$u" != 0 ] && echo "$u"; }
 # nb_trusted <path>: the real path (links resolved) when the file and every folder above it belong
 # to root and nobody else can write them; a folder only the admin group may write (/Applications)
-# is accepted. Anything else could be swapped by a user: not NetBird.
-nb_trusted() {
-  perl -MCwd=abs_path -e 'my ($o, $p, $top) = @ARGV; my $r = abs_path($p) // exit 1;
-    my @s = stat $r or exit 1; -f _ && ($s[4] == 0 || $s[4] == $o) && !($s[2] & 022) or exit 1;
-    for (my $d = $r; $d ne "/" && $d ne $top;) { $d =~ s{/[^/]*$}{}; $d = "/" if $d eq "";
-      @s = stat $d or exit 1; ($s[4] == 0 || $s[4] == $o) && !($s[2] & 02) or exit 1;
-      !($s[2] & 020) || $s[5] == 80 || $s[5] == 0 or exit 1 }
-    print "$r\n"' "$NB_OWNER" "$1" "$NB_TRUST_ROOT"
+# is accepted. Anything else could be swapped by a user: not NetBird (exit 1). launchd runs the
+# path as written, so the links are followed one by one and each one's folder is checked too
+# (#50): exit 2, still with the real path, when only a link's folder fails (NetBird's installer
+# puts its link into /usr/local/bin, which some Macs give to the user). Swapped there, the link
+# makes launchd run the new file as root at NetBird's next start whatever KillSwitch does, so a
+# refusal would protect nothing and only cut NetBird off: it is logged instead (decided by the
+# agent, docs/security/hardening-0.20.md).
+nb_trusted() { trusted_path "$NB_OWNER" 1 "$1" "$NB_TRUST_ROOT"; }
+# trusted_path <owner uid> <admin group may write folders: 0|1> <path> [top]: nb_trusted's walk,
+# for any owner besides root (the tests' own files) and with or without the admin group's folders;
+# the folders above [top] (default /) are not checked (NB_TRUST_ROOT: a test's own folder).
+trusted_path() {
+  perl -e 'my ($o, $admin, $p, $top) = @ARGV; $p =~ m{\A/} or exit 1; $top = "/" unless defined $top && length $top;
+    sub above_top { my $d = shift; $top ne "/" && $d ne $top && index("$top/", $d eq "/" ? "/" : "$d/") == 0 }
+    sub dir_ok { my @s = stat $_[0] or return 0; -d _ && ($s[4] == 0 || $s[4] == $o) && !($s[2] & 02) &&
+      (!($s[2] & 020) || ($admin && ($s[5] == 80 || $s[5] == 0))) }
+    my ($cur, $hops, %bad) = ("", 0);
+    my @rest = grep { length } split m{/}, $p;
+    while (@rest) {
+      my $c = shift @rest;
+      next if $c eq ".";
+      if ($c eq "..") { $cur =~ s{/[^/]*\z}{}; next }
+      my $d = $cur eq "" ? "/" : $cur;
+      $bad{$d} = 1 unless above_top($d) || dir_ok($d);
+      if (-l "$cur/$c") {
+        ++$hops <= 40 or exit 1;
+        my $t = readlink "$cur/$c"; defined $t && length $t or exit 1;
+        $cur = "" if $t =~ m{\A/};
+        unshift @rest, grep { length } split m{/}, $t;
+      } else { $cur = "$cur/$c" }
+    }
+    my @s = stat $cur or exit 1; -f _ && ($s[4] == 0 || $s[4] == $o) && !($s[2] & 022) or exit 1;
+    for (my $d = $cur; $d ne "/";) { $d =~ s{/[^/]*\z}{}; $d = "/" if $d eq ""; exit 1 if $bad{$d} }
+    print "$cur\n"; exit(%bad ? 2 : 0)' "$1" "$2" "$3" "${4:-/}"
+}
+nb_target() {  # nb_target <path>: nb_trusted's real path, a link's own folder aside (its exit 2)
+  local r rc
+  r=$(nb_trusted "$1"); rc=$?
+  { [ "$rc" = 0 ] || [ "$rc" = 2 ]; } && echo "$r"
 }
 nb_signed() { codesign -v -R="anchor apple generic and certificate leaf[subject.OU] = \"$NB_TEAM\"" "$1" 2>/dev/null; }
 nb_want() {
-  local bin
+  local bin real rc
   [ "$(setting tailscale 1)" = 1 ] && dscl . -read "/Groups/$NB_GROUP" PrimaryGroupID >/dev/null 2>&1 || return 1
   bin=$(nb_bin) && [ -n "$bin" ] || return 1
-  bin=$(nb_trusted "$bin") || { log_event "netbird: its binary can be changed by others than root, not let past the VPN"; return 1; }
-  nb_signed "$bin"
+  real=$(nb_trusted "$bin"); rc=$?
+  case $rc in
+    0) ;;
+    2) log_event "netbird: $bin is a link in a folder others than root can write (launchd runs it as root); let past the VPN by the file it leads to" ;;
+    *) log_event "netbird: its binary can be changed by others than root, not let past the VPN"; return 1 ;;
+  esac
+  nb_signed "$real"
 }
 nb_addr() {  # the daemon address from the plist's --daemon-addr, NetBird's default otherwise
   local a i=1 prev=""
@@ -527,7 +910,7 @@ nb_addr() {  # the daemon address from the plist's --daemon-addr, NetBird's defa
 }
 nb_cli() {  # nb_cli <seconds> <args...>: NetBird's CLI against its daemon as the console user, killed after <seconds>
   local t=$1 u bin; shift
-  u=$(nb_user) && bin=$(nb_trusted "$(nb_bin)") && nb_signed "$bin" || return 1
+  u=$(nb_user) && bin=$(nb_target "$(nb_bin)") && nb_signed "$bin" || return 1
   perl -MPOSIX -e '$t = shift; $u = shift; @pw = getpwuid $u or exit 1; $p = fork; defined $p or exit 1;
     if (!$p) { $) = "$pw[3] $pw[3]"; POSIX::setgid($pw[3]) && POSIX::setuid($u) && $< == $u && $> == $u && $u != 0 or exit 1;
       @ENV{qw(HOME USER LOGNAME)} = @pw[7, 0, 0]; exec @ARGV; exit 127 }
@@ -566,7 +949,7 @@ nb_try_restart() {  # nb_try_restart <failures so far> <now>
   log_event "netbird: its daemon did not start again (launchctl bootstrap failed), next try in ${delay} s"
   return 1
 }
-netbird_bg() { [ -f "$NB_PLIST" ] || return 0; lockf -k -t 0 "$DIR/netbird.lock" "$0" _netbird >/dev/null 2>&1 & }
+netbird_bg() { [ -f "$NB_PLIST" ] || return 0; lock_ready "$DIR/netbird.lock" 2>/dev/null; lockf -k -t 0 "$DIR/netbird.lock" "$0" _netbird >/dev/null 2>&1 & }
 netbird_sync() {  # netbird_sync [now]: nothing to do unless the plist, binary or setting changed
   local sig want=0 have=0 now=${1:-$(date +%s)} n next
   [ -f "$NB_PLIST" ] || { rm -f "$NB_SIGF" "$NB_RETRYF" "$NB_UPF"; return 0; }
@@ -604,30 +987,46 @@ netbird_sync() {  # netbird_sync [now]: nothing to do unless the plist, binary o
 # disabled before it stops it.
 watch_disabled() { launchctl print-disabled system 2>/dev/null | grep -qE "\"${WATCH_JOB#system/}\" => (disabled|true)"; }
 shutdown_guard() {
-  local svc
+  local all now bad name
   # damaged settings saying wifiguard=0 are not believed
-  [ ! -f "$FLAG" ] && { [ "$(setting wifiguard 1)" = 1 ] || ! root_file_ok "$SETTINGS" settings; } || return 0
+  # off by hand blocks nothing at boot, unless the VPN is on (ADR 0035)
+  { [ ! -f "$FLAG" ] || vpn_on; } && { [ "$(setting wifiguard 1)" = 1 ] || ! root_file_ok "$SETTINGS" settings; } || return 0
   if watch_disabled; then
-    log_event "watchdog switched off (Login Items): network left on"
+    # nothing would start it again: what an earlier shutdown turned off comes back now
+    if [ ! -f "$WIFI_MARK" ]; then log_event "watchdog switched off (Login Items): network left on"
+    elif net_back_wait; then log_event "watchdog switched off (Login Items): network turned back on"
+    else log_event "watchdog switched off (Login Items): NETWORK STILL OFF: $NET_LEFT"; fi
     return 0
   fi
-  physical_services > "$WIFI_MARK"
-  while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" off; done < "$WIFI_MARK"
-  log_event "shutdown: network off ($(paste -sd, - < "$WIFI_MARK"))"
+  all=$(service_list)
+  now=$(awk -F'\t' -v OFS='\t' '$1 == "on" { print $2, $3 }' <<< "$all")
+  for bad in $(awk -F'\t' '$1 == "bad" { print $3 }' <<< "$all"); do
+    log_event "network service on $bad has a control character in its name: left on"
+  done
+  # a mark of its own for this shutdown: the 90 s count starts at the next boot's first look
+  [ -f "$WIFI_MARK" ] || rm -f "$NET_SEEN"
+  # merged: the services turned off now first, by the name each device has now, then the mark's
+  [ -n "$now" ] && mark_add "$now"
+  while IFS=$'\t' read -r name _; do [ -n "$name" ] && ns -setnetworkserviceenabled "$name" off >/dev/null; done <<< "$now"
+  log_event "shutdown: network off ($(cut -f1 "$WIFI_MARK" 2>/dev/null | paste -sd, -))"
 }
 
 # "ks netrestore" (passwordless): the services the boot guard turned off, on again, for when the
-# watchdog that would do it is gone. While it runs it does that itself once the rules are up, so
-# before that this refuses: the boot window stays closed.
+# watchdog that would do it is gone or failed. While it runs it does that itself once the rules are
+# up, so for the first 20 s after the mark was first seen in this boot (net_seen_age) this refuses:
+# the boot window stays closed. Fails while a service is still off.
 net_restore() {
-  local svc
   [ -f "$WIFI_MARK" ] || return 0
-  if launchctl print "$WATCH_JOB" >/dev/null 2>&1 && [ ! -f "$FLAG" ] && ! loaded; then
+  if [ "$(net_seen_age)" -lt 20 ] && launchctl print "$WATCH_JOB" >/dev/null 2>&1 &&
+    { [ ! -f "$FLAG" ] || vpn_on; } && ! loaded; then
     echo "Сеть включит служба защиты, как только загрузит правила" >&2
     return 1
   fi
-  while IFS= read -r svc; do networksetup -setnetworkserviceenabled "$svc" on; done < "$WIFI_MARK"
-  rm -f "$WIFI_MARK"
+  if ! net_back_wait; then
+    log_event "netrestore: NETWORK STILL OFF: $NET_LEFT"
+    echo "Не удалось включить: $NET_LEFT" >&2
+    return 1
+  fi
   log_event "network turned back on by hand"
 }
 
@@ -1068,7 +1467,8 @@ core_generate_mihomo() (
     # fields only; no path, mihomo picks its own in its directory.
     NOTES="$w/notes" KS_DNS=$KS_DNS json_edit "$RP" '
       die "rule-providers: не объект\n" unless ref $j eq "HASH";
-      my %field = map { ($_ => 1) } qw(type behavior format url interval proxy size-limit payload path);
+      # header: request headers of the download (mihomo docs; #37), names and plain strings only
+      my %field = map { ($_ => 1) } qw(type behavior format url interval proxy size-limit payload path header);
       open my $notes, ">>", $ENV{NOTES} or die;
       for my $n (sort keys %$j) {
         my $shown = $n =~ s/[\x00-\x1f\x7f]/?/gr;
@@ -1079,6 +1479,14 @@ core_generate_mihomo() (
         my $t = $p->{type};
         die "rule-provider «$n»: тип «" . (ref $t ? "?" : ($t // "") =~ s/[\x00-\x1f\x7f]/?/gr) . "» не допускается (только http и inline)\n"
           unless defined $t && !ref $t && $t =~ /\A(http|inline)\z/;
+        if (exists $p->{header}) {
+          my $h = $p->{header};
+          die "rule-provider «$n»: header не объект\n" unless ref $h eq "HASH";
+          for (sort keys %$h) {
+            die "rule-provider «$n»: плохой заголовок\n" unless /\A[A-Za-z0-9-]{1,64}\z/ && ref $h->{$_} eq "ARRAY" && @{ $h->{$_} } <= 8 &&
+              !grep { !defined || ref || /[\x00-\x1f\x7f]/ || length > 1024 } @{ $h->{$_} };
+          }
+        }
         print $notes "provider-path\t$n\n" if exists $p->{path};
         delete $p->{path};
         if ($t eq "http") {
@@ -1120,7 +1528,7 @@ core_generate_mihomo() (
   # taken goes into the report with the reason. Our own resolvers (DoH through KS-DNS) stay the
   # default for every other name. Without a sniffer of its own the subscription gets a routing-only
   # one: domain rules then also apply to programs that resolve names themselves (DoH in Firefox).
-  NAMES="$w/names" GEO=$geo PROV="$RP" IN="$in" W="$w" KS_DNS=$KS_DNS TUN_ADDR=$CORE_TUN_ADDR \
+  NAMES="$w/names" GEO=$geo PROV="$RP" IN="$in" W="$w" KS_DNS=$KS_DNS TUN_ADDR=$CORE_TUN_ADDR DOH=$(doh_url) \
     /usr/bin/perl -MJSON::PP -e "$KS_RULES_PL"'
     my $in = rd($ENV{IN}); my $W = $ENV{W};
     open my $f, "<", $ENV{NAMES} or die; my %name = map { chomp; ($_ => 1) } <$f>; close $f;
@@ -1247,6 +1655,11 @@ core_generate_mihomo() (
     }
     $dns->{$_} = $taken{$_} for keys %taken;
     $dns->{"proxy-server-nameserver"} = [@ns] if $taken{"respect-rules"};
+    # the own DoH server (ADR 0031), reached through KS-DNS like ours, alone: mihomo asks "fallback"
+    # at the same time as the nameservers, so ours there would overrule it. Its own name goes to the
+    # VPN server as a domain and is resolved at the VPN exit (measured: default-nameserver and hosts
+    # are not asked). Nothing here leaves outside the tunnel.
+    if (length($ENV{DOH} // "")) { $dns->{nameserver} = ["$ENV{DOH}#$ENV{KS_DNS}"] }
     # what can resolve outside the tunnel: the signature and pf (egress) follow it
     my %sig = map { exists $taken{$_} ? ($_ => $taken{$_}) : () } qw(nameserver-policy direct-nameserver direct-nameserver-follow-policy respect-rules);
     my $c = JSON::PP->new->canonical;
@@ -1260,8 +1673,32 @@ core_generate_mihomo() (
     my $old = rd("$W/dropped.json"); wr("$W/dropped.json", [@$old, @dropped]);
     open $f, ">>", "$W/notes" or die; print $f "$_\n" for @notes; close $f;' || fail "Не удалось разобрать sniffer или dns подписки"
 
+  # The person's routing profile (ADR 0034): its rules go first here and stay right after
+  # KillSwitch's own below; its DIRECT ones are in the signature that follows, like the
+  # subscription's. "proxy" is where the subscription sends what no rule takes (its MATCH group),
+  # else its first select group, else KS-DNS: never DIRECT.
+  echo '[]' > "$w/profile-rules.json"
+  if has x-ks-routing "$in"; then
+    plutil -extract x-ks-routing json -o "$w/rt.json" "$in" >/dev/null 2>&1 || fail "x-ks-routing: не разобрать"
+    RT="$w/rt.json" GEO=$geo G="$G" KS_DNS=$KS_DNS W="$w" KS_GEOSITE_DAT="$CORE_DIR/geosite.dat" json_edit "$R" "$KS_RULES_PL$KS_ROUTING_PL"'
+      my %geo = map { ($_ => 1) } split " ", $ENV{GEO};
+      my ($name, $rules, $dropped) = routing_hint(rd($ENV{RT}), $geo{site}, $geo{ip});
+      my $groups = rd($ENV{G});
+      my %grp = map { ($_->{name} => 1) } @$groups;
+      my ($match) = map { /\AMATCH,([^,]+)\z/ ? $1 : () } grep { !ref } @$j;
+      my ($sel) = map { $_->{name} } grep { lc($_->{type} // "") eq "select" } @$groups;
+      my $proxy = defined $match && $grp{$match} ? $match : $sel // $ENV{KS_DNS};
+      my %to = (block => "REJECT", direct => "DIRECT", proxy => $proxy);
+      my %mk = (domain => "DOMAIN-SUFFIX", full => "DOMAIN", keyword => "DOMAIN-KEYWORD", geosite => "GEOSITE", cidr4 => "IP-CIDR", cidr6 => "IP-CIDR6");
+      my @r = map { my ($act, undef, $t, $v) = @$_; $t eq "geoip" ? "GEOIP," . ($v eq "private" ? "LAN" : uc $v) . ",$to{$act}" : "$mk{$t},$v,$to{$act}" } @$rules;
+      unshift @$j, @r;
+      wr("$ENV{W}/profile-rules.json", { name => $name, rules => \@r });
+      my $old = rd("$ENV{W}/dropped.json"); wr("$ENV{W}/dropped.json", [ @$old, @$dropped ]);' || fail "Профиль маршрутизации не подходит"
+  fi
+
   # What would go outside the tunnel, for "ks core refresh" to compare with the last import.
-  { direct_sig "$G" "$R" "$RP" && cat "$w/dns-sig"; } > "$w/direct" || fail "Не удалось разобрать правила"
+  { KS_PROFILE_RULES=$(/usr/bin/perl -MJSON::PP -e 'local $/; my $p = JSON::PP->new->decode(<STDIN>); print ref $p eq "HASH" ? scalar @{ $p->{rules} } : 0' < "$w/profile-rules.json") \
+      direct_sig "$G" "$R" "$RP" && cat "$w/dns-sig"; } > "$w/direct" || fail "Не удалось разобрать правила"
 
   # Double VPN: every other proxy is dialed through the entry, so the core only has to reach
   # the entry's server; the exits are reached through it and stay out of pf.
@@ -1281,37 +1718,6 @@ core_generate_mihomo() (
     done
     cp "$w/ips.$e" "$w/servers"
     note multihop "$entry"
-  fi
-
-  # Auto-failover (ADR 0005): the app names sets of the profile's servers in one country
-  # ("x-ks-failover", e.g. every Lithuanian server); each becomes a hidden fallback group the main
-  # selector (the first select group) can pick, so when the chosen server stops answering the core
-  # moves to the next one of the set by itself. Health checks go through the proxies themselves.
-  # Only proxies of the profile, so nothing here can send traffic DIRECT; added after direct_sig.
-  grep -q '^KS-FO-' "$w/names" && fail "Имена «KS-FO-…» заняты: так называются наши запасные группы"
-  if has x-ks-failover "$in"; then
-    plutil -extract x-ks-failover json -o "$w/fo.json" "$in" >/dev/null 2>&1 || fail "x-ks-failover: не разобрать"
-    head -n "$nproxies" "$w/names" > "$w/pnames"
-    FO="$w/fo.json" PNAMES="$w/pnames" json_edit "$G" '
-      open my $f, "<", $ENV{FO} or die; my $fo = do { local $/; JSON::PP->new->decode(<$f>) }; close $f;
-      open $f, "<", $ENV{PNAMES} or die; my %p = map { chomp; ($_ => 1) } <$f>; close $f;
-      die "x-ks-failover: не список\n" unless ref $fo eq "ARRAY";
-      die "x-ks-failover: больше 100 групп\n" if @$fo > 100;
-      my ($main) = grep { lc($_->{type} // "") eq "select" } @$j;
-      my ($n, %seen) = (0);
-      for my $set (@$fo) {
-        die "x-ks-failover: группа — не список из 2–500 серверов\n" unless ref $set eq "ARRAY" && @$set >= 2 && @$set <= 500;
-        for (@$set) {
-          die "x-ks-failover: не имя сервера\n" if ref $_;
-          die "x-ks-failover: «$_» — не сервер профиля\n" unless $p{$_};
-          die "x-ks-failover: «$_» в двух группах\n" if $seen{$_}++;
-        }
-        next unless $main;
-        my $name = "KS-FO-" . ++$n;
-        push @$j, { name => $name, type => "fallback", proxies => [@$set], hidden => JSON::PP::true,
-                    url => "https://cp.cloudflare.com/generate_204", interval => 120 };
-        push @{ $main->{proxies} }, $name;
-      }' || exit 1
   fi
 
   # DNS and rule downloads go through KS-DNS, a group of the profile's proxies only: picking
@@ -1336,12 +1742,17 @@ core_generate_mihomo() (
   # Known fake-ips are names again before the rules (no-resolve keeps this rule off them). ADR 0019.
   echo "IP-CIDR,198.18.0.0/16,REJECT,no-resolve" >> "$w/ours"
   note loop-guard "IP-CIDR,198.18.0.0/16,REJECT,no-resolve"
-  # Ads and trackers (adblock=1): refused before anything else, from the shipped geosite.dat only
-  # (never downloaded). REJECT sends nothing anywhere, so the DIRECT signature and pf are as before.
-  if [ "$(setting adblock 0)" = 1 ] && [ -s "$CORE_DIR/geosite.dat" ]; then
-    echo "GEOSITE,category-ads-all,REJECT" >> "$w/ours"
-    note adblock "GEOSITE,category-ads-all,REJECT"
-  fi
+  # Blocked categories (ads and trackers, adult, social, betting; ADR 0031): refused before
+  # anything else, from the shipped geosite.dat only (never downloaded). REJECT sends nothing
+  # anywhere, so the DIRECT signature and pf are as before.
+  while IFS= read -r g; do
+    [ -n "$g" ] || continue
+    echo "GEOSITE,$g,REJECT" >> "$w/ours"
+    note adblock "GEOSITE,$g,REJECT"
+  done <<<"$(block_geosites)"
+  # the own DoH server (ADR 0031): only its host in the world-readable report
+  doh=$(doh_url)
+  if [ -n "$doh" ]; then note doh "$(doh_host "$doh")"; fi
   if [ -n "$apps" ]; then
     {
       while IFS= read -r a; do
@@ -1360,9 +1771,10 @@ core_generate_mihomo() (
   fi
 
   # Why the core may leave the tunnel at all (pf, rules()): the subscription sends something
-  # DIRECT (a rule, a provider download, a DNS server), or the admin put apps outside the VPN.
+  # DIRECT (a rule, a provider download, a DNS server), the routing profile does (ADR 0034), or
+  # the admin put apps outside the VPN.
   {
-    grep -qE '^(rule|provider-proxy)'$'\t' "$w/direct" && echo rules
+    grep -qE '^(rule|profile-rule|provider-proxy)'$'\t' "$w/direct" && echo rules
     cat "$w/dns-egress"
     [ -n "$apps" ] && echo splitapps
   } > "$w/egress"
@@ -1392,6 +1804,8 @@ core_generate_mihomo() (
     # which it already has through the TUN.
     printf '"listeners":[{"name":"ks-fetch","type":"http","listen":"127.0.0.1","port":%s,"proxy":"%s"}],' "$FETCH_PORT" "$KS_DNS"
     printf '"tun":{"enable":true,"stack":"gvisor","auto-route":true,"auto-detect-interface":true,'
+    # the person's MTU (ADR 0032); none: mihomo's own, as before
+    [ -z "$(tun_mtu)" ] || printf '"mtu":%s,' "$(tun_mtu)"
     printf '"dns-hijack":["any:53"],"route-exclude-address":[%s]},' "$excl"
     # answers the system's DNS on 127.0.0.1:53; our resolvers are reached through the tunnel,
     # the subscription's DNS policy on top (see above)
@@ -1420,7 +1834,8 @@ core_generate_mihomo() (
 # switching hosts (xrayserver=<remarks>) needs no password; the chosen one, else the first, becomes
 # the config. Taken as the panel wrote them: outbounds (only the protocols below), routing, dns,
 # policy, observatory. Ours: the inbounds (TUN, system DNS on 127.0.0.1:53, the app's fetch on
-# 127.0.0.1:47890), the log, our rules first. Same files as core_generate: config, servers,
+# 127.0.0.1:47890), the log, our rules first; with multihop=<host> («Двойной VPN», ADR 0027) that
+# host's server as ks-entry, which every server of the running host is dialed through. Same files as core_generate: config, servers,
 # .pins, .direct, .egress, .report. Runs in a subshell: "exit" leaves only the generator.
 XRAY_PROTOCOLS='vless|vmess|trojan|shadowsocks|freedom|blackhole|dns|loopback'
 core_generate_xray() (
@@ -1443,11 +1858,29 @@ core_generate_xray() (
     printf '%s\t%s\n' "$h" "$a" >> "$w/pins"
   done < "$w/hosts"
   # pass 2: the config and what goes with it
-  W=$w PROTOS=$XRAY_PROTOCOLS PINS=${KS_PINS:-} PICK=$(setting xrayserver "") ADBLOCK=$(setting adblock 0) \
-    GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) APPS=$(setting splitapps "") \
+  W=$w PROTOS=$XRAY_PROTOCOLS PINS=${KS_PINS:-} PICK=$(setting xrayserver "") BLOCK="$(block_geosites | paste -sd" " -)" DOH=$(doh_url) \
+    APPS=$(setting splitapps "") MULTIHOP=$(setting multihop off) \
+    GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) GEOIP=$([ -s "$CORE_DIR/geoip.dat" ] && echo 1) \
+    KS_GEOSITE_DAT="$CORE_DIR/geosite.dat" KS_GEOIP_DAT="$CORE_DIR/geoip.dat" \
+    ESC=$(setting escalate 1) ESC_FILE="${KS_ESC_FILE:-$CORE_DIR/escalation}" MTU=$(tun_mtu) \
     TUN_GW="${CORE_TUN_ADDR%.*}.$(( ${CORE_TUN_ADDR##*.} - 1 ))/30" FETCH_PORT=$FETCH_PORT API_PORT=$([ -f "$CORE_DIR/api-off" ] || echo "$CORE_API_PORT") \
     ACCESS=$([ "$(setting diag 0)" = 1 ] && [ -d "$DIAG" ] && echo "$DIAG/access.log") \
-    /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL"' build()' || exit 1
+    /usr/bin/perl -MJSON::PP -e "$KS_XRAY_PL$KS_ROUTING_PL"' build()' || exit 1
+  if [ -f "$w/multihop-gone" ]; then   # built one hop: the setting says so too (ADR 0027)
+    # set by hand (ks set multihop): refused with the reason, never stored as on while one hop
+    if [ -n "${KS_MULTIHOP_STRICT:-}" ]; then
+      case "$(head -1 "$w/multihop-gone")" in
+        "not a server of the subscription") fail "Двойной VPN: сервера входа «$(setting multihop off)» нет в подписке" ;;
+        "it is the running server") fail "Двойной VPN: «$(setting multihop off)» сейчас выход, выбери другой сервер входа" ;;
+        "no server to connect through") fail "Двойной VPN: у сервера «$(setting multihop off)» нет сервера, через который можно подключиться" ;;
+        "it connects through another server itself") fail "Двойной VPN: сервер «$(setting multihop off)» сам подключается через другой сервер, входом он быть не может" ;;
+        "the subscription has its own ks-entry") fail "Двойной VPN: в подписке уже есть outbound «ks-entry»" ;;
+        *) fail "Двойной VPN: сервер выхода подключается напрямую через другой outbound подписки, цепочка через вход не получится" ;;
+      esac
+    fi
+    log_event "double VPN off: its entry «$(setting multihop off)»: $(head -1 "$w/multihop-gone")"
+    put_setting multihop off || exit 1
+  fi
   # the host picked by hand left out as unusable: the first one runs, and the journal says why
   pick=$(setting xrayserver "")
   if [ -n "$pick" ]; then
@@ -1470,9 +1903,11 @@ core_generate_xray() (
   : > "$w/approved"
   if [ -n "${KS_APPROVE_ALL:-}" ]; then
     mkdir "$w/e" && ln "$w/in.json" "$w/pins" "$w/e/" || exit 1
-    W=$w/e PROTOS=$XRAY_PROTOCOLS PINS=${KS_PINS:-} ADBLOCK=$(setting adblock 0) GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) \
+    W=$w/e PROTOS=$XRAY_PROTOCOLS PINS=${KS_PINS:-} BLOCK="$(block_geosites | paste -sd" " -)" DOH=$(doh_url) \
+      GEOSITE=$([ -s "$CORE_DIR/geosite.dat" ] && echo 1) GEOIP=$([ -s "$CORE_DIR/geoip.dat" ] && echo 1) \
+      KS_GEOSITE_DAT="$CORE_DIR/geosite.dat" KS_GEOIP_DAT="$CORE_DIR/geoip.dat" \
       APPS=$(setting splitapps "") TUN_GW=10.0.0.1/30 FETCH_PORT=$FETCH_PORT API_PORT="" ACCESS="" \
-      /usr/bin/perl -MJSON::PP -MStorable -MDigest::SHA -e "$KS_XRAY_PL"' approve()' > "$w/approved.all" || exit 1
+      /usr/bin/perl -MJSON::PP -MStorable -MDigest::SHA -e "$KS_XRAY_PL$KS_ROUTING_PL"' approve()' > "$w/approved.all" || exit 1
     sort -u "$w/approved.all" > "$w/approved"
     # a host that cannot be built is not approved for a switch (one to it fails the same way)
     [ ! -s "$w/e/skipped" ] || log_event "server switch approval skipped (cannot be built): $(head -n 20 "$w/e/skipped" | paste -sd, -)"
@@ -1529,7 +1964,11 @@ KS_XRAY_PL='
     die "В подписке нет ни одного годного сервера (" . join("; ", map { "$_->{item}: $UNUSABLE{ $_->{reason} }" . (defined $_->{detail} ? " «$_->{detail}»" : "") } @DROPPED[0 .. ($#DROPPED < 2 ? $#DROPPED : 2)]) . ")\n"
       unless @keep;
     @ORIG = @keep;
+    # the routing profile (ADR 0034) rides on the first config: with that host left out it goes to
+    # the first one kept, never lost (or taken from another host)
+    my $hint = $a->[0]{"x-ks-routing"};
     $a = [ @$a[@keep] ];
+    if ($keep[0] != 0) { delete $a->[0]{"x-ks-routing"}; $a->[0]{"x-ks-routing"} = $hint if defined $hint }
     $LOADED = $a;
     $a
   }
@@ -1667,10 +2106,43 @@ KS_XRAY_PL='
       return "selector" if grep { my $x = $_; picks_ours($x) || (defined $x && !ref $x && grep { index($_, $x) == 0 } @free) } @$sel;
     }
     "" }
+  # reached through another outbound of its config (proxySettings, sockopt.dialerProxy)
+  # a rule object for the report: at most 16 KB, or left out (the app says it cannot tell)
+  sub small { length($J->encode($_[0])) <= 16384 }
+  # (null or "" is none, as Xray reads it: set); chain_to: the tag it goes through, undef when none
+  sub chain_to { my $o = shift; return $o->{proxySettings}{tag} if ref $o->{proxySettings} eq "HASH" && set($o->{proxySettings}{tag});
+    my $ss = $o->{streamSettings}; ref $ss eq "HASH" && ref $ss->{sockopt} eq "HASH" && set($ss->{sockopt}{dialerProxy}) ? $ss->{sockopt}{dialerProxy} : undef }
+  sub chained { defined chain_to($_[0]) }
+  # a host'"'"'s server: its first proxy outbound with a tag
+  sub first_proxy { my $c = shift; my ($o) = grep { ref $_ eq "HASH" && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && length($_->{tag} // "") } @{ $c->{outbounds} }; $o }
+  # escalation (ADR 0030): a server'"'"'s transport (raw is tcp), its TLS fingerprint (undef without
+  # TLS or Reality, "" when the subscription sets none), the host'"'"'s other ways to its server
+  my %FP = map { $_ => 1 } qw(chrome firefox safari ios android edge 360 qq random randomized);
+  sub word { my $v = shift; defined $v && !ref $v && $v =~ /\A[a-z0-9]{1,16}\z/ ? $v : "other" }
+  sub network { my $o = shift; my $ss = ref $o->{streamSettings} eq "HASH" ? $o->{streamSettings} : {};
+    my $n = $ss->{network} // "tcp"; $n = "tcp" if !ref $n && $n eq "raw"; word($n) }
+  sub tls_of { my $o = shift; my $ss = $o->{streamSettings}; return undef unless ref $ss eq "HASH" && !ref $ss->{security} && ($ss->{security} // "") =~ /\A(tls|reality)\z/; $ss->{security} . "Settings" }
+  sub fp_of { my $o = shift; my $k = tls_of($o) // return undef; my $v = ref $o->{streamSettings}{$k} eq "HASH" ? $o->{streamSettings}{$k}{fingerprint} : undef; defined $v && !ref $v ? $v : "" }
+  sub set_fp { my ($o, $fp) = @_; my $k = tls_of($o) // return; $o->{streamSettings}{$k} = {} unless ref $o->{streamSettings}{$k} eq "HASH"; $o->{streamSettings}{$k}{fingerprint} = $fp }
+  sub addr0 { my $o = shift; my ($r) = addrs($o); $r && defined $$r && !ref $$r ? $$r : "" }
+  # xHTTP with a separate download server: that address is not one of the checked servers'"'"' (the
+  # parser handles it apart); the ladder never probes, picks or tunes such an outbound
+  sub split_dl { my $ss = $_[0]{streamSettings}; my $x = ref $ss eq "HASH" && ref $ss->{xhttpSettings} eq "HASH" ? $ss->{xhttpSettings} : return 0;
+    exists $x->{downloadSettings} || (ref $x->{extra} eq "HASH" && exists $x->{extra}{downloadSettings}) }
+  # a tag the escalation pass can carry in its tab-separated fields and the memory file
+  sub plain_tag { my $t = $_[0]{tag}; defined $t && !ref $t && length $t && length $t <= 256 && $t !~ /[\x00-\x1f\x7f]/ }
+  sub usable { my $o = shift; ref $o eq "HASH" && $o->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && plain_tag($o) && !chained($o) && !split_dl($o) }
+  # the outbounds of a host that reach the same server as $lead (the address), $lead left out
+  sub same_server { my ($c, $lead) = @_;
+    return () if !usable($lead) || !length addr0($lead);
+    grep { usable($_) && $_ != $lead && addr0($_) eq addr0($lead) } @{ $c->{outbounds} } }
   sub check {
     my $a = load(); my %hosts;
     for my $i (0 .. $#$a) {
       my $c = $a->[$i]; my $n = name_of($c, $i);
+      # the name goes into settings (xrayserver=, multihop=) and the report (ADR 0027)
+      die "Имя сервера «" . do { my $s = $n; utf8::decode($s); $s = substr($s, 0, 64); utf8::encode($s); $s } . "…» в подписке не подходит: управляющие символы или длиннее 256 байт\n"
+        if $n =~ /[\x00-\x1f\x7f]/ || length $n > 256;
       my %tags;
       for my $o (@{ $c->{outbounds} }) {
         die "$n: outbound не объект\n" unless ref $o eq "HASH";
@@ -1713,23 +2185,101 @@ KS_XRAY_PL='
     }
     my ($ci) = grep { length $ENV{PICK} && name_of($a->[$_], $_) eq $ENV{PICK} } 0 .. $#$a;
     $ci //= 0;
+    # what worked per host (ADR 0030; written by the escalation pass, gone with escalate=0): another
+    # of its outbounds to the same server first, another fingerprint for it; anything else ignored
+    # "probe": the pass armed the alternatives'"'"' probes for that host (it is failing)
+    my $esc = ($ENV{ESC} // "") eq "1";
+    my (%mem, %orig_fp, %orig_lead, %orig_outs);
+    if ($esc && length($ENV{ESC_FILE} // "") && open my $m, "<", $ENV{ESC_FILE}) {
+      for (<$m>) { chomp; my ($h, $k, $v) = split /\t/; $mem{$h}{$k} = $v if defined $v && $k =~ /\A(fp|lead|probe)\z/ }
+      close $m;
+    }
+    for my $i (0 .. $#$a) {
+      $orig_outs{$i} = [ @{ $a->[$i]{outbounds} } ];   # the subscription'"'"'s order (balancer members)
+      my $lead = first_proxy($a->[$i]) or next;
+      next unless usable($lead);
+      $orig_lead{$i} = $lead;
+      my $m = $mem{ name_of($a->[$i], $i) };
+      # another outbound to the same server: any of them, whichever was leading when it was found
+      if ($m && defined $m->{lead}) {
+        my ($alt) = grep { $_->{tag} eq $m->{lead} } same_server($a->[$i], $lead);
+        if ($alt) { my $o = $a->[$i]{outbounds}; my ($x, $y) = grep { $o->[$_] == $lead || $o->[$_] == $alt } 0 .. $#$o; @$o[$x, $y] = @$o[$y, $x]; $lead = $alt }
+      }
+      $orig_fp{$i} = fp_of($lead);
+      set_fp($lead, $m->{fp}) if $m && defined $m->{fp} && $FP{ $m->{fp} } && defined $orig_fp{$i};
+    }
     # ping (ADR 0023): every host'"'"'s server (its first proxy outbound, unless it is reached through
     # another outbound) once more as ks-ping-<n>, for the observatory only; no rule leads there
     my @pings;
     for my $i (0 .. $#$a) {
-      my ($o) = grep { ref $_ eq "HASH" && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && length($_->{tag} // "") } @{ $a->[$i]{outbounds} };
-      # (a chain the way check() reads one: null or "" is none)
-      next if !$o || (ref $o->{proxySettings} eq "HASH" && set($o->{proxySettings}{tag}))
-        || (ref $o->{streamSettings} eq "HASH" && ref $o->{streamSettings}{sockopt} eq "HASH" && set($o->{streamSettings}{sockopt}{dialerProxy}));
+      my $o = first_proxy($a->[$i]);
+      next if !$o || chained($o);
       $o = $J->decode($J->encode($o)); $o->{tag} = "ks-ping-$i";
       push @pings, $o; $servers[$i]{ping} = $o->{tag};
+    }
+    # the running host'"'"'s alternatives (ADR 0030): its server with two other fingerprints, its other
+    # outbounds to that server over another network (and the subscription'"'"'s own first one), at most
+    # 3. Probed the same way, but only while the pass has armed them (the server failing): otherwise
+    # just how many there are. Every host'"'"'s transport and server (the first host at the same
+    # address) (the endpoint unread since ADR 0036)
+    if ($esc) {
+      my $lead = first_proxy($a->[$ci]);
+      my (@variants, $n);
+      if ($lead && usable($lead)) {
+        my $cur = fp_of($lead);
+        my $armed = $mem{ name_of($a->[$ci], $ci) } && defined $mem{ name_of($a->[$ci], $ci) }{probe};
+        my $swapped = $lead != $orig_lead{$ci};
+        if (defined $cur) {
+          my %seen = ($cur => 1);
+          my @fps = grep { length && $FP{$_} && !$seen{$_}++ } ($orig_fp{$ci} // "", qw(chrome firefox safari));
+          for my $fp (grep { defined } @fps[0, 1]) {
+            my $o = $J->decode($J->encode($lead)); $o->{tag} = "ks-ping-$ci-fp-$fp"; set_fp($o, $fp);
+            push @variants, [ $o, { kind => "fingerprint", value => $fp, tag => $o->{tag}, !$swapped && $fp eq ($orig_fp{$ci} // "") ? (original => JSON::PP::true) : () } ];
+          }
+          $servers[$ci]{fingerprint} = word($cur) if length $cur;
+        }
+        my $outs = $a->[$ci]{outbounds};
+        my @alt = grep { network($_) ne network($lead) || $_ == $orig_lead{$ci} } same_server($a->[$ci], $lead);
+        for my $j (grep { my $x = $outs->[$_]; grep { $_ == $x } @alt } 0 .. $#$outs) {
+          last if 3 <= grep { $_->[1]{kind} eq "transport" } @variants;
+          my $o = $J->decode($J->encode($outs->[$j])); $o->{tag} = "ks-ping-$ci-t$j";
+          push @variants, [ $o, { kind => "transport", value => network($outs->[$j]), outbound => $outs->[$j]{tag}, tag => $o->{tag},
+            $outs->[$j] == $orig_lead{$ci} ? (original => JSON::PP::true) : () } ];
+        }
+        $n = @variants;
+        if ($armed) { push @pings, map { $_->[0] } @variants; $servers[$ci]{variants} = [ map { $_->[1] } @variants ] }
+        $servers[$ci]{lead} = $lead->{tag};
+      }
+      $servers[$ci]{escalable} = $n // 0;
+      my %first;
+      for my $i (0 .. $#$a) {
+        my $o = first_proxy($a->[$i]) or next;
+        my $ad = addr0($o); $first{$ad} //= $i;
+        $servers[$i]{transport} = network($o); $servers[$i]{endpoint} = $first{$ad};
+      }
+    }
+    # «Двойной VPN» (ADR 0027): the entry host'"'"'s server as ks-entry. One the build cannot use (gone
+    # from the subscription, a mihomo name from before, chained itself) turns double VPN off, said in
+    # $W/multihop-gone, so no refresh or rebuild is ever refused for it
+    my ($entry, $ei, $gone);
+    if (length($ENV{MULTIHOP} // "") && $ENV{MULTIHOP} ne "off") {
+      ($ei) = grep { name_of($a->[$_], $_) eq $ENV{MULTIHOP} } 0 .. $#$a;
+      if (!defined $ei) { $gone = "not a server of the subscription" }
+      # an older or stale pick (the first host by default) that is the entry: one hop
+      elsif ($ei == $ci) { $gone = "it is the running server" }
+      else {
+        my $o = first_proxy($a->[$ei]);
+        if (!$o) { $gone = "no server to connect through" }
+        elsif (chained($o)) { $gone = "it connects through another server itself" }
+        else { $entry = $J->decode($J->encode($o)); $entry->{tag} = "ks-entry" }
+      }
     }
     my $c = $a->[$ci];
     my (@dropped, @added, %unbound);
     push @dropped, map { { %$_{qw(section item reason)} } } @DROPPED;   # hosts load() left out
     my %keep = map { $_ => 1 } qw(dns routing outbounds policy observatory burstObservatory);
     my %managed = map { $_ => 1 } qw(inbounds log remarks meta);
-    for (sort keys %$c) { next if $keep{$_}; push @dropped, { section => "profile", item => $_, reason => $managed{$_} ? "managed" : "not-allowed" } }
+    for (sort keys %$c) { next if $keep{$_} || $_ eq "x-ks-routing"; push @dropped, { section => "profile", item => $_, reason => $managed{$_} ? "managed" : "not-allowed" } }
     my %cfg = map { exists $c->{$_} ? ($_ => $c->{$_}) : () } keys %keep;
     # Xray fetches a burst observatory'"'"'s connectivity URL itself, past routing (measured on
     # 26.9.30): out of the tunnel to an address of the subscription'"'"'s choice (0.19.1 review 3)
@@ -1792,6 +2342,34 @@ KS_XRAY_PL='
       $tame->($o, $t);
     }
     $tame->($_, undef) for @pings;   # their changes are those of the hosts
+    if ($entry && $tag{"ks-entry"}) { $gone = "the subscription has its own ks-entry"; undef $entry }
+    # a server of this host the subscription chains through something that is no server (freedom)
+    # would dial directly, past the entry
+    if ($entry) {
+      for my $o (grep { $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && chained($_) } @$outs) {
+        my ($t, %seen) = ($o);
+        while ($t && chained($t) && !$seen{$t}++) {
+          my $n = chain_to($t);
+          $t = defined $n && !ref $n ? $tag{$n} : undef;
+        }
+        next if $t && !chained($t) && $t->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/;
+        $gone = "a server of the running host connects directly through another outbound"; undef $entry; last;
+      }
+    }
+    if ($entry) {
+      $tame->($entry, undef);   # its changes are those of its host
+      # every server of this host through the entry; one the subscription reaches through another
+      # outbound goes through that one, and so through the entry too. So do the other hosts'"'"'
+      # probes: no exit ever sees this Mac'"'"'s address, and the ping is that of the chain
+      my $via = sub { my $o = shift;
+        $o->{streamSettings} = {} unless ref $o->{streamSettings} eq "HASH";
+        $o->{streamSettings}{sockopt} = {} unless ref $o->{streamSettings}{sockopt} eq "HASH";
+        $o->{streamSettings}{sockopt}{dialerProxy} = "ks-entry" };
+      $via->($_) for grep { $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ && !chained($_) } @$outs;
+      $via->($_) for grep { $_->{tag} ne "ks-ping-$ei" } @pings;
+      push @added, { kind => "multihop", items => [ $ENV{MULTIHOP} ] };
+    }
+    if (defined $gone) { open my $g, ">", "$W/multihop-gone" or die; print $g "$gone\n"; close $g }
     die "В конфиге «" . name_of($c, $ci) . "» нет ни одного сервера\n" unless defined $proxy;
     unless (defined $dnsout) { $dnsout = "ks-dns-out"; push @$outs, { tag => $dnsout, protocol => "dns", settings => { nonIPQuery => "reject" } }; push @added, { kind => "dns-out", items => [$dnsout] } }
     my $r = ref $cfg{routing} eq "HASH" ? $cfg{routing} : {};
@@ -1801,7 +2379,10 @@ KS_XRAY_PL='
     for my $b (ref $rt{balancers} eq "ARRAY" ? @{ $rt{balancers} } : ()) {
       next unless ref $b eq "HASH" && defined $b->{tag};
       my @sel = grep { !ref } @{ ref $b->{selector} eq "ARRAY" ? $b->{selector} : [] };
-      my @m = grep { my $t = $_; grep { index($t, $_) == 0 } @sel } map { $_->{tag} // () } @$outs;
+      # in the subscription'"'"'s order, also when escalation put another outbound first (ADR 0030):
+      # the members are part of the DIRECT signature
+      my @ord = (@{ $orig_outs{$ci} }, grep { my $x = $_; !grep { $_ == $x } @{ $orig_outs{$ci} } } @$outs);
+      my @m = grep { my $t = $_; grep { index($t, $_) == 0 } @sel } map { $_->{tag} // () } @ord;
       push @m, $b->{fallbackTag} if defined $b->{fallbackTag} && !grep { $_ eq $b->{fallbackTag} } @m;
       $bal{ $b->{tag} } = \@m;
     }
@@ -1817,7 +2398,7 @@ KS_XRAY_PL='
       if (ref $x ne "HASH" || grep { !$RULE_KEYS{$_} } keys %$x) { push @dropped, { section => "rules", index => $i, item => $text, reason => "not-allowed" }; next }
       if (defined $x->{outboundTag} ? !$tag{ $x->{outboundTag} } : !(defined $x->{balancerTag} && $bal{ $x->{balancerTag} })) {
         push @dropped, { section => "rules", index => $i, item => $text, reason => "target:" . ($x->{outboundTag} // $x->{balancerTag} // "") }; next }
-      push @rules, $x; push @report, { rule => $text, from => "subscription", index => $i };
+      push @rules, $x; push @report, { rule => $text, from => "subscription", index => $i, small($x) ? (xray => $x) : () };
       if ($todirect->($x)) {
         my @k = grep { !/\A(outboundTag|balancerTag|type|ruleTag)\z/ } keys %$x;
         my $dnsonly = @k == 1 && $k[0] eq "inboundTag" && ref $x->{inboundTag} eq "ARRAY" && !grep { !$dnstags{$_} } @{ $x->{inboundTag} };
@@ -1828,15 +2409,28 @@ KS_XRAY_PL='
     # what no rule takes goes to the first outbound
     if ($outs->[0]{protocol} eq "freedom") { $egress{rules} = 1; push @direct, "default\t" . ($outs->[0]{tag} // "") }
     for my $t (sort keys %bal) { push @direct, "balancer\t" . $J->encode({ tag => $t, members => $bal{$t} }) if grep { $freedom{$_} } @{ $bal{$t} } }
-    for my $o (grep { $_->{protocol} eq "freedom" } @$outs) { push @direct, "outbound\t" . $J->encode($o) if @direct }
+    # the subscription'"'"'s freedom outbounds, here in the signature once anything goes direct, also
+    # when only split apps or the routing profile below do through them (review S1)
+    my $outat = @direct;
+    my @outlines = map { "outbound\t" . $J->encode($_) } grep { $_->{protocol} eq "freedom" } @$outs;
     push @direct, "dns\t" . $J->encode($cfg{dns}) if $egress{dns};
     # ours, first: the system DNS to the template DNS outbound, the fetch to a server (never
     # direct, ADR 0016), then the person'"'"'s choices
     my @ours = ({ inboundTag => ["ks-dns"], outboundTag => $dnsout }, { inboundTag => ["ks-fetch"], outboundTag => $proxy });
-    if ($ENV{ADBLOCK} eq "1" && $ENV{GEOSITE}) {
+    # the own DoH server (ADR 0031): its queries (tag ks-doh) and its host always to a server
+    my $doh = $ENV{DOH} // "";
+    my ($dohhost) = $doh =~ m{\Ahttps://([^/:]+)};
+    if (length $doh) {
+      push @ours, { inboundTag => ["ks-doh"], outboundTag => $proxy },
+                  { (ipv4($dohhost) ? (ip => [$dohhost]) : (domain => ["full:$dohhost"])), outboundTag => $proxy };
+      push @added, { kind => "doh", items => [$dohhost] };
+    }
+    # blocked categories of the shipped geosite.dat (ADR 0031): a blackhole sends nothing anywhere
+    my @block = split " ", $ENV{BLOCK} // "";
+    if (@block) {
       unless (defined $block) { $block = "ks-block"; push @$outs, { tag => $block, protocol => "blackhole" } }
-      push @ours, { domain => ["geosite:category-ads-all"], outboundTag => $block };
-      push @added, { kind => "adblock", items => ["geosite:category-ads-all → $block"] };
+      push @ours, { domain => [ map { "geosite:$_" } @block ], outboundTag => $block };
+      push @added, { kind => "adblock", items => [ map { "geosite:$_ → $block" } @block ] };
     }
     my @apps = grep { length } split /,/, $ENV{APPS} // "";
     if (@apps) {
@@ -1845,8 +2439,46 @@ KS_XRAY_PL='
       push @ours, $rule; push @added, { kind => "splitapps", items => \@apps };
       $egress{splitapps} = 1; push @direct, "rule\t" . $J->encode($rule);
     }
-    unshift @report, map { { rule => rule_text($_), from => "killswitch" } } @ours;
-    $rt{rules} = [ @ours, @rules ];
+    # the routing profile the person chose (ADR 0034), carried in the first config for every host:
+    # block, proxy (the running server, never direct) and direct rules after the KillSwitch ones;
+    # its direct ones in the DIRECT signature like those of the subscription
+    my (@prof, $pname);
+    if (defined(my $hint = $a->[0]{"x-ks-routing"})) {
+      my ($list, $dr);
+      ($pname, $list, $dr) = routing_hint($hint, $ENV{GEOSITE}, $ENV{GEOIP});
+      push @dropped, @$dr;
+      my @g;
+      for (@$list) {
+        my ($act, $kind, $t, $v) = @$_;
+        my $key = $kind eq "site" ? "domain" : "ip";
+        my $val = $t =~ /\Acidr/ ? $v : "$t:$v";
+        if (@g && $g[-1][0] eq $act && $g[-1][1] eq $key) { push @{ $g[-1][2] }, $val } else { push @g, [ $act, $key, [$val] ] }
+      }
+      for (@g) {
+        my ($act, $key, $vals) = @$_;
+        my $to = $proxy;
+        if ($act eq "block") { unless (defined $block) { $block = "ks-block"; push @$outs, { tag => $block, protocol => "blackhole" } } $to = $block }
+        if ($act eq "direct") { unless (defined $direct) { $direct = "ks-direct"; push @$outs, { tag => $direct, protocol => "freedom" } } $to = $direct }
+        my $rule = { $key => $vals, outboundTag => $to };
+        push @prof, $rule;
+        if ($act eq "direct") { $egress{rules} = 1; push @direct, "profile-rule\t" . $J->encode($rule) }
+      }
+      # its block and proxy rules sit in front of the direct ones and shadow them: with anything
+      # of it going direct, the whole profile in order is approved (review B1). A proxy rule goes to
+      # whichever server of this host leads, which escalation changes (ADR 0030): the line says
+      # "proxy" instead of its tag, so that step passes the server switch check (KS-10). $proxy is
+      # always one of the host'"'"'s own VPN servers (the first vless/vmess/trojan/shadowsocks
+      # outbound with a tag, never freedom or a balancer): checked here, else the tag stays
+      die "x-ks-routing: proxy\n" unless ($tag{$proxy}{protocol} // "") =~ /\A(vless|vmess|trojan|shadowsocks)\z/;
+      push @direct, "profile\t" . $J->encode([ map { my $r = $_; $r->{outboundTag} eq $proxy
+        ? { (map { $_ => $r->{$_} } grep { $_ ne "outboundTag" } keys %$r), proxy => JSON::PP::true } : $r } @prof ])
+        if defined $direct && grep { $_->{outboundTag} eq $direct } @prof;
+      push @added, { kind => "routing-profile", items => [$pname] };
+    }
+    splice @direct, $outat, 0, @outlines if @direct;
+    unshift @report, (map { { rule => rule_text($_), from => "killswitch", xray => $_ } } @ours),
+      (map { { rule => rule_text($_), from => "profile", profile => $pname, xray => $_ } } @prof);
+    $rt{rules} = [ @ours, @prof, @rules ];
     # DNS: the system resolver is ourselves (127.0.0.1:53), fakedns would outlive the core, and
     # any <scheme>+local (udp, tcp, https, h2c, quic…) queries straight past routing (#37)
     if (ref $cfg{dns} eq "HASH" && ref $cfg{dns}{servers} eq "ARRAY") {
@@ -1855,6 +2487,20 @@ KS_XRAY_PL='
         my $x = ref $s ? "" : $s =~ s/\A\s+|\s+\z//gr;
         my $bad = !length $x || $x =~ /\A(localhost|fakedns(\+\w+)?)\z/i || $x =~ m{\A[a-z0-9]+\+local:}i;
         push @dropped, { section => "dns", item => ref $s ? "?" : $s, reason => "bad-value" } if $bad; !$bad } @{ $cfg{dns}{servers} } ];
+    }
+    # the own DoH first; when it gives no answer Xray asks the next one, Cloudflare'"'"'s DoH, also
+    # tagged ks-doh, so through a server. The template'"'"'s servers stay only for their own domains
+    # (skipFallback): a failed query must never go on to one the template routes DIRECT (review of
+    # #14); those without domains go. The template'"'"'s disableFallback stays (then the own DoH alone).
+    # After the DIRECT signature: nothing here leaves outside the tunnel.
+    if (length $doh) {
+      $cfg{dns} = {} unless ref $cfg{dns} eq "HASH";
+      my @s;
+      for (ref $cfg{dns}{servers} eq "ARRAY" ? @{ $cfg{dns}{servers} } : ()) {
+        if (ref $_ eq "HASH" && ref $_->{domains} eq "ARRAY" && @{ $_->{domains} }) { push @s, { %$_, skipFallback => JSON::PP::true } }
+        else { push @dropped, { section => "dns", item => (ref $_ eq "HASH" ? $_->{address} // "?" : $_ // "?"), reason => "own-doh" } }
+      }
+      $cfg{dns}{servers} = [ { address => $doh, tag => "ks-doh" }, { address => "https://1.1.1.1/dns-query", tag => "ks-doh" }, @s ];
     }
     # sniffing: the template inbound'"'"'s, else routing only
     my ($tpl) = grep { ref $_ eq "HASH" && ref $_->{sniffing} eq "HASH" && $_->{sniffing}{enabled} } @{ ref $c->{inbounds} eq "ARRAY" ? $c->{inbounds} : [] };
@@ -1877,7 +2523,7 @@ KS_XRAY_PL='
       $cfg{policy}{system}{$_} = JSON::PP::true for qw(statsInboundUplink statsInboundDownlink statsOutboundUplink statsOutboundDownlink);
     }
     # the probes (ADR 0023): Xray answers for one observatory, so the subscription own (either kind)
-    # also watches ours; without one, ours on the URL the mihomo failover groups check
+    # also watches ours; without one, ours on the URL of the mihomo health checks
     if (@pings) {
       my @obs = grep { ref $cfg{$_} eq "HASH" } qw(burstObservatory observatory);
       for my $obs (@obs) {
@@ -1890,9 +2536,10 @@ KS_XRAY_PL='
       push @$outs, @pings;
       push @added, { kind => "ping", items => [ map { $_->{tag} } @pings ] };
     }
+    push @$outs, $entry if $entry;
     $cfg{inbounds} = [
       { tag => "ks-tun", protocol => "tun", sniffing => $sniff,
-        settings => { mtu => 1500, gateway => [ $ENV{TUN_GW} ], autoSystemRoutingTable => ["0.0.0.0/0"], autoOutboundsInterface => "auto" } },
+        settings => { mtu => ($ENV{MTU} // "") =~ /\A[0-9]{4}\z/ ? $ENV{MTU} + 0 : 1500, gateway => [ $ENV{TUN_GW} ], autoSystemRoutingTable => ["0.0.0.0/0"], autoOutboundsInterface => "auto" } },
       { tag => "ks-dns", protocol => "dokodemo-door", listen => "127.0.0.1", port => 53,
         settings => { address => "1.1.1.1", port => 53, network => "tcp,udp" } },
       { tag => "ks-fetch", protocol => "http", listen => "127.0.0.1", port => $ENV{FETCH_PORT} + 0 } ];
@@ -1900,15 +2547,21 @@ KS_XRAY_PL='
     open my $f, ">", "$W/servers" or die; print $f "$_\n" for sort keys %srv; close $f;
     open $f, ">", "$W/direct" or die; print $f "$_\n" for @direct; close $f;
     open $f, ">", "$W/egress" or die; print $f "$_\n" for grep { $egress{$_} } qw(rules dns splitapps); close $f;
+    my %kind = (freedom => "direct", blackhole => "block", dns => "dns", loopback => "loopback");
     my @dnss = map { ref $_ eq "HASH" ? $_->{address} // "?" : $_ } @{ ref $cfg{dns} eq "HASH" && ref $cfg{dns}{servers} eq "ARRAY" ? $cfg{dns}{servers} : [] };
     s{\A([a-z0-9+]+://[^/]+)/.+}{$1/...}i for @dnss;
     return if $ENV{DIRECT_ONLY};
     wr("$W/report.json", { version => 1, core => "xray", rules => \@report, dropped => \@dropped, providers => [],
       groups => [ map { { name => $_, type => "balancer", proxies => $bal{$_}, from => "subscription" } } sort keys %bal ],
-      proxies => [ map { { name => $_->{tag}, type => $_->{protocol} } } grep { ($_->{tag} // "") !~ /\Aks-ping-/ && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ } @$outs ],
+      proxies => [ map { { name => $_->{tag}, type => $_->{protocol} } } grep { ($_->{tag} // "") !~ /\Aks-(ping-|entry\z)/ && $_->{protocol} =~ /\A(vless|vmess|trojan|shadowsocks)\z/ } @$outs ],
       added => \@added, sniffer => { from => ($tpl ? "subscription" : "killswitch"), value => $sniff },
       dns => { servers => \@dnss, taken => {} }, egress => [ grep { $egress{$_} } qw(rules dns splitapps) ],
-      servers => \@servers, selected => name_of($c, $ci) });
+      servers => \@servers, selected => name_of($c, $ci),
+      # «Проверить адрес» (ADR 0027): the rules above as objects (xray), where each outbound leads,
+      # and the one that takes what no rule does; tags and kinds only
+      # an untagged first outbound: its kind under "" (no rule can name it), so the fallback says it
+      targets => { (length($outs->[0]{tag} // "") ? () : ("" => $kind{ $outs->[0]{protocol} } // "vpn")), map { ($_->{tag} => $kind{ $_->{protocol} } // "vpn") } grep { length($_->{tag} // "") && $_->{tag} !~ /\Aks-(ping-|entry\z)/ } @$outs },
+      fallback => $outs->[0]{tag} // "" });
   }
   # the sha256 of the DIRECT signature of every host, one per line, from one parse of the profile; a
   # host that cannot be built is named in skipped and left out, the others still come
@@ -1927,6 +2580,93 @@ KS_XRAY_PL='
         open my $s, ">>", "$W/skipped" or die; print $s "$t\n"; close $s }
     }
   }
+'
+
+# A named routing profile (ADR 0034, #30), the person's choice in the app, as "x-ks-routing":
+# {"name": "...", "order": ["block","proxy","direct"], "block"|"proxy"|"direct": {"sites": [...],
+# "ips": [...]}}. Sites: domain:x (or bare x), full:x, keyword:x, geosite:x; IPs: a CIDR, geoip:cc,
+# geoip:private. routing_hint gives the entries in the profile's order as [action, site|ip, type,
+# value] and what it leaves out ({section, item, reason}: regexp:, ext:, negations and anything
+# else unsupported, a bad value, GEOSITE/GEOIP without the shipped geodata, which is never
+# downloaded, or a code the shipped KS_GEOSITE_DAT/KS_GEOIP_DAT lacks); a malformed hint dies
+# (the whole import is refused, as with any malformed profile).
+# shellcheck disable=SC2016 # perl, not shell
+KS_ROUTING_PL='
+  use Socket ();
+  sub rt_site { my $e = shift;
+    my $d = qr/(?=[^\s]{1,253}\z)[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*/;
+    return ("geosite", lc $1) if $e =~ /\Ageosite:([A-Za-z0-9][A-Za-z0-9._-]{0,63})\z/;
+    return ("full", lc $1) if $e =~ /\Afull:\.?($d)\z/;
+    return ("keyword", lc $1) if $e =~ /\Akeyword:([A-Za-z0-9._-]{1,64})\z/;
+    return ("domain", lc $1) if $e =~ /\A(?:domain:)?\.?($d)\z/;
+    return (undef, undef, $e =~ /\A(geosite|full|keyword|domain):/ ? "bad-value" : $e =~ /\A[a-z]+:/ ? "unsupported" : "bad-value") }
+  sub rt_ip { my $e = shift;
+    return ("geoip", lc $1) if $e =~ /\Ageoip:([A-Za-z]{2}|private)\z/;
+    return (undef, undef, "unsupported") if $e =~ /\A[a-z]+:/;
+    if ($e =~ /\A([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})(?:\/([0-9]{1,2}))?\z/) {
+      return (undef, undef, "bad-value") if grep({ $_ > 255 } $1, $2, $3, $4) || (defined $5 && $5 > 32);
+      return ("cidr4", ($1 + 0) . "." . ($2 + 0) . "." . ($3 + 0) . "." . ($4 + 0) . "/" . ($5 // 32));
+    }
+    # the captures copied first: the next match would reset them (Codex P2)
+    if (my ($a6, $l6) = $e =~ /\A([0-9A-Fa-f:.]{2,45})(?:\/([0-9]{1,3}))?\z/) {
+      return ("cidr6", lc($a6) . "/" . ($l6 // 128)) if $a6 =~ /:/ && Socket::inet_pton(Socket::AF_INET6(), $a6) && (!defined $l6 || $l6 <= 128);
+    }
+    (undef, undef, "bad-value") }
+  # the codes (lists) of a v2ray geodata file (geosite.dat, geoip.dat): protobuf, a list of
+  # entries (field 1) whose own field 1 is the code. Read once per run; {} when unreadable
+  my %DAT;
+  sub dat_codes { my $f = shift;
+    return $DAT{$f} //= do { my %c;
+      if (open my $fh, "<:raw", $f) { local $/; my $d = <$fh>; close $fh;
+        my ($p, $n) = (0, length $d);
+        my $vi = sub { my ($v, $s) = (0, 0); while ($p < $n) { my $b = ord substr($d, $p++, 1); $v |= ($b & 0x7f) << $s; return $v unless $b & 0x80; $s += 7 } -1 };
+        while ($p < $n) {
+          my $tag = $vi->(); my $len = $vi->();
+          last unless $tag == 0x0a && $len >= 0 && $p + $len <= $n;
+          my $end = $p + $len;
+          if ($vi->() == 0x0a) { my $l = $vi->(); $c{ lc substr($d, $p, $l) } = 1 if $l > 0 && $p + $l <= $end }
+          $p = $end;
+        }
+      }
+      \%c } }
+  sub routing_hint { my ($h, $gs, $gi) = @_;
+    die "x-ks-routing: не объект\n" unless ref $h eq "HASH";
+    for (sort keys %$h) { die "x-ks-routing: незнакомый ключ «$_»\n" unless /\A(name|order|block|proxy|direct)\z/ }
+    my $name = $h->{name};
+    # up to 64 characters as the app allows, not bytes (the JSON is read as UTF-8 bytes)
+    my $chars = $name;
+    utf8::decode($chars) if defined $chars && !ref $chars && $chars !~ /[^\x00-\xff]/;
+    die "x-ks-routing: имя профиля\n" unless defined $name && !ref $name && length $name && length $chars <= 64 && $name !~ /[\x00-\x1f\x7f]/;
+    my @order = qw(block proxy direct);
+    if (exists $h->{order}) {
+      die "x-ks-routing: order — block, proxy и direct в каком-то порядке\n"
+        unless ref $h->{order} eq "ARRAY" && join(",", sort map { ref $_ ? "?" : $_ } @{ $h->{order} }) eq "block,direct,proxy";
+      @order = @{ $h->{order} };
+    }
+    my (@out, @dropped); my $n = 0;
+    for my $act (@order) {
+      next unless exists $h->{$act};
+      my $l = $h->{$act};
+      die "x-ks-routing: $act — не объект\n" unless ref $l eq "HASH";
+      for (sort keys %$l) { die "x-ks-routing: $act — незнакомый ключ\n" unless /\A(sites|ips)\z/ }
+      for my $kind (qw(sites ips)) {
+        next unless exists $l->{$kind};
+        die "x-ks-routing: $act.$kind — не список\n" unless ref $l->{$kind} eq "ARRAY";
+        for my $e (@{ $l->{$kind} }) {
+          die "x-ks-routing: запись — не строка\n" if ref $e || !defined $e;
+          die "x-ks-routing: больше 10000 записей\n" if ++$n > 10000;
+          my ($t, $v, $why) = $kind eq "sites" ? rt_site($e) : rt_ip($e);
+          $why //= "geodata:geosite" if $t && $t eq "geosite" && !$gs;
+          $why //= "geodata:geoip" if $t && $t eq "geoip" && !$gi;
+          # a code the shipped file lacks: the core would refuse the whole config (review S3)
+          $why //= "geodata-code:geosite" if $t && $t eq "geosite" && $ENV{KS_GEOSITE_DAT} && !dat_codes($ENV{KS_GEOSITE_DAT})->{$v};
+          $why //= "geodata-code:geoip" if $t && $t eq "geoip" && $ENV{KS_GEOIP_DAT} && !dat_codes($ENV{KS_GEOIP_DAT})->{$v};
+          if ($why) { push @dropped, { section => "routing-profile", item => substr($e =~ s/[\x00-\x1f\x7f]/?/gr, 0, 256), reason => $why }; next }
+          push @out, [ $act, $kind eq "sites" ? "site" : "ip", $t, $v ];
+        }
+      }
+    }
+    ($name, \@out, \@dropped) }
 '
 
 # Perl shared by the generator's checks and its report: rd/wr read and write JSON files, split_rule
@@ -1992,7 +2732,7 @@ KS_RULES_PL='
 #   added     what KillSwitch put in, by kind; sniffer, dns: what is in effect and where it came from
 #   egress    why the core may leave the tunnel (pf)
 core_report() {
-  W=$1 IN=$2 KS_DNS=$KS_DNS /usr/bin/perl -MJSON::PP -e "$KS_RULES_PL"'
+  W=$1 IN=$2 KS_DNS=$KS_DNS DOH=$(doh_url) /usr/bin/perl -MJSON::PP -e "$KS_RULES_PL"'
     my ($W, $in) = ($ENV{W}, rd($ENV{IN}));
     my $lines = sub { open my $f, "<", $_[0] or return (); my @l = map { chomp; $_ } <$f>; close $f; @l };
     my (%notes, @order);
@@ -2002,6 +2742,8 @@ core_report() {
     my $ours = () = $lines->("$W/ours");
     my @rules;
     push @rules, { rule => $final->[$_], from => "killswitch" } for 0 .. $ours - 1;
+    my $prof = rd("$W/profile-rules.json");
+    push @rules, map { { rule => $_, from => "profile", profile => $prof->{name} } } @{ ref $prof eq "HASH" ? $prof->{rules} : [] };
     my $default = exists $notes{"default-rule"};
     for my $i (0 .. $#$orig) {
       next if $gone{$i};
@@ -2023,7 +2765,7 @@ core_report() {
     }
     my $g = rd("$W/groups.json");
     my @groups = map { { name => $_->{name}, type => $_->{type}, proxies => [ grep { !ref } @{ $_->{proxies} || [] } ],
-                         from => ($_->{name} eq $ENV{KS_DNS} || $_->{name} =~ /\AKS-FO-/ ? "killswitch" : "subscription"),
+                         from => ($_->{name} eq $ENV{KS_DNS} ? "killswitch" : "subscription"),
                          ($_->{hidden} ? (hidden => JSON::PP::true) : ()) } } @$g;
     my $px = rd("$W/proxies.json");
     my @proxies = map { { name => $_->{name}, type => $_->{type} } } @$px;
@@ -2031,8 +2773,9 @@ core_report() {
     my ($ksdns) = grep { $_->{name} eq $ENV{KS_DNS} } @groups;
     push @added, { kind => "dns-group", name => $ENV{KS_DNS}, items => $ksdns->{proxies} };
     my $dns = rd("$W/dns.json");
-    push @added, { kind => "dns-servers", items => $dns->{nameserver} };
-    push @added, map { { kind => "failover", name => $_->{name}, items => $_->{proxies} } } grep { $_->{name} =~ /\AKS-FO-/ } @groups;
+    my $hide = sub { my $s = shift; $s =~ s{\A(https://[^/#]+)/[^#]*}{$1/...}; $s };   # a DoH path can hold an account id
+    my @shown = map { $ENV{DOH} && index($_, $ENV{DOH}) == 0 ? $hide->($_) : $_ } @{ $dns->{nameserver} };
+    push @added, { kind => "dns-servers", items => [@shown] };
     my @pins = map { my ($h, $a) = split /\t/; { host => $h, address => $a } } $lines->("$W/pins");
     push @added, { kind => "pinning", items => \@pins } if @pins;
     push @added, { kind => "overrides", items => [ sort keys %{ $in->{"x-ks-overrides"} } ] } if ref $in->{"x-ks-overrides"} eq "HASH" && %{ $in->{"x-ks-overrides"} };
@@ -2050,7 +2793,7 @@ core_report() {
     my $report = {
       version => 1, rules => \@rules, dropped => \@dropped, providers => \@providers, groups => \@groups, proxies => \@proxies,
       added => \@added, sniffer => { from => (exists $notes{"sniffer-taken"} ? "subscription" : "killswitch"), value => rd("$W/sniffer.json") },
-      dns => { servers => $dns->{nameserver}, taken => $taken }, egress => [ $lines->("$W/egress") ],
+      dns => { servers => \@shown, taken => $taken }, egress => [ $lines->("$W/egress") ],
     };
     print JSON::PP->new->canonical->encode($report), "\n";'
 }
@@ -2070,6 +2813,10 @@ json_edit() {
 # definition of every rule provider such a rule uses (its url or payload is the real list of
 # what goes direct), then every provider whose download proxy the profile set or that an http
 # provider lacks, which means a direct download (KS-DNS, our default, is not printed).
+# KS_PROFILE_RULES=n: the first n rules are the person's routing profile (ADR 0034), printed as
+# "profile-rule" (a subscription's rule of the same text is another approval); when one of them can
+# go direct, all n in order are printed too ("profile"), since its block and proxy rules shadow its
+# direct ones (review B1).
 direct_sig() {
   KS_DNS=$KS_DNS /usr/bin/perl -MJSON::PP -e '
     sub rd { local $/; open my $f, "<", $_[0] or die; JSON::PP->new->decode(<$f>) }
@@ -2092,12 +2839,17 @@ direct_sig() {
         qw(name type proxies filter exclude-filter exclude-type include-all include-all-proxies include-all-providers) }), "\n";
     }
     my %used;
-    for my $rule (@$r) {
+    my $np = $ENV{KS_PROFILE_RULES} || 0;
+    my $pdirect;
+    for my $i (0 .. $#$r) {
+      my $rule = $r->[$i];
       my $t = ref $rule ? $c->encode($rule) : $rule;
       next unless grep { $d{$_} || $d{uc $_} } map { s/^[\s(]+|[\s)]+$//gr } split /,/, $t;
-      print "rule\t$t\n";
+      print $i < $np ? "profile-rule\t$t\n" : "rule\t$t\n";
+      $pdirect = 1 if $i < $np;
       $used{$1} = 1 while $t =~ /RULE-SET\s*,\s*([^,()\s]+)/gi;
     }
+    print "profile\t", $c->encode([ @$r[0 .. $np - 1] ]), "\n" if $pdirect;
     for my $n (sort keys %used) {
       my %x = ref $p->{$n} eq "HASH" ? %{ $p->{$n} } : (missing => JSON::PP::true);
       delete $x{proxy} if defined $x{proxy} && $x{proxy} eq $ENV{KS_DNS};   # ours, see provider-proxy
@@ -2119,49 +2871,289 @@ servers_migrate() {  # before the split every server was added by hand
   if [ -f "$SERVERS" ]; then cp "$SERVERS" "$SERVERS_MANUAL"; else : > "$SERVERS_MANUAL"; fi
 }
 
+# Lock files are root's alone: a plain 0600 file of ours. One that is not (0644 from an older ks,
+# a link, someone else's) is replaced first; a local user who could open a lock file could hold
+# it for ever, and every write of ks behind it would wait (review of #50).
+# shellcheck disable=SC2016 # perl, not shell
+KS_LOCK_OPEN_PL='
+    sub lock_open { my $l = shift; my @s = lstat $l;
+      unlink $l or die "$l: $!\n" if @s && (-l _ || !-f _ || ($s[2] & 07777) != 0600 || $s[4] != $>);
+      sysopen my $h, $l, O_RDWR | O_CREAT | O_NOFOLLOW, 0600 or die "$l: $!\n"; $h }'
+lock_ready() {  # lock_ready <file>: the file lockf will lock, root-only (KS_LOCK_OPEN_PL)
+  /usr/bin/perl -e 'use Fcntl qw(O_RDWR O_CREAT O_NOFOLLOW);'"$KS_LOCK_OPEN_PL"' lock_open($ARGV[0])' "$1"
+}
+# locked_rewrite <file> <perl code changing @L> [its args, in @ARGV]: the file's lines read,
+# changed and written back as a new 0644 file moved into place, all under an flock of <file>.lock
+# (#50): a concurrent writer (a server pick next to "ks set", two log_event) loses
+# nothing, a reader never sees half a file, and the temporary file's name is this process's own.
+# The lock file is root's alone (lock_open, 0600): one others could open, they could hold for ever.
+locked_rewrite() { locked_rewrite_wait 30 "" "$@"; }
+# locked_rewrite_wait <seconds> <line> <file> <code> [args]: as locked_rewrite, but after <seconds>
+# without the lock <line> (if not empty) is appended as it is, without the rewrite (log_event).
+locked_rewrite_wait() {
+  /usr/bin/perl -e 'use Fcntl qw(:flock O_RDWR O_WRONLY O_CREAT O_EXCL O_APPEND O_NOFOLLOW);
+    my ($wait, $busy, $f, $code) = splice @ARGV, 0, 4;
+    '"$KS_LOCK_OPEN_PL"'
+    my $lk = lock_open("$f.lock");
+    my $got; my $until = time + $wait;
+    until ($got = flock $lk, LOCK_EX | LOCK_NB) { last if time >= $until; select undef, undef, undef, 0.1 }
+    unless ($got) {
+      die "$f.lock: busy\n" unless length $busy;
+      sysopen my $o, $f, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW, 0644 or die "$f: $!\n";
+      print $o "$busy\n"; close $o or die "$f: $!\n"; exit 0;
+    }
+    our @L = ();
+    if (open my $in, "<", $f) { @L = <$in>; chomp @L; close $in }
+    eval $code; die $@ if $@;
+    my ($t, $o);
+    for my $n (0 .. 99) { $t = "$f.$$.$n.new"; last if sysopen $o, $t, O_WRONLY | O_CREAT | O_EXCL, 0600 }
+    $o or die "$f: $!\n";
+    print $o map { "$_\n" } @L;
+    close $o && chmod(0644, $t) && rename($t, $f) or do { unlink $t; die "$f: $!\n" }' "$@"
+}
 put_setting() {  # put_setting <key> <value> [settings-file]
-  local f=${3:-$SETTINGS}
-  { grep -vE "^$1=" "$f" 2>/dev/null; echo "$1=$2"; } > "$f.tmp" && chmod 644 "$f.tmp" && mv "$f.tmp" "$f"
+  locked_rewrite "${3:-$SETTINGS}" '@L = ((grep { !/\A\Q$ARGV[0]\E=/ } @L), "$ARGV[0]=$ARGV[1]")' "$1" "$2"
+}
+drop_setting() {  # drop_setting <key>: back to its default
+  [ -f "$SETTINGS" ] || return 0
+  locked_rewrite "$SETTINGS" '@L = grep { !/\A\Q$ARGV[0]\E=/ } @L' "$1"
+}
+# settings_merge <from> <to>: the keys whose value differs from file <from> to file <to> (a missing
+# file has none) set or dropped the same way in the settings, in one rewrite under their lock; other
+# keys, a concurrent "ks set" outside the core lock among them, stay as they are (set_mtu, #50)
+settings_merge() {
+  locked_rewrite "$SETTINGS" 'my @v = ({}, {});
+    for my $i (0, 1) { open my $h, "<", $ARGV[$i] or next; while (<$h>) { chomp; $v[$i]{$1} = $2 if /\A([^=]+)=(.*)\z/ } }
+    my %k = map { $_ => 1 } keys %{$v[0]}, keys %{$v[1]};
+    for my $k (sort keys %k) { my ($was, $now) = ($v[0]{$k}, $v[1]{$k});
+      next if defined $was && defined $now && $was eq $now;
+      @L = grep { !/\A\Q$k\E=/ } @L; push @L, "$k=$now" if defined $now }' "$1" "$2"
 }
 
-core_import() {  # core_import <profile.json> [import|refresh]
-  local src=${1:-} prof conf in tmp srv="$SERVERS_CORE.tmp" rc
-  prof=$(core_profile); conf=$(core_conf); in="$prof.new"; tmp="$conf.tmp"
-  servers_migrate
-  install -d -o root -g wheel -m 700 "$CORE_DIR/ctl"
-  # Read once, with the caller's rights (root must not open files for the user), into our
-  # directory; everything after works on that copy, which is kept for rebuilds.
-  [ -n "$src" ] || { echo "usage: ks core import <json>" >&2; return 1; }
-  local as=()
-  [ -n "${SUDO_UID:-}" ] && [ "$SUDO_UID" != 0 ] && as=(sudo -n -u "#$SUDO_UID")
+# src_owner <file>: the owner's uid of a regular file with one name, not a link
+src_owner() { perl -e 'my @s = lstat $ARGV[0] or exit 1; -f _ && $s[3] == 1 or exit 1; print "$s[4]\n"' -- "$1"; }
+# profile_read <file> <copy>: the app's profile read once, with the caller's rights (root must not
+# open files for the user), into our directory; everything after works on that copy.
+profile_read() {
+  local src=$1 in=$2 as=() o
+  if [ -n "${SUDO_UID:-}" ]; then
+    [ "$SUDO_UID" = 0 ] || as=(sudo -n -u "#$SUDO_UID")
+  else
+    # the admin password prompt and the daemon set no SUDO_UID (#37): the file's owner reads it
+    # (the app's temporary file); root's own file (the daemon's copy) only from folders only
+    # root can change, by its real path. Never a link, never a file with a second name.
+    o=$(src_owner "$src") || { echo "Не удалось прочитать $src" >&2; return 1; }
+    if [ "$o" != "$EUID" ]; then as=(sudo -n -u "#$o")
+    else src=$(trusted_path "$EUID" 0 "$src") || { echo "Не удалось прочитать $src" >&2; return 1; }; fi
+  fi
   # It holds the servers' passwords: root-only from the first byte (core/ is 711, so a file of a
   # known name there would be readable by anyone), and a leftover file would keep its old mode.
   rm -f "$in"
   ( umask 077; ${as[@]+"${as[@]}"} /bin/cat -- "$src" | head -c 20000001 > "$in"; exit "${PIPESTATUS[0]}" ) ||
     { rm -f "$in"; echo "Не удалось прочитать $src" >&2; return 1; }
   chmod 600 "$in"
-  if [ "${2:-}" = refresh ]; then
-    KS_STRICT_DNS=1 core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; rm -f "$in"; return 1; }
-    # refresh is passwordless (subscription auto-update): nothing new may be let out
-    refresh_check "$srv" "$tmp.pins" "$tmp.direct" || { rc=$?; core_clean "$tmp" "$srv"; rm -f "$in"; return "$rc"; }
-  else
-    KS_APPROVE_ALL=1 core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; rm -f "$in"; return 1; }
-    # what the admin just approved: refresh and rotation measure against it, an Xray server
-    # switch against every host's DIRECT (approved-switch, KS-10)
-    rm -f "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new"
-    ( umask 077; cut -f1 "$tmp.pins" > "$APPROVED_HOSTS.new"; cp "$tmp.direct" "$APPROVED_DIRECT.new"
-      cp "$tmp.approved" "$CORE_DIR/approved-switch.new" 2>/dev/null || : > "$CORE_DIR/approved-switch.new" )
-    chmod 600 "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new"
+}
+
+# The admin's approval is a set (ADR 0036, #64): one folder per profile of the last import in
+# core/approved/<n>, root-only, with the core kind it was built for (#65 switches the core by it),
+# its server host names and addresses, its DIRECT signature and every host's (KS-10).
+# approved-hosts, approved-direct and approved-switch are those of the profile that runs, so
+# refresh, rotation and an Xray server switch measure against it as before. An install from
+# before 0.20 has no set: its files of one import are the set of one.
+# approval_write <dir> <config.tmp> <servers.tmp>: the entry of a profile generated with KS_APPROVE_ALL
+approval_write() {
+  ( umask 077; mkdir "$1" && core_kind > "$1/kind" && cut -f1 "$2.pins" > "$1/hosts" && cp "$3" "$1/servers" && cp "$2.direct" "$1/direct" &&
+    { cp "$2.approved" "$1/switch" 2>/dev/null || : > "$1/switch"; } ) && chmod 600 "$1"/*
+}
+
+# approval_more <set.new> <profile.json>…: the other subscriptions' profiles, approved with the
+# one that runs: each read, generated and tested like an import, nothing of it kept but its entry.
+# Without the running one's double VPN and server pick: they name that subscription's servers.
+approval_more() {
+  local set=$1 n=1 f why in="$CORE_DIR/approve-profile.new" out="$CORE_DIR/approve.tmp" srv="$CORE_DIR/approve-servers.tmp" s="$CORE_DIR/approve-settings.tmp"
+  shift
+  rm -f "$s" "$s.base"; ( umask 077; grep -vE '^(multihop|xrayserver)=' "$SETTINGS" > "$s.base" 2>/dev/null; : > "$s" )
+  for f; do
+    n=$((n + 1))
+    # one that is not taken stays unapproved, the others are not affected (ADR 0036, decision 7):
+    # a switch to it asks for the password again, and that import tells why
+    # the journal gets the step only: the errors name hosts, paths and addresses
+    why=""
+    if ! profile_read "$f" "$in" 2>/dev/null; then why=unreadable
+    elif ! { grep -vE '^core=' "$s.base" > "$s"; echo "core=$(profile_kind "$in")" >> "$s"; }; then why="not written"
+    elif ! SETTINGS=$s KS_APPROVE_ALL=1 core_generate "$in" "$out" "$srv" "$SERVERS_MANUAL" 2>/dev/null; then why="refused by the generator"
+    elif ! { chmod 600 "$out"; SETTINGS=$s core_test "$out" >/dev/null 2>&1; }; then why="refused by the core"
+    elif ! SETTINGS=$s approval_write "$set/$n" "$out" "$srv"; then why="not written"; fi
+    if [ -n "$why" ]; then rm -rf "${set:?}/$n"; log_event "approval: profile $n of the import skipped: $why"; fi
+    core_clean "$out" "$srv"; rm -f "$in"
+  done
+  rm -f "$s" "$s.base"
+}
+
+# approval_find <servers> <pins> <direct>: the entry of the set that approves all of a generated
+# profile (nothing printed for the files of one import from before 0.20): one entry built for the
+# running core takes every host, address and the DIRECT signature. Refused with 3 and
+# refresh_check's reason (against the entry sharing most hosts) when none does.
+approval_find() {
+  local e best="" n most=-1 set="$CORE_DIR/approved"
+  [ -f "$APPROVED_HOSTS" ] || { echo "Нет подтверждённых серверов: нужно подтверждение паролем администратора" >&2; return 3; }
+  [ -d "$set" ] || { refresh_check "$1" "$2" "$3"; return; }
+  for e in "$set"/*; do
+    [ "$(cat "$e/kind" 2>/dev/null)" = "$(core_kind)" ] || continue
+    if refresh_check "$1" "$2" "$3" "$e" 2>/dev/null; then echo "$e"; return 0; fi
+    n=$(cut -f1 "$2" | grep -cxF -f "$e/hosts")
+    [ "$n" -le "$most" ] || { best=$e; most=$n; }
+  done
+  [ -z "$best" ] || { refresh_check "$1" "$2" "$3" "$best"; return 3; }
+  echo "Подписка не подтверждена для ядра $(core_kind): нужно подтверждение паролем администратора" >&2
+  return 3
+}
+
+# profile_kind <profile.json>: the core a profile is for: an Xray config (an array of them, or one
+# with outbounds) is Xray's, anything else mihomo's (whose generator refuses what is not a profile)
+profile_kind() {
+  /usr/bin/perl -MJSON::PP -0777 -ne 'my $j = eval { JSON::PP->new->decode($_) };
+    print ref $j eq "ARRAY" || (ref $j eq "HASH" && exists $j->{outbounds}) ? "xray" : "mihomo"' -- "$1"
+}
+
+# core_import <profile.json> [import|refresh|use] [profile.json…]: "import" (the admin password)
+# approves the first profile and the later ones (the other subscriptions) and runs the first;
+# "refresh" (passwordless) takes a newer copy of the running one, "use" (passwordless) another
+# approved one: neither may let out anything the admin did not approve. The copy is kept for rebuilds.
+core_import() {
+  local src=${1:-} mode=${2:-import} prof conf in="$CORE_DIR/profile-in.new" tmp srv="$SERVERS_CORE.tmp" rc set="$CORE_DIR/approved" e="" s mh="" k real=$SETTINGS ks=""
+  servers_migrate
+  install -d -o root -g wheel -m 700 "$CORE_DIR/ctl"
+  [ -n "$src" ] && { [ $# -le 2 ] || { [ "$mode" = import ] && [ $# -le 66 ]; }; } || { echo "usage: ks core import <json> [json…]" >&2; return 1; }
+  profile_read "$src" "$in" || return 1
+  # the core follows the subscription (ADR 0036, #65): the profile runs in the core of its own
+  # format, read from it, never from the caller. Another kind is built on settings that name it
+  # (double VPN off: its entry is in the other core's format, ADR 0027), kept once it is in place.
+  k=$(profile_kind "$in")
+  if [ "$k" != "$(core_kind)" ]; then
+    [ "$mode" != refresh ] || { rm -f "$in"; echo "Подписка теперь для ядра $k: нужно подтверждение паролем администратора" >&2; return 3; }
+    [ -x "$CORE_DIR/$k" ] || { rm -f "$in"; echo "Ядро $k не установлено" >&2; return 1; }
+    # an install from before 0.20 has the files of one import: of the running core only
+    [ "$mode" != use ] || [ -d "$set" ] || { rm -f "$in"; echo "Подписка не подтверждена для ядра $k: нужно подтверждение паролем администратора" >&2; return 3; }
+    ks="$CORE_DIR/kind-settings.tmp"; rm -f "$ks"
+    ( umask 077; { grep -vE '^(core|multihop)=' "$real" 2>/dev/null; echo "core=$k"; } > "$ks" )
+    local SETTINGS=$ks
   fi
-  core_commit "$tmp" "$srv" || { rm -f "$in" "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new"; return 1; }
+  s=$SETTINGS
+  prof=$(core_profile); conf=$(core_conf); tmp="$conf.tmp"
+  if [ "$mode" != import ]; then
+    # use: on a copy of the settings, so a refused one changes none (the generator turns double
+    # VPN off when its entry is not in that subscription); kept below once it runs
+    if [ "$mode" = use ]; then
+      s="$CORE_DIR/use-settings.tmp"; rm -f "$s"; ( umask 077; cp "$SETTINGS" "$s" 2>/dev/null || : > "$s" )
+    fi
+    SETTINGS=$s KS_STRICT_DNS=1 core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" ||
+      { core_clean "$tmp" "$srv"; rm -f "$in" "$ks"; [ "$s" = "$SETTINGS" ] || rm -f "$s"; return 1; }
+    # refresh and use are passwordless (subscription auto-update, another approved subscription):
+    # nothing new may be let out
+    if [ "$mode" = use ]; then e=$(approval_find "$srv" "$tmp.pins" "$tmp.direct")
+    else refresh_check "$srv" "$tmp.pins" "$tmp.direct"; fi ||
+      { rc=$?; core_clean "$tmp" "$srv"; rm -f "$in" "$ks"; [ "$s" = "$SETTINGS" ] || rm -f "$s"; return "$rc"; }
+    # what refresh and an Xray server switch measure against from now: the entry that approved it
+    if [ -n "$e" ]; then
+      rm -f "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new"
+      ( umask 077; cp "$e/hosts" "$APPROVED_HOSTS.new"; cp "$e/direct" "$APPROVED_DIRECT.new"; cp "$e/switch" "$CORE_DIR/approved-switch.new" )
+    fi
+    if [ "$s" != "$SETTINGS" ]; then mh=$(SETTINGS=$s setting multihop off); rm -f "$s"; fi
+  else
+    KS_APPROVE_ALL=1 core_generate "$in" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; rm -f "$in" "$ks"; return 1; }
+    # what the admin just approved: refresh and rotation measure against it, an Xray server
+    # switch against every host's DIRECT (approved-switch, KS-10), use against the set
+    rm -rf "$set.new" "$set.old"; rm -f "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new"
+    if ! ( umask 077; mkdir "$set.new" ) || ! approval_write "$set.new/1" "$tmp" "$srv" || ! approval_more "$set.new" "${@:3}"; then
+      core_clean "$tmp" "$srv"; rm -rf "$in" "$set.new" "$ks"; return 1
+    fi
+    ( umask 077; cp "$set.new/1/hosts" "$APPROVED_HOSTS.new"; cp "$set.new/1/direct" "$APPROVED_DIRECT.new"
+      cp "$set.new/1/switch" "$CORE_DIR/approved-switch.new" )
+  fi
+  [ -z "$ks" ] || take_save "$real"
+  core_commit "$tmp" "$srv" || { rm -rf "$in" "$APPROVED_HOSTS.new" "$APPROVED_DIRECT.new" "$CORE_DIR/approved-switch.new" "$set.new" "$ks"; take_drop; return 1; }
   mv "$in" "$prof"
-  if [ "${2:-}" != refresh ]; then
+  [ -z "$mh" ] || [ "$mh" = "$(setting multihop off)" ] || put_setting multihop "$mh"
+  if [ -n "$ks" ]; then
+    SETTINGS=$real put_setting multihop off; SETTINGS=$real put_setting core "$k"; rm -f "$ks"
+    ( umask 077; cp "$real" "$CORE_DIR/take-settings-done" )
+    log_event "core: $k (the subscription's)"
+  fi
+  if [ "$mode" = import ] || [ -n "$e" ]; then
     mv "$APPROVED_HOSTS.new" "$APPROVED_HOSTS"; mv "$APPROVED_DIRECT.new" "$APPROVED_DIRECT"
     mv "$CORE_DIR/approved-switch.new" "$CORE_DIR/approved-switch"
+  fi
+  if [ "$mode" = import ]; then
+    # the old set aside, the new one in, then the old one gone: a crash leaves one of them
+    { [ ! -e "$set" ] || mv "$set" "$set.old"; } && mv "$set.new" "$set" && rm -rf "$set.old"
+    # what one password approved, for the journal: no host names, no links (review B2)
+    [ $# -le 2 ] || log_event "approval: $(find "$set" -name kind | wc -l | tr -d ' ') profiles approved:$(for e in "$set"/*; do
+      printf ' %s hosts=%s direct=%s' "${e##*/}" "$(wc -l < "$e/hosts" | tr -d ' ')" "$(shasum -a 256 < "$e/direct" | cut -c1-12)"; done)"
   fi
 }
 
 core_clean() { rm -f "$1" "$1.pins" "$1.direct" "$1.egress" "$1.report" "$1.approved" "$2" "$SERVERS.tmp"; }
+
+# core_take <profile.json> <import|refresh|use> [profile.json…]: core_import, then pf and the core
+# follow. pf is reloaded with the new servers, never flushed, before the core restarts: blocking
+# holds throughout a switch to another subscription (ADR 0035, 0036).
+# A profile of the other core (#65) swaps the launchd job the way "core on" does, the anchor loaded
+# throughout, when the VPN is on (its target, or its job loaded); with the VPN off the next "core on"
+# starts it. When the new core does not run, what the switch replaced comes back (take_back) and the
+# old core runs again (or, its job not loaded before, none): still blocked, never without the rules.
+core_take() {
+  local was job=0
+  take_drop   # copies of a switch cut short (its import had committed): the state they replaced is gone
+  was=$(core_kind)
+  launchctl print "$CORE_JOB" >/dev/null 2>&1 && job=1
+  core_import "$@" || return $?
+  reload_if_on   # the servers list changed
+  if [ ! -e "$CORE_DIR/take" ]; then
+    [ "$job" = 0 ] || launchctl kickstart -k "$CORE_JOB"
+  elif { [ "$job" = 1 ] || vpn_on; } && ! core_on; then
+    take_back; reload_if_on
+    if [ "$job" = 1 ]; then core_on
+    else launchctl bootout "$CORE_JOB" 2>/dev/null; job_gone "$CORE_JOB"; core_plist_sync 2>/dev/null; fi
+    log_event "core: back to $was, $(core_kind_other "$was") did not start"
+    echo "Ядро $(core_kind_other "$was") не запустилось: работает прежнее" >&2
+    return 1
+  fi
+  take_drop
+  log_event "core config imported"
+}
+
+# What a switch of the core replaces, kept as <file>.take (not set_mtu's .prev) by take_save just
+# before the import commits: the servers, pins and what pf and the app read, the running approval
+# and the approved set, both cores' configs and profiles; the settings as they were (core/take-settings)
+# and as the import left them (take-settings-done). take_back puts the files back (a file that was not
+# there goes) and only the keys the switch changed (settings_merge, as set_mtu does): a "ks set"
+# meanwhile stays. core/take marks a switch under way.
+take_files() {
+  printf '%s\n' "$SERVERS" "$SERVERS_CORE" "$PINS" "$CORE_EGRESS" "$REPORT" "$CORE_DIR/direct" "$APPROVED_HOSTS" "$APPROVED_DIRECT" \
+    "$CORE_DIR/approved-switch" "$CORE_DIR/config.yaml" "$CORE_DIR/xray.json" "$CORE_PROFILE" "$CORE_DIR/profile-xray.json"
+}
+take_save() {  # take_save <settings as they are>
+  local f
+  take_drop
+  while IFS= read -r f; do [ ! -f "$f" ] || cp -p "$f" "$f.take"; done < <(take_files)
+  [ ! -d "$CORE_DIR/approved" ] || cp -Rp "$CORE_DIR/approved" "$CORE_DIR/approved.take"
+  [ ! -f "$1" ] || cp -p "$1" "$CORE_DIR/take-settings"
+  : > "$CORE_DIR/take"
+}
+take_back() {
+  local f
+  while IFS= read -r f; do if [ -f "$f.take" ]; then mv "$f.take" "$f"; else rm -f "$f"; fi; done < <(take_files)
+  rm -rf "$CORE_DIR/approved"; [ ! -d "$CORE_DIR/approved.take" ] || mv "$CORE_DIR/approved.take" "$CORE_DIR/approved"
+  [ ! -f "$CORE_DIR/take-settings-done" ] || settings_merge "$CORE_DIR/take-settings-done" "$CORE_DIR/take-settings"
+  take_drop
+}
+take_drop() {
+  local f
+  while IFS= read -r f; do rm -f "$f.take"; done < <(take_files)
+  rm -rf "$CORE_DIR/approved.take"; rm -f "$CORE_DIR/take-settings" "$CORE_DIR/take-settings-done" "$CORE_DIR/take"
+}
+core_kind_other() { if [ "$1" = xray ]; then echo mihomo; else echo xray; fi; }
 
 # core_publish <config.tmp>: the world-readable companions of an accepted config (egress for pf,
 # the report for the app) into place. Fails (1) when egress stayed the same, so a caller knows
@@ -2178,13 +3170,18 @@ core_publish() {
 # the admin: a server host name not in the last import, an address that is neither allowed
 # yet nor the address of an approved name, or DIRECT rules/groups other than those approved.
 # Installs from before 0.7 have no record: only addresses are compared, DIRECT needs an import.
+# [entry]: DIRECT measured against that entry of the approved set (approval_find) instead.
 refresh_check() {
-  local names="" ok="$1.ok" h a new rc=0
+  local names="" ok="$1.ok" h a new rc=0 switch="$CORE_DIR/approved-switch" known=$SERVERS
+  # an entry measures all of the profile by itself: its hosts, its addresses (and the ones added by
+  # hand), its DIRECT; nothing of the running profile, so one subscription's servers never pass
+  # with another's DIRECT (review B1)
+  [ -z "${4:-}" ] || { local APPROVED_HOSTS="$4/hosts" APPROVED_DIRECT="$4/direct"; switch="$4/switch"; known="$4/servers"; }
   if [ -f "$APPROVED_HOSTS" ]; then
     names=$(cut -f1 "$2" | grep -vxF -f "$APPROVED_HOSTS")
   fi
   {
-    cat "$SERVERS" 2>/dev/null
+    cat "$known" 2>/dev/null; [ -z "${4:-}" ] || cat "$SERVERS_MANUAL" 2>/dev/null
     [ -f "$APPROVED_HOSTS" ] && while IFS=$'\t' read -r h a; do grep -qxF -- "$h" "$APPROVED_HOSTS" && echo "$a"; done < "$2"
   } | grep -v '^$' > "$ok"
   new=$(grep -vxF -f "$ok" "$1"); rm -f "$ok"
@@ -2196,8 +3193,8 @@ refresh_check() {
   # Approved: the import's DIRECT, the running one, or one the import approved for a switch
   # (direct_unapproved); with no record of an import at all, only an import
   if { [ -s "$3" ] || [ -s "$APPROVED_DIRECT" ]; } && ! cmp -s "$3" "$APPROVED_DIRECT" &&
-     { [ ! -f "$APPROVED_DIRECT" ] || direct_unapproved "$3"; }; then
-    echo "Профиль меняет, что идёт мимо VPN (DIRECT): нужно подтверждение паролем администратора" >&2
+     { [ ! -f "$APPROVED_DIRECT" ] || { direct_unapproved "$3" "$switch" "${4:+entry}" && ! direct_subset "$3"; }; }; then
+    echo "Профиль меняет, что идёт мимо VPN (DIRECT)$(direct_parts "$3"): нужно подтверждение паролем администратора" >&2
     rc=3
   fi
   return "$rc"
@@ -2219,15 +3216,46 @@ core_commit() {
   mv "$tmp" "$(core_conf)"
 }
 
-# direct_unapproved <direct>: a generated config for another Xray host sends past the VPN what
+# direct_subset <direct>: only the person's routing profile went direct less (ADR 0034, review S5,
+# re-review F1): every line but the profile's own ("profile-rule", "profile") and the freedom
+# outbounds ("outbound") is the approved signature's, in the same order, and each of those is one
+# of the approved ones. Whole lines of a subscription's rules may not be fewer: one to a group or
+# balancer that can also go direct shields the DIRECT rules behind it (and split apps' rules, KS's
+# own, must not be taken over by a subscription's rule of the same text).
+direct_subset() {
+  [ -f "$APPROVED_DIRECT" ] || return 1
+  local own=$'^(profile-rule|profile|outbound)\t' ob=$'^outbound\t'
+  cmp -s <(grep -vE "$own" -- "$1") <(grep -vE "$own" -- "$APPROVED_DIRECT") &&
+    ! { grep -E $'^(profile-rule|profile)\t' -- "$1" || :; } | grep -qvxF -f "$APPROVED_DIRECT" &&
+    # the outbound lines are all the approved ones in their order, or the signature is empty
+    # (nothing goes direct any more): an untagged first one is Xray's default, whose "default"
+    # line names no tag, so one dropped or moved would make another the default, and a direct
+    # line left without its outbounds could go through another one (re-review 2 N-A, Codex P1)
+    { [ ! -s "$1" ] || cmp -s <(grep -E "$ob" -- "$1") <(grep -E "$ob" -- "$APPROVED_DIRECT"); }
+}
+
+# direct_parts <direct>: which part of the signature is not the approved one, for the app to say
+# (re-review F4): " [profile]" (the routing profile's lines), " [subscription]" (the rest; a freedom
+# outbound only when one was approved before, else it came with the profile), or both.
+direct_parts() {
+  local a=$APPROVED_DIRECT p="" s=""
+  [ -f "$a" ] || a=/dev/null
+  { grep -E $'^(profile-rule|profile)\t' -- "$1" || :; } | grep -qvxF -f "$a" && p=profile
+  cmp -s <(grep -vE $'^(profile-rule|profile|outbound)\t' -- "$1") <(grep -vE $'^(profile-rule|profile|outbound)\t' -- "$a") || s=subscription
+  if grep -q $'^outbound\t' -- "$a" && { grep -E $'^outbound\t' -- "$1" || :; } | grep -qvxF -f "$a"; then s=subscription; fi
+  [ -n "$p$s" ] || s=subscription
+  if [ -n "$p" ] && [ -n "$s" ]; then echo " [$p,$s]"; else echo " [$p$s]"; fi
+}
+
+# direct_unapproved <direct> [approved-switch]: a generated config for another Xray host sends past the VPN what
 # the admin did not approve (KS-10): neither what the running config sends (approved at import or
 # with a setting; before 0.19 no copy was kept, then the import's approved-direct) nor what that
 # import found for one of the subscription's hosts (approved-switch). Egress follows the signature.
-direct_unapproved() {
+direct_unapproved() {  # [entry]: an entry of the approved set alone, not the running config
   local run="$CORE_DIR/direct"
-  [ -f "$run" ] || run=$APPROVED_DIRECT
+  [ -f "$run" ] && [ -z "${3:-}" ] || run=$APPROVED_DIRECT
   if cmp -s "$1" "$run" || { [ ! -s "$1" ] && [ ! -s "$run" ]; }; then return 1; fi
-  ! grep -qxF -- "$(shasum -a 256 < "$1" | cut -d' ' -f1)" "$CORE_DIR/approved-switch" 2>/dev/null
+  ! grep -qxF -- "$(shasum -a 256 < "$1" | cut -d' ' -f1)" "${2:-$CORE_DIR/approved-switch}" 2>/dev/null
 }
 
 # core_rebuild <pins> [switch]: the config again from the kept profile with these addresses, no
@@ -2246,11 +3274,32 @@ core_rebuild() {
   core_commit "$tmp" "$srv"
 }
 
-# A setting the generator reads changed: rebuild and reload if there is a kept profile.
+# A setting the generator reads changed: rebuild and reload if there is a kept profile. 4: the new
+# config is in place but the core was not reloaded with it.
 core_apply_settings() {
   [ -f "$(core_profile)" ] && [ -f "$PINS" ] || return 0
   core_rebuild "$PINS" || return 1
-  reload_if_on; core_reload
+  reload_if_on; core_reload || return 4
+}
+# setting_apply <put function> <new> <old>: a setting the generator reads, written and applied. A
+# config the core does not take must not stay in settings (every later rebuild would fail): then the
+# old value goes back, and when that config was already put in place (the reload failed) the config
+# is built again with the old value, so settings and the config never disagree.
+setting_apply() {
+  local rc
+  "$1" "$2" || return 1
+  core_apply_settings && return 0
+  rc=$?
+  "$1" "$3"
+  [ "$rc" = 4 ] || return 1
+  echo "Ядро не перезапустилось с новой настройкой: вернул прежнюю" >&2
+  core_apply_settings >/dev/null 2>&1; rc=$?
+  case "$rc" in
+    0) ;;
+    4) log_event "settings: the previous config in place, not reloaded either" ;;
+    *) log_event "settings: the previous settings refused by the core, the config keeps the new value" ;;
+  esac
+  return 1
 }
 
 # "ks _regen" (install.sh, after an upgrade, under the core lock): the config again from the kept
@@ -2263,6 +3312,7 @@ core_regen() {
   local prof conf tmp srv="$SERVERS_CORE.tmp" was=0 pid f files other=0
   [ "$(core_kind)" = xray ] && xray_api_check
   switch_approval_migrate
+  multihop_stale_drop
   prof=$(core_profile); conf=$(core_conf); tmp="$conf.tmp"
   [ -f "$prof" ] && [ -f "$PINS" ] && [ -f "$conf" ] || { echo "core config: none"; return 0; }
   KS_PINS=$PINS core_generate "$prof" "$tmp" "$srv" "$SERVERS_MANUAL" || { core_clean "$tmp" "$srv"; return 1; }
@@ -2335,8 +3385,8 @@ mtime_older() {
   awk -v a="$a" -v b="$b" 'BEGIN { exit !(a + 0 < b + 0) }'
 }
 
-# core_up <pid before the restart>: the restarted Xray runs (another pid) and listens on its
-# inbounds, within CORE_UP_TRIES half-seconds.
+# core_up <pid before the restart>: the restarted core (Xray; mihomo too for set_mtu) runs (another
+# pid) and listens on its fetch inbound, within CORE_UP_TRIES half-seconds.
 CORE_UP_TRIES=10
 core_up() {
   local i
@@ -2463,7 +3513,7 @@ rotate_due() {
   ROT_LAST=$1; ROT_NEXT=$(($1 + 1800))
 }
 # skipped if an import, refresh or setting change holds the lock
-core_rotate_bg() { lockf -k -t 0 "$CORE_DIR/core.lock" "$0" _rotate >/dev/null 2>&1 & }
+core_rotate_bg() { lock_ready "$CORE_DIR/core.lock" 2>/dev/null; lockf -k -t 0 "$CORE_DIR/core.lock" "$0" _rotate >/dev/null 2>&1 & }
 net_sig() {  # primary interface and router
   printf 'show State:/Network/Global/IPv4\n' | scutil | awk '$1 == "PrimaryInterface" || $1 == "Router" { print $3 }' | paste -sd' ' -
 }
@@ -2475,7 +3525,7 @@ CORE_PLIST="/Library/LaunchDaemons/local.killswitch.core.plist"
 core_plist_sync() {
   local src
   src="$CORE_DIR/plist.$(core_kind)"
-  [ -s "$src" ] || { echo "Нет задания launchd для ядра $(core_kind): переустанови KillSwitch" >&2; return 1; }
+  [ -s "$src" ] || { echo "Нет задания launchd для ядра $(core_kind): переустанови KillSwitch" >&2; return 2; }
   cmp -s "$src" "$CORE_PLIST" && return 1
   cp "$src" "$CORE_PLIST.tmp" && chmod 644 "$CORE_PLIST.tmp" && mv "$CORE_PLIST.tmp" "$CORE_PLIST"
 }
@@ -2493,6 +3543,8 @@ set_core() {
   [ -x "$CORE_DIR/$1" ] || { echo "Ядро $1 не установлено" >&2; return 1; }
   [ "$(core_kind)" = "$1" ] && keep=1
   launchctl print "$CORE_JOB" >/dev/null 2>&1 && cmp -s "$CORE_DIR/plist.$1" "$CORE_PLIST" && keep=1
+  # «Двойной VPN» names its entry in the format of the core it was set for (ADR 0027)
+  [ "$(core_kind)" = "$1" ] || put_setting multihop off || return 1
   # its import is the last one (that of the other core failed or never came): the servers, pins
   # and approvals in place are that config's, so it stays even with the core off
   mine=$CORE_PROFILE; other="$CORE_DIR/profile-xray.json"
@@ -2507,22 +3559,49 @@ set_core() {
 # launchctl bootout returns before the job is gone, and bootstrap refuses it until then
 job_gone() { for _ in $(seq 1 50); do launchctl print "$1" >/dev/null 2>&1 || return 0; sleep 0.2; done; return 1; }
 
+# The watchdog running is older than this ks (0.19 during an upgrade, before install.sh's HUP: its
+# state file has no vpn= line) and flushes our rules while protection is off. With the VPN on, hand
+# over to this ks (HUP, as install.sh does) and wait, ~30 s at most, until the new one has the rules
+# loaded (vpn=1 blocking=1); the core is not started or restarted otherwise.
+watchdog_handover() {
+  [ -f "$STATEF" ] && ! grep -q '^vpn=' "$STATEF" 2>/dev/null || return 0
+  launchctl kill HUP "$WATCH_JOB" 2>/dev/null
+  for _ in $(seq 1 150); do
+    grep -qx 'vpn=1' "$STATEF" 2>/dev/null && grep -qx 'blocking=1' "$STATEF" && return 0
+    sleep 0.2
+  done
+  echo "the new watchdog did not take over with the rules loaded: the VPN not started" >&2
+  return 1
+}
+
 # "ks core on" (passwordless)
 core_on() {
+  local t wrote=0 sync
   [ -x "$CORE_DIR/$(core_kind)" ] || { echo "Ядро не установлено" >&2; return 1; }
   [ -s "$(core_conf)" ] || { echo "Нет конфига ядра: сначала возьми подписку" >&2; return 1; }
   # two TUNs fight over routes and DNS: the other VPN has to be off first
   if ! core_running && { pgrep -x DropwebCore >/dev/null || [ -n "$(vpn_ifaces)" ]; }; then
     echo "Сначала отключи VPN в dropweb или Happ" >&2; return 1
   fi
+  # from here until "ks core off" pf blocks whatever the protection switch says (ADR 0035)
+  if ! vpn_on; then
+    t=$(mktemp "$VPN_ON.XXXXXX") && date +%s > "$t" && chmod 644 "$t" && mv -f "$t" "$VPN_ON" || { rm -f "${t:-}"; return 1; }
+    wrote=1
+  fi
+  loaded || load || return 1
+  # nothing started yet: a failed handover undoes the target this call wrote
+  watchdog_handover || { [ "$wrote" = 0 ] || rm -f "$VPN_ON"; return 1; }
+  loaded || load || return 1
   core_log_tidy
   diag_dir   # a config with the access log names it (ADR 0021)
   # the stats port taken by another program (or free again): the config follows first, before the
   # loaded job of the other core (mihomo to Xray) goes; not while Xray itself runs (a restart)
-  if { ! core_running || ! cmp -s "$CORE_DIR/plist.xray" "$CORE_PLIST"; } && xray_api_check; then "$0" _regen >/dev/null 2>&1 || true; fi
+  if { ! core_running || ! cmp -s "$CORE_DIR/plist.xray" "$CORE_PLIST"; } && xray_api_check; then ( core_regen ) >/dev/null 2>&1 || true; fi   # under the core lock already
   launchctl enable "$CORE_JOB"
-  # the job of the chosen core (ADR 0020); a loaded job of the other one goes first
-  if core_plist_sync 2>/dev/null; then launchctl bootout "$CORE_JOB" 2>/dev/null; job_gone "$CORE_JOB"; fi
+  # the job of the chosen core (ADR 0020); a loaded job of the other one goes first; none for it: an error
+  sync=0; core_plist_sync || sync=$?
+  [ "$sync" != 2 ] || return 1
+  if [ "$sync" = 0 ]; then launchctl bootout "$CORE_JOB" 2>/dev/null; job_gone "$CORE_JOB"; fi
   launchctl bootstrap system "$CORE_PLIST" 2>/dev/null ||
     launchctl kickstart "$CORE_JOB"
   # DNS goes to the core only once it runs; otherwise the Mac would be left without names
@@ -2530,6 +3609,111 @@ core_on() {
   core_running || { echo "Ядро не запустилось" >&2; return 1; }
   dns_locked apply >/dev/null
   log_event "core on"
+}
+
+# "ks core off" (passwordless): the only way the VPN target goes (ADR 0035)
+core_off() {
+  launchctl bootout "$CORE_JOB" 2>/dev/null
+  # a core still there keeps the VPN on, the rules, its DNS and its job enabled (so it runs after
+  # a reboot, as the VPN target says): «Отключить VPN» can be pressed again
+  # a core that did not answer SIGTERM (stuck starting, #85) is killed rather than left running
+  job_gone "$CORE_JOB" || { launchctl kill SIGKILL "$CORE_JOB" 2>/dev/null; job_gone "$CORE_JOB"; } ||
+    { echo "Ядро не остановилось" >&2; return 1; }
+  launchctl disable "$CORE_JOB"
+  rm -f "$VPN_ON"
+  # protection off or paused: open only now that the core has stopped
+  [ -f "$FLAG" ] && pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
+  # DNS left on our resolver with the core gone leaves the Mac without names: say so (#92); the
+  # watchdog tries again while the DNS state is there (core_guard)
+  if ! dns_locked restore; then
+    log_event "core off: DNS not restored"
+    echo "VPN отключён, но DNS не вернулся. KillSwitch попробует ещё раз сам; если сайты не открываются, перезагрузи Mac" >&2
+    return 1
+  fi
+  log_event "core off"
+}
+
+# "ks core restart" (passwordless, «Перезапустить VPN»): the core again with the VPN kept on and pf
+# blocking throughout (ADR 0035); "core off" then "core on" would open pf in between.
+core_vpn_restart() {
+  vpn_on || { echo "VPN не включён" >&2; return 1; }
+  loaded || load || return 1
+  watchdog_handover || return 1
+  loaded || load || return 1
+  if launchctl print "$CORE_JOB" >/dev/null 2>&1; then launchctl kickstart -k "$CORE_JOB"; else core_on; fi
+}
+
+# The TUN's MTU (ADR 0032, #18): 1280 (IPv6's minimum) to 1500, a plain number; none = «Авто», each
+# core's own (Xray 1500, mihomo its default). tun_mtu: the setting if it is one, else nothing.
+mtu_ok() { [[ "$1" =~ ^1[2-5][0-9][0-9]$ ]] && [ "$1" -ge 1280 ] && [ "$1" -le 1500 ]; }
+tun_mtu() { local v; v=$(setting mtu ""); if mtu_ok "$v"; then echo "$v"; fi; }
+core_restart() { if launchctl print "$CORE_JOB" >/dev/null 2>&1; then launchctl kickstart -k "$CORE_JOB"; fi; }
+# "ks set mtu auto|<n>": the config is built with it on a copy of the settings first, and what that
+# copy changed (mtu, and whatever the build changed in it: a double VPN it cannot use goes off, ADR
+# 0027) goes into the settings only if that works, key by key under their lock (settings_merge): a
+# "ks set" outside the core lock meanwhile is kept, by a rollback too. The TUN is made anew only by
+# a restart (Xray has no reload, mihomo's API reload keeps the old TUN), so either core is restarted
+# once (about a second, pf keeps blocking), unless the new config is byte for byte the old one
+# (Xray's auto and 1500). A core that ran must come up again (core_up); if it does not, or the
+# restart fails, the previous settings, config and its files go back and the core is restarted with
+# them. The same value again changes nothing, except after a change that was cut short (its copies
+# still there): that one is undone and done again. The journal says «restarted» only when a running
+# core was restarted and came up.
+set_mtu() {
+  local prev s a pid="" job=0 f files again=0
+  [ "$1" = auto ] || mtu_ok "$1" || { echo "MTU — число от 1280 до 1500 или auto" >&2; return 1; }
+  if [ ! -f "$(core_profile)" ] || [ ! -f "$PINS" ]; then   # no subscription yet: its import builds with it
+    [ "$1" != "$(tun_mtu)" ] || { echo "MTU already $1"; return 0; }
+    mtu_store "$1" || return 1
+    log_event "tunnel MTU: $1"; return 0
+  fi
+  files=("$SETTINGS" "$(core_conf)" "$SERVERS" "$SERVERS_CORE" "$PINS" "$CORE_EGRESS" "$REPORT" "$CORE_DIR/direct")
+  a="$SETTINGS.mtu-done"   # the built copy, once its changes are in the settings (mtu_back undoes them)
+  for f in "${files[@]}"; do [ ! -f "$f.prev" ] || again=1; done
+  [ ! -f "$a" ] || again=1
+  if [ "$again" = 1 ]; then mtu_back; log_event "MTU change cut short: undone"; fi
+  prev=$(tun_mtu); prev=${prev:-auto}
+  [ "$again" = 1 ] || [ "$1" != "$prev" ] || { echo "MTU already $1"; return 0; }
+  launchctl print "$CORE_JOB" >/dev/null 2>&1 && job=1
+  core_job; [ "$CORE_RUN" = 1 ] && pid=$CORE_PID
+  s="$SETTINGS.mtu"; rm -f "$s" "$s.tmp"
+  cp "$SETTINGS" "$s" 2>/dev/null || : > "$s"
+  for f in "${files[@]}"; do rm -f "$f.prev"; [ ! -f "$f" ] || cp -p "$f" "$f.prev"; done
+  if ! SETTINGS=$s mtu_store "$1" || ! SETTINGS=$s core_rebuild "$PINS"; then
+    rm -f "$s" "$s.tmp" "$s.lock"; mtu_back; return 1
+  fi
+  rm -f "$s.lock"
+  mv "$s" "$a" && settings_merge "$SETTINGS.prev" "$a" || { rm -f "$s"; mtu_back; return 1; }
+  reload_if_on
+  if [ "$job" = 0 ] || { [ "$again" = 0 ] && cmp -s "$(core_conf).prev" "$(core_conf)"; }; then
+    for f in "${files[@]}"; do rm -f "$f.prev"; done; rm -f "$a"
+    log_event "tunnel MTU: $1"; return 0
+  fi
+  if core_restart && { [ -z "$pid" ] || core_up "$pid"; }; then
+    for f in "${files[@]}"; do rm -f "$f.prev"; done; rm -f "$a"
+    if [ -n "$pid" ]; then log_event "tunnel MTU: $1, VPN restarted"; else log_event "tunnel MTU: $1"; fi
+    return 0
+  fi
+  mtu_back; reload_if_on; core_restart
+  log_event "tunnel MTU: $1 refused, back to $prev: the VPN did not start with it"
+  echo "VPN не запустился с MTU ${1/auto/Авто}: вернули прежнее значение (${prev/auto/Авто})" >&2
+  return 1
+}
+# the copies set_mtu made go back in place (a file that was not there goes); uses its $files. The
+# settings are not replaced: only what set_mtu put into them goes back to how it was (settings_merge)
+mtu_back() {
+  local f a="$SETTINGS.mtu-done"
+  [ ! -f "$a" ] || settings_merge "$a" "$SETTINGS.prev"
+  rm -f "$a" "$SETTINGS.prev"
+  for f in "${files[@]}"; do
+    [ "$f" != "$SETTINGS" ] || continue
+    if [ -f "$f.prev" ]; then mv "$f.prev" "$f"; else rm -f "$f"; fi
+  done
+}
+mtu_store() {  # mtu_store auto|<n>
+  if [ "$1" = auto ]; then
+    drop_setting mtu
+  else put_setting mtu "$1"; fi
 }
 
 # "ks set splitapps <list>": apps outside the VPN, "" clears. The rebuilt config lets the core out
@@ -2541,22 +3725,85 @@ set_splitapps() {
   core_apply_settings
 }
 
-# "ks set multihop <entry proxy>|off": double VPN. The entry is checked by building the config
-# with it first; the setting is stored only if that works.
-set_multihop() {
-  local s
-  if [ "$1" != off ]; then
-    [ "$(core_kind)" = mihomo ] || { echo "Двойной VPN пока работает только с ядром mihomo" >&2; return 1; }
-    valid_name "$1" || { echo "Плохое имя прокси" >&2; return 1; }
-    [ -f "$CORE_PROFILE" ] && [ -f "$PINS" ] || { echo "Сначала возьми профиль" >&2; return 1; }
+# "ks set doh <url>" (ADR 0031): the own DNS-over-HTTPS server, used by the core through the VPN
+# only; "" clears. Checked before it is written: a bad line in settings would block everything.
+set_doh() {
+  local old
+  old=$(setting doh "")
+  if [ -n "$1" ] && ! valid_doh "$1"; then
+    echo "Адрес DNS-over-HTTPS должен быть вида https://имя-сервера/путь: без логина, без ? и #, не адрес в локальной сети" >&2
+    return 1
   fi
-  s=$(mktemp) || return 1
+  setting_apply doh_put "$1" "$old"
+}
+doh_put() {  # doh_put <url>: the settings line, "" removes it
+  if [ -n "$1" ]; then put_setting doh "$1"; return; fi
+  drop_setting doh
+}
+
+# "ks set multihop <entry proxy>|off": double VPN. The entry is checked by building the config
+# with it first; the setting is stored only if that works. With Xray the entry is a host of the
+# subscription (its first server, ADR 0027); "ks set core" turns it off.
+set_multihop() {
+  local d s pid="" i prev
+  prev=$(setting multihop off)
+  if [ "$1" != off ]; then
+    valid_name "$1" || { echo "Плохое имя прокси" >&2; return 1; }
+    [ -f "$(core_profile)" ] && [ -f "$PINS" ] || { echo "Сначала возьми профиль" >&2; return 1; }
+    if [ "$(core_kind)" = xray ]; then
+      # the generator would turn a host it cannot use off by itself: here it is refused, said why
+      grep -qxF -- "$1" <(report_servers) || { echo "Двойной VPN: в подписке нет сервера «$1»" >&2; return 1; }
+      [ "$1" != "$(report_selected)" ] || { echo "Двойной VPN: «$1» сейчас выход, выбери другой сервер входа" >&2; return 1; }
+      # only while double VPN is off are the probes direct: with an entry set, another host's
+      # «dead» may be the entry's (the new chain is checked after the restart instead)
+      if [ "$prev" = off ] && xray_pings 2>/dev/null | N=$1 awk -F'\t' '$1 == ENVIRON["N"] && $2 == 0 { f = 1 } END { exit !f }'; then
+        echo "Двойной VPN: сервер входа «$1» сейчас не отвечает" >&2; return 1
+      fi
+      core_job; [ "$CORE_RUN" = 1 ] && pid=$CORE_PID
+    fi
+  fi
+  # the copy and its lock in a folder of their own (0700), never at a name others could take
+  d=$(mktemp -d) || return 1
+  s="$d/settings"
   cp "$SETTINGS" "$s" 2>/dev/null
   put_setting multihop "$1" "$s"
-  if [ -f "$CORE_PROFILE" ] && [ -f "$PINS" ] && ! SETTINGS=$s core_rebuild "$PINS"; then rm -f "$s"; return 1; fi
-  rm -f "$s"
+  # strict: an entry the build could only make one hop of is refused, not stored (ADR 0027)
+  if [ -f "$(core_profile)" ] && [ -f "$PINS" ] && ! KS_MULTIHOP_STRICT=1 SETTINGS=$s core_rebuild "$PINS"; then rm -rf "$d"; return 1; fi
+  rm -rf "$d"
   put_setting multihop "$1" || return 1
   reload_if_on; core_reload
+  [ -n "$pid" ] || return 0
+  # Xray was running: the chain must answer after the restart, or the previous chain (checked the
+  # same way) or one hop again: fail closed (pf blocked all along) and recoverable, the VPN is never
+  # left on a dead entry
+  if core_up "$pid"; then
+    for ((i = 0; i < ${CHAIN_TRIES:-3}; i++)); do
+      [ "$(diag_probe | cut -d' ' -f2)" = 1 ] && return 0
+      sleep "${CHAIN_WAIT:-2}"
+    done
+  fi
+  if [ "$prev" != off ] && [ "$prev" != "$1" ] && [ -z "${KS_MULTIHOP_BACK:-}" ] && KS_MULTIHOP_BACK=1 set_multihop "$prev" >/dev/null 2>&1; then
+    log_event "double VPN back: «$prev», no answer through «$1»"
+    echo "Двойной VPN: через «$1» соединение не установилось, вход снова «$prev»" >&2
+    return 1
+  fi
+  [ -n "${KS_MULTIHOP_BACK:-}" ] && return 1   # the caller goes one hop
+  log_event "double VPN off: no answer through «$1»"
+  set_multihop off >/dev/null 2>&1
+  echo "Двойной VPN: через «$1» соединение не установилось, двойной VPN выключен" >&2
+  return 1
+}
+report_servers() { /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); print "$_->{name}\n" for @{ $r->{servers} || [] }' < "$REPORT" 2>/dev/null; }
+report_selected() { /usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); print $r->{selected} // ""' < "$REPORT" 2>/dev/null; }
+
+# "ks _regen" (the upgrade): a multihop= kept from the mihomo era (set_core did not clear it before
+# ADR 0027) names a mihomo proxy, and an Xray report written before ADR 0027 (no "targets") says it
+# was never set for Xray; a name that happens to match a host would quietly turn double VPN on
+multihop_stale_drop() {
+  [ "$(core_kind)" = xray ] && [ "$(setting multihop off)" != off ] && [ -s "$REPORT" ] || return 0
+  grep -q '"targets"' "$REPORT" && return 0
+  log_event "double VPN off: «$(setting multihop off)» was set for the other way of connecting"
+  put_setting multihop off
 }
 
 # System DNS -> 127.0.0.1 (the core), the way Mullvad does it on macOS (talpid-dns macos.rs):
@@ -2568,7 +3815,8 @@ set_multihop() {
 # system meanwhile (DHCP renew, another network) becomes the new original, then is overridden
 # again. Unlike Mullvad only ServerAddresses is replaced, so search domains stay, and only
 # services on a physical port are touched: Tailscale's MagicDNS keeps its own resolver.
-boot_id() { sysctl -n kern.boottime | sed 's/.*sec = \([0-9]*\).*/\1/'; }
+# kern.bootsessionuuid: kern.boottime moves when the clock is stepped early in boot. An old numeric id on disk reads as another boot.
+boot_id() { sysctl -n kern.bootsessionuuid; }
 
 # "<key>\t<addresses>" for those keys; addresses space separated, "-" or "!" as above.
 dns_snapshot() {
@@ -2673,8 +3921,10 @@ dns_restore() {
         dns_put "$path" "$val"
     done
   fi
-  rm -f "$DNS_STATE"
   dns_strip
+  # what the store refused stays ours: the state is kept for the watchdog to try again (#92)
+  ! dns_snapshot | awk -F'\t' -v o="$DNS_OURS" '{ n = split($2, a, " "); for (i = 1; i <= n; i++) if (a[i] == o) f = 1 } END { exit !f }' || return 1
+  rm -f "$DNS_STATE"
 }
 
 # Whatever the state said (missing, stale, written by 0.16 with ours as the original), our
@@ -2705,7 +3955,7 @@ core_log_tidy() {
 }
 
 # "ks core on|off" and the watchdog run these at the same time; lockf serialises them.
-dns_locked() { lockf -k -t 30 "$CORE_DIR/dns.lock" "$0" _dns "$1"; }
+dns_locked() { lock_ready "$CORE_DIR/dns.lock" 2>/dev/null; lockf -k -t 30 "$CORE_DIR/dns.lock" "$0" _dns "$1"; }
 core_running() { launchctl print "$CORE_JOB" 2>/dev/null | grep -q 'state = running'; }
 
 # "interface address" for every tunnel interface (utun, ipsec, ppp), IPv4 and IPv6, sorted.
@@ -2751,6 +4001,17 @@ tun_guard() {
   fi
 }
 
+# The VPN on (ADR 0035) and our core not running: everything is blocked, by design, but after
+# STUCK_AFTER seconds the state file says stuck=1 (the app's notification, #85) and the log says it once.
+STUCK_AFTER=300; STUCK_SINCE=""; VPN_STUCK=0
+vpn_stuck() {
+  if ! vpn_on || [ "$CORE_STATE" = on ]; then STUCK_SINCE=""; VPN_STUCK=0; return 0; fi
+  STUCK_SINCE=${STUCK_SINCE:-$SECONDS}
+  [ "$VPN_STUCK" = 0 ] && [ $((SECONDS - STUCK_SINCE)) -ge "$STUCK_AFTER" ] || return 0
+  VPN_STUCK=1
+  log_event "VPN on, no core for 5 min: everything blocked until it runs or «Отключить VPN»"
+}
+
 # Watchdog part for the core: the system DNS follows it. Set while it runs (and set again if
 # the system overwrote it), restored when it has not been running for 5 s or is unloaded,
 # so a crashed core does not leave the Mac without names.
@@ -2759,7 +4020,7 @@ core_guard() {
   local p now changed
   if ! p=$(launchctl print "$CORE_JOB" 2>/dev/null); then
     CORE_DOWN=""; CORE_STATE=off; CORE_PID=""; rm -f "$FOREIGN_VPN"
-    [ -f "$DNS_STATE" ] && { dns_locked restore; log_event "core not loaded: DNS restored"; }
+    [ -f "$DNS_STATE" ] && dns_locked restore && log_event "core not loaded: DNS restored"
     return 0
   fi
   core_job_parse "$p"   # the pid and last exit for the journal (diag_tick)
@@ -2778,7 +4039,7 @@ core_guard() {
     CORE_STATE=off; rm -f "$FOREIGN_VPN"
     now=$(date +%s); CORE_DOWN=${CORE_DOWN:-$now}
     if [ $((now - CORE_DOWN)) -ge 5 ] && [ -f "$DNS_STATE" ]; then
-      dns_locked restore; log_event "core not running: DNS restored"
+      dns_locked restore && log_event "core not running: DNS restored"
     fi
   fi
 }
@@ -2815,8 +4076,9 @@ xray_select() {
   grep -qxF -- "$1" <(/usr/bin/perl -MJSON::PP -e 'local $/; my $r = JSON::PP->new->decode(<STDIN>); print "$_->{name}\n" for @{ $r->{servers} || [] }' < "$REPORT" 2>/dev/null) ||
     { echo "В подписке нет сервера «$1»" >&2; return 1; }
   # a name the settings would call damaged (control characters, too long) would block everything;
-  # failover takes names from the subscription, not through passwordless_args_ok
   valid_name "$1" || { echo "Плохое имя сервера" >&2; return 1; }
+  # «Двойной VPN»: the entry as the exit would be one hop while the app shows two (ADR 0027)
+  [ "$1" != "$(setting multihop off)" ] || { echo "«$1» — сервер входа двойного VPN: выбери другой выход или выключи двойной VPN" >&2; return 1; }
   # Built and gated with the pick in a copy of the settings; the pick itself is written only after
   # the gate and the commit passed. A ks killed in between leaves the pick that the running config
   # was approved for, never one the gate refused, for the next rebuild without a gate (rotation,
@@ -2840,95 +4102,176 @@ xray_select() {
   put_setting xrayserver "$1" || return 1
   reload_if_on; core_reload
 }
-# Automatic failover with Xray (ADR 0023; the default decision of #43). Every 20 s the watchdog
-# starts "ks _failover" under the core lock: a request through the fetch inbound, which always goes
-# to the running host (ADR 0016). 3 failures in a row, or 2 minutes at more than 3× its usual
-# latency (the median of its last 30 answers, at least 5), and the live host of the same country
-# (the flag its name starts with) with the lowest latency in the observatory takes over, for a slow
-# one only if it answers in less than half the time. Never another country, never twice in 3
-# minutes, nothing while the setting failover=0. A server picked by hand (core select) is left only
-# when dead, never for being slow, and kept at least 3 minutes after the pick. The switch is the one the person makes
-# (xray_select: new config, Xray restarted, pf blocks meanwhile, the protection stays on).
-# State in $CORE_DIR/failover.
+# Transport escalation with Xray (ADR 0030, #20). Every 20 s the watchdog starts "ks _escalate"
+# under the core lock: a request through the fetch inbound, which always goes to the running host
+# (ADR 0016). The server itself is never changed: no automatic server replacement (ADR 0036).
+# State in $CORE_DIR/escalation-state (failures in a row, the last step: never two within 3
+# minutes, a pick by hand starts that over); what a step changes in it (escalation-state.next) is
+# written only once the step happened. Memory in $CORE_DIR/escalation:
+# "net=<net_sig>", then "<host>\t<kind>\t<value>\t<epoch>": probe (the alternatives' probes are
+# armed: 2 failures in a row and its own probe dead), fp / lead (another fingerprint, another
+# outbound to the same server first: what worked), left-fp / left-lead (a way a step just left,
+# not gone back to by a step for 6 hours). At 3 failures, armed, its own probe dead: the alternative
+# whose probe answers, fingerprint then transport, each once until it answers again. Back to the
+# subscription's way (and the probes off) once its probe answered 30 minutes; the probes off after
+# 15 minutes of answers when nothing was changed. Another server's entries go after a day. At most
+# 3 such rebuilds an hour and 10 a day per host ($CORE_DIR/escalation-steps). The pass prepares the
+# memory ($CORE_DIR/escalation.next, and escalation.fail with the variant set aside); escalate_step
+# builds the config from it.
 # shellcheck disable=SC2016 # perl, not shell
-KS_FAILOVER_PL='
+KS_ESCALATE_PL='
   use strict; use warnings;
   local $/; my $r = JSON::PP->new->decode(<STDIN>);
+  sub lines { my $p = shift; return () unless length($p // "") && open my $f, "<", $p; local $/ = "\n"; my @l = <$f>; chomp @l; @l }
   my @names = map { $_->{name} } @{ $r->{servers} || [] };
   my $cur = $r->{selected} // $names[0] // exit 0;
+  my $now = $ENV{NOW} + 0;
   my %s;
-  if (open my $f, "<", $ENV{ST}) { for (split /\n/, <$f>) { my ($k, $v) = split /=/, $_, 2; $s{$k} = $v if defined $v } }
-  # the pick by hand: the last one ks core select made, else (no state yet) xrayserver=
-  my $manual = exists $s{manual} ? $s{manual} : $ENV{PICK};
+  for (lines($ENV{ST})) { my ($k, $v) = split /=/, $_, 2; $s{$k} = $v if defined $v }
   %s = (server => $cur, last => $s{last} // 0) if ($s{server} // "") ne $cur;
-  $s{manual} = $manual;
-  my @h = grep { /\A[0-9]+\z/ } split /,/, $s{hist} // "";
-  my @sorted = sort { $a <=> $b } @h;
-  my $usual = @h >= 5 ? $sorted[$#sorted / 2] : 0;
-  my ($ms, $now) = ($ENV{PROBE_MS} + 0, $ENV{NOW} + 0);
-  if ($ENV{PROBE_OK}) {
-    $s{fails} = 0;
-    if ($usual && $ms > 3 * $usual) { $s{high} ||= $now }
-    else { $s{high} = 0; push @h, $ms; shift @h while @h > 30 }
-  } else { $s{fails} = ($s{fails} // 0) + 1 }
-  # slow moves only off a host failover chose (or the default one), never off a pick by hand
-  my $why = $s{fails} >= 3 ? "no-answer" : $s{high} && $now - $s{high} >= 120 && $manual ne $cur ? "slow" : "";
+  $s{$_} ||= 0 for qw(last fails okfrom);
+  if ($ENV{PROBE_OK}) { $s{fails} = 0; delete $s{esc}; $s{okfrom} ||= $now } else { $s{fails}++; $s{okfrom} = 0 }
   my $out = "";
-  my $flag = sub { my $n = shift; utf8::decode($n); $n =~ /\A([\x{1F1E6}-\x{1F1FF}]{2})/ ? $1 : "" };
-  if (!$why) { $s{told} = 0 }
-  elsif ($now - $s{last} >= 180) {
-    my %p = map { my @f = split /\t/; ($f[0] => [ $f[1], $f[2] ]) } split /\n/, $ENV{P} // "";
-    my $country = $flag->($cur);
-    my ($best) = sort { $p{$a}[1] <=> $p{$b}[1] }
-      grep { $_ ne $cur && length $_ <= 256 && !/[\x00-\x1f\x7f]/ && length $country && $flag->($_) eq $country && $p{$_} && $p{$_}[0] && ($why ne "slow" || $p{$_}[1] * 2 < $ms) } @names;
-    if (defined $best) { $out = join "\t", "switch", $cur, $best, $why, $ms, $usual; $s{last} = $now }   # the rest follows once the switch happened (failover_pass)
-    elsif (!$s{told}) { $out = join "\t", "stay", $cur, "-", $why, $ms, $usual; $s{told} = 1 }
+  # a name ks takes (valid_name), and nothing that would break a field of the files below
+  my $named = sub { defined $_[0] && length $_[0] && length $_[0] <= 256 && $_[0] !~ /[\x00-\x1f\x7f]/ };
+  my %p = map { my @f = split /\t/; ($f[0] => [ $f[1], $f[2] ]) } split /\n/, $ENV{P} // "";
+  my %o = map { my @f = split /\t/; ($f[0] => [ $f[1], $f[2] ]) } split /\n/, $ENV{O} // "";
+  my ($srv) = grep { $_->{name} eq $cur } @{ $r->{servers} || [] };
+  # «Двойной VPN» (ADR 0027): with the entry dead no exit answers, and nothing is done for the
+  # exit (the entry is what is down)
+  my $entry = $ENV{ENTRY} // "";
+  my $stuck = length $entry && $p{$entry} && !$p{$entry}[0];
+  my ($net, @mem);
+  for (lines($ENV{M})) { if (/\Anet=/) { $net = $_; next } my @f = split /\t/, $_, -1; push @mem, [ @f[0 .. 3] ] if @f >= 3 && $named->($f[0]) }
+  my $age = sub { $now - (($_[0][3] // "") =~ /\A[0-9]{1,12}\z/ ? $_[0][3] : 0) };
+  my @kept = grep { $_->[1] =~ /\Aleft-/ ? $age->($_) < 6 * 3600 : $_->[0] eq $cur || $age->($_) < 86400 } @mem;
+  my $mine = sub { my $k = shift; my ($e) = grep { $_->[0] eq $cur && $_->[1] eq $k } @kept; $e };
+  my ($armed, $override) = ($mine->("probe"), $mine->("fp") || $mine->("lead"));
+  my @variants = grep { ref $_ eq "HASH" && $named->($_->{tag}) } @{ $srv && ref $srv->{variants} eq "ARRAY" ? $srv->{variants} : [] };
+  my $own = $srv && defined $srv->{ping} ? $o{ $srv->{ping} } : undef;   # none: no result yet, not dead
+  my $own_dead = $own && !$own->[0];
+  my ($orig) = grep { $_->{original} } @variants;
+  if ($orig && $o{ $orig->{tag} } && $o{ $orig->{tag} }[0]) { $s{origfrom} ||= $now } else { $s{origfrom} = 0 }
+  my @steps = grep { $_->[1] eq $cur && $_->[0] =~ /\A[0-9]+\z/ && $_->[0] > $now - 86400 } map { [ split /\t/, $_, 2 ] } lines($ENV{K});
+  my $capped = (grep { $_->[0] > $now - 3600 } @steps) >= 3 || @steps >= 10;
+  my $esc_ok = $srv && $named->($cur) && !$stuck && !$capped;
+  my (%next, $mnext, $mfail);
+  if ($esc_ok && $armed && $ENV{PROBE_OK} && $now - $s{okfrom} >= 900 && (!$override || ($s{origfrom} && $now - $s{origfrom} >= 1800))) {
+    # well again: back to the subscription'"'"'s way once it answered 30 minutes; else just the probes off
+    if ($override) { $mnext = [ grep { $_->[0] ne $cur } @kept ]; $out = "settle\t$cur\trevert" }
+    else { $mnext = [ grep { !($_->[0] eq $cur && $_->[1] eq "probe") } @kept ]; $out = "settle\t$cur\toff" }
   }
-  $s{hist} = join ",", @h if ($s{server} eq $cur);
-  open my $f, ">", "$ENV{ST}.tmp" or die; print $f map { "$_=" . ($s{$_} // "") . "\n" } sort keys %s; close $f or die;
-  rename "$ENV{ST}.tmp", $ENV{ST} or die;
+  elsif ($esc_ok && !$ENV{PROBE_OK} && !$armed && $s{fails} >= 2 && $own_dead && ($srv->{escalable} // 0) > 0) {
+    $mnext = [ @kept, [ $cur, "probe", 1, $now ] ]; $out = "arm\t$cur";
+  }
+  elsif ($esc_ok && $s{fails} >= 3 && $armed && $own_dead && $now - $s{last} >= 180) {
+    # dead, its own probe too, and another way to the same server answers: another fingerprint,
+    # then another transport of the host; each once until it answers again, never back to a way
+    # a step just left
+    my %done = map { $_ => 1 } grep { length } split /,/, $s{esc} // "";
+    my %left = map { ("$_->[1]\t$_->[2]" => 1) } grep { $_->[0] eq $cur && $_->[1] =~ /\Aleft-/ } @kept;
+    for my $kind (qw(fingerprint transport)) {
+      next if $done{$kind};
+      my $k = $kind eq "fingerprint" ? "fp" : "lead";
+      my $val = sub { $kind eq "fingerprint" ? $_[0]{value} : $_[0]{outbound} };
+      my ($v) = sort { $o{ $a->{tag} }[1] <=> $o{ $b->{tag} }[1] }
+        grep { ($_->{kind} // "") eq $kind && $o{ $_->{tag} } && $o{ $_->{tag} }[0] && $named->($val->($_)) && !$left{ "left-$k\t" . $val->($_) } } @variants;
+      next unless $v;
+      my $was = $kind eq "fingerprint" ? $srv->{fingerprint} // "default" : $srv->{transport} // "other";
+      my $from = $kind eq "fingerprint" ? $srv->{fingerprint} : $srv->{lead};
+      # another transport: the fingerprint found for the old one is forgotten too
+      my @base = grep { !($_->[0] eq $cur && ($_->[1] eq $k || ($k eq "lead" && $_->[1] eq "fp"))) } @kept;
+      $mnext = [ @base, [ $cur, $k, $val->($v), $now ], $named->($from) ? [ $cur, "left-$k", $from, $now ] : () ];
+      $mfail = [ @kept, [ $cur, "left-$k", $val->($v), $now ] ];
+      $out = join "\t", "tune", $cur, $kind, $val->($v), $was, $v->{value};
+      $s{last} = $now;
+      %next = (%s, esc => join(",", sort(keys %done), $kind), fails => 0);
+      last;
+    }
+  }
+  my $put = sub { my ($path, %h) = @_; open my $f, ">", "$path.tmp" or die; print $f map { "$_=" . ($h{$_} // "") . "\n" } sort keys %h; close $f or die; rename "$path.tmp", $path or die };
+  $put->($ENV{ST}, %s);
+  $put->("$ENV{ST}.next", %next) if %next;
+  my $mem = sub { my ($path, $e) = @_; open my $f, ">", $path or die; print $f "$net\n" if defined $net; print $f join("\t", map { $_ // "" } @$_), "\n" for @$e; close $f or die };
+  $mem->("$ENV{M}.next", $mnext) if $mnext;
+  $mem->("$ENV{M}.fail", $mfail) if $mfail;
+  # entries gone with time, when nothing is rebuilt: the file only (another host'"'"'s probe follows at the next build)
+  $mem->("$ENV{M}.tmp", \@kept), rename "$ENV{M}.tmp", $ENV{M} if !$mnext && @kept != @mem;
   print "$out\n" if length $out;
 '
-failover_pass() {  # failover_pass [epoch]
-  local now=${1:-$(date +%s)} probe ok out act from to why ms usual text
-  [ "$(core_kind)" = xray ] && [ "$(setting failover 1)" = 1 ] && [ -s "$REPORT" ] || return 0
+escalate_pass() {  # escalate_pass [epoch]
+  local now=${1:-$(date +%s)} ok out act host a b c d mem="$CORE_DIR/escalation"
+  [ "$(setting escalate 1)" = 1 ] && [ "$(core_kind)" = xray ] && [ -s "$REPORT" ] || return 0
   core_job
   [ "$CORE_RUN" = 1 ] || return 0
   # no network at all (no primary interface): a failed probe says nothing of the server
   [ -n "$(primary_iface)" ] || return 0
-  read -r probe ok <<<"$(diag_probe)"
-  out=$(PROBE_MS=$probe PROBE_OK=$ok NOW=$now PICK=$(setting xrayserver "") P=$(xray_pings 2>/dev/null) ST="$CORE_DIR/failover" \
-    /usr/bin/perl -MJSON::PP -e "$KS_FAILOVER_PL" < "$REPORT") || return 0
+  escalate_net
+  read -r _ ok <<<"$(diag_probe)"
+  rm -f "$CORE_DIR/escalation-state.next" "$mem.next" "$mem.fail"
+  out=$(umask 077; PROBE_OK=$ok NOW=$now ENTRY=$(setting multihop off) P=$(xray_pings 2>/dev/null) ST="$CORE_DIR/escalation-state" \
+    O=$(xray_observe 2>/dev/null) M="$mem" K="$mem-steps" /usr/bin/perl -MJSON::PP -e "$KS_ESCALATE_PL" < "$REPORT") || return 0
   [ -n "$out" ] || return 0
-  IFS=$'\t' read -r act from to why ms usual <<<"$out"
-  if [ "$why" = slow ]; then text=slow; else text="no answer"; fi
-  if [ "$act" = switch ]; then
-    if xray_select "$to" 2>/dev/null; then
-      # only now the new host in the state, failover's and not a pick by hand. A refused switch
-      # (KS-10) keeps the running server's state, a pick by hand stays one, and waits the cooldown
-      printf 'server=%s\nlast=%s\nmanual=\n' "$to" "$now" > "$CORE_DIR/failover.tmp" && mv "$CORE_DIR/failover.tmp" "$CORE_DIR/failover"
-      log_event "failover ($text): $from -> $to"
-      if [ "$why" = slow ]; then diag_event failover from="$from" to="$to" reason="$why" ms="$ms" usual="$usual"
-      else diag_event failover from="$from" to="$to" reason="$why"; fi
-    else
-      log_event "failover failed: $from -> $to, $from kept"
-      diag_event failover-failed from="$from" to="$to" reason="$why"
-    fi
-  elif [ "$why" = slow ]; then
-    log_event "failover ($text): $from, no faster server of its country"
-  else
-    log_event "failover ($text): $from, no live server of its country"
-  fi
+  # arm <host> | settle <host> revert|off | tune <host> fingerprint|transport <fingerprint|outbound> <was> <now>
+  IFS=$'\t' read -r act host a b c d <<<"$out"
+  escalate_step "$act" "$host" "$a" "$b" "$c" "$d" "$now"
 }
-failover_bg() { [ -d "$CORE_DIR" ] && core_lock_exec 0 "$0" _failover >/dev/null 2>&1 & }
+# stamp_line <file> <now> <seconds kept> <text>: "<now>\t<text>" added, lines older than that dropped
+stamp_line() {
+  ( umask 077
+    { awk -F'\t' -v t=$(($2 - $3)) '$1 + 0 > t' "$1" 2>/dev/null; printf '%s\t%s\n' "$2" "$4"; } > "$1.tmp" && mv "$1.tmp" "$1" )
+}
+# escalate_step arm|settle|tune <host> <kind|revert|off> <value> <was> <now> <epoch>: the config with
+# the memory the pass prepared (escalation.next), through the KS-10 gate (core_rebuild switch,
+# which a change of fingerprint or order never trips); memory and state are written only
+# once it runs. Every attempt counts against the limits.
+escalate_step() {
+  local mem="$CORE_DIR/escalation" ok=0
+  stamp_line "$mem-steps" "$7" 86400 "$2"
+  if [ -f "$mem.next" ] && KS_ESC_FILE="$mem.next" core_rebuild "$PINS" switch 2>/dev/null; then
+    mv "$mem.next" "$mem"; [ ! -f "$mem-state.next" ] || mv "$mem-state.next" "$mem-state"
+    reload_if_on; core_reload; ok=1
+  else
+    rm -f "$mem.next" "$mem-state.next"; [ ! -f "$mem.fail" ] || mv "$mem.fail" "$mem"
+  fi
+  rm -f "$mem.fail"
+  case "$1:$ok" in
+    arm:1) log_event "escalate probing: $2"; diag_event escalate server="$2" kind=probes ;;
+    arm:0) log_event "escalate probing failed: $2" ;;
+    settle:1) if [ "$3" = revert ]; then log_event "escalate settled: $2"; diag_event escalate server="$2" kind=settled
+              else log_event "escalate probing off: $2"; fi ;;
+    settle:0) log_event "escalate settle failed: $2" ;;
+    tune:1) log_event "escalate (no answer): $2 $3 $5 -> $6"; diag_event escalate server="$2" kind="$3" from="$5" to="$6" reason=no-answer ;;
+    tune:0) log_event "escalate failed: $2 $3 $5 -> $6, kept"; diag_event escalate-failed server="$2" kind="$3" from="$5" to="$6" ;;
+  esac
+}
+# escalate_net: a new network (interface and router) forgets what worked: another one may block
+# something else. The config is rebuilt only when something was remembered; if that fails the
+# memory stays (it is what runs), noted for the new network.
+escalate_net() {
+  local mem="$CORE_DIR/escalation" sig
+  sig=$(net_sig)
+  [ -f "$mem" ] && [ "$(sed -n 's/^net=//p' "$mem" | head -1)" = "$sig" ] && return 0
+  ( umask 077; echo "net=$sig" > "$mem.next" ) || return 0
+  if [ -f "$mem" ] && grep -q "$(printf '\t')" "$mem"; then
+    if KS_ESC_FILE="$mem.next" core_rebuild "$PINS" switch 2>/dev/null; then
+      mv "$mem.next" "$mem"; reload_if_on; core_reload
+      log_event "escalate reset (network changed)"
+      return 0
+    fi
+    grep -v '^net=' "$mem" >> "$mem.next"
+  fi
+  mv "$mem.next" "$mem"
+}
+escalate_bg() { [ -d "$CORE_DIR" ] && core_lock_exec 0 "$0" _escalate >/dev/null 2>&1 & }
 core_select() {  # core_select <group> <proxy>: switch a select group, e.g. to another server
   local body rc
   if [ "$(core_kind)" = xray ]; then
     [ "$1" = "$XRAY_GROUP" ] || { echo "С ядром Xray выбирается только сервер" >&2; return 1; }
     xray_select "$2" || return   # 3: that host needs the admin (KS-10)
-    # a pick by hand starts the failover over and is kept for its cooldown at least (ADR 0023)
-    printf 'server=%s\nlast=%s\nfails=0\nmanual=%s\n' "$2" "${KS_NOW:-$(date +%s)}" "$2" > "$CORE_DIR/failover.tmp" &&
-      mv "$CORE_DIR/failover.tmp" "$CORE_DIR/failover"
+    # a pick by hand starts the escalation over, no step within its cooldown (ADR 0030)
+    printf 'server=%s\nlast=%s\nfails=0\n' "$2" "${KS_NOW:-$(date +%s)}" > "$CORE_DIR/escalation-state.tmp" &&
+      mv "$CORE_DIR/escalation-state.tmp" "$CORE_DIR/escalation-state"
     return
   fi
   body=$(mktemp) || return 1
@@ -2964,7 +4307,7 @@ observe_decode() {
     eval { for my $r (map { $_->[1] } grep { $_->[0] == 1 } fields($m)) {
       for my $st (map { $_->[1] } grep { $_->[0] == 1 } fields($r)) {
         my %h = map { $_->[0] => $_->[1] } grep { $_->[0] =~ /\A[124]\z/ } fields($st);
-        next unless defined $h{4} && $h{4} =~ /\Aks-ping-[0-9]{1,3}\z/;
+        next unless defined $h{4} && $h{4} =~ /\Aks-ping-[0-9]{1,3}(-fp-[a-z0-9]{1,16}|-t[0-9]{1,3})?\z/;
         my $alive = $h{1} ? 1 : 0;
         push @out, "$h{4}\t$alive\t" . ($alive && ($h{2} // 0) < 100000 ? $h{2} // 0 : 0);
       } } 1 } or exit 1;
@@ -3133,7 +4476,7 @@ diag_tick() {
   D_INIT=1; D_TICK=$SECONDS; D_PROT=$PROT; D_STANDBY=${STANDBY:-0}; D_TSIG=$TSIG; D_CORE=$CORE_STATE; D_PID=$CORE_PID
 }
 # not in the tests (they cannot write a root folder) and skipped while the last one still runs
-diag_bg() { [ -d "$DIAG" ] && [ -w "$DIAG" ] || return 0; lockf -k -t 0 "$DIAG/.lock" "$0" _diag >/dev/null 2>&1 & }
+diag_bg() { [ -d "$DIAG" ] && [ -w "$DIAG" ] || return 0; lock_ready "$DIAG/.lock" 2>/dev/null; lockf -k -t 0 "$DIAG/.lock" "$0" _diag >/dev/null 2>&1 & }
 
 # The core's launchd job: CORE_RUN 1|0, CORE_PID, CORE_EXIT (the last exit code or signal).
 PID_RE='pid = ([0-9]+)'; EXIT_RE='last exit code = ([0-9]+)'; SIGNAL_RE='last terminating signal = ([A-Za-z0-9: ]+)'
@@ -3450,6 +4793,7 @@ watch_main() {
   local n=0
   trap on_term TERM
   trap on_hup HUP
+  net_guard_start
   diag_dir
   while :; do
     watch_pass "$n"; n=$((n + 1))
@@ -3471,11 +4815,11 @@ passwordless_args_ok() {
     state|probe|on|netrestore) [ $# -eq 1 ] ;;
     core)
       case "${2:-}" in
-        state|on|off|proxies|traffic|connections) [ $# -eq 2 ] ;;
+        state|on|off|restart|proxies|traffic|connections) [ $# -eq 2 ] ;;
         select) [ $# -eq 4 ] && valid_name "$3" && valid_name "$4" ;;
         delay) [ $# -eq 3 ] && valid_name "$3" ;;
         # the app's own temporary file, read with the caller's rights (core_import)
-        refresh) [ $# -eq 3 ] && [[ "$3" == /* && "${#3}" -le 1024 && "$3" != *[[:cntrl:]]* ]] ;;
+        refresh|use) [ $# -eq 3 ] && [[ "$3" == /* && "${#3}" -le 1024 && "$3" != *[[:cntrl:]]* ]] ;;
         *) return 0 ;;
       esac ;;
     # «Собрать отчёт»: the folder the archive goes to (written as the caller, diag_report)
@@ -3487,24 +4831,29 @@ passwordless_args_ok() {
 }
 
 # Everything that writes the core's config or restarts it runs under one lock: the person's server
-# pick (core select) included, so it never overlaps the failover pass (ADR 0023), which never waits
+# pick (core select) included, so it never overlaps the escalation pass (ADR 0030), which never waits
 # (core_lock_exec 0); the watchdog's rotation skips its turn while it is held.
+# «Подключить», «Отключить» and «Перезапустить VPN» too: a Disconnect never lands inside a Connect (ADR 0035).
 core_lock_wanted() {
   case "${1:-}:${2:-}" in
-    core:import|core:refresh|core:select|set:splitapps|set:multihop|set:adblock|set:diag|_regen:|repair:) return 0 ;;
+    core:on|core:off|core:restart|core:import|core:refresh|core:use|core:select|set:splitapps|set:multihop|set:adblock|set:blockadult|set:blocksocial|set:blockbetting|set:doh|set:diag|set:escalate|set:mtu|_regen:|repair:) return 0 ;;
   esac
   return 1
 }
-core_lock_exec() { lockf -k -t "$1" "$CORE_DIR/core.lock" "${@:2}"; }   # core_lock_exec <seconds to wait> <command…>
+core_lock_exec() { lock_ready "$CORE_DIR/core.lock" 2>/dev/null; lockf -k -t "$1" "$CORE_DIR/core.lock" "${@:2}"; }   # core_lock_exec <seconds to wait> <command…>
 
-[ "${BASH_SOURCE[0]}" = "$0" ] || return 0   # sourced by Helper/tests
+# the command list at the top of this file, up to its first empty line
+ks_usage() { sed -n '2,/^$/{/./p;}' "${BASH_SOURCE[0]}"; }
+
+# sourced by Helper/tests: this Mac's VPN target and gap never steer a test (those that need them set their own)
+[ "${BASH_SOURCE[0]}" = "$0" ] || { VPN_ON=/nonexistent/vpn-on; GAPF=/nonexistent/vpn-gap; STATEF=/nonexistent/daemon-state; return 0; }
 # reads nothing but this file: no root needed
 [ "${1:-}" = version ] && { ks_version "$0"; exit 0; }
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
-passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; sed -n '2,32p' "$0" >&2; exit 1; }
+passwordless_args_ok "$@" || { echo "ks: bad arguments" >&2; ks_usage >&2; exit 1; }
 
 # The core lock (core_lock_wanted, above).
-if core_lock_wanted "$@" && [ -z "${KS_LOCKED:-}" ] && [ -d "$CORE_DIR" ]; then KS_LOCKED=1 exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@"; fi
+if core_lock_wanted "$@" && [ "$KS_LOCK_HELD" = 0 ] && [ -d "$CORE_DIR" ]; then lock_ready "$CORE_DIR/core.lock" 2>/dev/null; KS_LOCKED=$$ exec lockf -k -t 120 "$CORE_DIR/core.lock" "$0" "$@"; fi
 
 case "${1:-status}" in
   apply) guard ;;
@@ -3512,16 +4861,16 @@ case "${1:-status}" in
   _rotate) core_rotate ;;  # internal, under the lock, started by the watchdog
   _regen) core_regen ;;    # internal, under the lock, run by install.sh after an upgrade
   _diag) diag_pass ;;      # internal, under the journal's lock, started by the watchdog (ADR 0021)
-  _failover) failover_pass ;;  # internal, under the core lock, started by the watchdog (ADR 0023)
+  _escalate) escalate_pass ;;  # internal, under the core lock, started by the watchdog (ADR 0030)
   _netbird) netbird_sync ;; # internal, under its lock, started by the watchdog
   _dns)  # internal, under the lock of dns_locked
     case "${2:-}" in apply) dns_apply ;; restore) dns_restore ;; *) exit 1 ;; esac ;;
   watch) watch_main ;;
   netrestore) net_restore || exit 1 ;;
   on)    rm -f "$FLAG"; load && echo "kill switch: ON" ;;
-  off)   disable 0; echo "kill switch: OFF (until 'ks on')" ;;
+  off)   disable 0 || exit 1; echo "kill switch: OFF (until 'ks on')" ;;
   pause) min=${2:-5}; [[ "$min" =~ ^[0-9]{1,4}$ ]] || { echo "bad minutes" >&2; exit 1; }
-         disable $(( $(date +%s) + min * 60 )); echo "kill switch: paused for $min min" ;;
+         disable $(( $(date +%s) + min * 60 )) || exit 1; echo "kill switch: paused for $min min" ;;
   set)
     key=${2:-}; val=${3:-}
     case "$key" in
@@ -3537,19 +4886,33 @@ case "${1:-status}" in
         [ $# -eq 3 ] || { echo "usage: ks set diag 0|1" >&2; exit 1; }
         set_diag "$val" || exit 1
         log_event "detailed diagnostics: $([ "$val" = 1 ] && echo on || echo off)"; exit 0 ;;
+      mtu)
+        [ $# -eq 3 ] || { echo "usage: ks set mtu auto|1280…1500" >&2; exit 1; }
+        set_mtu "$val" || exit 1; exit 0 ;;
       multihop)
         [ $# -eq 3 ] || { echo "usage: ks set multihop <entry proxy>|off" >&2; exit 1; }
         set_multihop "$val" || exit 1
         log_event "double VPN: $val"; exit 0 ;;
+      doh)
+        [ $# -eq 3 ] || { echo "usage: ks set doh <https url>  (\"\" clears)" >&2; exit 1; }
+        set_doh "$val" || exit 1
+        log_event "own DoH: $(if [ -n "$val" ]; then doh_host "$val"; else echo none; fi)"; exit 0 ;;
     esac
     # coredirect (until 0.14, «Российские сайты напрямую») is gone: what goes direct is the
-    # subscription's alone (ADR 0013); install.sh drops the old line
-    [[ "$key" =~ ^(lan|tailscale|dns|direct|wifiguard|adblock|failover)$ && "$val" =~ ^[01]$ ]] || { echo "usage: ks set lan|tailscale|dns|direct|wifiguard|adblock|failover 0|1" >&2; exit 1; }
-    { grep -vE "^$key=" "$SETTINGS" 2>/dev/null; echo "$key=$val"; } > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+    # subscription's alone (ADR 0013); so is failover (until 0.19): no automatic server switch
+    # (ADR 0036); install.sh drops the old lines
+    [[ "$key" =~ ^(lan|tailscale|dns|direct|wifiguard|adblock|blockadult|blocksocial|blockbetting|escalate)$ && "$val" =~ ^[01]$ ]] ||
+      { echo "usage: ks set lan|tailscale|dns|direct|wifiguard|adblock|blockadult|blocksocial|blockbetting|escalate 0|1" >&2; exit 1; }
+    put_setting "$key" "$val" || exit 1
     reload_if_on
-    # the generator adds the ad block with adblock=1
-    if [ "$key" = adblock ]; then core_apply_settings || exit 1; fi
-    if [ "$key" = failover ]; then log_event "automatic server switch: $([ "$val" = 1 ] && echo on || echo off)"; fi
+    # the generator adds the blocked categories (ADR 0031)
+    case "$key" in adblock|blockadult|blocksocial|blockbetting) core_apply_settings || exit 1; block_geodata_note "$key" "$val" ;; esac
+    # off: what worked is forgotten and the probes of the alternatives go (ADR 0030)
+    if [ "$key" = escalate ]; then
+      [ "$val" = 1 ] || rm -f "$CORE_DIR/escalation"
+      if [ "$(core_kind)" = xray ]; then core_apply_settings || exit 1; fi
+      log_event "connection escalation: $([ "$val" = 1 ] && echo on || echo off)"
+    fi
     ;;
   allow)
     addr=${2:-}
@@ -3587,17 +4950,11 @@ case "${1:-status}" in
   core)
     case "${2:-state}" in
       on) core_on || exit 1 ;;
-      off)
-        launchctl bootout "$CORE_JOB" 2>/dev/null
-        launchctl disable "$CORE_JOB"
-        dns_locked restore
-        log_event "core off" ;;
-      import|refresh)
-        [ $# -eq 3 ] || { echo "usage: ks core $2 <json>" >&2; exit 1; }
-        core_import "$3" "$2" || exit $?
-        reload_if_on   # the servers list changed
-        launchctl print "$CORE_JOB" >/dev/null 2>&1 && launchctl kickstart -k "$CORE_JOB"
-        log_event "core config imported" ;;
+      off) core_off || exit 1 ;;
+      restart) core_vpn_restart || exit 1 ;;
+      import|refresh|use)
+        [ $# -eq 3 ] || { [ "$2" = import ] && [ $# -gt 3 ]; } || { echo "usage: ks core $2 <json>" >&2; exit 1; }
+        core_take "$3" "$2" "${@:4}" || exit $? ;;
       state)
         if core_running; then echo on; else echo off; fi ;;
       proxies)
@@ -3616,7 +4973,7 @@ case "${1:-status}" in
       connections)
         [ $# -eq 2 ] || { echo "usage: ks core connections" >&2; exit 1; }
         core_connections || exit 1 ;;
-      *) echo "usage: ks core on|off|state|import <json>|refresh <json>|proxies|select <group> <proxy>|delay <name>|traffic|connections" >&2; exit 1 ;;
+      *) echo "usage: ks core on|off|restart|state|import <json> [json…]|refresh <json>|use <json>|proxies|select <group> <proxy>|delay <name>|traffic|connections" >&2; exit 1 ;;
     esac
     ;;
   probe) net_probe ;;
@@ -3632,5 +4989,5 @@ case "${1:-status}" in
     [ -f "$FLAG" ] && { u=$(cat "$FLAG"); [ "$u" = 0 ] && echo "disabled by hand" || echo "back on at $(date -r "$u" +%H:%M)"; }
     pfctl -a "$ANCHOR" -s rules 2>/dev/null
     ;;
-  *) sed -n '2,32p' "$0"; exit 1 ;;
+  *) ks_usage; exit 1 ;;
 esac

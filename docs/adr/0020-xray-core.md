@@ -1,6 +1,7 @@
 # ADR 0020: Xray is the main core, mihomo the fallback
 
-- Status: accepted (Unreleased); research `docs/research/xray-core-2026-10.md`
+- Status: accepted (Unreleased); research `docs/research/xray-core-2026-10.md`. The choice in
+  Settings is gone with 0.20.0: the core follows the subscription (ADR 0036, #65)
 - Date: 2026-10-10
 - Owner decision 2026-10-10: pure Xray-TUN as the main core (like Happ), mihomo kept as a choice in
   Settings; no connections list in «Трафик» with Xray is accepted. Xray-core v26.9.30 pinned.
@@ -52,7 +53,7 @@ clients the full Xray config (an array of configs, one per host).
   routed to the first server, never direct (ADR 0016); log `warning` without an access log.
   The person's choices go before the subscription's rules: ad block (`geosite:category-ads-all`
   to blackhole, only with the shipped geosite.dat) and «Программы без VPN» (`process` rule to
-  freedom). «Двойной VPN» is refused with Xray for now.
+  freedom). «Двойной VPN» is refused with Xray for now (since ADR 0027: an entry host, `dialerProxy`).
 - **pf unchanged.** The core runs with gid `_ksvpn`; `egress` is `rules` when a rule, a balancer
   member or the first outbound (what no rule takes) is freedom, `dns` when only DNS servers'
   queries go to freedom, `splitapps` for the programs; the direct signature holds those rules,
@@ -105,7 +106,8 @@ clients the full Xray config (an array of configs, one per host).
 
 - No connections list, no ping, no speed in the menu bar with Xray yet (the stats API on a unix
   socket is the next step). Ping, speed and failover came with ADR 0021 and ADR 0023.
-- Own servers added by link (manual servers) are mihomo proxies and are not passed to Xray.
+- Own servers added by link (manual servers) are mihomo proxies and are not passed to Xray (since
+  ADR 0027: each one the main way can use is a host of its own in the array).
 - Not verifiable here (the owner's Mac must not lose its internet): the utun address and routes
   of a running Xray, DNS through 127.0.0.1:53, routes after `kill -9`, LuLu with a new binary, the
   Remnawave answer through the fetch inbound.

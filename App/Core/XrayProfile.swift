@@ -26,7 +26,7 @@ struct XrayProfile: Equatable {
             switch self {
             case .html: ProfileError.html.errorDescription
             case .notXray:
-                String(localized: "Сервис подписки не отдал настройки для основного способа подключения. Выбери запасной в настройках VPN.")
+                String(localized: "Сервис подписки не отдал настройки для основного способа подключения.")
             case .noServers: ProfileError.noProxies.errorDescription
             }
         }

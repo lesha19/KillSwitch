@@ -39,5 +39,11 @@ for v in SHA256_GEOSITE SHA256_GEOIP SHA256_GEOIP_DAT; do
 done
 check "geoip.metadb is not committed" "$(grep -cx 'Helper/geoip.metadb' "$here/../../.gitignore")" 1
 
+# --- every key settings_lines_ok accepts is in SETTING_KEYS (else it is logged as unknown on every change)
+okkeys=$(sed -n '/^settings_lines_ok()/,/^}/p' "$H/ks" | sed -nE 's/^      ([^)]*)\).*/\1/p' | grep -oE '[a-z][a-z0-9_]*=' | tr -d = | sort -u)
+listed=$(sed -nE 's/^SETTING_KEYS=" (.*) "$/\1/p' "$H/ks" | tr ' ' '\n' | sort -u)
+check "settings_lines_ok keys are all in SETTING_KEYS" "$(comm -23 <(echo "$okkeys") <(echo "$listed") | paste -sd' ' -)" ""
+check "the key scan found the case list" "$([ "$(echo "$okkeys" | wc -l)" -ge 15 ] && echo yes)" yes
+
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

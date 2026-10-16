@@ -16,18 +16,39 @@ final class ServerRecentsTests: XCTestCase {
         XCTAssertEqual(ServerRecents.list(""), [])
     }
 
-    /// Kept by server identity like the favourites (never a secret): a rename keeps the place.
-    func testNamesNowInTheirOrder() {
-        let keys = ["🇱🇹 Литва 1": "id:vless|lt|443|aa", "🇩🇪 Германия": "id:vless|de|443|bb"]
-        XCTAssertEqual(ServerRecents.names(["id:vless|de|443|bb", "Дом", "id:vless|lt|443|aa", "id:gone|x|1|cc"], keys: keys),
-                       ["🇩🇪 Германия", "Дом", "🇱🇹 Литва 1"])
+    /// Kept by (subscription, server identity) like the favourites (never a secret): a rename keeps
+    /// the place, and «Литва» of two subscriptions are two entries.
+    func testServersNowInTheirOrder() {
+        let keys = ["s1": ["🇱🇹 Литва 1": "id:vless|lt|443|aa", "🇩🇪 Германия": "id:vless|de|443|bb"],
+                    "s2": ["🇱🇹 Литва 1": "id:trojan|lt2|443|cc"]]
+        let stored = ["s1\tid:vless|de|443|bb", "own\tДом", "s2\tid:trojan|lt2|443|cc", "s1\tid:vless|lt|443|aa", "s1\tid:gone|x|1|cc", "Литва"]
+        XCTAssertEqual(ServerRecents.servers(stored, keys: keys),
+                       [ServerID(subscription: "s1", name: "🇩🇪 Германия"), ServerID(subscription: ServerID.own, name: "Дом"),
+                        ServerID(subscription: "s2", name: "🇱🇹 Литва 1"), ServerID(subscription: "s1", name: "🇱🇹 Литва 1")])
     }
 
     func testTheIdentityOfAServerIsStoredNotItsName() {
         let keys = ["🇱🇹 Литва": "id:vless|lt|443|aa"]
-        XCTAssertEqual(ServerRecents.adding(name: "🇱🇹 Литва", keys: keys, to: ["Дом"]), ["id:vless|lt|443|aa", "Дом"])
-        // without a key (Xray, before the profile is read) the name; a key replaces it later
-        XCTAssertEqual(ServerRecents.adding(name: "Дом", keys: keys, to: []), ["Дом"])
-        XCTAssertEqual(ServerRecents.adding(name: "🇱🇹 Литва", keys: keys, to: ["🇱🇹 Литва"]), ["id:vless|lt|443|aa"])
+        let lithuania = ServerID(subscription: "s1", name: "🇱🇹 Литва")
+        XCTAssertEqual(ServerRecents.adding(lithuania, keys: keys, to: ["own\tДом"]), ["s1\tid:vless|lt|443|aa", "own\tДом"])
+        // without a key (Xray) the name; a key replaces it later
+        XCTAssertEqual(ServerRecents.adding(ServerID(subscription: ServerID.own, name: "Дом"), keys: keys, to: []), ["own\tДом"])
+        XCTAssertEqual(ServerRecents.adding(lithuania, keys: keys, to: ["s1\t🇱🇹 Литва"]), ["s1\tid:vless|lt|443|aa"])
+        // the same name of another subscription is another server
+        XCTAssertEqual(ServerRecents.adding(ServerID(subscription: "s2", name: "🇱🇹 Литва"), keys: [:], to: ["s1\tid:vless|lt|443|aa"]),
+                       ["s2\t🇱🇹 Литва", "s1\tid:vless|lt|443|aa"])
+    }
+
+    /// «Избранное»: a star toggles the server of its subscription only.
+    func testAFavouriteIsOfItsSubscription() {
+        let keys = ["🇱🇹 Литва": "id:vless|lt|443|aa"]
+        let stork = ServerID(subscription: "s1", name: "🇱🇹 Литва"), other = ServerID(subscription: "s2", name: "🇱🇹 Литва")
+        var stored = ServerRecents.toggled(stork, keys: keys, in: [])
+        XCTAssertEqual(stored, ["s1\tid:vless|lt|443|aa"])
+        stored = ServerRecents.toggled(other, keys: [:], in: stored)
+        XCTAssertEqual(Set(ServerRecents.servers(stored, keys: ["s1": keys])), [stork, other])
+        XCTAssertEqual(ServerRecents.toggled(stork, keys: keys, in: stored), ["s2\t🇱🇹 Литва"])
+        // one kept by name before its identity was known goes too
+        XCTAssertEqual(ServerRecents.toggled(stork, keys: keys, in: ["s1\t🇱🇹 Литва"]), [])
     }
 }

@@ -50,9 +50,18 @@ enum NetworkCause: Equatable {
         return servers.contains { proxies.alive($0) != false }
     }
 
+    /// The server the person picked (`chosen`, as displayed) while the core still uses it and it
+    /// stopped answering: KillSwitch never moves to another server by itself (ADR 0036), the person
+    /// picks. nil for a group («Самый быстрый» moves by itself) or a server picked away from since.
+    static func serverDown(chosen: String?, proxies: CoreProxies) -> String? {
+        guard let chosen, proxies.groups.first(where: { $0.name == chosen }) == nil,
+              ServerPicker.selected(proxies) == chosen, proxies.alive(chosen) == false else { return nil }
+        return ServerName.display(chosen)
+    }
+
     static let probeInterval: TimeInterval = 60
 
-    /// Only when nothing answers (every server, or every one of the chosen country), at most once a minute.
+    /// Only when nothing answers (every server, or the chosen one), at most once a minute.
     /// Never while another VPN is up: it took the routes, and the main screen already says so (ADR 0009).
     static func shouldProbe(serversAnswer: Bool?, serversDown: Bool, last: Date?, now: Date, otherVPN: Bool = false) -> Bool {
         guard !otherVPN, serversAnswer == false || serversDown else { return false }

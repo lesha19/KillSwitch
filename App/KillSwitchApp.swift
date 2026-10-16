@@ -10,6 +10,7 @@ struct KillSwitchApp: App {
     @State private var updater: Updater
 
     init() {
+        VPNClient.migrate()   // before KillSwitchControl reads the chosen server (ADR 0036)
         let control = KillSwitchControl()
         let client = VPNClient(control: control)
         let updater = Updater()
@@ -38,9 +39,10 @@ struct KillSwitchApp: App {
                 .environment(updater)
         }
         .defaultSize(width: 860, height: 640)
-        // «Запускать без окна»: neither opened nor restored at launch, only the menu bar icon
-        .defaultLaunchBehavior(StartMinimised.isOn ? .suppressed : .automatic)
-        .restorationBehavior(StartMinimised.isOn ? .disabled : .automatic)
+        // «Запускать без окна» (or an update relaunch with the window closed, #51): neither opened
+        // nor restored at launch, only the menu bar icon
+        .defaultLaunchBehavior(StartMinimised.atLaunch ? .suppressed : .automatic)
+        .restorationBehavior(StartMinimised.atLaunch ? .disabled : .automatic)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .appInfo) { CheckForUpdatesButton(updater: updater) }
@@ -62,13 +64,39 @@ struct KillSwitchApp: App {
     }
 }
 
-/// `killswitch://…` links (the widget opens `killswitch://home`) land in a section of the window.
+/// `killswitch://…` links (the widget opens `killswitch://home`; the rest: DeepLinks, ADR 0029).
+///
+/// #51 (ADR 0011): closing the window leaves the app in the menu bar, without a Dock icon; Router
+/// brings the icon back with the window.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        if StartMinimised.atLaunch { NSApp.setActivationPolicy(.accessory) }
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NotificationCenter.default.addObserver(self, selector: #selector(windowWillClose(_:)),
+                                               name: NSWindow.willCloseNotification, object: nil)
+    }
+
+    @objc private func windowWillClose(_ note: Notification) {
+        // SwiftUI names the `Window` scene's NSWindow after its id
+        if (note.object as? NSWindow)?.identifier?.rawValue == MainWindow.id { NSApp.setActivationPolicy(.accessory) }
+    }
+
+    /// SwiftUI's own answer for an app of one `Window` is yes: it quit with the window.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    /// Opening the running app again (Finder, Launchpad, Spotlight) with the window closed: the
+    /// window, through Router like everything else. With a Dock icon AppKit's own reopen stays.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard NSApp.activationPolicy() == .accessory else { return true }
+        MainActor.assumeIsolated { Router.shared.go(.window) }
+        return false
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
         MainActor.assumeIsolated {
-            for url in urls {
-                if let route = Navigation.route(url: url) { Router.shared.go(route) }
-            }
+            for url in urls { DeepLinks.open(url) }
         }
     }
 }

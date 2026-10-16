@@ -178,47 +178,41 @@ private struct VPNSettings: View {
     @Environment(KillSwitchControl.self) private var control
     @Environment(VPNClient.self) private var client
     @AppStorage("showProfileGroups") private var showProfileGroups = false
-    @State private var revealed: String?
-    @State private var editing = false
+    /// Links shown on request, by subscription.
+    @State private var revealed: [String: String] = [:]
     @State private var newURL = ""
-    @State private var confirmRemove = false
-    @State private var backupRevealed: String?
-    @State private var editingBackup = false
-    @State private var newBackupURL = ""
+    /// The subscription «Удалить…» asks about.
+    @State private var removing: Subscription?
     @State private var addingServer = false
     @State private var editingApps = false
 
     var body: some View {
         @Bindable var client = client
         SettingsForm {
-            Section("Подписка") {
-                if client.hasURL && !editing {
-                    LabeledContent("Ссылка") {
-                        Text(revealed ?? client.maskedURL ?? "").monospaced().textSelection(.enabled)
-                            .lineLimit(revealed == nil ? 1 : nil)
+            Section("Подписки") {
+                // ADR 0036: each subscription of the list; adding one never replaces another
+                ForEach(client.subscriptions) { subscription in
+                    LabeledContent(subscription.title) {
+                        Text(revealed[subscription.id] ?? client.maskedURL(of: subscription.id) ?? "").monospaced().textSelection(.enabled)
+                            .lineLimit(revealed[subscription.id] == nil ? 1 : nil)
                     }
                     HStack {
-                        Button(revealed == nil ? String(localized: "Показать") : String(localized: "Скрыть")) {
-                            revealed = revealed == nil ? client.revealURL() : nil
-                        }.hiddenByProvider(client.urlHidden)
-                        Button("Изменить…") { editing = true; revealed = nil }
-                        SubscriptionQRButton()
+                        Button(revealed[subscription.id] == nil ? String(localized: "Показать") : String(localized: "Скрыть")) {
+                            revealed[subscription.id] = revealed[subscription.id] == nil ? client.revealURL(of: subscription.id) : nil
+                        }.hiddenByProvider(client.urlHidden(subscription.id))
+                        SubscriptionQRButton(id: subscription.id)
                         Spacer()
-                        Button("Удалить…", role: .destructive) { confirmRemove = true }
-                    }
-                    SubscriptionSummary()
-                } else {
-                    HStack {
-                        TextField("https://…", text: $newURL).onSubmit(saveURL)
-                            .accessibilityLabel("Ссылка на подписку")
-                        Button("Сохранить", action: saveURL).disabled(newURL.isEmpty)
-                        QRScanButton()
-                        if editing { Button("Отмена") { editing = false; newURL = "" } }
+                        Button("Удалить…", role: .destructive) { removing = subscription }
                     }
                 }
-                if client.hasURL {
-                    BackupLinkRow(revealed: $backupRevealed, editing: $editingBackup, newURL: $newBackupURL)
+                if client.hasURL { SubscriptionSummary() }
+                HStack {
+                    TextField(client.hasURL ? String(localized: "Ещё одна подписка: https://…") : "https://…", text: $newURL).onSubmit(saveURL)
+                        .accessibilityLabel("Ссылка на подписку")
+                    Button("Добавить", action: saveURL).disabled(newURL.isEmpty)
+                    QRScanButton()
                 }
+                if client.hasURL, let error = client.lastError { InlineError(error: error) }
                 Picker("Обновлять", selection: $client.intervalHours) {
                     Text("как просит подписка (\(client.status.serverIntervalHours) ч)").tag(0)
                     ForEach([1, 3, 6, 12, 24, 48], id: \.self) { Text("каждые \($0) ч").tag($0) }
@@ -228,7 +222,13 @@ private struct VPNSettings: View {
             Section("Свои серверы") {
                 ForEach(client.manual) { server in
                     HStack {
-                        ServerLabel(name: server.name)
+                        VStack(alignment: .leading, spacing: 2) {
+                            ServerLabel(name: server.name)
+                            if let reason = client.mainWayCannotUse(server) {
+                                Text("Работает только с запасным способом подключения: \(reason)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
                         Spacer()
                         Button("Убрать") { Task { await client.removeManual(server) } }
                     }
@@ -260,7 +260,7 @@ private struct VPNSettings: View {
             }
             .disabled(control.busy || control.state == .notInstalled)
 
-            CoreChoiceSection()
+            EscalateSection()
 
             Section("Вид") {
                 Toggle("Показывать группы подписки в списке серверов", isOn: $showProfileGroups)
@@ -268,9 +268,10 @@ private struct VPNSettings: View {
         }
         .sheet(isPresented: $addingServer) { AddServerSheet() }
         .sheet(isPresented: $editingApps) { SplitAppsSheet() }
-        .confirmationDialog("Удалить подписку?", isPresented: $confirmRemove) {
-            Button("Удалить", role: .destructive) { revealed = nil; Task { await client.removeURL() } }
-        } message: {
+        .confirmationDialog("Удалить подписку?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
+                            presenting: removing) { subscription in
+            Button("Удалить", role: .destructive) { revealed = [:]; Task { await client.remove(subscription.id) } }
+        } message: { _ in
             Text("Ссылка удалится из связки ключей. VPN продолжит работать с последним списком серверов.")
         }
     }
@@ -278,78 +279,25 @@ private struct VPNSettings: View {
     private func saveURL() {
         let value = newURL
         newURL = ""
-        editing = false
-        Task { await client.setURL(value) }
+        Task { await client.add(value) }
     }
 }
 
-/// «Способ подключения» (ADR 0020): the main way (Xray, the same as in Happ) or the fallback one
-/// (mihomo, with the connections list). Switching asks the password once and takes the
-/// subscription again in that way's format.
-private struct CoreChoiceSection: View {
+/// The core follows the subscription (ADR 0036, #65): no choice of it here. What stays is Xray's
+/// own retry with another fingerprint or transport, shown while Xray runs.
+private struct EscalateSection: View {
     @Environment(KillSwitchControl.self) private var control
-    @Environment(VPNClient.self) private var client
 
     var body: some View {
-        Section("Способ подключения") {
-            Picker("Способ подключения", selection: Binding(get: { control.coreChoice }, set: { client.switchCore(to: $0) })) {
-                Text("Основной — как в Happ").tag(CoreChoice.xray)
-                Text("Запасной").tag(CoreChoice.mihomo)
-            }
-            .pickerStyle(.radioGroup).labelsHidden()
-            .disabled(control.busy || client.updating || control.state == .notInstalled
-                      || !FileManager.default.fileExists(atPath: CoreChoice.xray.binary))
-            Footnote(text: String(localized: "Если сайты открываются через раз, попробуй другой способ. Смена спросит пароль и заново возьмёт подписку."),
-                     more: String(localized: "Основной способ работает так же, как Happ. Запасной умеет показывать соединения в окне «Трафик» и двойной VPN, но у некоторых сайты в нём открываются хуже."))
-            if control.coreChoice == .xray {
-                Toggle(isOn: Binding(get: { control.autoSwitch }, set: { control.set("failover", $0) })) {
-                    Text("Переключать сервер, если он перестал отвечать")
-                    Text("На самый быстрый работающий сервер той же страны. Другую страну KillSwitch сам не выбирает.")
+        if control.coreChoice == .xray {
+            Section {
+                Toggle(isOn: Binding(get: { control.escalate }, set: { control.set("escalate", $0) })) {
+                    Text("Пробовать другой отпечаток и транспорт, если сервер не отвечает")
+                    Text("Сначала тот же сервер с другим отпечатком TLS, потом с другим транспортом из подписки (например, xHTTP вместо TCP). Сервер KillSwitch сам не меняет. Что сработало, запоминается до смены сети.")
                 }
                 .disabled(control.busy || control.state == .notInstalled)
             }
         }
-    }
-}
-
-/// «Резервная ссылка» (#11): asked when the main link fails, directly and then through the VPN.
-private struct BackupLinkRow: View {
-    @Environment(VPNClient.self) private var client
-    @Binding var revealed: String?
-    @Binding var editing: Bool
-    @Binding var newURL: String
-
-    var body: some View {
-        if let masked = client.maskedBackupURL, !editing {
-            LabeledContent("Резервная ссылка") {
-                Text(revealed ?? masked).monospaced().textSelection(.enabled).lineLimit(revealed == nil ? 1 : nil)
-            }
-            HStack {
-                Button(revealed == nil ? String(localized: "Показать") : String(localized: "Скрыть")) {
-                    revealed = revealed == nil ? client.revealBackupURL() : nil
-                }
-                Button("Изменить…") { editing = true; revealed = nil }
-                Spacer()
-                Button("Убрать") { revealed = nil; client.removeBackupURL() }
-            }
-        } else {
-            LabeledContent {
-                HStack {
-                    TextField("https://…", text: $newURL).onSubmit(save).accessibilityLabel("Резервная ссылка на подписку")
-                    Button("Сохранить", action: save).disabled(newURL.isEmpty)
-                    if editing { Button("Отмена") { editing = false; newURL = "" } }
-                }
-            } label: {
-                Text("Резервная ссылка")
-                Text("Если основная не открывается, KillSwitch возьмёт подписку по этой.")
-            }
-        }
-    }
-
-    private func save() {
-        client.setBackupURL(newURL)
-        newURL = ""
-        editing = false
     }
 }
 
@@ -363,20 +311,17 @@ private struct MultihopRows: View {
         let candidates = Multihop.candidates(control.proxies?.servers ?? [], exit: exit)
         let entry = control.multihopEntry
         Toggle(isOn: Binding(get: { entry != nil },
-                             set: { on in control.setMultihop(entry: on ? (pending ?? candidates.first) : nil) })) {
+                             set: { on in control.setMultihop(entry: on ? (pending ?? Multihop.preferred(candidates, alive: { control.proxies?.alive($0) })) : nil) })) {
             Text("Двойной VPN")
             Text("Через два сервера: вход видит твой адрес, выход — сайты. Медленнее.")
         }
-        .disabled(entry == nil && (candidates.isEmpty || !control.coreChoice.canTurnOnMultihop))
-        if entry == nil && !control.coreChoice.canTurnOnMultihop {
-            Text("С основным способом подключения двойного VPN нет — он есть у запасного")
-                .font(.caption).foregroundStyle(.secondary)
-        } else if candidates.isEmpty && entry == nil {
+        .disabled(entry == nil && candidates.isEmpty)
+        if candidates.isEmpty && entry == nil {
             Text(control.coreRunning ? String(localized: "Нужно хотя бы два сервера.") : String(localized: "Подключись, чтобы выбрать сервер входа."))
                 .font(.caption).foregroundStyle(.secondary)
         } else {
             Picker("Сервер входа", selection: Binding(
-                get: { entry ?? pending ?? candidates.first ?? "" },
+                get: { entry ?? pending ?? Multihop.preferred(candidates, alive: { control.proxies?.alive($0) }) ?? candidates.first ?? "" },
                 set: { new in
                     pending = new
                     if entry != nil, new != entry { control.setMultihop(entry: new) }
@@ -500,7 +445,7 @@ private struct ProtectionSettings: View {
             Button("Выключить", role: .destructive) { control.turnOff() }
             Button("Отмена", role: .cancel) {}
         } message: {
-            Text("Если VPN оборвётся, программы пойдут в интернет напрямую.")
+            Text("Пока VPN включён, интернет и так идёт только через него. Без VPN программы пойдут напрямую.")
         }
     }
 
@@ -617,6 +562,7 @@ private struct AdvancedSettings: View {
     @Environment(KillSwitchControl.self) private var control
     @State private var editingExceptions = false
     @State private var editingServers = false
+    @State private var editingDoH = false
 
     var body: some View {
         SettingsForm {
@@ -645,17 +591,45 @@ private struct AdvancedSettings: View {
             }
             .disabled(control.busy || control.state == .notInstalled)
 
-            Section("Реклама и трекеры") {
+            Section("Блокировка") {
                 Toggle(isOn: Binding(get: { control.adBlock }, set: { control.set("adblock", $0) })) {
                     Text("Блокировать рекламу и трекеры")
                     Text("Только пока подключён VPN KillSwitch.")
                 }
-                .disabled(control.busy || control.state == .notInstalled)
+                Toggle("Блокировать сайты для взрослых", isOn: Binding(get: { control.blockAdult }, set: { control.set("blockadult", $0) }))
+                Toggle("Блокировать соцсети", isOn: Binding(get: { control.blockSocial }, set: { control.set("blocksocial", $0) }))
+                Toggle(isOn: Binding(get: { control.blockBetting }, set: { control.set("blockbetting", $0) })) {
+                    Text("Блокировать букмекеров")
+                    Text("Только российские букмекерские сайты.")
+                }
                 Footnote(text: String(localized: "Если какой-то сайт перестал работать, выключи и проверь снова."),
-                         more: String(localized: "Адреса рекламы и трекеров берутся из списка, который лежит в самой программе (category-ads-all), и обновляются вместе с ней: VPN ничего не скачивает сам. Заблокированное не уходит никуда — ни через VPN, ни мимо него."))
+                         more: String(localized: "Списки сайтов лежат в самой программе и обновляются вместе с ней: VPN ничего не скачивает сам. Заблокированное не уходит никуда — ни через VPN, ни мимо него. Соцсети — это ВКонтакте, Одноклассники, Facebook, Instagram, X и другие, Telegram в список не входит. Списка вредоносных сайтов в базе нет, поэтому такой блокировки тоже нет."))
             }
+            .disabled(control.busy || control.state == .notInstalled)
+
+            Section {
+                Text(control.ownDoH ?? String(localized: "Нет")).monospaced().foregroundStyle(.secondary).lineLimit(2)
+                Footnote(text: String(localized: "Спрашивается только через VPN — никогда напрямую и не у провайдера."),
+                         more: String(localized: "Например, NextDNS или AdGuard DNS со своими настройками. Адрес вида https://сервер/путь. Запросы к нему всегда идут через сервер VPN и никогда — напрямую или к провайдеру. Имя самого сервера узнаёт сервер VPN. Домены, для которых подписка задала свой DNS, спрашиваются у DNS подписки, а не у твоего сервера. С основным способом подключения остальные сайты узнаёт твой сервер; не отвечает — KillSwitch спрашивает DNS Cloudflare, тоже через VPN. С запасным способом сайты, которые идут через VPN, узнаёт сервер VPN, а твой сервер — только те, что идут напрямую или нужны правилам по адресам; не отвечает — другие серверы не спрашиваются."))
+            } header: {
+                HStack {
+                    Text("Свой сервер DNS-over-HTTPS")
+                    Spacer()
+                    Button("Изменить…") { editingDoH = true }
+                }
+            }
+            .disabled(control.busy || control.state == .notInstalled)
 
             TransportSection()
+
+            Section("Размер пакетов VPN") {
+                Picker("MTU", selection: Binding(get: { control.tunnelMTU }, set: { control.setMTU($0) })) {
+                    ForEach(TunnelMTU.choices(current: control.tunnelMTU), id: \.self) { Text(TunnelMTU.title($0)).tag($0) }
+                }
+                .disabled(control.busy || control.state == .notInstalled)
+                Footnote(text: String(localized: "Для поиска неполадок: может помочь, если через VPN обрываются видеозвонки или игры. Смена спросит пароль; включённый VPN перезапустится на секунду."),
+                         more: String(localized: "MTU — самый большой пакет, который программы этого Mac отдают в VPN за раз. «Авто» — как было: 1500 у основного способа, 9000 у запасного. Меньшее значение, 1380 или 1280, может помочь видеозвонкам, играм и голосовым чатам; на загрузку сайтов оно обычно не влияет. Не помогло — верни «Авто». На то, что идёт мимо VPN, это тоже не влияет."))
+            }
 
             Section("Диагностика") {
                 Toggle(isOn: Binding(get: { control.diagVerbose }, set: { control.set("diag", $0) })) {
@@ -684,6 +658,7 @@ private struct AdvancedSettings: View {
                       placeholder: String(localized: "Адрес, например 1.2.3.46 или 10.8.0.0/24"), original: control.exceptions,
                       apply: control.setExceptions)
         }
+        .sheet(isPresented: $editingDoH) { DoHSheet() }
         .sheet(isPresented: $editingServers) {
             ListSheet(title: String(localized: "Адреса серверов для других VPN-программ"),
                       note: String(localized: "К этим адресам сможет подключиться любая программа. Серверы подписки сюда добавлять не нужно."),
@@ -881,6 +856,29 @@ private struct BatchSheet<Content: View>: View {
 }
 
 /// A list of addresses: add, remove, apply together.
+/// «Свой сервер DNS-over-HTTPS» (ADR 0031): one address, checked as Helper/ks checks it.
+private struct DoHSheet: View {
+    @Environment(KillSwitchControl.self) private var control
+    @State private var draft = ""
+
+    private var url: String { draft.trimmingCharacters(in: .whitespaces) }
+    private var valid: Bool { url.isEmpty || HelperCommand.isDoH(url) }
+
+    var body: some View {
+        BatchSheet(title: String(localized: "Свой сервер DNS-over-HTTPS"), changed: valid && url != (control.ownDoH ?? ""),
+                   apply: { control.setDoH(url.isEmpty ? nil : url) }) {
+            Text("KillSwitch будет спрашивать адреса сайтов у этого сервера — только через VPN. Домены, для которых подписка задала свой DNS, спрашиваются у DNS подписки, а не у этого сервера, а с запасным способом подключения большинство сайтов узнаёт сервер VPN. Пусто — обычные серверы.")
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            TextField(String(localized: "https://dns.example.com/dns-query"), text: $draft).monospaced()
+            if !valid {
+                StatusLabel(String(localized: "Нужен адрес вида https://сервер/путь: без логина, без ? и #, не адрес в домашней сети."),
+                            systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.callout)
+            }
+        }
+        .onAppear { draft = control.ownDoH ?? "" }
+    }
+}
+
 private struct ListSheet: View {
     let title: String
     let note: String

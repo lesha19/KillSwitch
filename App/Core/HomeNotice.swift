@@ -2,11 +2,13 @@ import Foundation
 
 /// The one notice of the main screen besides an error (spec §5.1, priorities 2–7).
 enum HomeNotice: Equatable {
+    /// The VPN is on and the rules are not loaded (ADR 0035): traffic may be leaking.
+    case rulesMissing
     case otherVPN
     /// Nothing answers and `ks probe` says why (NetworkCause).
     case network(NetworkCause)
-    /// No server of the chosen country answers (Failover.State.countryDown).
-    case serversDown(country: String)
+    /// The chosen server stopped answering (NetworkCause.serverDown); nothing switches by itself.
+    case serversDown(server: String)
     case expired
     case ending(days: Int)
     case trafficLow(used: Int64, total: Int64)
@@ -31,21 +33,24 @@ enum HomeNotice: Equatable {
         /// «Не напоминать» on the filter notice.
         var filterDismissed: Bool
         var now: Date
-        /// The country whose servers all stopped answering.
+        /// The chosen server, as displayed, while it does not answer.
         var serversDown: String?
         var networkCause: NetworkCause? = nil
         var filterUpdateWaiting = false
         /// HelperService.showApprovalBanner, not dismissed.
         var helperApproval = false
+        /// The VPN on and the watchdog says the rules do not block (DaemonState.blocking).
+        var rulesMissing = false
     }
 
     static let endingDays = 3
     static let trafficShare = 0.9
 
     static func pick(_ input: Input) -> HomeNotice? {
+        if input.rulesMissing { return .rulesMissing }
         if input.otherVPN { return .otherVPN }
         if let cause = input.networkCause { return .network(cause) }
-        if let country = input.serversDown { return .serversDown(country: country) }
+        if let server = input.serversDown { return .serversDown(server: server) }
         if let expire = input.usage?.expire {
             let left = expire.timeIntervalSince(input.now)
             if left <= 0 { return .expired }
@@ -54,7 +59,9 @@ enum HomeNotice: Equatable {
         if let usage = input.usage, let total = usage.total, total > 0, Double(usage.used) >= Double(total) * trafficShare {
             return .trafficLow(used: usage.used, total: total)
         }
-        if input.newServers { return input.routingChanged ? .routingChanged : .newServers }
+        if input.newServers {
+            return input.routingChanged ? .routingChanged : .newServers
+        }
         if input.filterIncomplete && !input.filterDismissed { return .filterOff }
         if input.filterUpdateWaiting { return .filterUpdateWaiting }
         if input.helperApproval { return .helperApproval }
@@ -63,9 +70,10 @@ enum HomeNotice: Equatable {
 
     var title: String {
         switch self {
+        case .rulesMissing: String(localized: "Трафик может идти мимо VPN.")
         case .otherVPN: String(localized: "Работает другой VPN.")
         case .network(let cause): cause.title + "."
-        case .serversDown(let country): String(localized: "Серверы «\(country)» не отвечают.")
+        case .serversDown(let server): String(localized: "Сервер «\(server)» не отвечает.")
         case .expired: String(localized: "Подписка закончилась.")
         case .ending(let days): String(localized: "Подписка кончается через \(Russian.plural(days, String(localized: "день"), String(localized: "дня"), String(localized: "дней"))).")
         case .trafficLow(let used, let total): String(localized: "Трафик почти закончился: \(Russian.traffic(used: used, total: total)).")
@@ -79,9 +87,10 @@ enum HomeNotice: Equatable {
 
     var message: String {
         switch self {
+        case .rulesMissing: String(localized: "VPN включён, но правила защиты не загружены. Восстанови службу.")
         case .otherVPN: String(localized: "Отключи его: два VPN мешают друг другу.")
         case .network(let cause): cause.message
-        case .serversDown: String(localized: "Другие страны KillSwitch сам не включает: выбери страну или «Самый быстрый».")
+        case .serversDown: String(localized: "Выбери другой сервер.")
         case .expired: String(localized: "VPN работает со старыми серверами, пока они пускают.")
         case .ending, .trafficLow: ""
         case .newServers: String(localized: "Разреши им работать при включённой защите.")

@@ -20,6 +20,18 @@ final class Router {
     }
     /// «Начало работы», a sheet on the window.
     var onboarding = false
+    /// A `killswitch://` link waiting for «Добавить» / «Отключить» (DeepLinks); one at a time.
+    var linkRequest: DeepLink.Request?
+    /// The subscription a link's sheet confirmed is being fetched: the sheet stays until it answers.
+    var linkBusy = false
+
+    /// Before the app quits for an update (Updater): AppKit refuses to quit with a sheet up, and a
+    /// sheet whose binding is still true comes back after `endSheet`. A link's fetch in progress
+    /// goes on without its sheet.
+    func dropSheets() {
+        linkRequest = nil
+        onboarding = false
+    }
 
     /// SwiftUI's openWindow for the main window, handed over by the menu bar label (which always
     /// exists). A `Window` scene has one instance: this fronts it when it is already open.
@@ -37,9 +49,11 @@ final class Router {
         case .section(let section): self.section = section
         case .onboarding: onboarding = true
         }
+        NSApp.setActivationPolicy(.regular)   // the Dock icon, gone while the window was closed (#51)
         willShowWindow?()
         openWindow?()
-        NSApp.activate()
+        // right after leaving .accessory AppKit ignores an activation in the same turn (measured, #51)
+        DispatchQueue.main.async { NSApp.activate() }
     }
 
     func go(_ command: Navigation.Command) {

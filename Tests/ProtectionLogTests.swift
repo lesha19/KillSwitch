@@ -24,9 +24,30 @@ final class ProtectionLogTests: XCTestCase {
                        "Защита не действует: в /etc/pf.conf нет правил macOS")
     }
 
+    /// ADR 0035: a line per gap, its length and why.
+    func testGaps() {
+        XCTAssertEqual(text("2026-10-12 17:02:43 internet closed for 8 s: update"), "Интернет был закрыт 8 с: обновление")
+        XCTAssertEqual(text("2026-10-12 17:02:43 internet closed for 3 s: server switch"), "Интернет был закрыт 3 с: смена сервера")
+        XCTAssertEqual(text("2026-10-12 17:02:43 internet closed for 125 s: reconnect"), "Интернет был закрыт 2 мин 5 с: переподключение")
+        XCTAssertEqual(text("2026-10-12 17:02:43 internet closed for 120 s: VPN off"), "Интернет был закрыт 2 мин: до отключения VPN")
+    }
+
     func testVPNEvents() {
         XCTAssertEqual(text("2026-10-10 14:03:22 core: 🚀 Выбор сервера -> 🇱🇹 Литва"), "Выбран сервер «🇱🇹 Литва»")
         XCTAssertEqual(text("2026-10-10 14:03:22 double VPN: off"), "Двойной VPN выключен")
+        // ADR 0027: turned off by the helper, in words
+        XCTAssertEqual(text("2026-10-10 14:03:22 double VPN off: its entry «🇩🇪Германия»: not a server of the subscription"),
+                       "Двойной VPN выключен: сервера входа «🇩🇪 Германия» больше нет в подписке")
+        XCTAssertEqual(text("2026-10-10 14:03:22 double VPN off: its entry «🇩🇪Германия»: it is the running server"),
+                       "Двойной VPN выключен: «🇩🇪 Германия» сейчас и вход, и выход")
+        XCTAssertEqual(text("2026-10-10 14:03:22 double VPN off: its entry «🇩🇪Германия»: it connects through another server itself"),
+                       "Двойной VPN выключен: сервер входа «🇩🇪 Германия» больше не подходит")
+        XCTAssertEqual(text("2026-10-10 14:03:22 double VPN off: no answer through «🇩🇪Германия»"),
+                       "Двойной VPN выключен: через «🇩🇪 Германия» соединение не установилось")
+        XCTAssertEqual(text("2026-10-10 14:03:22 double VPN off: «NL reality» was set for the other way of connecting"),
+                       "Двойной VPN выключен: он был настроен для другого способа подключения")
+        XCTAssertEqual(text("2026-10-10 14:03:22 double VPN back: «🇳🇱Нидерланды», no answer through «🇩🇪Германия»"),
+                       "Через «🇩🇪 Германия» соединение не установилось — вход снова «🇳🇱 Нидерланды»")
         XCTAssertEqual(text("2026-10-10 14:03:22 apps outside the VPN: none"), "Программы без VPN: нет")
         XCTAssertEqual(text("2026-10-10 14:03:22 another VPN tunnel next to the core: utun6"), "Рядом работает другой VPN")
         XCTAssertEqual(text("2026-10-10 14:03:22 shutdown: network off (en0)"), "Mac выключается — сеть отключена")
@@ -51,21 +72,57 @@ final class ProtectionLogTests: XCTestCase {
                        "NetBird не подключился после перезапуска — подключите его заново")
     }
 
-    func testXrayFailover() {
-        XCTAssertEqual(text("2026-10-11 14:03:22 failover (no answer): 🇱🇹Литва -> 🇱🇹Литва 2"),
-                       "«🇱🇹 Литва» не отвечал — переключились на «🇱🇹 Литва 2»")
-        XCTAssertEqual(text("2026-10-11 14:03:22 failover (slow): 🇱🇹Литва -> 🇱🇹Литва 2"),
-                       "«🇱🇹 Литва» стал отвечать слишком медленно — переключились на «🇱🇹 Литва 2»")
-        XCTAssertEqual(text("2026-10-11 14:03:22 failover (no answer): 🇱🇹Литва, no live server of its country"),
-                       "«🇱🇹 Литва» не отвечает, а других работающих серверов этой страны нет")
-        XCTAssertEqual(text("2026-10-11 14:03:22 failover (slow): 🇱🇹Литва, no faster server of its country"),
-                       "«🇱🇹 Литва» отвечает медленно, а быстрее в этой стране нет")
-        XCTAssertEqual(text("2026-10-11 14:03:22 failover failed: 🇱🇹Литва -> 🇱🇹Литва 2, 🇱🇹Литва kept"),
-                       "Не получилось переключиться с «🇱🇹 Литва» на «🇱🇹 Литва 2»")
-        XCTAssertEqual(text("2026-10-11 14:03:22 automatic server switch: on"), "Автопереключение сервера включено")
+    /// «Размер пакетов VPN» (ADR 0032)
+    func testTunnelMTU() {
+        XCTAssertEqual(text("2026-10-12 14:03:22 tunnel MTU: 1380, VPN restarted"), "Размер пакетов VPN (MTU): 1380, VPN перезапущен")
+        XCTAssertEqual(text("2026-10-12 14:03:22 tunnel MTU: auto, VPN restarted"), "Размер пакетов VPN (MTU): Авто, VPN перезапущен")
+        // the VPN off or no subscription yet: nothing was restarted
+        XCTAssertEqual(text("2026-10-12 14:03:22 tunnel MTU: 1380"), "Размер пакетов VPN (MTU): 1380")
+        XCTAssertEqual(text("2026-10-12 14:03:22 tunnel MTU: 1280 refused, back to auto: the VPN did not start with it"),
+                       "VPN не запустился с размером пакетов 1280 — вернули прежний: Авто")
+        XCTAssertEqual(text("2026-10-12 14:03:22 MTU change cut short: undone"), "Прерванная смена размера пакетов VPN отменена")
+    }
+
+    func testRefusedServerSwitch() {
         XCTAssertEqual(text("2026-10-11 14:03:22 server switch to 🇱🇹Литва 2 refused: it sends other traffic past the VPN than approved"),
                        "Не переключились на «🇱🇹 Литва 2»: он пускает мимо VPN не то, что было подтверждено. Возьми подписку заново с паролем")
-        XCTAssertEqual(text("2026-10-11 14:03:22 automatic server switch: off"), "Автопереключение сервера выключено")
+    }
+
+    /// The automatic server switch is gone (ADR 0036): lines it left in events.log stay as they are.
+    func testOldFailoverLinesAreNotRetold() {
+        XCTAssertEqual(text("2026-10-11 14:03:22 failover (no answer): 🇱🇹Литва -> 🇱🇹Литва 2"), "failover (no answer): 🇱🇹Литва -> 🇱🇹Литва 2")
+        XCTAssertEqual(text("2026-10-11 14:03:22 automatic server switch: on"), "automatic server switch: on")
+    }
+
+    /// Transport escalation (ADR 0030): the same server another way; never another server (ADR 0036).
+    func testXrayEscalation() {
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate (no answer): 🇱🇹Литва fingerprint chrome -> safari"),
+                       "«🇱🇹 Литва» не отвечал — подключаемся к нему с другим отпечатком TLS: safari вместо chrome")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate (no answer): 🇱🇹Литва transport tcp -> xhttp"),
+                       "«🇱🇹 Литва» не отвечал — подключаемся к нему по другому транспорту из подписки: xhttp вместо tcp")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate failed: 🇱🇹Литва fingerprint chrome -> safari, kept"),
+                       "Не получилось сменить отпечаток TLS для «🇱🇹 Литва» — оставлен прежний")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate failed: 🇱🇹Литва transport tcp -> xhttp, kept"),
+                       "Не получилось сменить транспорт для «🇱🇹 Литва» — оставлен прежний")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate reset (network changed)"),
+                       "Сеть сменилась — серверы снова подключаются так, как задано в подписке")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate probing: 🇱🇹Литва"),
+                       "«🇱🇹 Литва» не ответил дважды — проверяем другие способы подключения к нему")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate probing off: 🇱🇹Литва"),
+                       "«🇱🇹 Литва» снова отвечает — другие способы подключения больше не проверяем")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate settled: 🇱🇹Литва"),
+                       "«🇱🇹 Литва» снова работает так, как задано в подписке — вернулись к этому")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate probing failed: 🇱🇹Литва"),
+                       "Не получилось проверить другие способы подключения к «🇱🇹 Литва»")
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate settle failed: 🇱🇹Литва"),
+                       "Не получилось вернуть «🇱🇹 Литва» к настройкам подписки")
+        XCTAssertEqual(text("2026-10-11 14:03:22 connection escalation: on"), "Подбор отпечатка и транспорта включён")
+        XCTAssertEqual(text("2026-10-11 14:03:22 connection escalation: off"), "Подбор отпечатка и транспорта выключен")
+        // a name with the words in it: the kind is the last one
+        XCTAssertEqual(text("2026-10-11 14:03:22 escalate (no answer): A transport B fingerprint chrome -> firefox"),
+                       "«A transport B» не отвечал — подключаемся к нему с другим отпечатком TLS: firefox вместо chrome")
+        XCTAssertNotNil(text("2026-10-11 14:03:22 escalate (no answer):  transport"))
+        XCTAssertNotNil(text("2026-10-11 14:03:22 escalate failed: x"))
     }
 
     /// A server name that begins with the separator once made the line trap, and it stays in
@@ -73,10 +130,7 @@ final class ProtectionLogTests: XCTestCase {
     func testServerNamesThatBeginWithTheSeparator() {
         XCTAssertEqual(text("2026-10-11 14:03:22 server switch to refused: A refused: it sends other traffic past the VPN than approved"),
                        "Не переключились на «refused: A»: он пускает мимо VPN не то, что было подтверждено. Возьми подписку заново с паролем")
-        XCTAssertEqual(text("2026-10-11 14:03:22 failover failed: -> A -> B, -> A kept"),
-                       "Не получилось переключиться с «-> A» на «B»")
         XCTAssertNotNil(text("2026-10-11 14:03:22 server switch to  refused: x"))
-        XCTAssertNotNil(text("2026-10-11 14:03:22 failover failed:  -> x"))
     }
 
     func testUnknownLineStaysAsIs() {

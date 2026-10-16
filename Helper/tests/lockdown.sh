@@ -11,7 +11,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 core_running() { return 0; }   # no standby (ADR 0018)
 DIR="$tmp"; FLAG="$DIR/disabled"; SETTINGS="$DIR/settings"; ALLOW="$DIR/allow"; TSRELAYS="$DIR/tsrelays"
 SERVERS="$DIR/servers"; SERVERS_MANUAL="$DIR/servers-manual"; SERVERS_CORE="$DIR/servers-core"; EVENTS="$DIR/events.log"
-HASHF="$DIR/rules.sha256"; SIGF="$DIR/tunnels"; FILESF="$DIR/rules.files"; INVALIDF="$DIR/invalid"; WIFI_MARK="$DIR/wifi-off-by-ks"; STATEF="$DIR/daemon-state"
+HASHF="$DIR/rules.sha256"; SIGF="$DIR/tunnels"; FILESF="$DIR/rules.files"; INVALIDF="$DIR/invalid"; WIFI_MARK="$DIR/wifi-off-by-ks"; NET_SEEN="$DIR/net-guard-seen"; STATEF="$DIR/daemon-state"
 NB_PLIST="$DIR/none"   # never the real NetBird plist (netbird.sh tests netbird_sync)
 CORE_DIR="$DIR/core"; mkdir "$CORE_DIR"; CORE_EGRESS="$CORE_DIR/egress"; CORE_PROFILE="$CORE_DIR/none"
 PF_CONF="$tmp/pf.conf"; echo 'anchor "com.apple/*"' > "$PF_CONF"
@@ -21,7 +21,7 @@ dscl() { return 0; }
 fails=0
 ok()  { echo "ok    $*"; }
 bad() { echo "FAIL  $*"; fails=$((fails + 1)); }
-LOCKDOWN=$'pass out quick on lo0 all flags any\nblock drop out quick all'
+LOCKDOWN=$(lockdown)
 locked() { [ "$(rules)" = "$LOCKDOWN" ]; }
 expect_open() { if locked; then bad "$1: everything blocked"; else ok "$1: rules as usual"; fi; }
 expect_locked() { if locked; then ok "$1: everything blocked"; else bad "$1: not blocked"; fi; }
@@ -30,7 +30,7 @@ reset() { rm -rf "$SETTINGS" "$ALLOW" "$SERVERS" "$SERVERS_MANUAL" "$SERVERS_COR
 # --- what is fine
 reset
 expect_open "no settings file at all (the defaults)"
-printf 'lan=1\ntailscale=0\ndns=1\ndirect=0\nwifiguard=1\nadblock=1\nsplitapps=/Applications/Telegram.app,curl\nmultihop=Germany 1\n' > "$SETTINGS"
+printf 'lan=1\ntailscale=0\ndns=1\ndirect=0\nwifiguard=1\nadblock=1\nblockadult=1\nblocksocial=0\nblockbetting=1\ndoh=https://dns.example.com/dns-query\nsplitapps=/Applications/Telegram.app,curl\nmultihop=Germany 1\n' > "$SETTINGS"
 expect_open "every key ks writes, valid values"
 printf 'multihop=off\nsplitapps=\n' > "$SETTINGS"
 expect_open "multihop off, splitapps cleared"
@@ -40,6 +40,14 @@ printf 'lan=1\n\nlan=0\n' > "$SETTINGS"
 expect_open "a blank line and a repeated key (the last one counts)"
 printf 'coredirect=1\nlan=1\n' > "$SETTINGS"
 expect_open "coredirect from before 0.15 (install.sh drops it, ignored meanwhile)"
+printf 'failover=1\nlan=1\n' > "$SETTINGS"
+expect_open "failover from before 0.20 (ADR 0036: install.sh drops it, ignored meanwhile)"
+printf 'hosts=nas.lan=192.168.1.10\nhosts=not a list\nlan=1\n' > "$SETTINGS"
+expect_open "hosts from an unreleased 0.20.0 build (#73: install.sh drops it, ignored meanwhile)"
+printf 'lan=1\nvpn=1\nfuturekey=a b c\n' > "$SETTINGS"
+expect_open "an unknown key (a newer or older ks wrote it): ignored, not damage (#83)"
+printf 'tailscale=0\ncore=mihomo\n' > "$SETTINGS"
+expect_open "tailscale and core=mihomo: still accepted and ignored for one release"
 printf 'lan=1' > "$SETTINGS"
 expect_open "no newline at the end"
 : > "$SETTINGS"
@@ -53,7 +61,6 @@ expect_open "empty lists"
 
 # --- what blocks everything: settings
 reset
-printf 'lan=1\nvpn=1\n' > "$SETTINGS"; expect_locked "an unknown key"
 printf 'lan=2\n' > "$SETTINGS"; expect_locked "a bad value"
 printf 'lan=\n' > "$SETTINGS"; expect_locked "an empty value of a switch"
 printf 'lan=1\ngarbage\n' > "$SETTINGS"; expect_locked "a line that is not key=value"
@@ -66,6 +73,17 @@ chmod 646 "$SETTINGS"; expect_locked "settings writable by anyone"
 chmod 644 "$SETTINGS"; OWNER_UID=$((EUID + 1)); expect_locked "settings of another owner"; OWNER_UID=$EUID
 rm -f "$SETTINGS"; mkdir "$SETTINGS"; expect_locked "settings is a directory"; rmdir "$SETTINGS"
 echo lan=1 > "$tmp/elsewhere"; ln -s "$tmp/elsewhere" "$SETTINGS"; expect_locked "settings is a symlink"
+
+# the lockdown never strands the Mac (#83): DHCP and the LAN pass, the rest (and LAN DNS) is blocked
+printf 'lan=0\n' > "$SETTINGS"; OWNER_UID=$((EUID + 1)); rules > "$tmp/out"; OWNER_UID=$EUID
+grep -qx 'pass out quick on lo0 all flags any' "$tmp/out" &&
+  grep -qx 'pass out quick inet proto udp from any port 68 to any port 67 user 0 keep state' "$tmp/out" &&
+  grep -qx 'pass out quick inet to { 169.254.0.0/16, 224.0.0.0/4, 255.255.255.255 } keep state' "$tmp/out" &&
+  grep -qx 'pass out quick inet to { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } flags any keep state' "$tmp/out" &&
+  grep -qx 'block drop out quick proto { tcp udp } to { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } port 53' "$tmp/out" &&
+  [ "$(tail -1 "$tmp/out")" = 'block drop out quick all' ] && ! grep -q utun9 "$tmp/out" &&
+  ok "settings of another owner: lockdown still lets DHCP and the LAN out (not its DNS), whatever lan= says" ||
+  bad "lockdown strands the network: $(paste -sd'|' "$tmp/out")"
 
 # --- the lists the rules are built from
 reset
@@ -83,7 +101,7 @@ reset; printf '# relays\n2001:db8::1\n' > "$TSRELAYS"; expect_open "tsrelays wit
 reset; echo rules > "$CORE_EGRESS"; chmod 666 "$CORE_EGRESS"; expect_locked "egress writable by anyone (it lets the core out)"
 reset
 [ -z "$(root_files_bad)" ] && ok "nothing reported when all is well" || bad "reported: $(root_files_bad)"
-printf 'bogus=1\n' > "$SETTINGS"; printf 'x\n' > "$ALLOW"
+printf 'lan=2\n' > "$SETTINGS"; printf 'x\n' > "$ALLOW"
 [ "$(root_files_bad | paste -sd, -)" = "settings,allow" ] && ok "the bad files are named" || bad "named: $(root_files_bad | paste -sd, -)"
 reset
 echo 192.0.2.1 > "$tmp/allow.new"; echo nope > "$ALLOW"
@@ -114,12 +132,33 @@ passes 2 3
 [ "$(cat "$tmp/anchor")" = "$LOCKDOWN" ] && ok "settings damaged while running: everything blocked within 2 passes" || bad "not caught: $(cat "$tmp/anchor")"
 [ "$(st protection)" = on ] && [ "$(cat "$INVALIDF")" = settings ] && [ "$(stat -f %Lp "$INVALIDF")" = 644 ] &&
   ok "  protection on, the app can read what is damaged" || bad "  state: $(cat "$STATEF"), invalid: $(cat "$INVALIDF" 2>&1)"
-grep -q 'invalid settings: everything blocked' "$EVENTS" && ok "  logged" || bad "  log: $(cat "$EVENTS")"
+grep -q 'invalid settings: internet blocked' "$EVENTS" && ok "  logged" || bad "  log: $(cat "$EVENTS")"
 : > "$EVENTS"; passes 4 7
 [ ! -s "$EVENTS" ] && ok "  not reloaded again while nothing changes" || bad "  reloaded: $(cat "$EVENTS")"
 rm -f "$SETTINGS"
 passes 8 9
 grep -q utun9 "$tmp/anchor" && [ ! -e "$INVALIDF" ] && ok "settings gone (defaults): rules back, nothing named invalid" || bad "after removal: $(cat "$tmp/anchor"; cat "$STATEF")"
+
+# an unknown key: the rules as usual, the key named once in the log (#83)
+printf 'lan=1\nvpn=1\n' > "$SETTINGS"; : > "$EVENTS"
+passes 10 11
+grep -q utun9 "$tmp/anchor" && [ ! -e "$INVALIDF" ] && grep -q 'unknown settings ignored: vpn' "$EVENTS" &&
+  ok "an unknown key while running: rules as usual, logged" || bad "unknown key: $(cat "$tmp/anchor"; cat "$EVENTS")"
+# the same key again: no second line; another key: a new line
+load >/dev/null 2>&1
+[ "$(grep -c 'unknown settings ignored' "$EVENTS")" = 1 ] && ok "the same unknown key on the next load: not logged again" || bad "log spam: $(cat "$EVENTS")"
+printf 'lan=1\nvpn=1\nfoo=2\n' > "$SETTINGS"; load >/dev/null 2>&1
+[ "$(grep -c 'unknown settings ignored' "$EVENTS")" = 2 ] && grep -q 'ignored: foo,vpn' "$EVENTS" && ok "another unknown key: a new line" || bad "no new line: $(cat "$EVENTS")"
+rm -f "$SETTINGS"; passes 10 11
+
+# a FIFO at the settings path is damage: load must not open it (root would block, the watchdog stall)
+rm -f "$SETTINGS"; mkfifo "$SETTINGS"; : > "$EVENTS"
+( load >/dev/null 2>&1 ) & lp=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$lp" 2>/dev/null || break; sleep 0.3; done
+if kill -0 "$lp" 2>/dev/null; then bad "a FIFO as settings: load hangs"; kill "$lp" 2>/dev/null
+else ok "a FIFO as settings: load returns, not opened"; fi
+exec 3<>"$SETTINGS"; exec 3>&-   # frees an opener that did block
+rm -f "$SETTINGS"
 
 # --- what passes the check but pf still refuses (999.1.1.1): everything blocked, not the old rules
 echo 999.1.1.1 > "$ALLOW"; : > "$EVENTS"
@@ -136,7 +175,7 @@ pfctl() {
 passes 12 13
 [ "$(cat "$tmp/anchor")" = "$LOCKDOWN" ] && [ "$(cat "$INVALIDF")" = rules ] && ok "rules pf refuses: everything blocked, named" ||
   bad "pf refused: $(cat "$tmp/anchor")"
-grep -q 'invalid rules: everything blocked' "$EVENTS" && ok "  logged" || bad "  log: $(cat "$EVENTS")"
+grep -q 'invalid rules: internet blocked' "$EVENTS" && ok "  logged" || bad "  log: $(cat "$EVENTS")"
 : > "$EVENTS"; passes 14 17
 [ ! -s "$EVENTS" ] && ok "  not retried while nothing changes" || bad "  retried: $(cat "$EVENTS")"
 rm -f "$ALLOW"; passes 18 19
@@ -215,7 +254,7 @@ grep -q 'unreadable' "$EVENTS" && ok "  logged" || bad "  not logged"
 
 # --- the boot window guard does not trust damaged settings either
 networksetup() { echo "networksetup $*" >> "$tmp/net"; }
-physical_services() { echo Wi-Fi; }
+service_list() { printf 'on\tWi-Fi\ten0\n'; }
 launchctl() { case "$*" in "print-disabled system") echo '{}' ;; *) return 0 ;; esac; }
 : > "$tmp/net"; printf 'wifiguard=0\nbogus\n' > "$SETTINGS"
 shutdown_guard
@@ -226,7 +265,7 @@ shutdown_guard
 
 # --- ks repair: «Сбросить настройки»
 reset
-printf 'lan=0\nbogus=1\n' > "$SETTINGS"; printf '192.0.2.1\nexample.com\n\n203.0.113.5\n' > "$ALLOW"; chmod 666 "$ALLOW"
+printf 'lan=0\nlan=2\n' > "$SETTINGS"; printf '192.0.2.1\nexample.com\n\n203.0.113.5\n' > "$ALLOW"; chmod 666 "$ALLOW"
 echo 192.0.2.7 > "$SERVERS_MANUAL"; echo 198.51.100.1 > "$SERVERS_CORE"; printf '192.0.2.7\nx\n' > "$SERVERS"
 rules > "$tmp/anchor"; : > "$EVENTS"
 repair >/dev/null

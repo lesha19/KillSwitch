@@ -42,12 +42,15 @@ enum HelperIdentity {
     func coreState(reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreOn(reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreOff(reply: @escaping @Sendable (Int32, String, String) -> Void)
+    func coreRestart(reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreProxies(reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreTraffic(reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreConnections(reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreSelect(group: String, proxy: String, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreDelay(name: String, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func coreRefresh(profile: FileHandle, reply: @escaping @Sendable (Int32, String, String) -> Void)
+    /// Another approved subscription's profile (HelperCommand.coreUse, ADR 0036).
+    func coreUse(profile: FileHandle, reply: @escaping @Sendable (Int32, String, String) -> Void)
     /// «Собрать отчёт» (ADR 0021): the archive is written into `output`, a file the app opened.
     func diagReport(output: FileHandle, reply: @escaping @Sendable (Int32, String, String) -> Void)
 
@@ -56,12 +59,18 @@ enum HelperIdentity {
     func setSwitch(key: String, on: Bool, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func setSplitApps(names: [String], authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func setMultihop(entry: String?, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
+    /// ADR 0031: the own DNS-over-HTTPS server; nil clears it (HelperCommand.setDoH).
+    func setDoH(url: String?, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func setCore(name: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
+    /// 0: «Авто».
+    func setMTU(value: Int, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func allow(address: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func unallow(address: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func serverAdd(address: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func serverRemove(address: String, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
-    func coreImport(profile: FileHandle, authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
+    /// `others`: the other subscriptions' profiles, approved with the one that runs (ADR 0036).
+    func coreImport(profile: FileHandle, others: [FileHandle], authorization: Data,
+                    reply: @escaping @Sendable (Int32, String, String) -> Void)
     func install(servers: [String], authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     func uninstall(authorization: Data, reply: @escaping @Sendable (Int32, String, String) -> Void)
     /// #17: damaged settings files back to the defaults (HelperCommand.repair).
@@ -79,6 +88,9 @@ extension HelperIdentity {
                          #selector(HelperProtocol.install(servers:authorization:reply:))] {
             interface.setClasses(strings, for: selector, argumentIndex: 0, ofReply: false)
         }
+        let handles = NSSet(objects: NSArray.self, FileHandle.self) as! Set<AnyHashable>
+        interface.setClasses(handles, for: #selector(HelperProtocol.coreImport(profile:others:authorization:reply:)),
+                             argumentIndex: 1, ofReply: false)
         return interface
     }
 }

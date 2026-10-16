@@ -104,6 +104,14 @@ func proxies(_ daemon: DaemonConnection) async -> CoreProxies? {
     CLI.proxies(await daemon.read(.coreProxies), appDefaults: UserDefaults(suiteName: CLI.appDefaultsSuite))
 }
 
+/// Whose profile the helper runs (the app's, ADR 0036).
+let running = UserDefaults(suiteName: CLI.appDefaultsSuite)?.string(forKey: CLI.activeKey) ?? ServerID.own
+
+/// Every subscription's servers: the running one's from the core, the others as the app listed them.
+func blocks(_ proxies: CoreProxies, running: String) -> [ServerPicker.Block] {
+    CLI.blocks(UserDefaults(suiteName: CLI.appDefaultsSuite)?.data(forKey: CLI.serversKey), running: running, proxies: proxies)
+}
+
 let command: CLI.Command
 switch CLI.parse(Array(CommandLine.arguments.dropFirst())) {
 case .success(let parsed): command = parsed
@@ -122,8 +130,10 @@ case .status(let json):
     let daemon = DaemonConnection()
     let state = await daemon.read(.state)
     let core = await daemon.read(.coreState)
-    let running = core.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("on")
-    let status = CLI.Status(state: state, coreState: core, proxies: running ? await proxies(daemon) : nil)
+    let on = core.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("on")
+    let list = on ? await proxies(daemon) : nil
+    let status = CLI.Status(state: state, coreState: core, proxies: list,
+                            subscription: list.flatMap { CLI.title(of: running, in: blocks($0, running: running)) })
     print(json ? CLI.json(status) : CLI.text(status))
 case .serverList(let json):
     let daemon = DaemonConnection()
@@ -131,16 +141,23 @@ case .serverList(let json):
         printError("the VPN is not connected: killswitch connect")
         finish(.failed)
     }
-    let entries = ServerPicker.entries(list), current = ServerPicker.selected(list)
-    print(json ? CLI.json(entries, current: current) : CLI.text(entries, current: current))
+    let current = ServerPicker.selected(list).map { ServerID(subscription: running, name: $0) }
+    let all = blocks(list, running: running)
+    print(json ? CLI.json(all, current: current) : CLI.text(all, current: current))
 case .serverSelect(let name):
     let daemon = DaemonConnection()
     guard await daemon.read(.coreState).hasPrefix("on"), let list = await proxies(daemon) else {
         printError("the VPN is not connected: a server can be chosen after killswitch connect")
         finish(.failed)
     }
-    switch CLI.selection(name, in: list) {
-    case .success(let steps):
+    let all = blocks(list, running: running)
+    switch CLI.selection(name, in: all, running: running) {
+    case .success(let entry):
+        guard let steps = CLI.steps(entry, running: running, proxies: list) else {
+            // the daemon runs one subscription; handing it another one's profile is the app's (VPNClient)
+            printError("\(CLI.label(entry, in: all)) is a server of another subscription: choose it in KillSwitch")
+            finish(.failed)
+        }
         for step in steps {
             let reply = await daemon.send(.coreSelect(group: step.group, proxy: step.proxy))
             if reply.status != 0 { fail(reply) }
@@ -150,6 +167,9 @@ case .serverSelect(let name):
         finish(.failed)
     case .failure(.ambiguous(let names)):
         printError("several servers match: " + names.joined(separator: ", "))
+        finish(.failed)
+    case .failure(.sameTitle(let title)):
+        printError("several subscriptions are called \(title): choose the server in KillSwitch")
         finish(.failed)
     }
 case .connect, .disconnect, .protection, .pause:

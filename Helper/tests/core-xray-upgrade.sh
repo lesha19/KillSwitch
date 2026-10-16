@@ -12,6 +12,9 @@ here=$(cd "$(dirname "$0")" && pwd)
 XRAY=${XRAY:-}
 fx="$here/fixtures"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+# ks core import reads only through folders only we can change (trusted_path), and the
+# checkout may sit under /tmp: the fixtures from a private copy
+cp -R "$here/fixtures" "$T/fixtures"; fx="$T/fixtures"
 DIR="$T"; CORE_DIR="$T/core"; mkdir -p "$CORE_DIR/ctl" "$T/ld"
 SETTINGS="$DIR/settings"; ALLOW="$DIR/allow"; TSRELAYS="$DIR/none"; EVENTS="$DIR/events.log"
 SERVERS="$DIR/servers"; SERVERS_MANUAL="$DIR/servers-manual"; SERVERS_CORE="$DIR/servers-core"

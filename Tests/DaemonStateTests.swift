@@ -16,6 +16,25 @@ final class DaemonStateTests: XCTestCase {
         XCTAssertEqual(DaemonState(text: "pid=9\nprotection=off")?.coreRunning, false)
     }
 
+    /// ADR 0035: the VPN target and whether pf blocks; nil from a helper before 0.20.
+    func testVPNAndBlocking() {
+        let state = DaemonState(text: "pid=9\nprotection=off\ncore=on\nstandby=0\nvpn=1\nblocking=0")
+        XCTAssertEqual(state?.vpnOn, true)
+        XCTAssertEqual(state?.blocking, false)
+        let off = DaemonState(text: "pid=9\nprotection=on\nvpn=0\nblocking=1")
+        XCTAssertEqual(off?.vpnOn, false)
+        XCTAssertEqual(off?.blocking, true)
+        XCTAssertNil(DaemonState(text: "pid=9\nprotection=on")?.blocking, "older helpers do not write it")
+        XCTAssertNil(DaemonState(text: "pid=9\nprotection=on")?.vpnOn)
+    }
+
+    /// #85: the watchdog says the VPN has been on without its core for 5 minutes.
+    func testStuck() {
+        XCTAssertEqual(DaemonState(text: "pid=9\nprotection=off\nvpn=1\nblocking=1\nstuck=1")?.stuck, true)
+        XCTAssertEqual(DaemonState(text: "pid=9\nprotection=off\nvpn=1\nblocking=1\nstuck=0")?.stuck, false)
+        XCTAssertEqual(DaemonState(text: "pid=9\nprotection=on")?.stuck, false, "older helpers do not write it")
+    }
+
     func testStandby() {
         XCTAssertEqual(DaemonState(text: "pid=9\nprotection=on\ncore=off\ntunnels=vpn:utun23 ts:\nstandby=1")?.standby, true)
         XCTAssertEqual(DaemonState(text: "pid=9\nprotection=on\ncore=off\nstandby=0")?.standby, false)

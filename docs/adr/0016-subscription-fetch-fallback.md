@@ -1,6 +1,7 @@
 # ADR 0016: the subscription is fetched through the VPN and a backup link when its host fails
 
-- Status: accepted (Unreleased, issue #11)
+- Status: accepted (Unreleased, issue #11); the backup link is dropped by ADR 0036 (0.20.0, #62),
+  fetching through the VPN stays
 - Date: 2026-10-10
 - Owner decision 2026-10-10: a backup subscription link entered by the person; no other mirrors
 - Research: `docs/research/mullvad-ivpn-gap-2026-10.md` (Mullvad's API access methods)
@@ -24,6 +25,10 @@ Already true and kept: a failed fetch, or a body without servers (`ProfileConver
   KS-DNS, the fallback group over the profile's proxies that never contains DIRECT, so it cannot
   leave outside the tunnel whatever the rules say. No new pf rule. Checked with `mihomo -t` of
   the pinned 1.19.32.
+> Superseded in part by ADR 0036 (0.20.0, #62): the backup link is gone. The order is the link
+> directly, then through the listener while our core runs; the backup steps and the «Резервная
+> ссылка» row below no longer exist.
+
 - The app tries `SubscriptionSource.order`: the main link directly, the main link through the
   listener (only while our core runs), then the backup link the same two ways. The first that
   gives a profile wins; if none does, the first error is shown. The source is kept in the status

@@ -10,6 +10,9 @@ here=$(cd "$(dirname "$0")" && pwd)
 MIHOMO=${MIHOMO:-/Library/KillSwitch/core/mihomo}; [ -x "$MIHOMO" ] || [ ! -x "$here/../mihomo" ] || MIHOMO="$here/../mihomo"
 fx="$here/fixtures"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+# ks core import reads only through folders only we can change (trusted_path), and the
+# checkout may sit under /tmp: the fixtures from a private copy
+cp -R "$here/fixtures" "$tmp/fixtures"; fx="$tmp/fixtures"
 DIR="$tmp"; CORE_DIR="$tmp/core"; mkdir -p "$CORE_DIR/ctl"
 SETTINGS="$DIR/settings"; ALLOW="$DIR/allow"; TSRELAYS="$DIR/none"; EVENTS="$DIR/events.log"
 SERVERS="$DIR/servers"; SERVERS_MANUAL="$DIR/servers-manual"; SERVERS_CORE="$DIR/servers-core"
@@ -90,12 +93,16 @@ run "$fx/ok-full.json" refresh
 [ "$rc" = 0 ] && grep -qx 198.51.100.20 "$SERVERS_CORE" && [ "$(val proxies.1.server "$cfg")" = 198.51.100.20 ] &&
   ok "refresh: approved name on a new address accepted" || bad "refresh new address: $rc $(cat "$tmp/err")"
 grep -qx 203.0.113.20 "$SERVERS" && bad "refresh: old address still allowed" || ok "refresh: old address dropped from pf"
-# failover sets (ADR 0005) join a group that holds DIRECT, yet need no password
+# the failover sets of 0.10–0.19 (ADR 0005, gone with ADR 0036): an unknown key like any other,
+# no fallback group, no password
 edit '$j->{"x-ks-failover"} = [["NL reality", "FI ws"]]' < "$fx/ok-full.json" > "$tmp/p.json"
 run "$tmp/p.json" refresh
-[ "$rc" = 0 ] && grep -q '"KS-FO-1"' "$cfg" && ok "refresh: failover groups added without the admin" || bad "refresh with failover: $rc $(cat "$tmp/err")"
+[ "$rc" = 0 ] && ! grep -qE 'KS-FO-|x-ks-failover' "$cfg" && ok "refresh: an old x-ks-failover key ignored like any unknown key, no fallback group" ||
+  bad "refresh with x-ks-failover: $rc $(cat "$tmp/err")"
+edit 'push @{$j->{"proxy-groups"}}, {name=>"KS-FO-1", type=>"select", proxies=>["NL reality"]}' < "$fx/ok-full.json" > "$tmp/p.json"
+run "$tmp/p.json" refresh
+[ "$rc" = 0 ] && ok "refresh: a group named KS-FO-… is the subscription's own now" || bad "refresh with a KS-FO group: $rc $(cat "$tmp/err")"
 run "$fx/ok-full.json" refresh
-[ "$rc" = 0 ] && ! grep -q 'KS-FO-' "$cfg" && ok "refresh: and dropped again" || bad "refresh without failover: $rc"
 cp "$cfg" "$tmp/cfg.before"
 # a new host name
 edit 'push @{$j->{proxies}}, {name=>"NL", type=>"trojan", server=>"nl.example.com", port=>443, password=>"p"}' < "$fx/ok-full.json" > "$tmp/p.json"
@@ -216,6 +223,33 @@ rotate_due 1130 "en0 192.168.1.1" && bad "flapping" || ok "second change"
 rotate_due 1186 "en0 192.168.1.1" && ok "second change: checked, at most once a minute" || bad "second change not checked"
 rotate_due 2900 "en0 192.168.1.1" && bad "due before 30 min" || ok "quiet network: not before 30 min"
 rotate_due 2987 "en0 192.168.1.1" && ok "quiet network: every 30 min" || bad "30 min"
+
+# --- who reads the profile (#37). Through sudo: the caller (SUDO_UID). Without it (the admin
+# password prompt, the daemon): the file's owner, and only a regular file with one name (no link
+# to swap, no hard link to someone else's file). Root's own file (the daemon's copy) only from a
+# folder only root can change. sudo is a fake here: it records and reads as us.
+SUDOLOG="$tmp/sudo"; dns de.example.com 203.0.113.20; dns fi.example.com 203.0.113.30
+sudo() { echo "sudo $*" >> "$SUDOLOG"; shift 3; "$@"; }
+src="$tmp/src"; mkdir -p "$src"; chmod 700 "$src"; cp "$fx/ok-full.json" "$src/p.json"
+: > "$tmp/sudo"; SUDO_UID=4242 run "$src/p.json" import
+[ "$rc" = 0 ] && [ "$(cat "$tmp/sudo")" = "sudo -n -u #4242 /bin/cat -- $src/p.json" ] && ok "source via sudo: read as SUDO_UID" || bad "sudo uid: $rc $(cat "$tmp/sudo") $(cat "$tmp/err")"
+: > "$tmp/sudo"; run "$src/p.json" import
+[ "$rc" = 0 ] && [ ! -s "$tmp/sudo" ] && ok "no SUDO_UID, our own file in our own folder: read as us" || bad "own file: $rc $(cat "$tmp/sudo") $(cat "$tmp/err")"
+real_src_owner=$(declare -f src_owner)
+src_owner() { echo 4243; }
+: > "$tmp/sudo"; run "$src/p.json" import
+[ "$rc" = 0 ] && [ "$(cat "$tmp/sudo")" = "sudo -n -u #4243 /bin/cat -- $src/p.json" ] && ok "no SUDO_UID (admin prompt): read as the file's owner" || bad "owner: $rc $(cat "$tmp/sudo") $(cat "$tmp/err")"
+eval "$real_src_owner"
+ln -s "$src/p.json" "$src/link.json"; : > "$tmp/sudo"; run "$src/link.json" import
+[ "$rc" = 1 ] && [ ! -s "$tmp/sudo" ] && grep -q 'Не удалось прочитать' "$tmp/err" && ok "no SUDO_UID: a link is not read" || bad "link: $rc $(cat "$tmp/err")"
+ln "$src/p.json" "$src/hard.json"; run "$src/hard.json" import
+[ "$rc" = 1 ] && ok "no SUDO_UID: a file with two names is not read" || bad "hard link: $rc $(cat "$tmp/err")"
+rm -f "$src/hard.json"
+mkdir -p "$tmp/shared"; chmod 777 "$tmp/shared"; cp "$fx/ok-full.json" "$tmp/shared/p.json"; run "$tmp/shared/p.json" import
+[ "$rc" = 1 ] && ok "no SUDO_UID: root's own file in a folder others can write is not read" || bad "shared folder: $rc $(cat "$tmp/err")"
+ln -s "$tmp/shared" "$src/via"; run "$src/via/p.json" import
+[ "$rc" = 1 ] && ok "  nor through a link to such a folder" || bad "via link: $rc $(cat "$tmp/err")"
+unset -f sudo
 
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

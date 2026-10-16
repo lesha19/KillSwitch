@@ -36,6 +36,7 @@ enum DiagnosticsCopy {
             ("Правил подписки", control.routing.map { "\($0.subscriptionRules.count), не взято \($0.dropped.count)" } ?? "нет данных"),
             ("Двойной VPN", yes(control.multihopEntry != nil)),
             ("Программ мимо VPN", "\(control.splitApps.count)"),
+            ("MTU", TunnelMTU.title(control.tunnelMTU)),
             ("Групп серверов", "\(control.proxies?.groups.count ?? 0)"),
             ("Подписка", client.hasURL ? "есть" : "нет"),
             ("Обновлена", date(client.status.lastUpdate)),

@@ -41,13 +41,18 @@ indirect enum JSONValue: Decodable, Equatable, Sendable {
 struct RoutingReport: Decodable, Equatable, Sendable {
     static let path = "/Library/KillSwitch/core/routing.json"
 
-    enum Origin: String, Decodable, Sendable { case subscription, killswitch }
+    /// profile: the person's routing profile (ADR 0034), named in `profile`.
+    enum Origin: String, Decodable, Sendable { case subscription, killswitch, profile }
 
     struct Rule: Decodable, Equatable, Sendable {
         var rule: String
         var from: Origin
         /// Position in the subscription's list (nil for KillSwitch's).
         var index: Int?
+        /// The routing profile's name, for its rules.
+        var profile: String?
+        /// With Xray: the rule object as the core has it, for «Проверить адрес» (ADR 0027).
+        var xray: [String: JSONValue]?
     }
 
     struct Dropped: Decodable, Equatable, Sendable {
@@ -88,8 +93,8 @@ struct RoutingReport: Decodable, Equatable, Sendable {
         var address: String
     }
 
-    /// One thing KillSwitch put in or changed: `kind` (dns-group, dns-servers, failover, pinning,
-    /// overrides, unbound, provider-path, provider-proxy, sniffer, adblock, splitapps, multihop,
+    /// One thing KillSwitch put in or changed: `kind` (dns-group, dns-servers, pinning,
+    /// overrides, unbound, provider-path, provider-proxy, sniffer, adblock, doh, splitapps, multihop,
     /// default-rule), a name and its items (names, rules, or host → address for pinning).
     struct Added: Decodable, Equatable, Sendable {
         var kind: String
@@ -134,6 +139,24 @@ struct RoutingReport: Decodable, Equatable, Sendable {
     var sniffer: Sniffer
     var dns: DNS
     var egress: [String]
+    /// "xray" for the main way of connecting (ADR 0020); absent in mihomo's report.
+    var core: String?
+    /// With Xray: each outbound tag's kind (vpn, direct, block, dns) and the tag that takes what no
+    /// rule does (Xray's first outbound), for «Проверить адрес» (ADR 0027).
+    var targets: [String: String]?
+    var fallback: String?
+
+    var isXray: Bool { core == "xray" }
+
+    /// Where an Xray outbound or balancer tag leads: freedom is direct, blackhole a block, the rest
+    /// (servers, balancers) the VPN.
+    func xrayRoute(_ tag: String) -> TrafficRoute {
+        switch targets?[tag] {
+        case "direct": .direct
+        case "block": .block
+        default: .vpn(tag)
+        }
+    }
 
     init(data: Data) throws {
         self = try JSONDecoder().decode(Self.self, from: data)
@@ -219,10 +242,14 @@ extension RoutingReport.Dropped {
             case "geosite": return String(localized: "Нет базы категорий сайтов (geosite)")
             default: return String(localized: "Нет базы стран (geoip)")
             }
+        case "geodata-code":
+            return detail == "geosite" ? String(localized: "Такой категории сайтов нет в базе (geosite)")
+                : String(localized: "Такой страны нет в базе стран (geoip)")
         case "managed": return String(localized: "Это KillSwitch задаёт сам")
         case "not-allowed": return String(localized: "Этого KillSwitch из подписки не берёт")
         case "bad-value": return String(localized: "Значение не прошло проверку")
         case "parse": return String(localized: "Не удалось разобрать правило")
+        case "own-doh": return String(localized: "Вместо него — твой DNS-over-HTTPS")
         // a host of an Xray subscription left out (section "servers")
         case "address": return String(localized: "Адрес сервера не годится (например, 0.0.0.0 — заглушка панели)")
         case "tag": return String(localized: "Тег ks-… занят KillSwitch")
@@ -242,14 +269,14 @@ extension RoutingReport.Added {
         switch kind {
         case "dns-group": String(localized: "Группа \(name ?? "KS-DNS") для DNS")
         case "dns-servers": String(localized: "DNS через VPN")
-        case "failover": String(localized: "Запасная группа \(name ?? "")")
         case "pinning": String(localized: "Адреса серверов закреплены")
         case "overrides": String(localized: "Свои настройки серверов")
         case "unbound": String(localized: "Убрана привязка к сетевому интерфейсу")
         case "provider-path": String(localized: "Убран свой путь к набору правил")
         case "provider-proxy": String(localized: "Наборы правил скачиваются через VPN")
         case "sniffer": String(localized: "Распознавание сайтов")
-        case "adblock": String(localized: "Блокировка рекламы — твой выбор")
+        case "adblock": String(localized: "Блокировка — твой выбор")
+        case "doh": String(localized: "Свой DNS-over-HTTPS — твой выбор")
         case "splitapps": String(localized: "Программы без VPN — твой выбор")
         case "multihop": String(localized: "Двойной VPN — твой выбор")
         case "default-rule": String(localized: "Правило по умолчанию")
@@ -266,8 +293,6 @@ extension RoutingReport.Added {
             String(localized: "DNS-запросы и загрузка наборов правил идут только через серверы подписки. Даже если в группе подписки выбрать «Напрямую», они останутся в VPN.")
         case "dns-servers":
             String(localized: "Остальные имена сайтов узнаются через DNS-over-HTTPS внутри VPN: провайдер не видит, куда ты заходишь.")
-        case "failover":
-            String(localized: "Если выбранный сервер перестанет отвечать, ядро само перейдёт на соседний в той же стране. Куда идут сайты, это не меняет.")
         case "pinning":
             String(localized: "Защита пускает трафик только к известным адресам серверов, поэтому имя сервера заменено его адресом. Шифрование по-прежнему проверяет имя.")
         case "overrides":
@@ -281,7 +306,9 @@ extension RoutingReport.Added {
         case "sniffer":
             String(localized: "В подписке его нет. Без него правила по доменам не срабатывают для программ, которые сами узнают адреса (DNS-over-HTTPS в Firefox). Адрес соединения не меняется, имя нужно только для выбора правила.")
         case "adblock":
-            String(localized: "Включено в «Дополнительно»: реклама и трекеры из базы KillSwitch блокируются раньше правил подписки.")
+            String(localized: "Включено в «Дополнительно»: выбранные категории сайтов из базы KillSwitch блокируются раньше правил подписки.")
+        case "doh":
+            String(localized: "Выбрано в «Дополнительно»: KillSwitch спрашивает адреса сайтов у твоего сервера, всегда через VPN, никогда напрямую и не у провайдера. Домены, для которых подписка задала свой DNS, спрашиваются у DNS подписки, а не у твоего сервера; с запасным способом подключения большинство сайтов узнаёт сервер VPN.")
         case "splitapps":
             String(localized: "Выбрано в «Дополнительно»: эти программы идут мимо VPN раньше правил подписки.")
         case "multihop":

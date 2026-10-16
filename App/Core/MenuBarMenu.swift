@@ -21,9 +21,13 @@ enum MenuBarMenu {
     /// быстрый» when the server list has one (ServerPicker).
     static func entries(status: Status, busy: Bool, coreConfigured: Bool, fastestAvailable: Bool) -> [Entry?] {
         let connection: Entry
-        switch status.primary {
+        // the core runs or the VPN is on where the main button does something else (stuck, rules
+        // missing, another VPN): its way out, never a disabled «Подключить»
+        switch status.secondary == .disconnectVPN || status.secondary == .disconnect ? status.secondary! : status.primary {
         case .disconnect, .cancel:
             connection = Entry(item: .disconnect, title: String(localized: "Отключить"), enabled: !busy)
+        case .disconnectVPN:
+            connection = Entry(item: .disconnect, title: Status.Action.disconnectVPN.title, enabled: !busy)
         default:
             connection = Entry(item: .connect, title: String(localized: "Подключить"),
                                enabled: status.primary == .connect && status.primaryEnabled && coreConfigured && !busy)

@@ -9,6 +9,8 @@ enum HelperCommand: Equatable, Sendable {
     // Never widen the rules: what the sudoers line of Helper/install.sh allows without a password.
     case state, probe, protectionOn, netRestore
     case coreState, coreOn, coreOff, coreProxies
+    /// «Перезапустить VPN»: the core again with the VPN kept on and pf blocking (ADR 0035).
+    case coreRestart
     /// Two byte totals of the core for the menu bar speed (`ks core traffic`).
     case coreTraffic
     /// The core's connections and rule provider sizes for «Трафик» (`ks core connections`).
@@ -17,6 +19,9 @@ enum HelperCommand: Equatable, Sendable {
     case coreDelay(String)
     /// Refused by ks (exit 3) if the profile brings new servers: the subscription auto-update.
     case coreRefresh(profile: String)
+    /// Another subscription's profile (ADR 0036): refused by ks (exit 3) unless the last import
+    /// approved its servers and what it sends DIRECT.
+    case coreUse(profile: String)
     /// «Собрать отчёт» (ADR 0021): the redacted archive into this folder. Through the daemon the
     /// app opens the file and the daemon gives ks its own folder (`Executor`) and the uid of the
     /// user who asked: ks takes only that user's crash reports.
@@ -29,11 +34,16 @@ enum HelperCommand: Equatable, Sendable {
     case setSplitApps([String])
     /// nil turns «Двойной VPN» off.
     case setMultihop(String?)
+    /// The own DNS-over-HTTPS server (ADR 0031), used by the core through the VPN; nil clears it.
+    case setDoH(String?)
     /// The way of connecting (ADR 0020); the subscription is imported again for it.
     case setCore(CoreChoice)
+    /// The TUN's MTU, nil = «Авто» (ADR 0032).
+    case setMTU(Int?)
     case allow(String), unallow(String)
     case serverAdd(String), serverRemove(String)
-    case coreImport(profile: String)
+    /// The profile that runs and the other subscriptions' profiles, approved with it (ADR 0036).
+    case coreImport(profile: String, others: [String] = [])
     /// The daemon puts the connecting user here (audit token), whatever the app said.
     case install(user: String, servers: [String])
     case uninstall
@@ -57,8 +67,8 @@ enum HelperCommand: Equatable, Sendable {
 
     var needsAuthorization: Bool {
         switch self {
-        case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic, .coreConnections,
-             .coreSelect, .coreDelay, .coreRefresh, .diagReport, .upgrade:
+        case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreRestart, .coreProxies, .coreTraffic,
+             .coreConnections, .coreSelect, .coreDelay, .coreRefresh, .coreUse, .diagReport, .upgrade:
             false
         default:
             true
@@ -71,7 +81,7 @@ enum HelperCommand: Equatable, Sendable {
     /// the state stays open. Commands behind the right are authorized by the admin's password.
     var onlyForConsoleUser: Bool {
         switch self {
-        case .protectionOn, .netRestore, .coreOn, .coreOff, .coreSelect, .coreRefresh, .upgrade, .coreConnections: true
+        case .protectionOn, .netRestore, .coreOn, .coreOff, .coreRestart, .coreSelect, .coreRefresh, .coreUse, .upgrade, .coreConnections: true
         default: false
         }
     }
@@ -102,24 +112,28 @@ enum HelperCommand: Equatable, Sendable {
         case .coreState: ["core", "state"]
         case .coreOn: ["core", "on"]
         case .coreOff: ["core", "off"]
+        case .coreRestart: ["core", "restart"]
         case .coreProxies: ["core", "proxies"]
         case .coreTraffic: ["core", "traffic"]
         case .coreConnections: ["core", "connections"]
         case .coreSelect(let group, let proxy): ["core", "select", group, proxy]
         case .coreDelay(let name): ["core", "delay", name]
         case .coreRefresh(let profile): ["core", "refresh", profile]
+        case .coreUse(let profile): ["core", "use", profile]
         case .diagReport(let directory, let uid): ["diag", "report", directory] + (uid.map { [String($0)] } ?? [])
         case .protectionOff: ["off"]
         case .pause(let minutes): ["pause", String(minutes)]
         case .setSwitch(let key, let on): ["set", key, on ? "1" : "0"]
         case .setSplitApps(let names): ["set", "splitapps", names.joined(separator: ",")]
         case .setMultihop(let entry): ["set", "multihop", entry ?? Self.multihopOff]
+        case .setDoH(let url): ["set", "doh", url ?? ""]
         case .setCore(let core): ["set", "core", core.rawValue]
+        case .setMTU(let mtu): ["set", "mtu", mtu.map(String.init) ?? Self.mtuAuto]
         case .allow(let address): ["allow", address]
         case .unallow(let address): ["unallow", address]
         case .serverAdd(let address): ["server-add", address]
         case .serverRemove(let address): ["server-remove", address]
-        case .coreImport(let profile): ["core", "import", profile]
+        case .coreImport(let profile, let others): ["core", "import", profile] + others
         case .install(let user, let servers): [user] + servers
         case .uninstall: []
         case .upgrade: ["--upgrade"]
@@ -129,19 +143,23 @@ enum HelperCommand: Equatable, Sendable {
 
     var isValid: Bool {
         switch self {
-        case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic, .coreConnections,
-             .protectionOff, .uninstall, .upgrade, .repair:
+        case .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreRestart, .coreProxies, .coreTraffic,
+             .coreConnections, .protectionOff, .uninstall, .upgrade, .repair:
             true
         case .coreSelect(let group, let proxy): Self.isName(group) && Self.isName(proxy)
         case .coreDelay(let name): Self.isName(name)
-        case .coreRefresh(let profile), .coreImport(let profile): Self.isProfilePath(profile)
+        case .coreRefresh(let profile), .coreUse(let profile): Self.isProfilePath(profile)
+        case .coreImport(let profile, let others):
+            others.count <= Self.maxOtherProfiles && ([profile] + others).allSatisfy(Self.isProfilePath)
         case .diagReport(let directory, _): Self.isProfilePath(directory)
         case .pause(let minutes): (0...9999).contains(minutes)
         case .setSwitch(let key, _): Self.switchKeys.contains(key)
         case .setSplitApps(let names):
             names.count <= Self.maxSplitApps && Set(names).count == names.count && names.allSatisfy(Self.isSplitApp)
         case .setMultihop(let entry): entry.map { Self.isName($0) && $0 != Self.multihopOff } ?? true
+        case .setDoH(let url): url.map(Self.isDoH) ?? true
         case .setCore: true
+        case .setMTU(let mtu): mtu.map { Self.mtuRange.contains($0) } ?? true
         case .allow(let address), .serverAdd(let address): Self.isAddress(address)
         case .unallow(let address), .serverRemove(let address): Self.isListedAddress(address)
         case .install(let user, let servers):
@@ -186,6 +204,7 @@ enum HelperCommand: Equatable, Sendable {
         case ["core", "state"]: command = .coreState
         case ["core", "on"]: command = .coreOn
         case ["core", "off"]: command = .coreOff
+        case ["core", "restart"]: command = .coreRestart
         case ["core", "proxies"]: command = .coreProxies
         case ["core", "traffic"]: command = .coreTraffic
         case ["core", "connections"]: command = .coreConnections
@@ -202,9 +221,19 @@ enum HelperCommand: Equatable, Sendable {
                         .map(String.init))
                 case "multihop":
                     command = .setMultihop(arguments[2] == Self.multihopOff ? nil : arguments[2])
+                case "doh":
+                    command = .setDoH(arguments[2].isEmpty ? nil : arguments[2])
                 case "core":
                     guard let core = CoreChoice(rawValue: arguments[2]) else { return nil }
                     command = .setCore(core)
+                case "mtu":
+                    if arguments[2] == Self.mtuAuto {
+                        command = .setMTU(nil)
+                    } else {
+                        // ks mtu_ok: four ASCII digits, no sign or leading zero
+                        guard arguments[2].wholeMatch(of: /[1-9][0-9]{3}/) != nil, let mtu = Int(arguments[2]) else { return nil }
+                        command = .setMTU(mtu)
+                    }
                 default:
                     guard ["0", "1"].contains(arguments[2]) else { return nil }
                     command = .setSwitch(arguments[1], arguments[2] == "1")
@@ -214,7 +243,9 @@ enum HelperCommand: Equatable, Sendable {
             case ("server-add", 2): command = .serverAdd(arguments[1])
             case ("server-remove", 2): command = .serverRemove(arguments[1])
             case ("core", 3) where arguments[1] == "delay": command = .coreDelay(arguments[2])
-            case ("core", 3) where arguments[1] == "import": command = .coreImport(profile: arguments[2])
+            case ("core", 3...) where arguments[1] == "import":
+                command = .coreImport(profile: arguments[2], others: Array(arguments.dropFirst(3)))
+            case ("core", 3) where arguments[1] == "use": command = .coreUse(profile: arguments[2])
             case ("core", 3) where arguments[1] == "refresh": command = .coreRefresh(profile: arguments[2])
             case ("diag", 3) where arguments[1] == "report": command = .diagReport(directory: arguments[2])
             case ("core", 4) where arguments[1] == "select": command = .coreSelect(group: arguments[2], proxy: arguments[3])
@@ -238,10 +269,42 @@ enum HelperCommand: Equatable, Sendable {
     // MARK: checks
 
     static let multihopOff = "off"
+    /// `ks set mtu auto|1280…1500` (ks mtu_ok): 1280 is IPv6's minimum.
+    static let mtuAuto = "auto"
+    static let mtuRange = 1280...1500
     /// `ks set <key> 0|1`; all behind the right, «Блокировать рекламу» (adblock) too: it changes
     /// what the core refuses, and only an admin turns that on or off, as with the password before.
     /// «Подробная диагностика» (diag, ADR 0021) too: it changes what the core records.
-    static let switchKeys: Set<String> = ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag", "failover"]
+    /// «Пробовать другой отпечаток и транспорт» (escalate, ADR 0030) too: it changes the core's config.
+    /// The blocked categories (ADR 0031) are switches too: adblock, blockadult, blocksocial, blockbetting.
+    static let switchKeys: Set<String> = ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag", "escalate",
+                                          "blockadult", "blocksocial", "blockbetting"]
+
+    /// ks valid_doh (ADR 0031): https, a public host name or IPv4 address, an optional port and
+    /// path; no user, query or fragment, nothing local (the server is reached through the VPN).
+    static func isDoH(_ text: String) -> Bool {
+        guard text.utf8.count <= 256,
+              let match = text.wholeMatch(of: /https:\/\/([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?(\/(?:[A-Za-z0-9._~\/-]|%[0-9A-Fa-f]{2})*)?/) else { return false }
+        if let port = match.2 {
+            guard let number = Int(port), (1...65535).contains(number) else { return false }
+        }
+        let host = String(match.1)
+        if host.wholeMatch(of: /[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/) != nil {
+            // no leading zeros: Xray refuses such an address in a rule
+            let octet = /(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/
+            guard host.split(separator: ".").allSatisfy({ $0.wholeMatch(of: octet) != nil }) else { return false }
+            let octets = host.split(separator: ".").compactMap { Int($0) }
+            let (a, b) = (octets[0], octets[1])
+            // this network, private, loopback, link-local, CGNAT, 198.18/15 (our TUN), multicast and up
+            return ![0, 10, 127].contains(a) && a < 224 && !(a == 169 && b == 254) && !(a == 172 && (16...31).contains(b))
+                && !(a == 192 && b == 168) && !(a == 100 && (64...127).contains(b)) && !(a == 198 && (18...19).contains(b))
+        }
+        let label = /[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?/
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard host.utf8.count <= 253, labels.count >= 2, labels.allSatisfy({ $0.wholeMatch(of: label) != nil }),
+              labels.last?.first?.isLetter == true else { return false }
+        return !["local", "localhost", "internal", "lan"].contains(String(labels.last!).lowercased()) && !host.lowercased().hasSuffix(".home.arpa")
+    }
     static let maxSplitApps = 50
     static let maxInstallServers = 512
 
@@ -272,6 +335,9 @@ enum HelperCommand: Equatable, Sendable {
         let parts = entry.split(separator: "/", omittingEmptySubsequences: false).dropFirst()
         return entry.utf8.count <= 255 && entry.hasSuffix(".app") && !parts.contains { $0.isEmpty || $0 == "." || $0 == ".." }
     }
+
+    /// What ks's core_import takes besides the profile that runs.
+    static let maxOtherProfiles = 64
 
     /// The daemon writes profiles to its own directory; the path is absolute and one line.
     static func isProfilePath(_ path: String) -> Bool {

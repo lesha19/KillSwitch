@@ -9,11 +9,16 @@ import os
 /// system: while no VPN tunnel is up, a new flow is let through only to the local network,
 /// to listed addresses (VPN servers, Tailscale relays, exceptions) or from trusted programs
 /// (our own core, Tailscale, NetBird), identified by code signature. Everything else is dropped.
-/// With a tunnel up, flows are allowed and pf does the fine-grained filtering.
+/// With a tunnel up, flows are allowed and pf does the fine-grained filtering. Without the helper
+/// (FilterGate, #55) there are no pf rules to stand behind and the filter blocks nothing.
 ///
 /// The app passes the lists in `vendorConfiguration` (see FilterConfig in the app).
 final class FilterDataProvider: NEFilterDataProvider {
+    /// `log stream --predicate 'subsystem == "com.lesha19.KillSwitch" && category == "filter"'`
+    private static let log = Logger(subsystem: "com.lesha19.KillSwitch", category: "filter")
+
     override func startFilter(completionHandler: @escaping (Error?) -> Void) {
+        _ = Self.gateBlocks(logAlways: true)
         let settings = NEFilterSettings(rules: [], defaultAction: .filterData)
         nonisolated(unsafe) let done = completionHandler   // called once, by NetworkExtension
         apply(settings) { error in done(error) }
@@ -25,7 +30,7 @@ final class FilterDataProvider: NEFilterDataProvider {
 
     override func handleNewFlow(_ flow: NEFilterFlow) -> NEFilterNewFlowVerdict {
         let config = filterConfiguration.vendorConfiguration ?? [:]
-        if Self.vpnTunnelUp() { return .allow() }
+        if Self.vpnTunnelUp() || !Self.gateBlocks() { return .allow() }
         if let token = flow.sourceAppAuditToken, Self.isTrusted(token, config: config) { return .allow() }
         guard let socket = flow as? NEFilterSocketFlow,
               let host = Self.remoteHost(socket) else { return .drop() }
@@ -68,6 +73,9 @@ final class FilterDataProvider: NEFilterDataProvider {
         initialState: ExpiringCache<Data, TrustedCode.Program?>(lifetime: 10, capacity: 512))
     /// Whether a VPN tunnel is up, for a second: pf does the exact filtering meanwhile.
     private static let tunnelCache = OSAllocatedUnfairLock(initialState: ExpiringCache<Int, Bool>(lifetime: 1, capacity: 1))
+    /// FilterGate's answer, for a second, and the last one logged.
+    private static let gateCache = OSAllocatedUnfairLock(initialState: ExpiringCache<Int, Bool>(lifetime: 1, capacity: 1))
+    private static let gateLogged = OSAllocatedUnfairLock<Bool?>(initialState: nil)
 
     private static func trustedProgram(_ token: Data) -> TrustedCode.Program? {
         let now = Date()
@@ -83,6 +91,27 @@ final class FilterDataProvider: NEFilterDataProvider {
         let up = vpnTunnelUpNow()
         tunnelCache.withLock { $0.set(up, for: 0, now: now) }
         return up
+    }
+
+    /// False only when the helper is known to be gone (FilterGate): then nothing is dropped. Each
+    /// change is logged, so a filter that stopped blocking shows in the unified log.
+    private static func gateBlocks(logAlways: Bool = false) -> Bool {
+        let now = Date()
+        if !logAlways, let cached = gateCache.withLock({ $0.value(for: 0, now: now) }) { return cached }
+        let blocks = FilterGate.blocks()
+        gateCache.withLock { $0.set(blocks, for: 0, now: now) }
+        let changed = gateLogged.withLock { last in
+            defer { last = blocks }
+            return last != blocks
+        }
+        if changed || logAlways {
+            if blocks {
+                log.notice("gate: helper installed (or cannot tell), filtering while no VPN tunnel is up")
+            } else {
+                log.notice("gate: helper removed (\(FilterGate.helperPath, privacy: .public) is gone), blocking nothing")
+            }
+        }
+        return blocks
     }
 
     /// VPN TUN interfaces carry an address in 198.18.0.0/16: our core's 198.18.128.1, dropweb's and

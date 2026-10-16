@@ -73,7 +73,8 @@ extension KillSwitchControl {
             protection: state, connection: connection, foreignVPN: foreignVPN != nil, daemonProblem: daemonProblem,
             coreInstalled: coreInstalled, needsRepair: needsRepair || helperOutdated && !upgradingHelper,
             hasServers: coreConfigured || client.hasURL || !client.manual.isEmpty,
-            connectingSince: connectingSince, now: clock, standby: protectionStandby))
+            connectingSince: connectingSince, now: clock, standby: protectionStandby, vpnOn: vpnOn,
+            tunnelWasUp: tunnelWasUp, rulesMissing: rulesMissing))
     }
 }
 
@@ -292,8 +293,11 @@ struct SubscriptionSummary: View {
                     Button("Подтвердить…") { Task { await client.confirmNewServers() } }
                         .controlSize(.small)
                         .disabled(client.updating)
-                        .help(client.routingChanged ? "Разрешить новые правила «напрямую» подписки (спросит пароль)"
-                                                    : "Разрешить новые серверы подписки (спросит пароль)")
+                        .help(!client.routingChanged ? "Разрешить новые серверы подписки (спросит пароль)"
+                              : "Разрешить новые правила «напрямую» подписки (спросит пароль)")
+                }
+                if let note = client.approvalNote {
+                    Text(note).font(.caption).foregroundStyle(.secondary)
                 }
             }
             if client.needsPassword {

@@ -2,8 +2,9 @@ import CryptoKit
 import Foundation
 import Observation
 
-/// The VPN client side: subscription (URL in the keychain), servers added from share links,
-/// and handing the merged profile to the helper (`ks core import`).
+/// The VPN client side: the subscriptions (links in the keychain, ADR 0036), servers added from
+/// share links («Свои серверы»), and handing the profile of the selected server's subscription to
+/// the helper (`ks core import`).
 @MainActor
 @Observable
 final class VPNClient {
@@ -15,16 +16,16 @@ final class VPNClient {
 
     typealias Status = SubscriptionStatus
 
-    private(set) var hasURL = false
-    private(set) var maskedURL: String?
-    /// #11: the person's backup link, asked when the main one fails; keychain, never logged.
-    private(set) var maskedBackupURL: String?
-    private(set) var status = Status()
+    /// In the order of adding (Subscriptions).
+    private(set) var subscriptions: [Subscription] = []
     private(set) var manual: [ManualServer] = []
     private(set) var updating = false
     private(set) var lastError: UserError?
-    /// Groups of the cached profile, for choosing a server before connecting.
-    private(set) var profileProxies: CoreProxies?
+    /// The servers of each subscription with a cached profile, then «Свои серверы» (ADR 0036).
+    private(set) var blocks: [Block] = [] {
+        // the CLI tells same-name servers of several subscriptions apart by it (#66)
+        didSet { UserDefaults.standard.set(try? JSONEncoder().encode(serverBlocks(live: nil)), forKey: CLI.serversKey) }
+    }
     /// An automatic update found a new profile, but applying it needs the admin password
     /// (the installed helper does not allow `core refresh` without one).
     private(set) var needsPassword = false
@@ -37,16 +38,57 @@ final class VPNClient {
     private(set) var transportOverrides = Transport.decode(UserDefaults.standard.data(forKey: Transport.storeKey))
     /// Servers of the cached profile whose transport can be changed, with the subscription's values.
     private(set) var transportServers: [Transport.Server] = []
-    /// Server name → identity (ServerIdentity) in the cached profile: what per-server settings
-    /// are kept under, so they survive a rename.
-    private(set) var serverKeys: [String: String] = [:]
-    /// «Начало работы»: the way of connecting the checked subscription was fetched for (ADR 0020).
-    private var setupCore: CoreChoice?
-    /// The raw reason the last Xray fetch failed, for the setup's fallback.
+    /// Server name → identity (ServerIdentity) in the profile the helper runs: what per-server
+    /// settings are kept under, so they survive a rename.
+    var serverKeys: [String: String] { activeBlock?.keys ?? [:] }
+    /// The raw reason the last Xray fetch failed: a subscription without Xray configs runs in mihomo.
     private var lastXrayFailure: String?
 
-    /// «Избранные» of the server list, by identity (names for servers not seen yet).
-    static let favouritesKey = "favouriteServers"
+    /// «Избранные» of the server list, by (subscription, identity) (ServerRecents).
+    static let favouritesKey = Subscriptions.favouritesKey
+
+    /// One subscription's servers (or «Свои серверы»): its cached profile's groups, and its server
+    /// name → identity (mihomo only).
+    struct Block {
+        let id: String
+        let title: String
+        let proxies: CoreProxies
+        let keys: [String: String]
+    }
+
+    var hasURL: Bool { !subscriptions.isEmpty }
+    /// The subscription the helper runs, else the first: what the single-subscription views show
+    /// (per-subscription blocks with their own status come with #67).
+    var current: Subscription? { subscriptions.first { $0.id == activeID } ?? subscriptions.first }
+    var status: Status { current?.status ?? Status() }
+    var maskedURL: String? { current.flatMap { Subscriptions.link(of: $0.id, Self.store) }.map(SubscriptionHeaders.masked) }
+
+    /// Whose profile the helper runs (or is to run): the one last handed over (even one deleted
+    /// since: the helper still runs it, #67); before any import, the first subscription, else
+    /// «Свои серверы».
+    var activeID: String {
+        let stored = control.activeSubscription
+        if control.coreConfigured || subscriptions.contains(where: { $0.id == stored }) || (stored == ServerID.own && !manual.isEmpty) {
+            return stored
+        }
+        return subscriptions.first?.id ?? ServerID.own
+    }
+
+    var activeBlock: Block? { blocks.first { $0.id == activeID } }
+    /// Groups of the profile the helper runs, from its cache, for choosing a server before connecting.
+    var profileProxies: CoreProxies? { activeBlock?.proxies }
+
+    /// The servers of every subscription as «Серверы» lists them: the running one's from the core
+    /// (`live`) when it runs, the others from their caches.
+    func serverBlocks(live: CoreProxies?) -> [ServerPicker.Block] {
+        blocks.map { block in
+            let proxies = block.id == activeID ? live ?? block.proxies : block.proxies
+            return ServerPicker.Block(id: block.id, title: block.title, entries: ServerPicker.entries(proxies, subscription: block.id))
+        }
+    }
+
+    /// «Stork», «Свои серверы»: the title of a subscription's block.
+    func title(of subscription: String) -> String? { blocks.first { $0.id == subscription }?.title }
 
     /// Hours between automatic updates; 0 = what the subscription asks for.
     var intervalHours = UserDefaults.standard.integer(forKey: "subscriptionIntervalHours") {
@@ -61,30 +103,43 @@ final class VPNClient {
     /// After a failed or refused update: try again in an hour, not after the full interval.
     private var retryAt: Date?
 
+    /// The timer's: by the subscription the helper runs (one schedule per subscription is #67).
     private var schedule: UpdateSchedule {
         get { UpdateSchedule(lastUpdate: status.lastUpdate, retryAt: retryAt) }
         set {
             retryAt = newValue.retryAt
-            if newValue.lastUpdate != status.lastUpdate {
-                status.lastUpdate = newValue.lastUpdate
-                saveStatus()
-            }
+            if let id = current?.id, newValue.lastUpdate != status.lastUpdate { changeStatus(id) { $0.lastUpdate = newValue.lastUpdate } }
         }
     }
 
-    private static let urlAccount = "subscription-url"
-    private static let backupAccount = "subscription-url-backup"
+    private static let backupAccount = "subscription-url-backup"   // only to delete it
     private static let linksAccount = "manual-links"
-    private static let statusKey = "subscriptionStatus"
     private static let importedKey = "importedProfileHash"
+
+    /// The list, its links in the keychain, its caches in Application Support/KillSwitch.
+    static let store = Subscriptions.Store(
+        defaults: .standard,
+        read: { try Keychain.readChecked($0) },
+        write: { account, data in
+            guard let data else { Keychain.delete(account); return true }
+            return Keychain.write(account, data)
+        },
+        directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("KillSwitch"))
+
+    /// Once, before anything reads the server stores (KillSwitchControl): the single subscription
+    /// of 0.19 becomes the first of the list (Subscriptions.migrate).
+    static func migrate() {
+        // the keychain not answering is no «no own servers»: the move waits for the next launch
+        let data: Data?
+        do { data = try Keychain.readChecked(linksAccount) } catch { return }
+        let manual = data.flatMap { try? JSONDecoder().decode([ManualServer].self, from: $0) } ?? []
+        Subscriptions.migrate(store, own: manual.compactMap(proxy))
+    }
 
     init(control: KillSwitchControl) {
         self.control = control
-        if let url = Self.storedURL() {
-            hasURL = true
-            maskedURL = SubscriptionHeaders.masked(url)
-        }
-        maskedBackupURL = Self.storedBackupURL().map(SubscriptionHeaders.masked)
+        subscriptions = Subscriptions.load(Self.store)
+        Keychain.delete(Self.backupAccount)   // the backup link of 0.16–0.19 (#11), dropped by ADR 0036
         // #11: a fetch that failed while the VPN was off goes again as soon as it connects
         NotificationCenter.default.addObserver(forName: UpdateRetry.vpnConnected, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -94,9 +149,6 @@ final class VPNClient {
         }
         if let data = Keychain.read(Self.linksAccount), let saved = try? JSONDecoder().decode([ManualServer].self, from: data) {
             manual = saved
-        }
-        if let data = UserDefaults.standard.data(forKey: Self.statusKey), let saved = try? JSONDecoder().decode(Status.self, from: data) {
-            status = saved
         }
         reloadProfileProxies()
         timer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
@@ -108,72 +160,74 @@ final class VPNClient {
         }
     }
 
-    // MARK: subscription URL
+    // MARK: subscriptions (ADR 0036)
 
     /// Shown only on request in Settings, never when the provider sent `hide-url` (#26); never logged.
-    func revealURL() -> String? { urlHidden ? nil : Self.storedURL() }
+    func revealURL(of id: String) -> String? { urlHidden(id) ? nil : Subscriptions.link(of: id, Self.store) }
 
-    var urlHidden: Bool { status.provider?.hidesURL == true }
+    func urlHidden(_ id: String) -> Bool { subscriptions.first { $0.id == id }?.status.provider?.hidesURL == true }
 
-    func setURL(_ text: String) async {
-        guard store(text.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
-        await update(interactive: true)
-    }
+    func maskedURL(of id: String) -> String? { Subscriptions.link(of: id, Self.store).map(SubscriptionHeaders.masked) }
 
-    /// Shown only on request in Settings; never logged.
-    func revealBackupURL() -> String? { Self.storedBackupURL() }
-
-    /// «Резервная ссылка» (#11): kept like the main one, asked only when the main one fails.
-    func setBackupURL(_ text: String) {
-        let url = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard Self.isSubscriptionLink(url) else { lastError = Self.notALink; return }
-        guard Keychain.write(Self.backupAccount, Data(url.utf8)) else {
+    /// Settings, a QR code and `killswitch://add`: adds a subscription, never replaces one; the same
+    /// link again is refused. It is kept only once it answered (as a link given in 0.19 was): one
+    /// that fails is taken out again and lastError says why. The first one is handed to the helper
+    /// too (the admin's password), a further one waits until one of its servers is picked. True
+    /// when it was added.
+    @discardableResult
+    func add(_ text: String) async -> Bool {
+        lastError = nil
+        let added: Subscription
+        switch Subscriptions.add(text, Self.store) {
+        case .success(let subscription): added = subscription
+        case .failure(.notALink):
+            lastError = Self.notALink
+            return false
+        case .failure(.duplicate):
+            lastError = UserError(title: String(localized: "Эта подписка уже добавлена"),
+                                  message: String(localized: "Такая ссылка уже есть в списке подписок."))
+            return false
+        case .failure(.notKept):
             lastError = UserError(title: String(localized: "Ссылка не сохранилась"), message: String(localized: "Не получилось сохранить ссылку в связке ключей."))
-            return
+            return false
         }
-        maskedBackupURL = SubscriptionHeaders.masked(url)
+        subscriptions = Subscriptions.load(Self.store)
+        while updating { try? await Task.sleep(for: .milliseconds(500)) }   // then fetched at once, not by the timer
+        updating = true
+        defer { updating = false }
+        guard await fetch(added.id) else {
+            forget(added.id)
+            return false
+        }
+        guard activeID == added.id else { return true }
+        if await applyCurrent(interactive: true) { schedule.record(.applied, now: Date()) }
+        return true
     }
 
-    func removeBackupURL() {
-        Keychain.delete(Self.backupAccount)
-        maskedBackupURL = nil
-    }
-
-    private static func isSubscriptionLink(_ url: String) -> Bool {
-        guard let components = URLComponents(string: url) else { return false }
-        return components.scheme?.lowercased() == "https" && components.host?.isEmpty == false
+    /// A subscription out of the list with all that was kept of it (Subscriptions.remove).
+    private func forget(_ id: String) {
+        Subscriptions.remove(id, Self.store)
+        subscriptions = Subscriptions.load(Self.store)
+        control.forget(subscription: id)
+        reloadProfileProxies()
     }
 
     private static let notALink = UserError(title: String(localized: "Это не ссылка на подписку"), message: String(localized: "Нужна ссылка вида https://…"))
 
-    /// Keeps a subscription link in the keychain; the status starts over.
-    private func store(_ url: String) -> Bool {
-        guard Self.isSubscriptionLink(url) else {
-            lastError = Self.notALink
-            return false
-        }
-        guard Keychain.write(Self.urlAccount, Data(url.utf8)) else {
-            lastError = UserError(title: String(localized: "Ссылка не сохранилась"), message: String(localized: "Не получилось сохранить ссылку в связке ключей."))
-            return false
-        }
-        hasURL = true
-        maskedURL = SubscriptionHeaders.masked(url)
-        status = Status()
-        saveStatus()
-        return true
+    /// Its link, caches, status and what was kept of its servers go (Subscriptions.remove). The
+    /// helper keeps running what it was handed, even the deleted subscription's servers, until
+    /// another server is picked (what deleting the one in use does is #67). Without subscriptions
+    /// the own servers alone go to the helper, as before.
+    func remove(_ id: String) async {
+        forget(id)
+        lastError = nil
+        if subscriptions.isEmpty, !manual.isEmpty { await applyCurrent(interactive: true) }
     }
 
-    func removeURL() async {
-        Keychain.delete(Self.urlAccount)
-        try? FileManager.default.removeItem(at: Self.cacheFile)
-        try? FileManager.default.removeItem(at: Self.xrayCacheFile)
-        reloadProfileProxies()
-        hasURL = false
-        maskedURL = nil
-        status = Status()
-        saveStatus()
-        lastError = nil
-        if !manual.isEmpty { await apply(subscription: nil, interactive: true) }
+    private func changeStatus(_ id: String, _ change: (inout Status) -> Void) {
+        guard let index = subscriptions.firstIndex(where: { $0.id == id }) else { return }
+        change(&subscriptions[index].status)
+        Subscriptions.save(subscriptions, Self.store)
     }
 
     // MARK: manual servers
@@ -187,7 +241,12 @@ final class VPNClient {
         guard !links.isEmpty, let added = parse(links, name: name) else { return }
         manual += added
         saveManual()
-        await applyCurrent(interactive: true)
+        await ownChanged()
+    }
+
+    /// Own servers are a profile of their own (ADR 0036): handed over again only while it runs.
+    private func ownChanged() async {
+        if activeID == ServerID.own { await applyCurrent(interactive: true) } else { reloadProfileProxies() }
     }
 
     private func parse(_ links: [String], name: String?) -> [ManualServer]? {
@@ -223,9 +282,10 @@ final class VPNClient {
     }
 
     func removeManual(_ server: ManualServer) async {
+        let wasActive = activeID == ServerID.own
         manual.removeAll { $0.id == server.id }
         saveManual()
-        await applyCurrent(interactive: true)
+        if wasActive { await applyCurrent(interactive: true) } else { reloadProfileProxies() }
     }
 
     /// Saves the choice and hands the profile to the core by a passwordless refresh: the servers
@@ -244,102 +304,158 @@ final class VPNClient {
     // MARK: updating
 
     func updateIfDue() {
-        guard hasURL, !updating, schedule.isDue(interval: effectiveInterval, now: Date()) else { return }
+        guard !updating else { return }
+        guard hasURL, schedule.isDue(interval: effectiveInterval, now: Date()) else { return }
         Task { await update(interactive: false) }
     }
 
-    /// Fetches the subscription and applies it. On any failure the core keeps its old config.
-    /// «Обновлено» moves only when the profile reached the core; otherwise again in an hour.
+    /// Fetches every subscription and hands the profile the helper runs over again. On any failure
+    /// the core keeps its old config. «Обновлено» moves only when the profile reached the core;
+    /// otherwise again in an hour. (A schedule and an error per subscription: #67.)
     func update(interactive: Bool) async {
-        guard let url = Self.storedURL().flatMap(URL.init(string:)) else {
-            if !manual.isEmpty { await apply(subscription: nil, interactive: interactive) }
-            return
-        }
         guard !updating else { return }
         updating = true
         defer { updating = false }
-        if usesXray {
-            guard let xray = await fetchXray(url) else { return }
-            let applied = await applyXray(xray.data, interactive: interactive)
-            schedule.record(applied ? .applied : .notApplied, now: Date())
+        let active = activeID
+        var activeError: UserError?
+        var fetchedActive = false
+        for subscription in subscriptions {
+            let fetched = await fetch(subscription.id)
+            if subscription.id == active {
+                fetchedActive = fetched
+                activeError = lastError
+            } else if fetched {
+                changeStatus(subscription.id) { $0.lastUpdate = Date() }
+            }
+        }
+        lastError = activeError
+        if active == ServerID.own {
+            if !manual.isEmpty { await applyCurrent(interactive: interactive) }
             return
         }
-        guard let profile = await fetchProfile(url) else { return }
-        let applied = await apply(subscription: profile, interactive: interactive)
+        guard fetchedActive else { return }
+        let applied = await applyCurrent(interactive: interactive)
         schedule.record(applied ? .applied : .notApplied, now: Date())
     }
 
-    /// Downloads and caches the subscription, without handing it to the helper. The cache is what
-    /// «Разрешить…» (confirmNewServers) and manual servers build on, so it is the last fetched
-    /// profile, applied or not. A failed fetch, or one without servers, leaves the cache and the
-    /// core's config alone. #11: tried in SubscriptionSource.order; the first error is shown.
-    private func fetchProfile(_ url: URL) async -> Profile? {
-        let backup = Self.storedBackupURL().flatMap(URL.init(string:))
+    /// Downloads and caches one subscription in the format of its core (core(of:)), without
+    /// handing it to the helper. The cache is what «Разрешить…» (confirmNewServers) and a switch
+    /// build on, so it is the last fetched profile, applied or not. A failed fetch, or one without
+    /// servers, leaves the cache alone. #11: tried in SubscriptionSource.order; the first error is shown.
+    @discardableResult
+    private func fetch(_ id: String) async -> Bool {
+        await fetchEither(id) != nil
+    }
+
+    private enum Fetched { case xray(XrayProfile), mihomo(Profile) }
+
+    /// The core follows the subscription (ADR 0036, #65): its Xray configs at `<link>/json` when
+    /// Xray is installed, else (none there, or none fetched yet) its mihomo profile. One that says
+    /// it has no Xray configs (Subscriptions.saysNoXray) loses its old ones once its mihomo profile
+    /// came, so it runs in mihomo from then on; a failed fetch keeps them. One no installed core runs
+    /// is kept with Subscriptions.noCore as its error.
+    private func fetchEither(_ id: String) async -> Fetched? {
+        lastXrayFailure = nil
+        let fetched: Fetched?
+        if installedCores.contains(.xray), let xray = await fetchXray(id) {
+            fetched = .xray(xray)
+        } else {
+            let xrayCache = Subscriptions.cache(of: id, xray: true, Self.store)
+            let none = Subscriptions.saysNoXray(lastXrayFailure)
+            guard lastXrayFailure == nil || none || !FileManager.default.fileExists(atPath: xrayCache.path) else { return nil }
+            if lastXrayFailure != nil { lastError = nil }
+            guard let profile = await fetchProfile(id) else { return nil }
+            if none { try? FileManager.default.removeItem(at: xrayCache) }
+            fetched = .mihomo(profile)
+        }
+        if unusable(id) { lastError = Subscriptions.noCore }
+        return fetched
+    }
+
+    /// The cores the helper has (or the app carries for its install, ADR 0020).
+    private var installedCores: Set<CoreChoice> {
+        Set(CoreChoice.allCases.filter {
+            FileManager.default.fileExists(atPath: $0.binary) || Bundle.main.path(forResource: $0.rawValue, ofType: nil, inDirectory: "Helper") != nil
+        })
+    }
+
+    /// The core a subscription runs in (Subscriptions.core): what its last fetch cached. «Свои
+    /// серверы» run in Xray unless it can use none of them (ADR 0027).
+    private func core(of id: String) -> CoreChoice? {
+        Subscriptions.core(offers: offers(of: id), installed: installedCores)
+    }
+
+    private func offers(of id: String) -> Set<CoreChoice> {
+        if id == ServerID.own {
+            if manual.isEmpty { return [] }
+            return manual.allSatisfy({ (try? ProxyLink.parse($0.link)).flatMap(XrayManual.unsupported) != nil }) ? [.mihomo] : [.xray, .mihomo]
+        }
+        return Set(CoreChoice.allCases.filter { FileManager.default.fileExists(atPath: Subscriptions.cache(of: id, xray: $0 == .xray, Self.store).path) })
+    }
+
+    /// It has servers, but in no format an installed core runs: never handed to the helper.
+    private func unusable(_ id: String) -> Bool { core(of: id) == nil && !offers(of: id).isEmpty }
+
+    private func fetchProfile(_ id: String) async -> Profile? {
+        guard let url = Subscriptions.link(of: id, Self.store).flatMap(URL.init(string:)) else { return nil }
         var firstError: String?
-        for source in SubscriptionSource.order(hasBackup: backup != nil, vpnRunning: control.coreRunning) {
-            guard let link = source.usesBackup ? backup : url else { continue }
+        for source in SubscriptionSource.order(vpnRunning: control.coreRunning) {
             do {
-                return try await fetchProfile(link, source: source, title: url.host)
+                let (body, headers) = try await Self.fetch(url, viaVPN: source.viaVPN)
+                let read = try await ProfileConverter.readInBackground(subscription: body)   // off the main actor (#50)
+                guard subscriptions.contains(where: { $0.id == id }) else { return nil }   // deleted meanwhile
+                if id == activeID { UserDefaults.standard.set(read.leftOut, forKey: RoutingReport.leftOutKey) }
+                if let json = read.json { Self.cache(json, to: Subscriptions.cache(of: id, xray: false, Self.store)) }
+                took(headers, source: source, for: id)
+                return read.profile
             } catch {
                 firstError = firstError ?? Self.describe(error)
             }
         }
-        let raw = firstError ?? "empty"
-        schedule.record(.fetchFailed(offline: raw.hasPrefix("offline")), now: Date())
-        lastError = UserError.from(raw: raw, context: .subscription)
+        failed(id, raw: firstError ?? "empty")
         return nil
     }
 
-    private func fetchProfile(_ url: URL, source: SubscriptionSource, title: String?) async throws -> Profile {
-        let (body, headers) = try await Self.fetch(url, viaVPN: source.viaVPN)
-        let (profile, leftOut) = try ProfileConverter.read(subscription: body)
-        UserDefaults.standard.set(leftOut, forKey: RoutingReport.leftOutKey)
-        Self.cache(profile)
-        took(headers, source: source, title: title)
-        return profile
+    private func failed(_ id: String, raw: String) {
+        if id == current?.id { schedule.record(.fetchFailed(offline: raw.hasPrefix("offline")), now: Date()) }
+        lastError = UserError.from(raw: raw, context: .subscription)
     }
 
     // MARK: the main way of connecting (ADR 0020)
 
-    /// The helper runs Xray: the subscription is the panel's Xray config (XrayProfile).
-    private var usesXray: Bool { control.coreChoice == .xray }
-
     /// The same sources and order as fetchProfile; the link plus XrayProfile.pathComponent.
-    private func fetchXray(_ url: URL) async -> XrayProfile? {
-        let backup = Self.storedBackupURL().flatMap(URL.init(string:))
+    private func fetchXray(_ id: String) async -> XrayProfile? {
+        guard let url = Subscriptions.link(of: id, Self.store).flatMap(URL.init(string:)) else { return nil }
         var firstError: String?
-        for source in SubscriptionSource.order(hasBackup: backup != nil, vpnRunning: control.coreRunning) {
-            guard let link = source.usesBackup ? backup : url else { continue }
+        for source in SubscriptionSource.order(vpnRunning: control.coreRunning) {
             do {
-                return try await fetchXray(link, source: source, title: url.host)
+                let (body, headers) = try await Self.fetch(XrayProfile.url(for: url), viaVPN: source.viaVPN)
+                let profile = try XrayProfile(body: body)
+                guard subscriptions.contains(where: { $0.id == id }) else { return nil }   // deleted meanwhile
+                if id == activeID { UserDefaults.standard.set([String](), forKey: RoutingReport.leftOutKey) }
+                Self.cache(profile.data, to: Subscriptions.cache(of: id, xray: true, Self.store))
+                took(headers, source: source, for: id)
+                return profile
             } catch {
                 firstError = firstError ?? Self.describe(error)
             }
         }
         let raw = firstError ?? "empty"
         lastXrayFailure = raw
-        schedule.record(.fetchFailed(offline: raw.hasPrefix("offline")), now: Date())
-        lastError = UserError.from(raw: raw, context: .subscription)
+        failed(id, raw: raw)
         return nil
     }
 
-    private func fetchXray(_ url: URL, source: SubscriptionSource, title: String?) async throws -> XrayProfile {
-        let (body, headers) = try await Self.fetch(XrayProfile.url(for: url), viaVPN: source.viaVPN)
-        let profile = try XrayProfile(body: body)
-        UserDefaults.standard.set([String](), forKey: RoutingReport.leftOutKey)
-        Self.cacheXray(profile.data)
-        took(headers, source: source, title: title)
-        return profile
-    }
-
-    /// The panel's config to the helper (refresh, or import with the password on a click). Own
-    /// servers added by link are not part of it: they are profiles of the other way.
+    /// The selected subscription's panel config to the helper (refresh, or import with the password
+    /// on a click); for «Свои серверы» the own servers the main way can use, as hosts of their own
+    /// (XrayManual, ADR 0027).
     @discardableResult
-    private func applyXray(_ data: Data?, interactive: Bool) async -> Bool {
-        guard let data else {
+    private func applyXray(_ server: ServerID, interactive: Bool) async -> Bool {
+        guard let config = Subscriptions.xray(for: server, configs: Self.cachedXray(subscriptions), own: manualProxies) else {
             lastError = nil
             return true
         }
+        let data = RoutingHint.strippingXray(config)
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-xray-\(UUID().uuidString).json")
         do {
             try data.write(to: file, options: .atomic)
@@ -349,10 +465,13 @@ final class VPNClient {
             return false
         }
         defer { try? FileManager.default.removeItem(at: file) }
-        return await handOver(file: file, hash: Self.hash(data), interactive: interactive) { [self] hash in importedXray(hash: hash) }
+        return await handOver(file: file, hash: Self.hash(data), subscription: server.subscription, interactive: interactive) { [self] hash in
+            importedXray(hash: hash, subscription: server.subscription)
+        }
     }
 
-    private func importedXray(hash: String) {
+    private func importedXray(hash: String, subscription: String) {
+        control.setActiveSubscription(subscription)
         reloadProfileProxies()
         UserDefaults.standard.set(hash, forKey: Self.importedKey)
         UserDefaults.standard.set([CoreProxies.xrayGroup], forKey: KillSwitchControl.groupOrderKey)
@@ -361,36 +480,75 @@ final class VPNClient {
         needsConfirmation = false; routingChanged = false
     }
 
-    /// The cached subscription of the way the helper runs, to the helper again.
+    /// Own servers by name with their entries, as ProxyLink reads them.
+    private var manualProxies: [(name: String, proxy: [String: Any])] {
+        manual.compactMap { server in (try? ProxyLink.parse(server.link)).map { (server.name, $0) } }
+    }
+
+    /// Why the main way cannot use this own server (it then works only with the other way); nil
+    /// when it can, or when the own servers run the other way.
+    func mainWayCannotUse(_ server: ManualServer) -> String? {
+        guard core(of: ServerID.own) == .xray, let proxy = try? ProxyLink.parse(server.link) else { return nil }
+        return XrayManual.unsupported(proxy)
+    }
+
+    /// The server the helper's profile is built for: the chosen one's subscription is `activeID`.
+    private var selected: ServerID {
+        ServerID(subscription: activeID, name: control.chosenServer.flatMap { $0.subscription == activeID ? $0.name : nil } ?? "")
+    }
+
+    /// The cached profile of the subscription the helper runs, to the helper again.
     @discardableResult
     private func applyCurrent(interactive: Bool) async -> Bool {
-        if usesXray { return await applyXray(Self.cachedXray(), interactive: interactive) }
-        return await apply(subscription: Self.cachedSubscription(), interactive: interactive)
+        await apply(to: selected, interactive: interactive)
     }
 
-    /// Settings › «Способ подключения»: the helper switches (one password) and the subscription is
-    /// fetched again in that way's format and imported; a VPN that was on comes back.
-    func switchCore(to choice: CoreChoice) {
-        guard choice != control.coreChoice, !updating else { return }
-        let wasOn = control.coreRunning
-        control.setCore(choice) { [self] in
-            reloadProfileProxies()
-            await update(interactive: true)
-            if wasOn, control.coreConfigured { control.coreOn() }
+    /// The profile of the server's subscription (Subscriptions.profile), in the format of its core:
+    /// the helper switches to that core by the profile (#65).
+    private func apply(to server: ServerID, interactive: Bool) async -> Bool {
+        if unusable(server.subscription) {
+            lastError = Subscriptions.noCore
+            return false
         }
+        return core(of: server.subscription) == .xray ? await applyXray(server, interactive: interactive) : await apply(server, interactive: interactive)
     }
 
-    private func took(_ headers: [String: String], source: SubscriptionSource, title: String?) {
-        status.title = SubscriptionHeaders.title(headers["profile-title"]) ?? status.title ?? title
-        status.source = source
-        status.usage = SubscriptionUsage(header: headers["subscription-userinfo"])
-        status.serverInterval = SubscriptionHeaders.updateInterval(headers["profile-update-interval"])
-        status.provider = ProviderInfo(headers: headers)
-        status.accountURL = [headers["profile-web-page-url"], headers["support-url"]].lazy
-            .compactMap { $0.flatMap(URL.init(string:)) }.first { $0.scheme == "https" }
-        saveStatus()
+    /// «Выбор сервера» (ADR 0036): a server of the subscription the helper runs is chosen at once;
+    /// one of another subscription (or of «Свои серверы») first has that subscription's profile
+    /// handed to the helper, without the password when the last import approved it (#64), then is
+    /// chosen in it.
+    /// Blocking holds through the import as through any (ADR 0035).
+    /// Only a server actually chosen goes to «Недавние»: not one whose import was cancelled or
+    /// failed, nor a click while an update runs (it does nothing).
+    func choose(_ entry: ServerPicker.Entry) async {
+        if entry.subscription == activeID {
+            control.choose(entry)
+        } else {
+            guard !updating, blocks.contains(where: { $0.id == entry.subscription }) else { return }
+            updating = true
+            defer { updating = false }
+            guard await apply(to: entry.server, interactive: true), control.activeSubscription == entry.subscription else { return }
+            await control.chooseImported(entry)
+        }
+        guard !entry.isFastest else { return }
+        let keys = blocks.first { $0.id == entry.subscription }?.keys ?? [:]
+        let recents = ServerRecents.list(UserDefaults.standard.string(forKey: ServerRecents.key) ?? "")
+        UserDefaults.standard.set(ServerRecents.text(ServerRecents.adding(entry.server, keys: keys, to: recents)), forKey: ServerRecents.key)
+    }
+
+    private func took(_ headers: [String: String], source: SubscriptionSource, for id: String) {
+        guard let host = subscriptions.first(where: { $0.id == id })?.host else { return }
+        changeStatus(id) { status in
+            status.title = SubscriptionHeaders.title(headers["profile-title"]) ?? status.title ?? host
+            status.source = source
+            status.usage = SubscriptionUsage(header: headers["subscription-userinfo"])
+            status.serverInterval = SubscriptionHeaders.updateInterval(headers["profile-update-interval"])
+            status.provider = ProviderInfo(headers: headers)
+            status.accountURL = [headers["profile-web-page-url"], headers["support-url"]].lazy
+                .compactMap { $0.flatMap(URL.init(string:)) }.first { $0.scheme == "https" }
+        }
         reloadProfileProxies()
-        noticeLimits()
+        if id == current?.id { noticeLimits() }
     }
 
     /// «Подписка кончается» at 3 days and at 1 day, «Трафик почти закончился» past 90 %: once per
@@ -416,32 +574,50 @@ final class VPNClient {
 
     // MARK: first run (Onboarding)
 
-    /// Step «Ссылка на подписку»: keeps and checks a subscription link, or takes share links or the
-    /// text of a WireGuard file as own servers. Nothing reaches the helper yet, so no password.
+    /// Step «Ссылка на подписку»: adds and checks a subscription link (one already in the list is
+    /// checked again), or takes share links or the text of a WireGuard file as own servers.
+    /// Nothing reaches the helper yet, so no password.
     func check(_ text: String) async -> Onboarding.Found? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !updating else { return nil }
         lastError = nil
         if trimmed.lowercased().hasPrefix("http") {
-            guard store(trimmed), let url = URL(string: trimmed) else { return nil }
+            let key = Subscriptions.normalised(trimmed)
+            let id: String
+            var new = false
+            if let kept = subscriptions.first(where: { key != nil && Subscriptions.link(of: $0.id, Self.store).flatMap(Subscriptions.normalised) == key }) {
+                id = kept.id
+            } else {
+                switch Subscriptions.add(trimmed, Self.store) {
+                case .success(let added):
+                    id = added.id
+                    new = true
+                case .failure(.notKept):
+                    lastError = UserError(title: String(localized: "Ссылка не сохранилась"), message: String(localized: "Не получилось сохранить ссылку в связке ключей."))
+                    return nil
+                case .failure:
+                    lastError = Self.notALink
+                    return nil
+                }
+                subscriptions = Subscriptions.load(Self.store)
+            }
+            setupSubscription = id
+            // as `add`: a new link is kept only once it answered
+            let failed = { [self] () -> Onboarding.Found? in
+                if new { forget(id); setupSubscription = nil }
+                return nil
+            }
             updating = true
             defer { updating = false }
-            setupCore = nil
-            if usesXray {
-                if let xray = await fetchXray(url) {
-                    setupCore = .xray
-                    return Onboarding.Found(title: status.title, servers: xray.servers.count, expire: status.usage?.expire)
-                }
-                // ADR 0020: a service without the main way's format still works the other way;
-                // only while setting up, before anything was imported
-                guard !control.coreConfigured, let failure = lastXrayFailure,
-                      failure == XrayProfile.Failure.notXray.errorDescription || failure.hasPrefix("HTTP 404") else { return nil }
-                lastError = nil
+            let status = { [self] in subscriptions.first { $0.id == id }?.status ?? Status() }
+            let profile: Profile
+            switch await fetchEither(id) {
+            case .xray(let xray): return Onboarding.Found(title: status().title, servers: xray.servers.count, expire: status().usage?.expire)
+            case .mihomo(let fetched): profile = fetched
+            case nil: return failed()
             }
-            guard let profile = await fetchProfile(url) else { return nil }
-            setupCore = usesXray ? .mihomo : nil
-            let found = Onboarding.Found(title: status.title, servers: (profile["proxies"] as? [Any])?.count ?? 0,
-                                         expire: status.usage?.expire)
+            let found = Onboarding.Found(title: status().title, servers: (profile["proxies"] as? [Any])?.count ?? 0,
+                                         expire: status().usage?.expire)
             if !found.ready { lastError = UserError.from(raw: "empty", context: .subscription) }
             return found
         }
@@ -451,9 +627,13 @@ final class VPNClient {
         guard let added = parse(links, name: nil) else { return nil }
         manual += added
         saveManual()
+        setupSubscription = hasURL ? nil : ServerID.own
         reloadProfileProxies()
         return Onboarding.Found(title: nil, servers: manual.count, expire: nil, ownServers: true)
     }
+
+    /// The subscription the wizard checked (or ServerID.own): the one it imports.
+    private var setupSubscription: String?
 
     /// What is already there when the wizard is reopened.
     var found: Onboarding.Found? {
@@ -461,19 +641,27 @@ final class VPNClient {
         return Onboarding.Found(title: status.title, servers: servers, expire: status.usage?.expire, ownServers: !hasURL)
     }
 
-    /// The merged profile in a private temporary file, for `ks core import` inside the wizard's one
-    /// admin command; `didImport` or `discard` removes the file.
+    /// The profile in a private temporary file, for `ks core import` inside the wizard's one admin
+    /// command; `didImport` or `discard` removes the file.
     struct Prepared {
         let file: URL
         let hash: String
         /// The way of connecting it is for, set before the import (nil: the one the helper runs).
         let core: CoreChoice?
         fileprivate let profile: Profile?
+        fileprivate let subscription: String
     }
 
     func prepareImport() -> Prepared? {
-        if (setupCore ?? control.coreChoice) == .xray {
-            guard let data = Self.cachedXray() else { return nil }
+        let server = ServerID(subscription: setupSubscription ?? activeID, name: "")
+        if unusable(server.subscription) {
+            lastError = Subscriptions.noCore
+            return nil
+        }
+        let core = core(of: server.subscription)
+        if core == .xray {
+            guard let config = Subscriptions.xray(for: server, configs: Self.cachedXray(subscriptions), own: manualProxies) else { return nil }
+            let data = RoutingHint.strippingXray(config)
             let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-xray-\(UUID().uuidString).json")
             do {
                 try data.write(to: file, options: .atomic)
@@ -482,16 +670,19 @@ final class VPNClient {
                 lastError = UserError.from(raw: "profile file: \(error.localizedDescription)", context: .subscription)
                 return nil
             }
-            return Prepared(file: file, hash: Self.hash(data), core: .xray, profile: nil)
+            return Prepared(file: file, hash: Self.hash(data), core: .xray, profile: nil, subscription: server.subscription)
         }
-        guard let profile = forCore(Self.cachedSubscription()),
-              let written = write(profile) else { return nil }
-        return Prepared(file: written.file, hash: written.hash, core: setupCore, profile: profile)
+        guard let profile = forCore(server), let written = write(profile) else { return nil }
+        return Prepared(file: written.file, hash: written.hash, core: core, profile: profile, subscription: server.subscription)
     }
 
     func didImport(_ prepared: Prepared) {
-        if let profile = prepared.profile { imported(profile, hash: prepared.hash) } else { importedXray(hash: prepared.hash) }
-        setupCore = nil
+        if let profile = prepared.profile {
+            imported(profile, hash: prepared.hash, subscription: prepared.subscription)
+        } else {
+            importedXray(hash: prepared.hash, subscription: prepared.subscription)
+        }
+        setupSubscription = nil
         // the wizard fetched the subscription a moment ago (check)
         if hasURL { schedule.record(.applied, now: Date()) }
         discard(prepared)
@@ -524,31 +715,45 @@ final class VPNClient {
         if await applyCurrent(interactive: true) { schedule.record(.applied, now: Date()) }
     }
 
-    /// Merges with the manual servers and hands the result to the helper, unless the core already
-    /// has exactly this. A click imports (admin prompt if needed); a timer only refreshes, which
-    /// the helper refuses when new server addresses would have to be let out.
+    /// Hands the server's subscription profile to the helper, unless the core already has exactly
+    /// this. A click imports (admin prompt if needed); a timer only refreshes, which the helper
+    /// refuses when new server addresses would have to be let out.
     /// True when the core has this profile now (imported, or it had it already).
     @discardableResult
-    private func apply(subscription: Profile?, interactive: Bool) async -> Bool {
-        guard let profile = forCore(subscription) else {
+    private func apply(_ server: ServerID, interactive: Bool) async -> Bool {
+        guard let profile = forCore(server) else {
             lastError = nil
             return true
         }
         guard let (file, hash) = write(profile) else { return false }
         defer { try? FileManager.default.removeItem(at: file) }
-        return await handOver(file: file, hash: hash, interactive: interactive) { [self] hash in imported(profile, hash: hash) }
+        return await handOver(file: file, hash: hash, subscription: server.subscription, interactive: interactive) { [self] hash in
+            imported(profile, hash: hash, subscription: server.subscription)
+        }
     }
 
     /// The written profile to the helper, unless the core already has exactly this: a click
     /// imports (admin prompt if needed), a timer only refreshes. `done` records what was imported.
-    private func handOver(file: URL, hash: String, interactive: Bool, done: (String) -> Void) async -> Bool {
+    /// A click on another subscription's server first switches without the password (#64); the
+    /// password import hands every subscription's profile, so one password approves them all.
+    private func handOver(file: URL, hash: String, subscription: String, interactive: Bool, done: (String) -> Void) async -> Bool {
         if control.coreConfigured, UserDefaults.standard.string(forKey: Self.importedKey) == hash {
-            lastError = nil
-            needsPassword = false
-            needsConfirmation = false; routingChanged = false
+            done(hash)   // the subscription it is, too
             return true
         }
-        guard interactive else {
+        let step = Subscriptions.handOver(interactive: interactive, switching: subscription != control.activeSubscription)
+        if step == .use {
+            let outcome = await control.coreUse(file: file.path)
+            if outcome == .applied {
+                done(hash)
+                return true
+            }
+            guard Subscriptions.needsImport(after: outcome) else {
+                if case .failed(let message) = outcome { lastError = UserError.from(raw: message, context: .subscription) }
+                return false
+            }
+        }
+        guard step != .refresh else {
             let outcome = await control.coreRefresh(file: file.path)
             switch outcome {
             case .applied:
@@ -556,8 +761,10 @@ final class VPNClient {
                 return true
             case .newServers, .routingChanged:
                 lastError = nil
-                let routing = outcome == .routingChanged
-                if !needsConfirmation || routing != routingChanged { Notifier.shared.post(routing ? .routingChanged : .newServers) }
+                let routing = outcome != .newServers
+                if !needsConfirmation || routing != routingChanged {
+                    Notifier.shared.post(routing ? .routingChanged : .newServers)
+                }
                 needsConfirmation = true
                 routingChanged = routing
             case .needsPassword: needsPassword = true
@@ -565,7 +772,9 @@ final class VPNClient {
             }
             return false
         }
-        switch await control.coreImport(file: file.path, allowPassword: true) {
+        let others = approvalFiles(besides: subscription)
+        defer { others.forEach { try? FileManager.default.removeItem(at: $0) } }
+        switch await control.coreImport(file: file.path, others: others.map(\.path), allowPassword: true) {
         case .ok:
             done(hash)
             return true
@@ -579,26 +788,70 @@ final class VPNClient {
         return false
     }
 
-    /// What goes to the helper: the subscription with the own servers, plus the same-country sets
-    /// the helper turns into failover groups (Failover) and the transport overrides (Transport).
-    private func forCore(_ subscription: Profile?) -> Profile? {
-        ProfileMerger.merge(subscription: subscription, manual: manual.compactMap(Self.proxy))
-            .map { Transport.adding(transportOverrides, to: Failover.adding(to: $0)) }
+    /// Whose servers «Подтвердить…» approves: every subscription the import hands the helper (#64).
+    var approvalNote: String? {
+        let titles = Dictionary(subscriptions.map { ($0.id, $0.title) } + [(ServerID.own, String(localized: "Свои серверы"))]) { first, _ in first }
+        let all = subscriptions.map(\.id) + (manual.isEmpty ? [] : [ServerID.own])
+        return Subscriptions.approvalNote(titles: Subscriptions.approvalOrder(running: activeID, all: all).compactMap { titles[$0] })
     }
 
-    private func reloadProfileProxies() {
-        if usesXray {
-            profileProxies = Self.cachedXray().flatMap { try? XrayProfile(body: String(decoding: $0, as: UTF8.self)) }
-                .map { CoreProxies(xrayServers: $0.servers) }
-            transportServers = []
-            serverKeys = [:]
-            KillSwitchShortcuts.updateAppShortcutParameters()
-            return
+    /// The other subscriptions' profiles (and the own servers'), each in the format of its core
+    /// (#65), for it to approve with the one it runs (Subscriptions.approvalOrder). One that cannot be
+    /// written is left out: it stays unapproved, and a switch to it asks again.
+    private func approvalFiles(besides subscription: String) -> [URL] {
+        let all = subscriptions.map(\.id) + (manual.isEmpty ? [] : [ServerID.own])
+        let order = Subscriptions.approvalOrder(running: subscription, all: all)
+        if order.count < all.count {
+            HelperClient.log.notice("import: \(all.count - order.count) subscriptions over the limit left unapproved")
         }
-        let profile = ProfileMerger.merge(subscription: Self.cachedSubscription(), manual: manual.compactMap(Self.proxy))
-        profileProxies = profile.map(CoreProxies.init(profile:))
-        transportServers = profile.map(Transport.servers) ?? []
-        serverKeys = profile.map(ServerIdentity.keys) ?? [:]
+        return order.dropFirst().compactMap { id in
+            let server = ServerID(subscription: id, name: "")
+            let data: Data? = switch core(of: id) {
+            case .xray: Subscriptions.xray(for: server, configs: Self.cachedXray(subscriptions), own: manualProxies).map(RoutingHint.strippingXray)
+            case .mihomo: forCore(server).flatMap { try? ProfileConverter.json($0) }
+            case nil: nil   // no installed core runs it: left unapproved
+            }
+            guard let data else { return nil }
+            // the servers' passwords: the user's only from the first byte
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-approve-\(UUID().uuidString).json")
+            let fd = open(file.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+            guard fd >= 0 else { return nil }
+            let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+            do {
+                try handle.write(contentsOf: data)
+                try handle.close()
+            } catch {
+                try? FileManager.default.removeItem(at: file)
+                return nil
+            }
+            return file
+        }
+    }
+
+    /// What goes to the helper: the server's subscription alone, or the own servers alone
+    /// (Subscriptions.profile), plus the transport overrides (Transport).
+    private func forCore(_ server: ServerID) -> Profile? {
+        Subscriptions.profile(for: server, profiles: Self.cachedProfiles(subscriptions), own: manual.compactMap(Self.proxy))
+            .map { RoutingHint.stripping(Transport.adding(transportOverrides, to: $0)) }
+    }
+
+    /// The blocks of the servers list from the caches, each in the format of its core (#65).
+    private func reloadProfileProxies() {
+        var result: [Block] = []
+        let configs = Self.cachedXray(subscriptions)
+        var profiles = Self.cachedProfiles(subscriptions)
+        profiles[ServerID.own] = ProfileMerger.merge(subscription: nil, manual: manual.compactMap(Self.proxy))
+        for (id, title) in subscriptions.map({ ($0.id, $0.title) }) + [(ServerID.own, String(localized: "Свои серверы"))] {
+            if core(of: id) == .xray {
+                let config = id == ServerID.own ? XrayManual.merge(subscription: nil, manual: manualProxies) : configs[id].flatMap { XrayManual.merge(subscription: $0, manual: []) }
+                guard let servers = config?.servers else { continue }
+                result.append(Block(id: id, title: title, proxies: CoreProxies(xrayServers: servers), keys: [:]))
+            } else if core(of: id) == .mihomo, let profile = profiles[id] {
+                result.append(Block(id: id, title: title, proxies: CoreProxies(profile: profile), keys: ServerIdentity.keys(profile)))
+            }
+        }
+        transportServers = core(of: activeID) == .xray ? [] : profiles[activeID].map(Transport.servers) ?? []
+        blocks = result
         migrateToServerKeys()
         // «Сменить страну на …» in Spotlight and Siri knows the new list
         KillSwitchShortcuts.updateAppShortcutParameters()
@@ -617,12 +870,10 @@ final class VPNClient {
             transportOverrides = overrides
             UserDefaults.standard.set(Transport.encode(overrides), forKey: Transport.storeKey)
         }
-        let stored = (UserDefaults.standard.string(forKey: Self.favouritesKey) ?? "").split(separator: "\n").map(String.init)
-        let favourites = ServerIdentity.migrate(stored, keys: serverKeys)
-        if favourites != stored { UserDefaults.standard.set(favourites.joined(separator: "\n"), forKey: Self.favouritesKey) }
     }
 
-    private func imported(_ profile: Profile, hash: String) {
+    private func imported(_ profile: Profile, hash: String, subscription: String) {
+        control.setActiveSubscription(subscription)
         reloadProfileProxies()
         UserDefaults.standard.set(hash, forKey: Self.importedKey)
         let groups = (profile["proxy-groups"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
@@ -699,14 +950,6 @@ final class VPNClient {
 
     // MARK: storage
 
-    private static func storedURL() -> String? {
-        Keychain.read(urlAccount).flatMap { String(data: $0, encoding: .utf8) }
-    }
-
-    private static func storedBackupURL() -> String? {
-        Keychain.read(backupAccount).flatMap { String(data: $0, encoding: .utf8) }
-    }
-
     private func saveManual() {
         if manual.isEmpty {
             Keychain.delete(Self.linksAccount)
@@ -715,39 +958,32 @@ final class VPNClient {
         }
     }
 
-    private func saveStatus() {
-        UserDefaults.standard.set(try? JSONEncoder().encode(status), forKey: Self.statusKey)
+    /// A subscription's last good profile (Subscriptions.cache), so a switch and own servers work
+    /// offline. It holds server credentials, hence user-only permissions.
+    private static func cache(_ data: Data, to file: URL) {
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        try? data.write(to: file, options: [.atomic])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
     }
 
-    /// Last good subscription profile, so manual servers can be added offline. It holds server
-    /// credentials, hence user-only permissions.
-    private static var cacheFile: URL {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("KillSwitch")
-        return dir.appendingPathComponent("subscription.json")
+    /// The Xray configs by subscription.
+    private static func cachedXray(_ subscriptions: [Subscription]) -> [String: Data] {
+        var result: [String: Data] = [:]
+        for subscription in subscriptions {
+            result[subscription.id] = try? Data(contentsOf: Subscriptions.cache(of: subscription.id, xray: true, store))
+        }
+        return result
     }
 
-    private static func cache(_ profile: Profile) {
-        guard let data = try? ProfileConverter.json(profile) else { return }
-        let dir = cacheFile.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try? data.write(to: cacheFile, options: [.atomic])
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: cacheFile.path)
-    }
-
-    private static var xrayCacheFile: URL { cacheFile.deletingLastPathComponent().appendingPathComponent("subscription-xray.json") }
-
-    private static func cacheXray(_ data: Data) {
-        let dir = xrayCacheFile.deletingLastPathComponent()
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        try? data.write(to: xrayCacheFile, options: [.atomic])
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: xrayCacheFile.path)
-    }
-
-    private static func cachedXray() -> Data? { try? Data(contentsOf: xrayCacheFile) }
-
-    private static func cachedSubscription() -> Profile? {
-        guard let data = try? Data(contentsOf: cacheFile) else { return nil }
-        return try? JSONSerialization.jsonObject(with: data) as? Profile
+    /// The mihomo profiles by subscription.
+    private static func cachedProfiles(_ subscriptions: [Subscription]) -> [String: Profile] {
+        var result: [String: Profile] = [:]
+        for subscription in subscriptions {
+            guard let data = try? Data(contentsOf: Subscriptions.cache(of: subscription.id, xray: false, store)) else { continue }
+            result[subscription.id] = try? JSONSerialization.jsonObject(with: data) as? Profile
+        }
+        return result
     }
 
     private static func hash(_ data: Data) -> String {

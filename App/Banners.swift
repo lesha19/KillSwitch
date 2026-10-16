@@ -71,6 +71,7 @@ struct TopErrorBanner<Fallback: View>: View {
 
     private func available(_ action: UserError.Action?) -> UserError.Action? {
         if action == .openAccount && client.status.accountURL == nil { return nil }
+        if action == .restartVPN && !control.vpnOn { return nil }   // `ks core restart` needs the VPN on (ADR 0035)
         return action
     }
 

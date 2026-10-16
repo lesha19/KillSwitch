@@ -30,8 +30,8 @@ line the file is now gone. That must keep meaning "all defaults".
   - `tsrelays`: the same plus comments and blank lines.
   - `core/egress`: ownership and permissions only (any content lets the core out).
 - **Missing is fine**: no file is the defaults.
-- **Lockdown**: `rules()` prints only `pass out quick on lo0` and `block drop out quick all`. No
-  tunnel, no LAN, no DHCP: we cannot know what the person allowed. Rules that pass the check but
+- **Lockdown**: damaged settings block the internet; loopback, DHCP and the local network (not its
+  DNS) still work (#83). No tunnel: we cannot know what the person allowed. Rules that pass the check but
   pf still refuses (999.1.1.1) load the same lockdown instead of keeping the old rules.
 - `load` names the reason in `/Library/KillSwitch/invalid` (world-readable, the bad files or
   `rules`, removed on a good load) and in events.log. The watchdog compares a stat signature of the

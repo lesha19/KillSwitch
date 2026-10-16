@@ -31,6 +31,24 @@ enum ProfileConverter {
         try read(subscription: body).profile
     }
 
+    /// What `readInBackground` hands back. A Profile is not Sendable; this one is made by the
+    /// background task and owned by the caller alone once it returns.
+    struct Read: @unchecked Sendable {
+        let profile: Profile
+        let leftOut: [String]
+        /// The profile as `json` gives it (the app's cache), nil if it would not encode.
+        let json: Data?
+    }
+
+    /// `read` (and `json` for the cache) on a background thread: a flat profile of ~19 MB took
+    /// ~25 s to parse in a Debug build and froze the window on the main actor (#50).
+    static func readInBackground(subscription body: String) async throws -> Read {
+        try await Task.detached(priority: .userInitiated) {
+            let (profile, leftOut) = try read(subscription: body)
+            return Read(profile: profile, leftOut: leftOut, json: try? json(profile))
+        }.value
+    }
+
     /// The profile and the top-level keys of the subscription left out of it (sorted), for «Трафик».
     static func read(subscription body: String) throws -> (profile: Profile, leftOut: [String]) {
         let text = body.trimmingCharacters(in: .whitespacesAndNewlines)

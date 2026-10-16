@@ -40,6 +40,27 @@ check "CDPATH and GLOBIGNORE unset" "$(line 13)" "unsetunset"
 check "IFS back to space, tab, newline" "$(line 14)" "20090a"
 [ -e "$tmp/ran" ] && check "the fake curl never ran" ran "not run" || check "the fake curl never ran" "not run" "not run"
 
+# --- the test hooks and the core lock's marker (#50): KS_NOW (a clock for the tests),
+# KS_APPROVE_ALL (an import's approval) and KS_LOCKED (the core lock is held) never come from the
+# caller. The lock's own re-exec still counts: its marker is the pid of the lockf that ks became,
+# and only that lockf's child believes it.
+out=$(env -i PATH=/usr/bin:/bin KS_NOW=1 KS_APPROVE_ALL=1 KS_LOCKED=1 KS_LOCK_HELD=1 \
+  /bin/bash -c '. "$1"; printf "%s|%s|%s|%s\n" "${KS_NOW-unset}" "${KS_APPROVE_ALL-unset}" "${KS_LOCKED-unset}" "$KS_LOCK_HELD"' _ "$KS")
+check "KS_NOW, KS_APPROVE_ALL, KS_LOCKED unset; the lock not taken as held" "$out" "unset|unset|unset|0"
+# 0.20.0's hooks: the escalation memory a step builds with, a strict or backing-off double VPN,
+# the chain check's tries and wait, and the generator's DIRECT_ONLY (no config written)
+out=$(env -i PATH=/usr/bin:/bin KS_ESC_FILE=/x KS_MULTIHOP_STRICT=1 KS_MULTIHOP_BACK=1 CHAIN_TRIES=0 CHAIN_WAIT=99 DIRECT_ONLY=1 \
+  /bin/bash -c '. "$1"; printf "%s|" "${KS_ESC_FILE-unset}" "${KS_MULTIHOP_STRICT-unset}" "${KS_MULTIHOP_BACK-unset}" "${CHAIN_TRIES-unset}" \
+    "${CHAIN_WAIT-unset}" "${DIRECT_ONLY-unset}"' _ "$KS")
+check "KS_ESC_FILE, KS_MULTIHOP_STRICT, KS_MULTIHOP_BACK, CHAIN_TRIES, CHAIN_WAIT, DIRECT_ONLY unset" "$out" "unset|unset|unset|unset|unset|unset|"
+out=$(env -i PATH=/usr/bin:/bin /bin/bash -c 'KS_LOCKED=$PPID exec /bin/bash -c ". \"\$1\"; echo \$KS_LOCK_HELD" _ "$1"' _ "$KS")
+check "a marker naming the parent, which is no lockf: not held" "$out" 0
+out=$(env -i PATH=/usr/bin:/bin /bin/bash -c 'KS_LOCKED=$$ exec /usr/bin/lockf -k -t 5 "$2" /bin/bash -c ". \"\$1\"; echo \$KS_LOCK_HELD" _ "$1"' _ "$KS" "$tmp/core.lock")
+check "the lock's own re-exec (KS_LOCKED=\$\$ exec lockf … ks): held" "$out" 1
+out=$(env -i PATH=/usr/bin:/bin /bin/bash -c 'KS_LOCKED=1 exec /usr/bin/lockf -k -t 5 "$2" /bin/bash -c ". \"\$1\"; echo \$KS_LOCK_HELD" _ "$1"' _ "$KS" "$tmp/core.lock")
+check "under some lockf with a marker not its pid: not held" "$out" 0
+check "the core lock re-execs with its pid as the marker" "$(grep 'KS_LOCK_HELD" = 0 \] && \[ -d "\$CORE_DIR" \]; then' "$KS" | grep -c 'KS_LOCKED=\$\$ exec lockf')" 1
+
 # --- BASH_ENV runs before the first line of a script; "bash -p" ignores it (and ENV, SHELLOPTS,
 # exported functions). sudoers drops it too, but ks must not rely on that alone.
 check "first line of ks is #!/bin/bash -p" "$(head -1 "$KS")" "#!/bin/bash -p"
@@ -78,7 +99,7 @@ kept=$(sed -n 's/^Defaults!\/Library\/KillSwitch\/ks env_keep-="\(.*\)"$/\1/p' "
 for v in HOME MAIL LANG LC_ALL LC_CTYPE TZ SSH_AUTH_SOCK; do
   [[ " $kept " == *" $v "* ]] || check "env_keep-= has $v" no yes
 done
-check "the passwordless commands are exactly these (0.13: core traffic, ADR 0013: core connections, ADR 0021: diag report)" "$(grep -c 'NOPASSWD: /Library/KillSwitch/ks state, /Library/KillSwitch/ks probe, /Library/KillSwitch/ks on, /Library/KillSwitch/ks netrestore, /Library/KillSwitch/ks core state, /Library/KillSwitch/ks core on, /Library/KillSwitch/ks core off, /Library/KillSwitch/ks core proxies, /Library/KillSwitch/ks core traffic, /Library/KillSwitch/ks core connections, /Library/KillSwitch/ks core select \*, /Library/KillSwitch/ks core delay \*, /Library/KillSwitch/ks core refresh \*, /Library/KillSwitch/ks diag report \*$' "$tmp/sudoers")" 1
+check "the passwordless commands are exactly these (0.13: core traffic, ADR 0013: core connections, ADR 0021: diag report, ADR 0035: core restart, ADR 0036: core use)" "$(grep -c 'NOPASSWD: /Library/KillSwitch/ks state, /Library/KillSwitch/ks probe, /Library/KillSwitch/ks on, /Library/KillSwitch/ks netrestore, /Library/KillSwitch/ks core state, /Library/KillSwitch/ks core on, /Library/KillSwitch/ks core off, /Library/KillSwitch/ks core restart, /Library/KillSwitch/ks core proxies, /Library/KillSwitch/ks core traffic, /Library/KillSwitch/ks core connections, /Library/KillSwitch/ks core select \*, /Library/KillSwitch/ks core delay \*, /Library/KillSwitch/ks core refresh \*, /Library/KillSwitch/ks core use \*, /Library/KillSwitch/ks diag report \*$' "$tmp/sudoers")" 1
 
 echo
 [ "$fails" = 0 ] && echo "all passed" || { echo "$fails failed"; exit 1; }

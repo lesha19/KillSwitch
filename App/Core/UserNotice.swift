@@ -5,10 +5,10 @@ import Foundation
 enum UserNotice: Equatable {
     case vpnDropped(protected: Bool)
     case reconnected(server: String?)
-    /// Failover moved to another server of the same country (names as displayed).
-    case serverSwitched(from: String, to: String)
-    /// No server of the chosen country answers; another country is the person's choice.
-    case serversDown(country: String)
+    /// The chosen server stopped answering; another server is the person's choice (ADR 0036).
+    case serversDown(server: String)
+    /// The helper turned «Двойной VPN» off by itself: its entry no longer fits (ADR 0027).
+    case doubleVPNOff(entry: String)
     case autoConnectNeedsPassword
     /// Auto-connect found another program's VPN up and left it alone (ADR 0009).
     case otherVPN(name: String?)
@@ -19,6 +19,8 @@ enum UserNotice: Equatable {
     case routingChanged
     case pauseEnded
     case serviceOff
+    /// The VPN on and its core not running for 5 minutes: everything stays blocked (#85).
+    case vpnStuck
     case macOSUpdated
     /// The app updated itself and the daemon put the new helper in place (ADR 0012).
     case updateInstalled(coreRestarted: Bool)
@@ -53,8 +55,8 @@ enum UserNotice: Equatable {
         switch self {
         case .vpnDropped: "vpnDropped"
         case .reconnected: "reconnected"
-        case .serverSwitched: "serverSwitched"
         case .serversDown: "serversDown"
+        case .doubleVPNOff: "doubleVPNOff"
         case .autoConnectNeedsPassword: "autoConnect"
         case .otherVPN: "otherVPN"
         case .subscriptionEnding(let days, _, _): "ending\(days)"
@@ -63,6 +65,7 @@ enum UserNotice: Equatable {
         case .routingChanged: "routingChanged"
         case .pauseEnded: "pauseEnded"
         case .serviceOff: "serviceOff"
+        case .vpnStuck: "vpnStuck"
         case .macOSUpdated: "macOS"
         case .updateInstalled: "updated"
         }
@@ -70,23 +73,23 @@ enum UserNotice: Equatable {
 
     var setting: Setting? {
         switch self {
-        case .vpnDropped, .reconnected, .autoConnectNeedsPassword, .serverSwitched, .serversDown, .otherVPN: .connection
+        case .vpnDropped, .reconnected, .autoConnectNeedsPassword, .serversDown, .otherVPN, .doubleVPNOff: .connection
         case .subscriptionEnding, .trafficLow, .newServers, .routingChanged: .subscription
         case .pauseEnded: .pause
         case .serviceOff: .service
-        case .macOSUpdated, .updateInstalled: nil
+        case .macOSUpdated, .updateInstalled, .vpnStuck: nil
         }
     }
 
     var action: Action? {
         switch self {
         case .vpnDropped: .connect
-        case .autoConnectNeedsPassword, .serversDown, .otherVPN: .openApp
+        case .autoConnectNeedsPassword, .serversDown, .otherVPN, .doubleVPNOff, .vpnStuck: .openApp
         case .subscriptionEnding: .renew
         case .newServers, .routingChanged: .approve
         case .serviceOff: .openLoginItems
         case .macOSUpdated: .check
-        case .reconnected, .serverSwitched, .trafficLow, .pauseEnded, .updateInstalled: nil
+        case .reconnected, .trafficLow, .pauseEnded, .updateInstalled: nil
         }
     }
 
@@ -94,8 +97,8 @@ enum UserNotice: Equatable {
         switch self {
         case .vpnDropped: String(localized: "VPN оборвался")
         case .reconnected: String(localized: "VPN снова работает")
-        case .serverSwitched: String(localized: "VPN переключился на другой сервер")
-        case .serversDown(let country): String(localized: "Серверы «\(country)» не отвечают")
+        case .serversDown(let server): String(localized: "Сервер «\(server)» не отвечает")
+        case .doubleVPNOff: String(localized: "Двойной VPN выключен")
         case .autoConnectNeedsPassword: String(localized: "VPN не подключился сам")
         case .otherVPN(let name): OtherVPN.title(name: name)
         case .subscriptionEnding(let days, _, _): String(localized: "Подписка кончается через ") + Russian.plural(days, String(localized: "день"), String(localized: "дня"), String(localized: "дней"))
@@ -104,6 +107,7 @@ enum UserNotice: Equatable {
         case .routingChanged: String(localized: "Подписка меняет правила «напрямую»")
         case .pauseEnded: String(localized: "Защита снова включена")
         case .serviceOff: String(localized: "Служба KillSwitch выключена")
+        case .vpnStuck: String(localized: "Интернет закрыт: VPN не подключается")
         case .macOSUpdated: String(localized: "macOS обновилась")
         case .updateInstalled: String(localized: "Обновление установлено")
         }
@@ -117,8 +121,8 @@ enum UserNotice: Equatable {
             protected ? String(localized: "Интернет закрыт, пока VPN не подключится. Ничего не утекает.")
                       : String(localized: "Защита выключена — программы идут в интернет напрямую.")
         case .reconnected(let server): server ?? String(localized: "Интернет снова идёт через VPN.")
-        case .serverSwitched(let from, let to): String(localized: "«\(from)» не отвечал. Теперь — «\(to)».")
-        case .serversDown: String(localized: "Выбери другую страну или «Самый быстрый».")
+        case .serversDown: String(localized: "Выбери другой сервер.")
+        case .doubleVPNOff(let entry): String(localized: "Сервер входа «\(entry)» больше не подходит. VPN работает через один сервер.")
         case .autoConnectNeedsPassword: String(localized: "Службу нужно обновить.")
         case .otherVPN: String(localized: "KillSwitch не подключился сам, чтобы не выключать его без спроса. Переключиться можно в KillSwitch.")
         case .subscriptionEnding(_, let title, let expire):
@@ -128,6 +132,7 @@ enum UserNotice: Equatable {
         case .routingChanged: String(localized: "Часть трафика пойдёт мимо VPN. Проверь, прежде чем разрешать.")
         case .pauseEnded: String(localized: "Пауза закончилась.")
         case .serviceOff: String(localized: "Включи её в Объектах входа.")
+        case .vpnStuck: String(localized: "VPN не подключается уже 5 минут, а KillSwitch держит интернет закрытым, чтобы ничего не утекло. Выбери другой сервер или нажми «Отключить VPN».")
         case .macOSUpdated: String(localized: "Перезагрузи Mac и запусти проверку утечек.")
         case .updateInstalled(let restarted):
             restarted ? String(localized: "VPN переподключился за секунду, защита не отключалась.")

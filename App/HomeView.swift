@@ -122,7 +122,7 @@ private struct HomeContent: View {
     private var detail: Status.Detail {
         let server = control.currentServer
         return Status.Detail(server: server.map(ServerName.display), ping: server.flatMap(control.delay(of:)),
-                             switched: control.recentSwitch, otherVPN: control.otherVPNName,
+                             otherVPN: control.otherVPNName,
                              otherVPNStopFailed: control.otherVPNStopFailed)
     }
 
@@ -152,7 +152,7 @@ private struct HomeContent: View {
         case .repair: control.install()
         case .openLoginItems: NSWorkspace.shared.open(SystemSettings.loginItems)
         case .connect: control.coreOn()
-        case .cancel, .disconnect: control.coreOff()
+        case .cancel, .disconnect, .disconnectVPN: control.coreOff()
         case .chooseServer: chooseServer()
         case .enableProtection, .resumeProtection: control.turnOn()
         case .replaceOtherVPN:
@@ -176,7 +176,7 @@ extension Status {
     /// The server row and the quick switches make sense once the VPN can be used.
     var showsServer: Bool {
         switch self {
-        case .connecting, .stuck, .protected, .connectedUnprotected, .blocked, .unprotected: true
+        case .connecting, .stuck, .protected, .unblocked, .reconnecting, .blocked, .unprotected: true
         default: false
         }
     }
@@ -193,18 +193,26 @@ extension Status.Tone {
 }
 
 extension Status.Action {
-    var isConnection: Bool { self == .connect || self == .disconnect || self == .cancel || self == .replaceOtherVPN }
+    var isConnection: Bool { self == .connect || self == .disconnect || self == .disconnectVPN || self == .cancel || self == .replaceOtherVPN }
 }
 
-/// «🇱🇹 Литва   37 мс  ›»: opens the server choice.
+/// «🇱🇹 Литва · Stork   37 мс  ›»: opens the server choice.
 private struct ServerRow: View {
     let action: () -> Void
     @Environment(KillSwitchControl.self) private var control
+    @Environment(VPNClient.self) private var client
+
+    /// Whose server the row names (#66).
+    private var subscription: String? {
+        let id = control.coreRunning ? control.activeSubscription : control.pendingChoice?.subscription ?? control.lastServer?.subscription
+        return id.flatMap(client.title(of:))
+    }
 
     var body: some View {
         let server = control.currentServer
-        let title = control.coreRunning ? server.map(ServerName.display)
-            : control.pendingChoice?.title ?? control.lastServer.map(ServerName.display)
+        let title = (control.coreRunning ? server.map(ServerName.display)
+            : control.pendingChoice?.title ?? control.lastServer.map { ServerName.display($0.name) })
+            .map { ServerPicker.label($0, subscription: subscription) }
         Button(action: action) {
             HStack {
                 Text(title ?? String(localized: "Выбрать сервер")).lineLimit(1)
@@ -220,7 +228,7 @@ private struct ServerRow: View {
         }
         .buttonStyle(.plain)
         .keyboardShortcut("l")
-        .accessibilityLabel(String(localized: "Сервер: \(title.map { _ in spoken } ?? String(localized: "не выбран"))"))
+        .accessibilityLabel(String(localized: "Сервер: \(title.map { _ in ServerPicker.label(spoken, subscription: subscription) } ?? String(localized: "не выбран"))"))
         .accessibilityHint("Открыть выбор сервера")
         .help("Выбрать сервер (⌘L)")
     }
@@ -230,7 +238,7 @@ private struct ServerRow: View {
         if let pending = control.pendingChoice {
             return pending.isFastest ? ServerPicker.fastestTitle : ServerName.spoken(pending.name)
         }
-        return control.lastServer.map(ServerName.spoken) ?? String(localized: "не выбран")
+        return control.lastServer.map { ServerName.spoken($0.name) } ?? String(localized: "не выбран")
     }
 }
 
@@ -245,11 +253,9 @@ private struct QuickSwitches: View {
         VStack(spacing: 6) {
             row(Text(multihopTitle(exit: exit)), String(localized: "Двойной VPN"),
                 isOn: Binding(get: { control.multihopEntry != nil },
-                              set: { control.setMultihop(entry: $0 ? candidates.first : nil) }))
-                .disabled(control.multihopEntry == nil && (candidates.isEmpty || !control.coreChoice.canTurnOnMultihop))
-                .help(control.coreChoice.canTurnOnMultihop
-                      ? String(localized: "Через два сервера: вход видит твой адрес, выход — сайты. Спросит пароль.")
-                      : String(localized: "С основным способом подключения двойного VPN нет — он есть у запасного"))
+                              set: { control.setMultihop(entry: $0 ? Multihop.preferred(candidates, alive: { control.proxies?.alive($0) }) : nil) }))
+                .disabled(control.multihopEntry == nil && Multihop.preferred(candidates, alive: { control.proxies?.alive($0) }) == nil)
+                .help(String(localized: "Через два сервера: вход видит твой адрес, выход — сайты. Спросит пароль."))
         }
         .disabled(control.busy)
     }
@@ -329,15 +335,20 @@ private struct NoticeBanner: View {
             filterIncomplete: filterIncomplete, filterDismissed: filterDismissed, now: Date(),
             serversDown: control.serversDown, networkCause: control.networkCause,
             filterUpdateWaiting: control.filter.updateWaitingForApproval,
-            helperApproval: control.helperApprovalBanner && [.needsApproval, .needsRegistration].contains(control.helperAvailability)))
+            helperApproval: control.helperApprovalBanner && [.needsApproval, .needsRegistration].contains(control.helperAvailability),
+            rulesMissing: control.rulesMissing))
         if let notice {
             switch notice {
+            case .rulesMissing:
+                Banner(icon: "exclamationmark.shield.fill", tint: .red, title: notice.title, message: notice.message) {
+                    Button("Восстановить службу…") { control.install() }.disabled(control.busy)
+                }
             case .otherVPN:
                 EmptyView()   // the summary on top says it, with the button (ADR 0009); lower notices wait
             case .network(let cause):
                 Banner(icon: "wifi.exclamationmark", title: notice.title, message: notice.message) {
                     if cause == .serversBlocked {
-                        if let fastest = control.proxies.flatMap({ ServerPicker.entries($0).first(where: \.isFastest) }) {
+                        if let fastest = control.proxies.flatMap({ ServerPicker.entries($0, subscription: control.activeSubscription).first(where: \.isFastest) }) {
                             Button(ServerPicker.fastestTitle) { control.choose(fastest) }.disabled(control.busy)
                         }
                         Button("Выбрать сервер…", action: chooseServer)
@@ -347,7 +358,7 @@ private struct NoticeBanner: View {
                 }
             case .serversDown:
                 Banner(icon: "antenna.radiowaves.left.and.right.slash", title: notice.title, message: notice.message) {
-                    if let fastest = control.proxies.flatMap({ ServerPicker.entries($0).first(where: \.isFastest) }) {
+                    if let fastest = control.proxies.flatMap({ ServerPicker.entries($0, subscription: control.activeSubscription).first(where: \.isFastest) }) {
                         Button(ServerPicker.fastestTitle) { control.choose(fastest) }.disabled(control.busy)
                     }
                     Button("Выбрать сервер…", action: chooseServer)
@@ -363,7 +374,7 @@ private struct NoticeBanner: View {
             case .trafficLow:
                 Banner(icon: "gauge.with.dots.needle.100percent", title: notice.title, message: notice.message) { EmptyView() }
             case .newServers, .routingChanged:
-                Banner(icon: notice == .routingChanged ? "arrow.triangle.branch" : "server.rack", title: notice.title, message: notice.message) {
+                Banner(icon: notice == .newServers ? "server.rack" : "arrow.triangle.branch", title: notice.title, message: notice.message) {
                     Button("Разрешить…") { Task { await client.confirmNewServers() } }.disabled(client.updating)
                 }
             case .filterOff:
@@ -444,7 +455,7 @@ struct ActionsMenu: View {
             Button("Выключить", role: .destructive) { control.turnOff() }
             Button("Отмена", role: .cancel) {}
         } message: {
-            Text("Если VPN оборвётся, программы пойдут в интернет напрямую.")
+            Text("Пока VPN включён, интернет и так идёт только через него. Без VPN программы пойдут напрямую.")
         }
         .alert("Выйти из KillSwitch?", isPresented: $confirmQuit) {
             Button("Выйти") { NSApp.terminate(nil) }

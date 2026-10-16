@@ -1,3 +1,4 @@
+# Actions is not paid: the merge gate is scripts/ci-local.sh (the same steps, run on a Mac).
 # Build and test on the main branch, on release tags and by hand.
 # The repository is private: macOS minutes are billed (with the macOS multiplier), so CI runs
 # only where it matters, in one job, and a newer push to the same ref cancels the running one.

@@ -43,7 +43,7 @@ final class KillSwitchControl {
     private(set) var servers: [String] = []          // /Library/KillSwitch/servers
     private(set) var manualServers: [String] = []    // /Library/KillSwitch/servers-manual
     private(set) var daemonProblem = false
-    /// A settings file of the service is damaged and protection blocks everything (#17): «Сбросить настройки».
+    /// A settings file of the service is damaged and protection blocks the internet; loopback, DHCP and the local network (not its DNS) still work (#83) (#17): «Сбросить настройки».
     private(set) var settingsDamaged = false
     /// The service is gone and left the network services off (its boot guard): «Включить сеть».
     private(set) var networkLeftOff = false
@@ -75,10 +75,17 @@ final class KillSwitchControl {
     private(set) var coreChoice: CoreChoice = .mihomo
     /// «Блокировать рекламу и трекеры»: the core refuses category-ads-all of the shipped geosite.dat.
     private(set) var adBlock = false
+    /// The other blocked categories of the shipped geosite.dat (ADR 0031): adult sites, social networks, betting.
+    private(set) var blockAdult = false
+    private(set) var blockSocial = false
+    private(set) var blockBetting = false
+    /// The own DNS-over-HTTPS server (`doh=`, ADR 0031), used by the core through the VPN; nil = none.
+    private(set) var ownDoH: String?
     /// «Подробная диагностика» (diag, ADR 0021): Xray records every connection in the local journal.
     private(set) var diagVerbose = false
-    /// Xray: the helper moves to another host of the country when this one stops answering (ADR 0023).
-    private(set) var autoSwitch = true
+    /// Xray: a server that stops answering is tried with another TLS fingerprint or another transport
+    /// the subscription offers (escalate, ADR 0030); the server itself never changes (ADR 0036).
+    private(set) var escalate = true
     /// «Собрать отчёт» is running, and why the last one failed (nil after a good one).
     private(set) var reportBusy = false
     private(set) var reportError: String?
@@ -86,10 +93,28 @@ final class KillSwitchControl {
     private(set) var splitApps: [String] = []
     /// «Двойной VPN»: the entry server; the exit is the selected one. Nil = off.
     private(set) var multihopEntry: String?
+    /// «Размер пакетов VPN» (ADR 0032): nil = «Авто».
+    private(set) var tunnelMTU: Int?
+    /// When the person last changed «Двойной VPN» or the way of connecting: an off within two
+    /// minutes of it is theirs, any other is the helper's and is told (ADR 0027).
+    private var multihopAskedAt: Date?
     /// Set while another VPN's TUN is up next to our core (see `foreignVPNFile`).
     private(set) var foreignVPN: String?
     /// Protection stands by while another VPN is up and ours is not (ADR 0018, the watchdog's file).
     private(set) var protectionStandby = false
+    /// The VPN is on, from «Подключить» to «Отключить» (ADR 0035): pf blocks whatever the switch says.
+    private(set) var vpnOn = false
+    /// Our tunnel has been up since this «Подключить» (ADR 0035): its going is a reconnect, not the
+    /// first connect. Kept across launches by the VPN target's content (the epoch of «Подключить»).
+    private(set) var tunnelWasUp = false
+    private static let tunnelSeenKey = "tunnelSeenForVPNOn"
+    /// The VPN is on and the helper says the rules are not loaded: traffic may be leaking.
+    private(set) var rulesMissing = false
+    /// The watchdog's stuck=1 last read: the notification goes out when it turns on (#85).
+    private var vpnStuck = false
+    static let vpnOnPath = "/Library/KillSwitch/vpn-on"
+    /// The helper's VPN target on disk, for when the watchdog's file does not say.
+    private static var vpnOnFile: Bool { FileManager.default.fileExists(atPath: vpnOnPath) }
     /// Groups and servers of the running core, from `ks core proxies`.
     private(set) var proxies: CoreProxies?
     private var proxiesLoading = false
@@ -162,7 +187,7 @@ final class KillSwitchControl {
         updateHelperAvailability()
     }
 
-    private let helper = "/Library/KillSwitch/ks"
+    private let helper = FilterGate.helperPath
     private var timer: Timer?
     /// Changes in /Library/KillSwitch: the watchdog rewrites its state file there (DaemonState).
     private var watcher: DispatchSourceFileSystemObject?
@@ -174,6 +199,8 @@ final class KillSwitchControl {
     private var daemonStateLive = false
     /// The error the last failed state read showed: the next good read clears it, not an action's.
     private var statePollError: UserError?
+    /// A refresh when a boot guard mark's 20 s are up (NetworkMark.recheck): the timer may be 30 s away.
+    private var markRecheck: Task<Void, Never>?
 
     init() {
         notifyIfMacOSUpdated()
@@ -275,16 +302,15 @@ final class KillSwitchControl {
 
     /// Always a click: the list decides what goes around the VPN.
     func setSplitApps(_ names: [String]) { runAsAdmin([helper, "set", "splitapps", SplitApps.argument(names)]) }
+    /// The own DNS-over-HTTPS server; nil clears it. Always a click.
+    func setDoH(_ url: String?) { runAsAdmin([helper, "set", "doh", url ?? ""]) }
     /// `entry` nil turns «Двойной VPN» off. Always a click.
-    func setMultihop(entry: String?) { runAsAdmin([helper, "set", "multihop", entry ?? Multihop.off]) }
-    /// `ks set core` (one password); `then` imports the subscription for it (VPNClient.switchCore).
-    func setCore(_ choice: CoreChoice, then done: @escaping @MainActor () async -> Void) {
-        runAsAdmin(batch: [[helper, "set", "core", choice.rawValue]]) { [self] in
-            coreChoice = choice
-            await done()
-        }
+    func setMultihop(entry: String?) {
+        multihopAskedAt = Date()
+        runAsAdmin([helper, "set", "multihop", entry ?? Multihop.off])
     }
-
+    /// `ks set mtu`: the config rebuilt and the VPN restarted (about a second, the protection blocks).
+    func setMTU(_ mtu: Int?) { runAsAdmin([helper] + HelperCommand.setMTU(mtu).arguments) }
     /// «Адреса серверов для других VPN-программ»: VPN servers are reachable by any process (Happ's
     /// tunnel runs as the ordinary user and cannot be told apart from other apps), so only these
     /// addresses are let out. The edited list, one password.
@@ -294,8 +320,10 @@ final class KillSwitchControl {
 
     /// «Перенос настроек» (SettingsBackup, ADR 0024): the root settings as Settings shows them.
     var rootSettings: SettingsBackup.Root {
-        .init(core: coreChoice, switches: switches.merging(["direct": allowDirect, "adblock": adBlock, "diag": diagVerbose, "failover": autoSwitch]) { $1 },
-              exceptions: exceptions, manualServers: manualServers, splitApps: splitApps)
+        .init(switches: switches.merging(["direct": allowDirect, "adblock": adBlock, "diag": diagVerbose,
+                                                      "escalate": escalate, "blockadult": blockAdult, "blocksocial": blockSocial,
+                                                      "blockbetting": blockBetting]) { $1 },
+              exceptions: exceptions, manualServers: manualServers, splitApps: splitApps, doh: ownDoH ?? "", mtu: tunnelMTU ?? 0)
     }
     /// A loaded or reset set of root settings: the commands of their own screens, one password;
     /// `done` after they went through (nothing to run: at once).
@@ -324,24 +352,32 @@ final class KillSwitchControl {
     /// A server picked while disconnected (ServerPicker path), applied by the next «Подключить».
     private(set) var pendingChoice: ServerPicker.Entry? = KillSwitchControl.loadPending()
     /// The server of the last connection, shown while disconnected.
-    private(set) var lastServer = UserDefaults.standard.string(forKey: "lastServer")
+    private(set) var lastServer = UserDefaults.standard.string(forKey: Subscriptions.lastKey).flatMap(ServerID.init(stored:))
 
-    private static let pendingKey = "pendingServer"
+    private static let pendingKey = Subscriptions.pendingKey
+
+    /// The subscription (or ServerID.own) whose profile the helper was handed last (ADR 0036);
+    /// VPNClient sets it on every import.
+    private(set) var activeSubscription = UserDefaults.standard.string(forKey: Subscriptions.activeKey) ?? ServerID.own
+
+    func setActiveSubscription(_ id: String) {
+        guard id != activeSubscription else { return }
+        activeSubscription = id
+        UserDefaults.standard.set(id, forKey: Subscriptions.activeKey)
+    }
 
     /// «Выбор сервера»: switches the running core at once, or remembers the choice for «Подключить».
-    /// A server is picked through its country's failover group when it has one (Failover).
     func choose(_ entry: ServerPicker.Entry) {
-        setChosen(entry.name)
+        setChosen(entry.server)
         serversDown = nil
         guard coreRunning else {
             pendingChoice = entry
             if let data = try? JSONEncoder().encode(entry) { UserDefaults.standard.set(data, forKey: Self.pendingKey) }
             return
         }
-        let path = proxies.map { Failover.path(for: entry, in: $0) } ?? entry.path
         busy = true
         Task {
-            for step in path { await select(group: step.group, proxy: step.proxy) }
+            for step in entry.path { await select(group: step.group, proxy: step.proxy) }
             busy = false
         }
     }
@@ -349,17 +385,35 @@ final class KillSwitchControl {
     /// «Предпочитаемый сервер» of a Wi-Fi network (WiFiRules): like `choose`, but never asks for a
     /// password, since nobody clicked.
     func chooseAutomatically(_ entry: ServerPicker.Entry) async {
-        setChosen(entry.name)
+        setChosen(entry.server)
         serversDown = nil
         guard coreRunning else {
             pendingChoice = entry
             if let data = try? JSONEncoder().encode(entry) { UserDefaults.standard.set(data, forKey: Self.pendingKey) }
             return
         }
-        for step in proxies.map({ Failover.path(for: entry, in: $0) }) ?? entry.path {
+        for step in entry.path {
             _ = await callHelper(["core", "select", step.group, step.proxy], interactive: false)
         }
         loadProxies(force: true)
+    }
+
+    /// A server of the subscription just imported (VPNClient.choose): chosen as on «Подключить»,
+    /// since the core's API may take a moment to come back after the import.
+    func chooseImported(_ entry: ServerPicker.Entry) async {
+        setChosen(entry.server)
+        serversDown = nil
+        pendingChoice = entry
+        if let data = try? JSONEncoder().encode(entry) { UserDefaults.standard.set(data, forKey: Self.pendingKey) }
+        if coreRunning { await applyPendingChoice() }
+    }
+
+    /// A deleted subscription's chosen, last and waiting server (ADR 0036): the home screen no
+    /// longer names it. Subscriptions.remove clears what was stored.
+    func forget(subscription: String) {
+        if chosenServer?.subscription == subscription { chosenServer = nil }
+        if lastServer?.subscription == subscription { lastServer = nil }
+        if pendingChoice?.subscription == subscription { pendingChoice = nil }
     }
 
     /// The current server in «Выбор сервера» terms: the running core's choice, else the one
@@ -369,72 +423,26 @@ final class KillSwitchControl {
         return pendingChoice?.name
     }
 
-    // MARK: auto-failover (Failover, ADR 0005)
+    // MARK: the chosen server went silent (nothing switches by itself, ADR 0036)
 
-    /// The server the person picked last, or the last good one after a switch.
-    private(set) var chosenServer = UserDefaults.standard.string(forKey: KillSwitchControl.chosenKey)
-    /// The last switch to another server of the same country.
-    private(set) var lastSwitch: Failover.Switch? = KillSwitchControl.loadSwitch()
-    /// The country whose servers all stopped answering; the person picks what next.
+    /// The server the person picked last.
+    private(set) var chosenServer = UserDefaults.standard.string(forKey: KillSwitchControl.chosenKey).flatMap(ServerID.init(stored:))
+    /// The chosen server, as displayed, while it does not answer; the person picks what next.
     private(set) var serversDown: String?
-    /// Servers already moved behind their failover group once (adoption), so a refused select is
-    /// not retried on every refresh.
-    private var adopted: Set<String> = []
 
-    private static let chosenKey = "chosenServer"
-    private static let switchKey = "lastFailover"
+    private static let chosenKey = Subscriptions.chosenKey
 
-    /// Shown in the status line for an hour after the switch, while connected.
-    var recentSwitch: Failover.Switch? {
-        guard coreRunning, let lastSwitch, lastSwitch.isRecent(now: Date()) else { return nil }
-        return lastSwitch
+    private func setChosen(_ server: ServerID?) {
+        chosenServer = server
+        UserDefaults.standard.set(server?.stored, forKey: Self.chosenKey)
     }
 
-    /// When `chosenServer` last changed in this run: a list read right after may show the old host.
-    private var chosenAt: Date?
-
-    private func setChosen(_ name: String?) {
-        chosenServer = name
-        chosenAt = Date()
-        UserDefaults.standard.set(name, forKey: Self.chosenKey)
-    }
-
-    private static func loadSwitch() -> Failover.Switch? {
-        UserDefaults.standard.data(forKey: switchKey).flatMap { try? JSONDecoder().decode(Failover.Switch.self, from: $0) }
-    }
-
-    /// After every server list from the core: puts a server picked straight in the main selector
-    /// behind its group, notices a switch the core made by itself and a country that went silent.
-    /// Only passwordless `ks core select`; never another country.
-    private func checkFailover(_ proxies: CoreProxies) {
-        if let steps = Failover.adoption(proxies), let server = steps.first?.proxy, !adopted.contains(server) {
-            adopted.insert(server)
-            setChosen(server)   // the main selector points at it: it is the current pick
-            Task {
-                for step in steps {
-                    guard case .ok = await callHelper(["core", "select", step.group, step.proxy], interactive: false) else { break }
-                }
-                loadProxies(force: true)
-            }
-            return
-        }
-        switch Failover.state(chosen: chosenServer, proxies: proxies, pickedAt: chosenAt) {
-        case .fine:
-            serversDown = nil
-        case .switched(let from, let to):
-            serversDown = nil
-            let change = Failover.Switch(from: ServerName.display(from), to: ServerName.display(to), at: Date())
-            lastSwitch = change
-            if let data = try? JSONEncoder().encode(change) { UserDefaults.standard.set(data, forKey: Self.switchKey) }
-            setChosen(to)   // the last good one, also for the next connection
-            notify(.serverSwitched(from: change.from, to: change.to))
-            if let group = Failover.group(of: to, in: proxies) {
-                Task { _ = await callHelper(["core", "select", group.name, to], interactive: false) }
-            }
-        case .countryDown(let country):
-            if serversDown != country { notify(.serversDown(country: country)) }
-            serversDown = country
-        }
+    /// After every server list from the core: tells once when the chosen server stopped answering.
+    private func checkServers(_ proxies: CoreProxies) {
+        let chosen = chosenServer.flatMap { $0.subscription == activeSubscription ? $0.name : nil }
+        let server = NetworkCause.serverDown(chosen: chosen, proxies: proxies)
+        if let server, serversDown != server { notify(.serversDown(server: server)) }
+        serversDown = server
     }
 
     // MARK: why nothing works (NetworkCause, ADR 0006)
@@ -542,10 +550,11 @@ final class KillSwitchControl {
     /// The core's API comes up a moment after `ks core on`: a few tries, then give up quietly
     /// (the core keeps its own last choice).
     private func applyPendingChoice() async {
-        adopted = []
         guard let entry = pendingChoice else { return }
         pendingChoice = nil
         UserDefaults.standard.removeObject(forKey: Self.pendingKey)
+        // a server of another subscription waits for its import (VPNClient.choose)
+        guard entry.subscription == activeSubscription else { return }
         for step in entry.path {
             for attempt in 0..<6 {
                 if case .ok = await callHelper(["core", "select", step.group, step.proxy], interactive: false) { break }
@@ -561,7 +570,8 @@ final class KillSwitchControl {
     }
     func coreOff() {
         disconnecting = true
-        run(["core", "off"], userInitiated: true)
+        // the VPN stays on (the core did not stop): the next drop is one again
+        run(["core", "off"], userInitiated: true) { [self] in disconnecting = false }
     }
 
     /// «Отключить» was pressed: the tunnel going down is no drop.
@@ -596,10 +606,11 @@ final class KillSwitchControl {
     /// writes the full core config and lets the servers out. The config decides what goes around
     /// the VPN, so unless sudoers allows it, this asks for the password; `allowPassword: false`
     /// (automatic updates) never shows the prompt.
-    func coreImport(file: String, allowPassword: Bool) async -> ImportResult {
+    /// `others`: the other subscriptions' profiles, approved with this one (ADR 0036).
+    func coreImport(file: String, others: [String] = [], allowPassword: Bool) async -> ImportResult {
         busy = true
         defer { busy = false; refresh() }
-        switch await callHelper(["core", "import", file], interactive: allowPassword) {
+        switch await callHelper(["core", "import", file] + others, interactive: allowPassword) {
         case .ok: measured = [:]; return .ok
         case .needsPassword: return .needsPassword
         case .cancelled: return .cancelled
@@ -618,9 +629,20 @@ final class KillSwitchControl {
         return outcome
     }
 
+    /// Another subscription's profile, without a prompt: refused by the helper (exit 3) unless the
+    /// last import approved its servers and DIRECT (ADR 0036).
+    func coreUse(file: String) async -> RefreshOutcome {
+        busy = true
+        defer { busy = false; refresh() }
+        let result = await readHelper(["core", "use", file])
+        let outcome = RefreshOutcome(status: result.status, output: result.output)
+        if outcome == .applied { measured = [:] }
+        return outcome
+    }
+
     /// Picks a server in a selector group of the running core. Always a click.
     func coreSelect(group: String, proxy: String) {
-        if group == proxies?.mainGroup?.name { setChosen(proxy) }
+        if group == proxies?.mainGroup?.name { setChosen(ServerID(subscription: activeSubscription, name: proxy)) }
         busy = true
         Task {
             await select(group: group, proxy: proxy)
@@ -728,11 +750,11 @@ final class KillSwitchControl {
                 if let parsed = try? CoreProxies(data: Data(output.utf8), order: order) {
                     proxiesError = nil
                     if parsed != proxies { proxies = parsed }
-                    checkFailover(parsed)
+                    checkServers(parsed)
                     checkNetwork(parsed)
-                    if let server = currentServer, server != lastServer {
-                        lastServer = server
-                        UserDefaults.standard.set(server, forKey: "lastServer")
+                    if let name = currentServer, ServerID(subscription: activeSubscription, name: name) != lastServer {
+                        lastServer = ServerID(subscription: activeSubscription, name: name)
+                        UserDefaults.standard.set(lastServer?.stored, forKey: Subscriptions.lastKey)
                     }
                 } else {
                     proxiesError = UserError.from(raw: "proxies: not a JSON list", context: .serverList)
@@ -824,9 +846,10 @@ final class KillSwitchControl {
             return false
         }
     }
-    /// Then the daemon goes too (uninstall.sh removes its authorization right).
+    /// Then the filter is switched off (#55) and the daemon goes too (uninstall.sh removes its authorization right).
     func uninstall() {
         runBundled("uninstall.sh", []) { [self] in
+            await filter.turnOff()
             await helperClient.unregister()
             updateHelperAvailability()
         }
@@ -843,12 +866,13 @@ final class KillSwitchControl {
             if !disconnecting {
                 dropped = true
                 // with protection on the drop is told above, for any tunnel
-                if state != .on { notify(.vpnDropped(protected: false)) }
+                // with protection off it is told here; the VPN still on blocks all the same (ADR 0035)
+                if state != .on { notify(.vpnDropped(protected: Self.vpnOnFile)) }
             }
             disconnecting = false
         } else if !wasOwnUp && ownTunnelUp {
             NotificationCenter.default.post(name: UpdateRetry.vpnConnected, object: nil)
-            if dropped { notify(.reconnected(server: lastServer.map(ServerName.display))) }
+            if dropped { notify(.reconnected(server: lastServer.map { ServerName.display($0.name) })) }
             dropped = false
             disconnecting = false
         }
@@ -862,6 +886,7 @@ final class KillSwitchControl {
             coreChoice = Bundle.main.path(forResource: "xray", ofType: nil, inDirectory: "Helper") != nil ? .xray : .mihomo
             daemonProblem = false; networkLeftOff = false
             daemonStateLive = false
+            vpnOn = false; rulesMissing = false
             helperOutdated = false; helperComparedAt = nil
             publish(.notInstalled)
             return
@@ -876,6 +901,10 @@ final class KillSwitchControl {
             daemonStateLive = true
             daemonRuns(true)
             protectionStandby = daemon.standby
+            vpnOn = daemon.vpnOn ?? Self.vpnOnFile
+            rulesMissing = vpnOn && daemon.blocking == false
+            if daemon.stuck && !vpnStuck { notify(.vpnStuck) }   // once each time it gets stuck (#85)
+            vpnStuck = daemon.stuck
             coreRunning = coreInstalled && daemon.coreRunning
             if !coreRunning { proxies = nil }
             foreignVPN = coreRunning ? Self.readForeignVPN() : nil
@@ -888,6 +917,7 @@ final class KillSwitchControl {
         }
         daemonStateLive = false
         protectionStandby = false
+        vpnOn = Self.vpnOnFile
         checkDaemon()
         if coreInstalled {
             Task {
@@ -915,6 +945,8 @@ final class KillSwitchControl {
             }
             needsRepair = false
             clearStatePollError()
+            // without the watchdog's file: "ks state" says on only while the rules are loaded
+            rulesMissing = vpnOn && DaemonState.protection(result.output) != .on
             publish(DaemonState.protection(result.output))
         }
     }
@@ -979,9 +1011,17 @@ final class KillSwitchControl {
 
     private func trackConnecting() {
         resumeIfReconnected()
-        guard connection == .connecting else { connectingSince = nil; return }
+        trackTunnelSeen()
+        // the VPN on and our core not running yet (or not starting): connecting as well (Status)
+        guard connection == .connecting || vpnOn && connection == .disconnected else { connectingSince = nil; return }
         if connectingSince == nil { connectingSince = Date() }
         clock = Date()
+    }
+
+    private func trackTunnelSeen() {
+        guard vpnOn, let target = try? String(contentsOfFile: Self.vpnOnPath, encoding: .utf8) else { tunnelWasUp = false; return }
+        if ownTunnelUp { UserDefaults.standard.set(target, forKey: Self.tunnelSeenKey) }
+        tunnelWasUp = UserDefaults.standard.string(forKey: Self.tunnelSeenKey) == target
     }
 
     private func publish(_ new: State) {
@@ -1000,13 +1040,16 @@ final class KillSwitchControl {
 
     /// `userInitiated`: a click (or the widget) may fall back to the password prompt; anything else
     /// only tries the passwordless way.
-    private func run(_ args: [String], userInitiated: Bool) {
+    /// `failed`: run unless the helper did it.
+    private func run(_ args: [String], userInitiated: Bool, failed: (() -> Void)? = nil) {
         busy = true
         Task {
             switch await callHelper(args, interactive: userInitiated) {
             case .ok: error = nil
-            case .failed(let message): error = UserError.from(raw: message.isEmpty ? "ks \(args.joined(separator: " ")): failed" : message, context: .helper)
-            case .needsPassword, .cancelled: break
+            case .failed(let message):
+                error = UserError.from(raw: message.isEmpty ? "ks \(args.joined(separator: " ")): failed" : message, context: .helper)
+                failed?()
+            case .needsPassword, .cancelled: failed?()
             }
             busy = false
             refresh()
@@ -1134,10 +1177,20 @@ final class KillSwitchControl {
         allowRouterDNS = (values["dns"] ?? "0") == "1"
         allowDirect = (values["direct"] ?? "0") == "1"
         adBlock = (values["adblock"] ?? "0") == "1"
+        blockAdult = (values["blockadult"] ?? "0") == "1"
+        blockSocial = (values["blocksocial"] ?? "0") == "1"
+        blockBetting = (values["blockbetting"] ?? "0") == "1"
+        ownDoH = values["doh"].flatMap { $0.isEmpty ? nil : $0 }
         diagVerbose = (values["diag"] ?? "0") == "1"
-        autoSwitch = (values["failover"] ?? "1") == "1"
+        escalate = (values["escalate"] ?? "1") == "1"
         splitApps = SplitApps.parse(setting: values["splitapps"])
-        multihopEntry = Multihop.entry(setting: values["multihop"])
+        tunnelMTU = TunnelMTU.value(setting: values["mtu"])
+        let entry = Multihop.entry(setting: values["multihop"])
+        let asked = multihopAskedAt.map { Date().timeIntervalSince($0) < 120 } ?? false
+        if Multihop.turnedOffByItself(was: multihopEntry, now: entry, asked: asked), let was = multihopEntry {
+            notify(.doubleVPNOff(entry: ServerName.display(was)))
+        }
+        multihopEntry = entry
         exceptions = Self.readLines("/Library/KillSwitch/allow")
         servers = Self.readLines("/Library/KillSwitch/servers")
         manualServers = Self.readLines("/Library/KillSwitch/servers-manual")
@@ -1180,7 +1233,16 @@ final class KillSwitchControl {
 
     private func daemonRuns(_ runs: Bool) {
         daemonProblem = !runs
-        networkLeftOff = !runs && FileManager.default.fileExists(atPath: "/Library/KillSwitch/wifi-off-by-ks")
+        let markAge = NetworkMark.age()
+        networkLeftOff = NetworkMark.leftOff(age: markAge, daemonRuns: runs)
+        markRecheck?.cancel()
+        markRecheck = NetworkMark.recheck(age: markAge, daemonRuns: runs).map { delay in
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled else { return }
+                self?.refresh()
+            }
+        }
         let defaults = UserDefaults.standard
         if daemonProblem {
             if !defaults.bool(forKey: "daemonWarned") {
@@ -1204,12 +1266,12 @@ final class KillSwitchControl {
     /// «Сбросить настройки»: `ks repair` (#17), behind the password like any change that opens something.
     func resetSettings() { runAsAdmin([helper, "repair"]) }
 
-    /// «Перезапустить VPN»: the core is running but its API does not answer.
+    /// «Перезапустить VPN»: the core is running but its API does not answer. One `ks core restart`:
+    /// the VPN stays on and pf blocks throughout (ADR 0035), unlike «off» then «on».
     func restartCore() {
         busy = true
         Task {
-            _ = await callHelper(["core", "off"], interactive: true)
-            switch await callHelper(["core", "on"], interactive: true) {
+            switch await callHelper(["core", "restart"], interactive: true) {
             case .ok: error = nil
             case .failed(let message): error = UserError.from(raw: message, context: .helper)
             case .needsPassword, .cancelled: break

@@ -18,8 +18,8 @@ settings:
     DEVELOPMENT_TEAM: YR58655PJ7
     CODE_SIGN_STYLE: Automatic
     CODE_SIGN_IDENTITY: "Apple Development"
-    MARKETING_VERSION: "0.19.1"
-    CURRENT_PROJECT_VERSION: "27"
+    MARKETING_VERSION: "0.20.0"
+    CURRENT_PROJECT_VERSION: "28"
     # on for every target (ADR 0010): the root daemon trusts the app by its signature, so no other
     # process may inject code into it; release.sh signs with --options runtime as well
     ENABLE_HARDENED_RUNTIME: YES
@@ -125,8 +125,8 @@ targets:
   KillSwitchFilter:
     type: system-extension
     platform: macOS
-    # AddressMatch, ExpiringCache: the filter's logic, in App/Core so the unit tests reach it
-    sources: [Filter, App/Core/AddressMatch.swift, App/Core/ExpiringCache.swift]
+    # AddressMatch, ExpiringCache, FilterGate: the filter's logic, in App/Core so the unit tests reach it
+    sources: [Filter, App/Core/AddressMatch.swift, App/Core/ExpiringCache.swift, App/Core/FilterGate.swift]
     entitlements:
       path: Filter/KillSwitchFilter.entitlements
       properties:
@@ -194,10 +194,10 @@ targets:
       - App/Core/Protection.swift
       - App/Core/CoreProxies.swift
       - App/Core/ServerPicker.swift
+      - App/Core/ServerID.swift
       - App/Core/CoreDelay.swift
       - App/Core/ServerName.swift
       - App/Core/ServerDescription.swift
-      - App/Core/Failover.swift
       - App/Core/ProfileMerger.swift
       - App/Core/ProfileConverter.swift
       - App/Core/ProxyLink.swift

@@ -101,14 +101,21 @@ final class HelperClient {
     private func call(_ command: HelperCommand, authorization auth: Data?) async -> HelperReply? {
         let connection = connect()
         var profile: FileHandle?
+        var others: [FileHandle] = []
         var report: (handle: FileHandle, path: String)?
+        defer { others.forEach { try? $0.close() } }
         switch command {
-        case .coreImport(let path), .coreRefresh(let path):
+        case .coreImport(let path, _), .coreRefresh(let path), .coreUse(let path):
             // opened here, as the user: the daemon never opens a user's path as root
-            guard let handle = FileHandle(forReadingAtPath: path) else {
-                return HelperReply(status: HelperReply.failedToRun, stdout: "", stderr: "Не удалось открыть профиль")
+            var paths = [path]
+            if case .coreImport(_, let more) = command { paths += more }
+            for path in paths {
+                guard let handle = FileHandle(forReadingAtPath: path) else {
+                    try? profile?.close()
+                    return HelperReply(status: HelperReply.failedToRun, stdout: "", stderr: "Не удалось открыть профиль")
+                }
+                if profile == nil { profile = handle } else { others.append(handle) }
             }
-            profile = handle
         case .diagReport(let directory, _):
             // the file is the user's, made here; the daemon only writes into the open handle
             let path = directory + "/" + DiagReport.fileName(for: Date())
@@ -146,12 +153,14 @@ final class HelperClient {
             case .coreState: helper.coreState(reply: reply)
             case .coreOn: helper.coreOn(reply: reply)
             case .coreOff: helper.coreOff(reply: reply)
+            case .coreRestart: helper.coreRestart(reply: reply)
             case .coreProxies: helper.coreProxies(reply: reply)
             case .coreTraffic: helper.coreTraffic(reply: reply)
             case .coreConnections: helper.coreConnections(reply: reply)
             case .coreSelect(let group, let proxy): helper.coreSelect(group: group, proxy: proxy, reply: reply)
             case .coreDelay(let name): helper.coreDelay(name: name, reply: reply)
             case .coreRefresh: helper.coreRefresh(profile: profile!, reply: reply)
+            case .coreUse: helper.coreUse(profile: profile!, reply: reply)
             case .diagReport: once.resume(nil)   // answered above
             case .protectionOff: helper.protectionOff(authorization: form, reply: reply)
             case .repair: helper.repair(authorization: form, reply: reply)
@@ -159,12 +168,14 @@ final class HelperClient {
             case .setSwitch(let key, let on): helper.setSwitch(key: key, on: on, authorization: form, reply: reply)
             case .setSplitApps(let names): helper.setSplitApps(names: names, authorization: form, reply: reply)
             case .setMultihop(let entry): helper.setMultihop(entry: entry, authorization: form, reply: reply)
+            case .setDoH(let url): helper.setDoH(url: url, authorization: form, reply: reply)
             case .setCore(let core): helper.setCore(name: core.rawValue, authorization: form, reply: reply)
+            case .setMTU(let mtu): helper.setMTU(value: mtu ?? 0, authorization: form, reply: reply)
             case .allow(let address): helper.allow(address: address, authorization: form, reply: reply)
             case .unallow(let address): helper.unallow(address: address, authorization: form, reply: reply)
             case .serverAdd(let address): helper.serverAdd(address: address, authorization: form, reply: reply)
             case .serverRemove(let address): helper.serverRemove(address: address, authorization: form, reply: reply)
-            case .coreImport: helper.coreImport(profile: profile!, authorization: form, reply: reply)
+            case .coreImport: helper.coreImport(profile: profile!, others: others, authorization: form, reply: reply)
             // the user is the one the daemon sees connecting
             case .install(_, let servers): helper.install(servers: servers, authorization: form, reply: reply)
             case .uninstall: helper.uninstall(authorization: form, reply: reply)

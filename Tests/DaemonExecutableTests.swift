@@ -34,4 +34,33 @@ final class DaemonExecutableTests: XCTestCase {
         defer { free(expected) }
         XCTAssertEqual(current, String(cString: expected))
     }
+
+    /// #84: the daemon writes its app's path for the watchdog (ks app_guard), which removes protection
+    /// once that path is gone for ten minutes. Only an app in /Applications and only into an installed
+    /// helper's folder: an app on a DMG, a late volume or in ~/Downloads is never recorded (never
+    /// taken for gone), nor a translocated one.
+    func testRecordAppWritesTheBundlePathForTheWatchdog() throws {
+        let dir = try XCTUnwrap(PrivateDirectory.make())
+        defer { PrivateDirectory.remove(dir) }
+        let record = dir.appendingPathComponent("app").path
+        func recorded() -> String? { try? String(contentsOfFile: record, encoding: .utf8) }
+        DaemonExecutable.recordApp(executable: "/Applications/KillSwitch.app/Contents/MacOS/KillSwitchHelper", directory: dir.path)
+        XCTAssertEqual(recorded(), "/Applications/KillSwitch.app\n")
+        let mode = try XCTUnwrap(FileManager.default.attributesOfItem(atPath: record)[.posixPermissions] as? NSNumber)
+        XCTAssertEqual(mode.intValue, 0o644)
+        DaemonExecutable.recordApp(executable: "/Applications/Tools/Kill Switch.app/Contents/MacOS/KillSwitchHelper", directory: dir.path)
+        XCTAssertEqual(recorded(), "/Applications/Tools/Kill Switch.app\n", "a moved app is followed")
+        for path in ["/Volumes/KillSwitch/KillSwitch.app/Contents/MacOS/KillSwitchHelper",
+                     "/Users/a/Downloads/KillSwitch.app/Contents/MacOS/KillSwitchHelper",
+                     "/Applications/../Volumes/KillSwitch.app/Contents/MacOS/KillSwitchHelper",
+                     "/private/var/folders/x/AppTranslocation/1234/d/KillSwitch.app/Contents/MacOS/KillSwitchHelper",
+                     "Contents/MacOS/KillSwitchHelper"] {
+            DaemonExecutable.recordApp(executable: path, directory: dir.path)
+            XCTAssertEqual(recorded(), "/Applications/Tools/Kill Switch.app\n", path)
+        }
+        let missing = dir.appendingPathComponent("not-installed").path
+        DaemonExecutable.recordApp(executable: "/Applications/KillSwitch.app/Contents/MacOS/KillSwitchHelper", directory: missing)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missing), "no folder made for a helper that is not installed")
+        XCTAssertEqual(DaemonExecutable.appRecord, "/Library/KillSwitch/app")
+    }
 }

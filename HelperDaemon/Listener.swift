@@ -38,6 +38,7 @@ final class Endpoint: NSObject, HelperProtocol, Sendable {
     func coreState(reply: @escaping Reply) { Executor.perform(.coreState, caller: uid, reply: reply) }
     func coreOn(reply: @escaping Reply) { Executor.perform(.coreOn, caller: uid, reply: reply) }
     func coreOff(reply: @escaping Reply) { Executor.perform(.coreOff, caller: uid, reply: reply) }
+    func coreRestart(reply: @escaping Reply) { Executor.perform(.coreRestart, caller: uid, reply: reply) }
     func coreProxies(reply: @escaping Reply) { Executor.perform(.coreProxies, caller: uid, reply: reply) }
     func coreTraffic(reply: @escaping Reply) { Executor.perform(.coreTraffic, caller: uid, reply: reply) }
     func coreConnections(reply: @escaping Reply) { Executor.perform(.coreConnections, caller: uid, reply: reply) }
@@ -47,6 +48,9 @@ final class Endpoint: NSObject, HelperProtocol, Sendable {
     func coreDelay(name: String, reply: @escaping Reply) { Executor.perform(.coreDelay(name), caller: uid, reply: reply) }
     func coreRefresh(profile: FileHandle, reply: @escaping Reply) {
         Executor.perform(.coreRefresh(profile: Executor.profilePlaceholder), profile: profile, caller: uid, reply: reply)
+    }
+    func coreUse(profile: FileHandle, reply: @escaping Reply) {
+        Executor.perform(.coreUse(profile: Executor.profilePlaceholder), profile: profile, caller: uid, reply: reply)
     }
     func diagReport(output: FileHandle, reply: @escaping Reply) {
         // the journal holds every user's connections: not for whoever else is logged in
@@ -76,12 +80,18 @@ final class Endpoint: NSObject, HelperProtocol, Sendable {
     func setMultihop(entry: String?, authorization: Data, reply: @escaping Reply) {
         Executor.perform(.setMultihop(entry), authorization: authorization, caller: uid, reply: reply)
     }
+    func setDoH(url: String?, authorization: Data, reply: @escaping Reply) {
+        Executor.perform(.setDoH(url), authorization: authorization, caller: uid, reply: reply)
+    }
     func setCore(name: String, authorization: Data, reply: @escaping Reply) {
         guard let core = CoreChoice(rawValue: name) else {
             reply(HelperReply.refused, "", "usage: ks set core xray|mihomo")
             return
         }
         Executor.perform(.setCore(core), authorization: authorization, caller: uid, reply: reply)
+    }
+    func setMTU(value: Int, authorization: Data, reply: @escaping Reply) {
+        Executor.perform(.setMTU(value == 0 ? nil : value), authorization: authorization, caller: uid, reply: reply)
     }
     func allow(address: String, authorization: Data, reply: @escaping Reply) {
         Executor.perform(.allow(address), authorization: authorization, caller: uid, reply: reply)
@@ -95,9 +105,9 @@ final class Endpoint: NSObject, HelperProtocol, Sendable {
     func serverRemove(address: String, authorization: Data, reply: @escaping Reply) {
         Executor.perform(.serverRemove(address), authorization: authorization, caller: uid, reply: reply)
     }
-    func coreImport(profile: FileHandle, authorization: Data, reply: @escaping Reply) {
+    func coreImport(profile: FileHandle, others: [FileHandle], authorization: Data, reply: @escaping Reply) {
         Executor.perform(.coreImport(profile: Executor.profilePlaceholder), authorization: authorization, profile: profile,
-                         caller: uid, reply: reply)
+                         others: others, caller: uid, reply: reply)
     }
     func install(servers: [String], authorization: Data, reply: @escaping Reply) {
         // the sudoers entry goes to whoever connected, not to a name the app sends

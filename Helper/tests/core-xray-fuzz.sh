@@ -242,7 +242,7 @@ if accepted "a ws stream read as it is" '$c->{outbounds}[0]{streamSettings} = { 
 fi
 
 # --- the direct signature of a subscription that 0.19.0 approved is the same now: a different one
-# would make every passwordless switch and failover after the upgrade ask for the password
+# would make every passwordless switch after the upgrade ask for the password
 # (0.19.1 review: reading the transports once added keys to every stream). The 0.19.0 hashes:
 for g in "xray-panel.json 5c3272a3902c1cee70f8f54e9bda93e469f103f69cc053b446f88a544c441599" \
          "xray-3xui.json b05acca29ee7282b849360f55dea7bd65ad8937af75ef75d3b71fee028d541a9"; do

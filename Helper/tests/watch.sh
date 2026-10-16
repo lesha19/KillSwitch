@@ -7,9 +7,9 @@ here=$(cd "$(dirname "$0")" && pwd)
 # shellcheck source=../ks
 . "$here/../ks"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-DIR="$tmp"; FLAG="$DIR/disabled"; SETTINGS="$DIR/settings"; ALLOW="$DIR/allow"; TSRELAYS="$DIR/none"
+DIR="$tmp"; FLAG="$DIR/disabled"; SETTINGS="$DIR/settings"; ALLOW="$DIR/allow"; TSRELAYS="$DIR/none"; VPN_ON="$DIR/vpn-on"; GAPF="$DIR/vpn-gap"
 SERVERS="$DIR/servers"; SERVERS_MANUAL="$DIR/servers-manual"; EVENTS="$DIR/events.log"
-HASHF="$DIR/rules.sha256"; SIGF="$DIR/tunnels"; FILESF="$DIR/rules.files"; INVALIDF="$DIR/invalid"; CORE_EGRESS="$DIR/none"; WIFI_MARK="$DIR/wifi-off-by-ks"; STATEF="$DIR/daemon-state"
+HASHF="$DIR/rules.sha256"; SIGF="$DIR/tunnels"; FILESF="$DIR/rules.files"; INVALIDF="$DIR/invalid"; CORE_EGRESS="$DIR/none"; WIFI_MARK="$DIR/wifi-off-by-ks"; NET_SEEN="$DIR/net-guard-seen"; STATEF="$DIR/daemon-state"
 NB_PLIST="$DIR/none"   # no NetBird: netbird_sync has its own test
 PF_CONF="$tmp/pf.conf"; echo 'anchor "com.apple/*"' > "$PF_CONF"
 dscl() { return 1; }   # no core group: fewer rules, same logic
@@ -124,6 +124,63 @@ ADDRS="utun4 198.18.0.1
 utun7 198.18.128.1"; CORE_RUNS=1
 passes 61 61
 
+# --- ADR 0035: while the VPN is on, pf blocks whatever the protection switch says
+[ "$(st vpn)" = 0 ] && [ "$(st blocking)" = 1 ] && ok "state file: VPN off, blocking (protection on)" || bad "vpn/blocking: $(cat "$STATEF")"
+: > "$VPN_ON"; echo 0 > "$FLAG"; rules > "$tmp/anchor"; : > "$EVENTS"
+passes 62 63
+grep -q 'utun4' "$tmp/anchor" && ! grep -q 'loaded while off' "$EVENTS" && ok "VPN on, protection off: the rules stay loaded" ||
+  bad "VPN on, off: $(cat "$tmp/anchor") / $(cat "$EVENTS")"
+[ "$(st protection)" = off ] && [ "$(st vpn)" = 1 ] && [ "$(st blocking)" = 1 ] &&
+  ok "  state: protection off, VPN on, blocking" || bad "  state: $(cat "$STATEF")"
+: > "$tmp/anchor"
+passes 64 65
+grep -q 'utun4' "$tmp/anchor" && ok "  flushed by someone: loaded again within 2 passes" || bad "  flush while VPN on not undone"
+echo $(( $(date +%s) + 300 )) > "$FLAG"; : > "$tmp/anchor"
+passes 66 67
+grep -q 'utun4' "$tmp/anchor" && [[ "$(st protection)" == paused:* ]] && ok "VPN on, paused: blocking as well" || bad "VPN on, paused: $(cat "$STATEF")"
+ADDRS=""
+passes 68 68
+grep -q '^block drop out quick all$' "$tmp/anchor" && ok "  the tunnel gone (reconnecting): everything outside it blocked" || bad "  no tunnel: $(cat "$tmp/anchor")"
+ADDRS="utun4 198.18.0.1
+utun7 198.18.128.1"
+rm -f "$VPN_ON"
+passes 69 70
+[ ! -s "$tmp/anchor" ] && [ "$(st vpn)" = 0 ] && [ "$(st blocking)" = 0 ] && ok "VPN off, still paused: flushed, state says no blocking" ||
+  bad "VPN off, paused: $(cat "$tmp/anchor") / $(cat "$STATEF")"
+
+# «Подключить» with protection off loads the rules itself (core on): the very next pass, a quick one
+# included, says blocking, never a moment of vpn=1 blocking=0 (the app's red notice)
+: > "$VPN_ON"; load; passes 71 71
+[ "$(st vpn)" = 1 ] && [ "$(st blocking)" = 1 ] && ok "core on, protection off: the next (quick) pass says blocking" ||
+  bad "after core on: $(cat "$STATEF")"
+rm -f "$VPN_ON"; passes 72 73
+
+# «Подключить» lands in the middle of a pass (after guard, before the state file): the pass reads
+# the VPN target once, so it never says vpn=1 blocking=0 (a red flash in the app)
+echo 0 > "$FLAG"; passes 74 75
+core_guard() { echo "core_guard" >> "$tmp/calls"; CORE_STATE=off; : > "$VPN_ON"; }
+passes 76 76
+core_guard() { echo "core_guard" >> "$tmp/calls"; CORE_STATE=off; }
+[ "$(st vpn)" = 0 ] && [ "$(st blocking)" = 0 ] && ok "the VPN turned on mid-pass: that pass says vpn=0 blocking=0, one read" ||
+  bad "mid-pass: $(cat "$STATEF")"
+passes 77 77
+[ "$(st vpn)" = 1 ] && [ "$(st blocking)" = 1 ] && ok "  the next pass: vpn=1 blocking=1" || bad "  next pass: $(cat "$STATEF")"
+rm -f "$VPN_ON" "$FLAG"; passes 78 79
+
+# «Подключить» writes vpn-on and loads the rules after the pass read vpn-on and before its
+# "rules loaded while off" check: that check looks at the file itself, never flushes them
+echo 0 > "$FLAG"; passes 80 81; : > "$EVENTS"
+eval "real_$(declare -f pfctl)"
+pfctl() {
+  if [ "$*" = "-a $ANCHOR -s rules" ] && [ ! -e "$VPN_ON" ]; then : > "$VPN_ON"; rules > "$tmp/anchor"; fi
+  real_pfctl "$@"
+}
+passes 82 82
+eval "$(declare -f real_pfctl | sed 1s/real_pfctl/pfctl/)"
+grep -q 'utun4' "$tmp/anchor" && ! grep -q 'loaded while off' "$EVENTS" && ok "core on mid-pass, protection off: its rules not flushed" ||
+  bad "core on mid-pass flushed: $(cat "$EVENTS")"
+rm -f "$VPN_ON" "$FLAG"; passes 83 84
+
 # --- "ks off" raced with a reload: rules loaded although off
 echo 0 > "$FLAG"; rules > "$tmp/anchor"; : > "$EVENTS"
 passes 16 17
@@ -148,8 +205,17 @@ rm -f "$FLAG"
 
 # --- the boot-window guard at TERM: shutdown vs. being switched off in Login Items
 rm -f "$FLAG"
-networksetup() { echo "networksetup $*" >> "$tmp/net"; }
-physical_services() { printf 'Wi-Fi\nUSB 10/100/1000 LAN\n'; }
+networksetup() {  # every "on" works (netguard.sh has the one that fails)
+  echo "networksetup $*" >> "$tmp/net"
+  case "$1" in
+    -listnetworkserviceorder) printf '(*) Wi-Fi\n(Hardware Port: Wi-Fi, Device: en0)\n(*) USB 10/100/1000 LAN\n(Hardware Port: USB 10/100/1000 LAN, Device: en7)\n' ;;
+    -getnetworkserviceenabled) grep -qx "networksetup -setnetworkserviceenabled $2 on" "$tmp/net" && echo Enabled || echo Disabled ;;
+  esac
+}
+ifconfig() { echo "lo0 en0 en7"; }   # only "ifconfig -l": utun_addrs is a fake above
+configd_ifs() { printf 'lo0\nen0\nen7\n'; }
+NET_CONFIRM=0   # the second look on the next pass (netguard.sh has the 3 s)
+service_list() { printf 'on\tWi-Fi\ten0\non\tUSB 10/100/1000 LAN\ten7\n'; }
 JOB=loaded; DISABLED='	"local.killswitch" => enabled'
 launchctl() {
   case "$*" in
@@ -159,7 +225,7 @@ launchctl() {
   esac
 }
 : > "$tmp/net"; shutdown_guard
-[ "$(paste -sd'|' "$WIFI_MARK")" = "Wi-Fi|USB 10/100/1000 LAN" ] && [ "$(grep -c ' off$' "$tmp/net")" = 2 ] &&
+[ "$(cut -f1 "$WIFI_MARK" | paste -sd'|' -)" = "Wi-Fi|USB 10/100/1000 LAN" ] && [ "$(grep -c ' off$' "$tmp/net")" = 2 ] &&
   ok "shutdown: physical services off, remembered" || bad "shutdown: $(cat "$tmp/net")"
 rm -f "$WIFI_MARK"; : > "$tmp/net"
 DISABLED='	"local.killswitch" => disabled'
@@ -173,13 +239,27 @@ shutdown_guard
 DISABLED='	"local.killswitch" => enabled'; echo 0 > "$FLAG"; : > "$tmp/net"
 shutdown_guard
 [ ! -s "$tmp/net" ] && ok "off by hand: network left alone" || bad "off by hand"
-rm -f "$FLAG"
+: > "$VPN_ON"; rm -f "$WIFI_MARK"
+shutdown_guard
+[ "$(grep -c ' off$' "$tmp/net")" = 2 ] && ok "off by hand but the VPN on (ADR 0035): network off at shutdown as with protection on" ||
+  bad "VPN on, off: $(cat "$tmp/net")"
+# the boot (or a crash) with the VPN on: the rules before anything else, then the network back
+: > "$tmp/anchor"; rm -f "$HASHF"; : > "$tmp/calls"; LAST_FLAG=""
+passes 0 1
+[ "$(grep -E '^(pfctl -a .* -f -|core_guard)$' "$tmp/calls" | head -1)" = "pfctl -a $ANCHOR -f -" ] && grep -q utun4 "$tmp/anchor" &&
+  ok "watchdog start, VPN on, protection off: the rules loaded first" || bad "start: $(paste -sd'|' "$tmp/calls")"
+[ ! -e "$WIFI_MARK" ] && ok "  then the network back on (and looked at twice)" || bad "  network still off"
+rm -f "$FLAG" "$VPN_ON"
 
 # --- ks netrestore: the network back on when the watchdog cannot do it
 printf 'Wi-Fi\n' > "$WIFI_MARK"; : > "$tmp/net"; : > "$tmp/anchor"
 JOB=loaded
 net_restore 2>/dev/null && bad "netrestore while the watchdog runs and the rules are not up" ||
   { [ -e "$WIFI_MARK" ] && [ ! -s "$tmp/net" ] && ok "netrestore refused while the watchdog will do it after the rules"; }
+echo 0 > "$FLAG"; : > "$VPN_ON"
+net_restore 2>/dev/null && bad "netrestore with the VPN on before its rules are up" ||
+  { [ -e "$WIFI_MARK" ] && ok "  refused with protection off too while the VPN is on (ADR 0035)"; }
+rm -f "$FLAG" "$VPN_ON"
 JOB=unloaded
 net_restore >/dev/null && [ ! -e "$WIFI_MARK" ] && grep -qx 'networksetup -setnetworkserviceenabled Wi-Fi on' "$tmp/net" &&
   ok "netrestore: watchdog gone, the services ks turned off are on again" || bad "netrestore: $(cat "$tmp/net")"

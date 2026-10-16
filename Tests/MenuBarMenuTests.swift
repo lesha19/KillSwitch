@@ -23,8 +23,35 @@ final class MenuBarMenuTests: XCTestCase {
         let entries = MenuBarMenu.entries(status: .protected, busy: false, coreConfigured: true, fastestAvailable: true)
         XCTAssertEqual(entries.first??.item, .disconnect)
         XCTAssertEqual(entries.first??.title, "Отключить")
-        let connecting = MenuBarMenu.entries(status: .connecting, busy: false, coreConfigured: true, fastestAvailable: true)
+        let connecting = MenuBarMenu.entries(status: .connecting(), busy: false, coreConfigured: true, fastestAvailable: true)
         XCTAssertEqual(connecting.first??.item, .disconnect)
+    }
+
+    /// ADR 0035: the VPN on and reconnecting, the way out is «Отключить VPN».
+    func testReconnectingMenuDisconnectsTheVPN() {
+        let entries = MenuBarMenu.entries(status: .reconnecting, busy: false, coreConfigured: true, fastestAvailable: true)
+        XCTAssertEqual(entries.first??.item, .disconnect)
+        XCTAssertEqual(entries.first??.title, "Отключить VPN")
+    }
+
+    /// The VPN on next to another program's VPN, or stuck on its first connect: «Отключить VPN» too.
+    func testMenuDisconnectsTheVPNWhereverItIsOn() {
+        for status in [Status.otherVPN(blocksDirect: true, vpnOn: true), .stuck(closed: true), .connecting(closed: true)] {
+            let entry = MenuBarMenu.entries(status: status, busy: false, coreConfigured: true, fastestAvailable: true).first ?? nil
+            XCTAssertEqual(entry?.item, .disconnect, "\(status)")
+            XCTAssertEqual(entry?.title, "Отключить VPN", "\(status)")
+        }
+    }
+
+    /// The core runs where the main button does something else (rules missing, a server that does not
+    /// answer): «Отключить», never a disabled «Подключить».
+    func testMenuDisconnectsWhenDisconnectIsTheSecondButton() {
+        for status in [Status.unblocked(), .stuck()] {
+            let entry = MenuBarMenu.entries(status: status, busy: false, coreConfigured: true, fastestAvailable: true).first ?? nil
+            XCTAssertEqual(entry?.item, .disconnect, "\(status)")
+            XCTAssertEqual(entry?.title, "Отключить", "\(status)")
+            XCTAssertEqual(entry?.enabled, true, "\(status)")
+        }
     }
 
     /// Like the main button: nothing to connect to, another VPN up, or the helper busy.

@@ -4,7 +4,8 @@ import Foundation
 /// back on another Mac or after a reinstall, and «Сбросить» to the defaults through the same path.
 /// Never in the file: the subscription link, own servers and keys (Keychain), server identities
 /// (they carry a hash of the server's secret: favourites and recents go by name), per-server
-/// transport overrides and «Двойной VPN» (both name servers of one subscription).
+/// transport overrides and «Двойной VPN» (both name servers of one subscription). The own DoH
+/// server (ADR 0031) is in it: the person's setting, like the exceptions.
 /// A file is checked whole before anything changes; root settings change only through the `ks`
 /// commands the Settings screens run (`rootCommands`), behind the same authorization.
 enum SettingsBackup {
@@ -17,12 +18,16 @@ enum SettingsBackup {
     }
 
     /// Settings in /Library/KillSwitch, as Settings shows them. Nil = not in the file, left alone.
+    /// No core: it follows the subscription (#65); a file's "core" from before is ignored.
     struct Root: Equatable, Sendable {
-        var core: CoreChoice?
         var switches: [String: Bool]?
         var exceptions: [String]?
         var manualServers: [String]?
         var splitApps: [String]?
+        /// The own DNS-over-HTTPS server (ADR 0031); "" = none.
+        var doh: String?
+        /// The TUN's MTU, 0 = «Авто» (ADR 0032); nil: not named.
+        var mtu: Int?
     }
 
     struct Settings: Equatable, Sendable {
@@ -48,15 +53,19 @@ enum SettingsBackup {
     /// What Settings shows, with ks's own defaults (Helper/ks `setting`, KillSwitchControl.readSettings).
     static let defaultSwitches: [String: Bool] = [
         "lan": true, "tailscale": true, "wifiguard": true, "dns": false, "direct": false, "adblock": false, "diag": false,
-        "failover": true,
+        "escalate": true, "blockadult": false, "blocksocial": false, "blockbetting": false,
     ]
-    private static let switchOrder = ["lan", "dns", "tailscale", "wifiguard", "direct", "adblock", "diag", "failover"]
+    /// Switches files from older versions carry that are gone: skipped on load. «failover», the
+    /// automatic server switch (0.10–0.19, ADR 0036).
+    private static let retiredSwitches: Set<String> = ["failover"]
+    private static let switchOrder = ["lan", "dns", "tailscale", "wifiguard", "direct", "adblock", "blockadult", "blocksocial",
+                                      "blockbetting", "diag", "escalate"]
 
     /// «Сбросить»: every app setting to its default; the root switches to ks's defaults and the
-    /// lists emptied. The way of connecting stays (changing it imports the subscription again).
+    /// lists emptied. The core follows the subscription (#65).
     static var reset: Settings {
         Settings(app: Dictionary(uniqueKeysWithValues: fields.map { ($0.key, $0.fallback) }),
-                 root: Root(core: nil, switches: defaultSwitches, exceptions: [], manualServers: [], splitApps: []))
+                 root: Root(switches: defaultSwitches, exceptions: [], manualServers: [], splitApps: [], doh: "", mtu: 0))
     }
 
     // MARK: app settings
@@ -101,10 +110,22 @@ enum SettingsBackup {
     }
 
     /// Every field as the app has it now. Server identities become the servers' names now
-    /// (`serverKeys`, VPNClient); one no longer in the profile is left out.
-    static func snapshot(_ defaults: UserDefaults, serverKeys: [String: String]) -> [String: Value] {
-        var names: [String: String] = [:]
-        for (name, key) in serverKeys where names[key] == nil || name < names[key]! { names[key] = name }
+    /// (`serverKeys`, VPNClient); one no longer in the profile is left out. Favourites and recents
+    /// (kept by subscription, ADR 0036) travel as the names of the servers of `subscription` (the
+    /// one in use) and of «Свои серверы»; by subscription title: #66.
+    static func snapshot(_ defaults: UserDefaults, serverKeys: [String: String], subscription: String = ServerID.own,
+                         ownKeys: [String: String] = [:]) -> [String: Value] {
+        func byKey(_ keys: [String: String]) -> [String: String] {
+            var names: [String: String] = [:]
+            for (name, key) in keys where names[key] == nil || name < names[key]! { names[key] = name }
+            return names
+        }
+        let names = byKey(serverKeys), ownNames = byKey(ownKeys)
+        func name(_ line: Substring) -> String? {
+            guard let server = ServerID(stored: String(line)) else { return line.hasPrefix(ServerIdentity.prefix) ? names[String(line)] : String(line) }
+            guard server.subscription == subscription || server.isOwn else { return nil }
+            return server.name.hasPrefix(ServerIdentity.prefix) ? (server.isOwn ? ownNames : names)[server.name] : server.name
+        }
         var result: [String: Value] = [:]
         for field in fields {
             let stored: Value? = switch (field.fallback, field.storage) {
@@ -113,7 +134,7 @@ enum SettingsBackup {
             case (.text, _): defaults.string(forKey: field.key).map(Value.text)
             case (.list, .lines):
                 defaults.string(forKey: field.key).map { text in
-                    .list(text.split(separator: "\n").compactMap { $0.hasPrefix(ServerIdentity.prefix) ? names[String($0)] : String($0) })
+                    .list(text.split(separator: "\n").compactMap(name))
                 }
             case (.list, _): defaults.stringArray(forKey: field.key).map(Value.list)
             case (.rules, _): .rules(WiFiRules.decode(defaults.data(forKey: field.key)))
@@ -123,10 +144,29 @@ enum SettingsBackup {
         return result
     }
 
-    /// Writes where the app reads them (AppStorage, AutoConnector, Updater).
-    static func apply(_ app: [String: Value], to defaults: UserDefaults) {
+    /// Writes where the app reads them (AppStorage, AutoConnector, Updater). Favourites and recents
+    /// go to `subscription` (the one in use), the names in `own` and Xray's «… (свой)» to «Свои
+    /// серверы» (ADR 0036); a name of both (`names`: the subscription's servers) to both. They replace
+    /// those two's lines; the other subscriptions' stay, except when `resetting` («Сбросить»).
+    static func apply(_ app: [String: Value], to defaults: UserDefaults, subscription: String = ServerID.own, own: Set<String> = [],
+                      names: Set<String> = [], resetting: Bool = false) {
         for field in fields {
-            switch app[field.key] {
+            var value = app[field.key]
+            if [Subscriptions.favouritesKey, Subscriptions.recentsKey].contains(field.key), case .list(let list) = value {
+                var lines: [String] = []
+                for name in list {
+                    let isOwn = own.contains(name) || name.hasSuffix(XrayManual.mark)
+                    let ids = isOwn ? (names.contains(name) ? [subscription, ServerID.own] : [ServerID.own]) : [subscription]
+                    for id in ids where !lines.contains(ServerID(subscription: id, name: name).stored) {
+                        lines.append(ServerID(subscription: id, name: name).stored)
+                    }
+                }
+                let others = resetting ? [] : ServerRecents.list(defaults.string(forKey: field.key) ?? "").filter { line in
+                    ServerID(stored: line).map { $0.subscription != subscription && !$0.isOwn } ?? false
+                }
+                value = .list(lines + others)
+            }
+            switch value {
             case .bool(let on): defaults.set(on, forKey: field.key)
             case .int(let number): defaults.set(number, forKey: field.key)
             case .text(let text): defaults.set(text, forKey: field.key)
@@ -177,17 +217,19 @@ enum SettingsBackup {
         ]
         if let root = settings.root {
             var part: [String: Any] = [:]
-            if let core = root.core { part["core"] = core.rawValue }
             if let switches = root.switches { part["switches"] = switches }
             if let exceptions = root.exceptions { part["exceptions"] = exceptions }
             if let servers = root.manualServers { part["manualServers"] = servers }
             if let apps = root.splitApps { part["splitApps"] = apps }
+            if let doh = root.doh { part["doh"] = doh }
+            if let mtu = root.mtu { part["mtu"] = mtu == 0 ? HelperCommand.mtuAuto as Any : mtu as Any }
             object["root"] = part
         }
         return (try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])) ?? Data()
     }
 
-    /// The whole file checked; what it does not name is nil (left as it is), unknown keys ignored.
+    /// The whole file checked; what it does not name is nil (left as it is), unknown keys ignored
+    /// (root "hosts" of unreleased 0.20.0 builds among them, #73).
     static func read(_ data: Data) throws -> Settings {
         guard data.count <= maxBytes, let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               object["format"] as? String == format, let fileVersion = number(object["version"]), fileVersion >= 1 else {
@@ -210,14 +252,10 @@ enum SettingsBackup {
     private static func readRoot(_ raw: Any) throws -> Root {
         guard let part = raw as? [String: Any] else { throw Problem.damaged(String(localized: "Защита и служба")) }
         var root = Root()
-        if let core = part["core"] {
-            guard let choice = (core as? String).flatMap(CoreChoice.init(rawValue:)) else { throw Problem.damaged(String(localized: "Способ подключения")) }
-            root.core = choice
-        }
         if let switches = part["switches"] {
             guard let dict = switches as? [String: Any] else { throw Problem.damaged(String(localized: "Что можно без VPN")) }
             var result: [String: Bool] = [:]
-            for (key, value) in dict {
+            for (key, value) in dict where !retiredSwitches.contains(key) {
                 guard HelperCommand.switchKeys.contains(key), let on = flag(value) else { throw Problem.damaged(switchTitle(key)) }
                 result[key] = on
             }
@@ -234,6 +272,19 @@ enum SettingsBackup {
         if let raw = part["splitApps"] {
             guard let list = raw as? [String], HelperCommand.setSplitApps(list).isValid else { throw Problem.damaged(String(localized: "Программы без VPN")) }
             root.splitApps = list
+        }
+        if let raw = part["doh"] {
+            guard let url = raw as? String, url.isEmpty || HelperCommand.isDoH(url) else { throw Problem.damaged(dohTitle) }
+            root.doh = url
+        }
+        if let raw = part["mtu"] {
+            if raw as? String == HelperCommand.mtuAuto {
+                root.mtu = 0
+            } else if !(raw is String), let mtu = number(raw), HelperCommand.setMTU(mtu).isValid {
+                root.mtu = mtu
+            } else {
+                throw Problem.damaged(mtuTitle)
+            }
         }
         return root
     }
@@ -386,19 +437,21 @@ enum SettingsBackup {
                                  new: describe(value, field), root: false))
         }
         guard let root = new.root, let now = current.root else { return result }
-        if let core = root.core, core != now.core {
-            result.append(Change(key: "core", title: String(localized: "Способ подключения"), old: now.core.map(coreTitle) ?? "—",
-                                 new: coreTitle(core), root: true))
-        }
         for key in switchOrder {
             guard let on = root.switches?[key], on != (now.switches?[key] ?? defaultSwitches[key]) else { continue }
             result.append(Change(key: key, title: switchTitle(key), old: onOff(!on), new: onOff(on), root: true))
+        }
+        if let mtu = root.mtu, mtu != (now.mtu ?? 0) {
+            result.append(Change(key: "mtu", title: mtuTitle, old: mtuText(now.mtu ?? 0), new: mtuText(mtu), root: true))
         }
         let lists: [(String, String, [String]?, [String]?, Bool)] = [
             ("exceptions", String(localized: "Адреса без VPN"), now.exceptions, root.exceptions, true),
             ("manualServers", String(localized: "Адреса серверов для других VPN-программ"), now.manualServers, root.manualServers, true),
             ("splitApps", String(localized: "Программы без VPN"), now.splitApps, root.splitApps, false),
         ]
+        if let doh = root.doh, doh != (now.doh ?? "") {
+            result.append(Change(key: "doh", title: dohTitle, old: dohText(now.doh ?? ""), new: dohText(doh), root: true))
+        }
         for (key, title, old, new, addresses) in lists {
             // the lists are sets to ks: another order is no change
             guard let new, Set(new) != Set(old ?? []) else { continue }
@@ -411,12 +464,12 @@ enum SettingsBackup {
         return result
     }
 
-    /// The `ks` commands that turn `current` into `new`, as Settings builds them (Batch); the way
-    /// of connecting is not among them: VPNClient.switchCore runs it and imports the subscription.
+    /// The `ks` commands that turn `current` into `new`, as Settings builds them (Batch).
     static func rootCommands(helper: String, current: Root, new: Root) -> [[String]] {
         var commands: [[String]] = []
         if let switches = new.switches {
-            commands += Batch.settings(helper: helper, old: current.switches ?? defaultSwitches, new: switches)
+            // a switch the current set does not name is at its default (one added after the file was made)
+            commands += Batch.settings(helper: helper, old: defaultSwitches.merging(current.switches ?? [:]) { $1 }, new: switches)
         }
         if let list = new.exceptions {
             commands += Batch.list(helper: helper, add: "allow", remove: "unallow", old: current.exceptions ?? [], new: list)
@@ -426,6 +479,12 @@ enum SettingsBackup {
         }
         if let apps = new.splitApps, Set(apps) != Set(current.splitApps ?? []) {
             commands.append([helper, "set", "splitapps", SplitApps.argument(apps)])
+        }
+        if let doh = new.doh, doh != (current.doh ?? "") {
+            commands.append([helper, "set", "doh", doh])
+        }
+        if let mtu = new.mtu, mtu != (current.mtu ?? 0) {
+            commands.append([helper] + HelperCommand.setMTU(mtu == 0 ? nil : mtu).arguments)
         }
         return commands
     }
@@ -439,6 +498,11 @@ enum SettingsBackup {
         case .rules(let rules): listText(rules.map(\.ssid))
         }
     }
+
+    private static var dohTitle: String { String(localized: "Свой сервер DNS-over-HTTPS") }
+    private static func dohText(_ url: String) -> String { url.isEmpty ? String(localized: "нет") : url }
+    static let mtuTitle = String(localized: "Размер пакетов VPN (MTU)")
+    private static func mtuText(_ mtu: Int) -> String { mtu == 0 ? String(localized: "Авто") : String(mtu) }
 
     private static func onOff(_ on: Bool) -> String { on ? String(localized: "вкл") : String(localized: "выкл") }
 
@@ -459,10 +523,6 @@ enum SettingsBackup {
         return list.count > 3 ? shown + " " + String(localized: "и ещё \(list.count - 3)") : shown
     }
 
-    private static func coreTitle(_ core: CoreChoice) -> String {
-        core == .xray ? String(localized: "Основной") : String(localized: "Запасной")
-    }
-
     private static func switchTitle(_ key: String) -> String {
         switch key {
         case "lan": String(localized: "Доступ к домашней сети")
@@ -471,8 +531,11 @@ enum SettingsBackup {
         case "wifiguard": String(localized: "Отключать сеть при выключении Mac")
         case "direct": String(localized: "Пускать dropweb мимо VPN (слабее защиты)")
         case "adblock": String(localized: "Блокировать рекламу и трекеры")
+        case "blockadult": String(localized: "Блокировать сайты для взрослых")
+        case "blocksocial": String(localized: "Блокировать соцсети")
+        case "blockbetting": String(localized: "Блокировать букмекеров")
         case "diag": String(localized: "Подробная диагностика (все соединения)")
-        case "failover": String(localized: "Переключать сервер, если он перестал отвечать")
+        case "escalate": String(localized: "Пробовать другой отпечаток и транспорт, если сервер не отвечает")
         default: key
         }
     }

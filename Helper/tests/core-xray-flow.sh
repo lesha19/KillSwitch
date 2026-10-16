@@ -11,7 +11,10 @@ here=$(cd "$(dirname "$0")" && pwd)
 XRAY=${XRAY:-}
 fx="$here/fixtures"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-DIR="$tmp"; CORE_DIR="$tmp/core"; mkdir -p "$CORE_DIR/ctl" "$tmp/ld"
+# ks core import reads only through folders only we can change (trusted_path), and the
+# checkout may sit under /tmp: the fixtures from a private copy
+cp -R "$here/fixtures" "$tmp/fixtures"; fx="$tmp/fixtures"
+DIR="$tmp"; CORE_DIR="$tmp/core"; mkdir -p "$CORE_DIR/ctl" "$tmp/ld"; VPN_ON="$DIR/vpn-on"; GAPF="$DIR/vpn-gap"
 SETTINGS="$DIR/settings"; ALLOW="$DIR/allow"; TSRELAYS="$DIR/none"; EVENTS="$DIR/events.log"
 SERVERS="$DIR/servers"; SERVERS_MANUAL="$DIR/servers-manual"; SERVERS_CORE="$DIR/servers-core"
 CORE_CTL="$CORE_DIR/ctl/mihomo.sock"
@@ -25,7 +28,7 @@ install() { :; }
 pfctl() { cat >/dev/null; }
 dscl() { return 0; }
 vpn_ifaces() { :; }; ts_ifaces() { :; }
-loaded() { return 1; }
+loaded() { return 1; }; load() { :; }   # core on asserts the rules (ADR 0035): never the real pf files
 LOADED=0
 launchctl() { echo "launchctl $*" >> "$tmp/launchd"; case "$1" in print) [ "$LOADED" = 1 ] && echo 'state = running' ;; esac; [ "$1" != print ] || [ "$LOADED" = 1 ]; }
 resolve_host() { case "$1" in de.example.com) echo 203.0.113.20 ;; *) return 1 ;; esac; }
@@ -69,7 +72,10 @@ run "$fx/xray-panel.json" import
 rm -f "$tmp/xray-fails"
 echo '{"proxies":[{"name":"a","type":"ss","server":"203.0.113.9","port":1,"cipher":"aes-128-gcm","password":"x"}]}' > "$tmp/m.json"
 run "$tmp/m.json" import
-[ "$rc" != 0 ] && grep -q Xray "$tmp/err" && ok "a mihomo profile while core=xray: refused with the reason" || bad "mihomo profile: $rc $(cat "$tmp/err")"
+[ "$rc" = 0 ] && [ "$(core_kind)" = mihomo ] && cmp -s "$CORE_DIR/xray.json" "$tmp/before" &&
+  ok "a mihomo profile while core=xray: the core follows it (#65), Xray's config kept" || bad "mihomo profile: $rc $(core_kind) $(cat "$tmp/err")"
+run "$fx/xray-panel.json" import
+[ "$rc" = 0 ] && [ "$(core_kind)" = xray ] && ok "  and back to Xray with the panel's JSON" || bad "  back to xray: $rc $(core_kind)"
 
 # --- refresh (passwordless) measures against the approval, as with mihomo
 run "$fx/xray-panel.json" refresh
@@ -148,8 +154,8 @@ core_select "$XRAY_GROUP" "🇱🇹Литва 2" 2>/dev/null
 ! grep -q 'Литва 2' "$tmp/seen" && ok "  while the candidate is built and gated, the settings still name the running pick" ||
   bad "  pick written before the gate: $(cat "$tmp/seen")"
 eval "$(declare -f real_core_rebuild | sed '1s/real_core_rebuild/core_rebuild/')"
-# KS-10 / fail closed: a host name the settings would call damaged is never written (failover
-# takes names from the subscription without the passwordless filter)
+# KS-10 / fail closed: a host name the settings would call damaged is never written (the
+# subscription's names, beyond what the passwordless filter sees)
 # the copy the candidate is built from cannot be written (a full disk): the old pick would be
 # built and pass the gate, and the new one written ungated; refused instead, nothing written
 eval "$(declare -f put_setting | sed '1s/put_setting/real_put_setting/')"

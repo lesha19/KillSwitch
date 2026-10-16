@@ -20,6 +20,9 @@ struct ServersScreen: View {
     @State private var filter = ServerPicker.Filter()
     @State private var highlighted: String?
     @State private var choosingEntry = false
+    /// At most 1 s: Accessibility allows a double-click interval up to ~5 s, which would swallow
+    /// a deliberate quick correction of a misclick.
+    @State private var choice = ServerChoice(interval: min(NSEvent.doubleClickInterval, 1))
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -49,10 +52,8 @@ struct ServersScreen: View {
                     .fixedSize()
                     .help("Порядок серверов: как в подписке, быстрые сверху или по имени")
                     Spacer()
-                    if let proxies {
-                        let options = ServerPicker.filterOptions(entries(proxies), proxies: proxies)
-                        if !options.isEmpty { filterMenu(options) }
-                    }
+                    let options = filterOptions
+                    if !options.isEmpty { filterMenu(options) }
                 }
             }
         }
@@ -97,43 +98,63 @@ struct ServersScreen: View {
         }
     }
 
+    /// The profile the helper runs: the running core's, else its cache.
     private var proxies: CoreProxies? { control.proxies ?? client.profileProxies }
 
+    /// One block per subscription, then «Свои серверы» (ADR 0036): the one the helper runs from
+    /// the running core (its choice, its ping), the others from their caches. Choosing the entry
+    /// of «Двойной VPN» lists that one alone.
+    private var blocks: [(block: ServerPicker.Block, proxies: CoreProxies)] {
+        client.blocks.compactMap { block in
+            let active = block.id == client.activeID
+            guard active || !choosingEntry else { return nil }
+            let proxies = active && control.coreRunning ? control.proxies ?? block.proxies : block.proxies
+            return (ServerPicker.Block(id: block.id, title: block.title, entries: entries(proxies, subscription: block.id)), proxies)
+        }
+    }
+
     @ViewBuilder private var list: some View {
-        if let proxies {
-            let all = entries(proxies)
-            let sections = ServerPicker.sections(ServerPicker.filtered(all, filter, proxies: proxies), favourites: favourites, recents: recents, query: query, sort: sort,
-                                                 delays: delays(all))
-            let current = choosingEntry ? control.multihopEntry : currentName(proxies)
-            if sections.fastest == nil && sections.favourites.isEmpty && sections.all.isEmpty {
+        let blocks = blocks
+        if !blocks.isEmpty {
+            let all = blocks.flatMap(\.block.entries)
+            let filtered = blocks.map { ServerPicker.Block(id: $0.block.id, title: $0.block.title,
+                                                           entries: ServerPicker.filtered($0.block.entries, filter, proxies: $0.proxies)) }
+            let list = ServerPicker.list(filtered, favourites: favourites, recents: recents, query: query, sort: sort, delays: delays(all))
+            let current = current
+            if list.blocks.isEmpty && list.favourites.isEmpty {
                 empty(query.isEmpty && !filter.isOn ? String(localized: "В подписке нет серверов.") : String(localized: "Ничего не нашлось."))
             } else {
                 List(selection: $highlighted) {
-                    if let fastest = sections.fastest {
-                        row(fastest, current: current)
+                    if !list.recents.isEmpty && !choosingEntry {
+                        Section("Недавние") { ForEach(list.recents) { row($0, current: current, tag: Self.recentTag + $0.id, named: true) } }
                     }
-                    if !sections.recents.isEmpty && !choosingEntry {
-                        Section("Недавние") { ForEach(sections.recents) { row($0, current: current, tag: Self.recentTag + $0.id) } }
+                    if !list.favourites.isEmpty {
+                        Section("Избранное") { ForEach(list.favourites) { row($0, current: current, named: true) } }
                     }
-                    if !sections.favourites.isEmpty {
-                        Section("Избранные") { ForEach(sections.favourites) { row($0, current: current) } }
+                    ForEach(list.blocks) { block in
+                        Section {
+                            if let fastest = block.fastest { row(fastest, current: current) }
+                            ForEach(block.servers) { row($0, current: current) }
+                        } header: {
+                            Text(verbatim: block.title)
+                        }
                     }
-                    Section("Все") { ForEach(sections.all) { row($0, current: current) } }
                 }
                 .listStyle(.inset)
                 .frame(minHeight: 280, maxHeight: back == nil ? .infinity : 420)
                 .contextMenu(forSelectionType: String.self) { ids in
-                    if let id = ids.first.map(Self.name(fromTag:)) {
-                        Button(favourites.contains(id) ? String(localized: "Убрать из избранного") : String(localized: "Добавить в избранное")) { toggleFavourite(id) }
+                    if let entry = ids.first.flatMap({ id in all.first { $0.id == Self.id(fromTag: id) } }), !entry.isFastest {
+                        Button(favourites.contains(entry.server) ? String(localized: "Убрать из избранного") : String(localized: "Добавить в избранное")) { toggleFavourite(entry) }
                     }
                 } primaryAction: { ids in
-                    if let id = ids.first.map(Self.name(fromTag:)), let entry = all.first(where: { $0.id == id }) { choose(entry) }
+                    if let id = ids.first.map(Self.id(fromTag:)), let entry = all.first(where: { $0.id == id }) { choose(entry) }
                 }
             }
-            if let error = control.coreError { InlineError(error: error) }
+            if let error = control.coreError ?? client.lastError { InlineError(error: error) }
         } else if control.coreRunning, let error = control.proxiesError {
             InlineError(error: error)
-            Button("Перезапустить VPN") { control.restartCore() }
+            // `ks core restart` needs the VPN on (ADR 0035)
+            if control.vpnOn { Button("Перезапустить VPN") { control.restartCore() } }
         } else if control.coreRunning {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -143,6 +164,18 @@ struct ServersScreen: View {
         } else {
             empty(String(localized: "Список появится после первого обновления подписки."))
         }
+    }
+
+    /// What the filter offers over all blocks.
+    private var filterOptions: ServerPicker.FilterOptions {
+        var options = ServerPicker.FilterOptions(countries: [], protocols: [], groups: [])
+        for (block, proxies) in blocks {
+            let more = ServerPicker.filterOptions(block.entries, proxies: proxies)
+            options.countries += more.countries.filter { !options.countries.contains($0) }
+            options.protocols += more.protocols.filter { !options.protocols.contains($0) }
+            options.groups += more.groups.filter { !options.groups.contains($0) }
+        }
+        return options
     }
 
     /// Country, protocol, group: each only when the list has more than one.
@@ -188,39 +221,48 @@ struct ServersScreen: View {
     /// A server is in «Недавние» and again below: its row there has a tag of its own.
     private static let recentTag = "\u{1}recent:"
 
-    private static func name(fromTag tag: String) -> String {
+    private static func id(fromTag tag: String) -> String {
         tag.hasPrefix(recentTag) ? String(tag.dropFirst(recentTag.count)) : tag
     }
 
-    private func row(_ entry: ServerPicker.Entry, current: String?, tag: String? = nil) -> some View {
-        ServerPickerRow(entry: entry, current: entry.name == current, favourite: favourites.contains(entry.name),
-                        description: client.profileProxies?.serverDescription(of: entry.name), ping: ping(entry), leaf: entry.isFastest ? proxies?.leaf(of: entry.name) : nil,
-                        choose: { choose(entry) }, toggleFavourite: { toggleFavourite(entry.name) })
+    /// `named`: the row says whose server it is («Недавние», «Избранное»).
+    private func row(_ entry: ServerPicker.Entry, current: ServerID?, tag: String? = nil, named: Bool = false) -> some View {
+        let block = client.blocks.first { $0.id == entry.subscription }
+        let active = entry.subscription == client.activeID
+        return ServerPickerRow(entry: entry, current: entry.server == current, favourite: favourites.contains(entry.server),
+                               subscription: named ? block?.title : nil, description: block?.proxies.serverDescription(of: entry.name),
+                               ping: active ? ping(entry) : .unknown, leaf: entry.isFastest && active ? proxies?.leaf(of: entry.name) : nil,
+                               choose: { choose(entry) }, toggleFavourite: { toggleFavourite(entry) })
             .tag(tag ?? entry.id)
     }
 
-    /// The exit list is the whole picker; the entry list has servers only, never the exit.
-    private func entries(_ proxies: CoreProxies) -> [ServerPicker.Entry] {
-        let all = ServerPicker.entries(proxies)
-        guard choosingEntry else { return all }
+    /// The exit list is the whole picker but the entry (ADR 0027); the entry list has servers only,
+    /// never the exit. Both only in the subscription the helper runs.
+    private func entries(_ proxies: CoreProxies, subscription: String) -> [ServerPicker.Entry] {
+        let all = ServerPicker.entries(proxies, subscription: subscription)
+        guard subscription == client.activeID else { return all }
+        guard choosingEntry else {
+            let exits = Set(Multihop.exits(all.map(\.name), entry: control.multihopEntry))
+            return all.filter { exits.contains($0.name) }
+        }
         let candidates = Set(Multihop.candidates(all.filter { !$0.isFastest }.map(\.name), exit: control.currentServer))
         return all.filter { candidates.contains($0.name) }
     }
 
-    private func currentName(_ proxies: CoreProxies) -> String? {
-        if control.coreRunning, control.proxies != nil { return ServerPicker.selected(proxies) }
-        return control.pendingChoice?.name
+    private var current: ServerID? {
+        if choosingEntry { return control.multihopEntry.map { ServerID(subscription: client.activeID, name: $0) } }
+        if control.coreRunning, let proxies = control.proxies {
+            return ServerPicker.selected(proxies).map { ServerID(subscription: client.activeID, name: $0) }
+        }
+        return control.pendingChoice?.server
     }
 
     private func choose(_ entry: ServerPicker.Entry) {
+        guard choice.accept() else { return }
         if choosingEntry {
             control.setMultihop(entry: entry.name)
         } else {
-            control.choose(entry)
-            if !entry.isFastest {
-                recentsText = ServerRecents.text(ServerRecents.adding(name: entry.name, keys: client.serverKeys,
-                                                                      to: ServerRecents.list(recentsText)))
-            }
+            Task { await client.choose(entry) }   // «Недавние» once it is chosen
             back?()
         }
     }
@@ -229,28 +271,36 @@ struct ServersScreen: View {
         ServerPicker.Ping(delay: control.delay(of: entry.name), timedOut: control.timedOut(entry.name))
     }
 
-    private func delays(_ entries: [ServerPicker.Entry]) -> [String: Int] {
-        var result: [String: Int] = [:]
-        for entry in entries {
-            if let delay = control.delay(of: entry.name) { result[entry.name] = delay } else if control.timedOut(entry.name) { result[entry.name] = CoreDelay.timeout }
+    /// Known only for the subscription the core runs.
+    private func delays(_ entries: [ServerPicker.Entry]) -> [ServerID: Int] {
+        var result: [ServerID: Int] = [:]
+        for entry in entries where entry.subscription == client.activeID {
+            if let delay = control.delay(of: entry.name) {
+                result[entry.server] = delay
+            } else if control.timedOut(entry.name) {
+                result[entry.server] = CoreDelay.timeout
+            }
         }
         return result
     }
 
-    /// Names of the favourites now: they are kept by server identity, so a rename keeps them.
-    private var favourites: Set<String> {
-        ServerIdentity.names(favouritesText.split(separator: "\n").map(String.init), keys: client.serverKeys)
+    /// Each subscription's server name → identity.
+    private var keys: [String: [String: String]] {
+        Dictionary(client.blocks.map { ($0.id, $0.keys) }, uniquingKeysWith: { a, _ in a })
     }
 
-    private var recents: [String] {
-        ServerRecents.names(ServerRecents.list(recentsText), keys: client.serverKeys)
+    /// The favourites now: kept by (subscription, identity), so a rename keeps them.
+    private var favourites: Set<ServerID> {
+        Set(ServerRecents.servers(ServerRecents.list(favouritesText), keys: keys))
     }
 
-    private func toggleFavourite(_ name: String) {
-        let key = client.serverKeys[name] ?? name
-        var list = favouritesText.split(separator: "\n").map(String.init)
-        if list.contains(key) || list.contains(name) { list.removeAll { $0 == key || $0 == name } } else { list.append(key) }
-        favouritesText = list.joined(separator: "\n")
+    private var recents: [ServerID] {
+        ServerRecents.servers(ServerRecents.list(recentsText), keys: keys)
+    }
+
+    private func toggleFavourite(_ entry: ServerPicker.Entry) {
+        favouritesText = ServerRecents.text(ServerRecents.toggled(entry.server, keys: keys[entry.subscription] ?? [:],
+                                                                  in: ServerRecents.list(favouritesText)))
     }
 }
 
@@ -258,6 +308,8 @@ private struct ServerPickerRow: View {
     let entry: ServerPicker.Entry
     let current: Bool
     let favourite: Bool
+    /// Whose server it is, in «Недавние» and «Избранное» (ADR 0036).
+    let subscription: String?
     /// The subscription's few words about the server (ServerDescription), under the name.
     let description: String?
     let ping: ServerPicker.Ping
@@ -277,6 +329,9 @@ private struct ServerPickerRow: View {
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.title).lineLimit(1)
+                if let subscription {
+                    Text(verbatim: subscription).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
                 if let description {
                     Text(verbatim: description).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -310,6 +365,7 @@ private struct ServerPickerRow: View {
         guard !entry.isFastest else { return ServerPicker.fastestTitle }
         var parts = [ServerName.spoken(entry.name)]
         if entry.own { parts[0] += String(localized: ", свой") }
+        if let subscription { parts.append(subscription) }
         if let description { parts.append(description) }
         return parts.joined(separator: ", ")
     }

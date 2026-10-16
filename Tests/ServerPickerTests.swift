@@ -23,6 +23,12 @@ final class ServerPickerTests: XCTestCase {
         try CoreProxies(data: Data(json.utf8), order: ["🚀 Выбор сервера", "⚡ Авто", "Свои серверы"])
     }
 
+    /// #66: the menu bar and the home screen name the server's subscription.
+    func testLabelNamesTheSubscription() {
+        XCTAssertEqual(ServerPicker.label("🇱🇹 Литва", subscription: "Stork"), "🇱🇹 Литва · Stork")
+        XCTAssertEqual(ServerPicker.label("🇱🇹 Литва", subscription: nil), "🇱🇹 Литва")
+    }
+
     func testFlatListFromTheMainGroup() throws {
         let entries = ServerPicker.entries(try proxies())
         XCTAssertEqual(entries.map(\.name), ["⚡ Авто", "🇱🇹 Литва", "🇩🇪 Германия", "LT-Vilnius", "🇵🇱 Варшава", "Дом"])
@@ -113,6 +119,36 @@ final class ServerPickerTests: XCTestCase {
         XCTAssertTrue(sections.all.map(\.name).contains("Дом"))
         XCTAssertEqual(ServerPicker.sections(entries, favourites: [], recents: recents, query: "дом", sort: .name, delays: [:]).recents, [])
         XCTAssertEqual(ServerPicker.sections(entries, favourites: [], query: "", sort: .name, delays: [:]).recents, [])
+    }
+
+    /// ADR 0036: one block per subscription, then «Свои серверы»; «Литва» of two subscriptions are
+    /// two rows; «Недавние» and «Избранное» across the blocks, each row knowing its subscription.
+    func testBlocksPerSubscription() throws {
+        let stork = ServerPicker.entries(try proxies(), subscription: "s1")
+        let ivpn = ServerPicker.entries(CoreProxies(xrayServers: ["🇱🇹 Литва", "🇳🇱 Нидерланды"]), subscription: "s2")
+        let own = ServerPicker.entries(CoreProxies(xrayServers: ["Дом (свой)"]), subscription: ServerID.own)
+        let blocks = [ServerPicker.Block(id: "s1", title: "Stork", entries: stork),
+                      ServerPicker.Block(id: "s2", title: "iVPN", entries: ivpn),
+                      ServerPicker.Block(id: ServerID.own, title: "Свои серверы", entries: own)]
+        let lithuania = ServerID(subscription: "s2", name: "🇱🇹 Литва")
+        let list = ServerPicker.list(blocks, favourites: [lithuania], recents: [ServerID(subscription: ServerID.own, name: "Дом (свой)"),
+                                                                                ServerID(subscription: "s1", name: "🇱🇹 Литва")],
+                                     query: "", sort: .subscription, delays: [:])
+        XCTAssertEqual(list.recents.map(\.server), [ServerID(subscription: ServerID.own, name: "Дом (свой)"), ServerID(subscription: "s1", name: "🇱🇹 Литва")])
+        XCTAssertEqual(list.favourites.map(\.server), [lithuania])
+        XCTAssertEqual(list.blocks.map(\.title), ["Stork", "iVPN", "Свои серверы"])
+        XCTAssertEqual(list.blocks[0].fastest?.name, "⚡ Авто")
+        XCTAssertTrue(list.blocks[0].servers.contains { $0.name == "🇱🇹 Литва" })   // Stork's, not the favourite
+        XCTAssertEqual(list.blocks[1].servers.map(\.name), ["🇳🇱 Нидерланды"])
+        XCTAssertNotEqual(list.blocks[0].servers.first { $0.name == "🇱🇹 Литва" }?.id, lithuania.stored)
+        // search inside every block; a block with nothing found is left out
+        let found = ServerPicker.list(blocks, favourites: [], recents: [], query: "нидер", sort: .name, delays: [:])
+        XCTAssertEqual(found.blocks.map(\.id), ["s2"])
+        // ping order inside each block
+        let byPing = ServerPicker.list(blocks, favourites: [], recents: [], query: "", sort: .ping,
+                                       delays: [ServerID(subscription: "s2", name: "🇳🇱 Нидерланды"): 20,
+                                                ServerID(subscription: "s1", name: "🇳🇱 Нидерланды"): 999])
+        XCTAssertEqual(byPing.blocks[1].servers.map(\.name), ["🇳🇱 Нидерланды", "🇱🇹 Литва"])
     }
 
     func testSortBySubscriptionKeepsItsOrder() throws {

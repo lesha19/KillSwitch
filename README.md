@@ -9,9 +9,16 @@ Rules are loaded at boot, before login.
 
 - `Helper/ks` — root helper: generates the pf rules from settings and loads them into anchor
   `com.apple/killswitch` (`/etc/pf.conf` untouched). `status | state | on | off | pause [min] |
-  set lan|tailscale|dns|direct|wifiguard|adblock 0|1 | allow <addr> | unallow <addr> | server-add <ip> |
+  set lan|tailscale|dns|direct|wifiguard|adblock|blockadult|blocksocial|blockbetting 0|1 | set doh <url> | allow <addr> | unallow <addr> | server-add <ip> |
   server-remove <ip> | core … | apply | repair | watch`. Tests (no root, nothing on the system changes):
-  `for t in Helper/tests/*.sh; do bash "$t"; done`.
+  `for t in Helper/tests/*.sh; do bash "$t"; done`. Before a push, also as CI runs them (no
+  cores, no geodata, a copy of the tracked files): `scripts/test-helper-ci.sh /bin/bash` and
+  `scripts/test-helper-ci.sh "$(brew --prefix)/bin/bash"`.
+  Merge gate (Actions is not paid): `scripts/ci-local.sh <commit> [--pr N]` runs the ci.yml steps
+  on a clean worktree of that commit; merge only on its `green`.
+  `scripts/vm.sh <commit> [--pr N]` runs the same gate inside the tart VM (never build or test on the host Mac).
+  `scripts/vm-batch.sh check <base> <PR>...` gates a batch of reviewed PRs once (the merge of all of them onto the base tip; a red batch is bisected and the culprit left out), then they are squash-merged in that order
+  and `scripts/vm-batch.sh landed <base> <tree>` must say the tip is the tested tree. Rules: docs/agents/done.md.
 - `Helper/local.killswitch.plist` — LaunchDaemon: runs `ks watch` (RunAtLoad + KeepAlive), so rules
   are loaded at boot, before login, and checked every 2 s (tunnels every second). `AssociatedBundleIdentifiers` makes it
   show up under the app's name in System Settings → Login Items & Extensions.
@@ -31,8 +38,8 @@ Rules are loaded at boot, before login.
   is fetched with a mihomo User-Agent and Remnawave's device headers (`x-hwid` = hash of the Mac's
   hardware UUID, `x-device-os`, `x-ver-os`, `x-device-model`), reduced to proxies, proxy-groups, rules
   and rule-providers and handed to the helper; a failed update keeps the old config. If the subscription's host does not answer,
-  the app asks again through the core's loopback listener (127.0.0.1:47890, always through the VPN) and
-  then the optional backup link (keychain), and shows which source worked (ADR 0016). A click (adding the
+  the app asks again through the core's loopback listener (127.0.0.1:47890, always through the VPN),
+  and shows which way worked (ADR 0016; the backup link is gone, ADR 0036). A click (adding the
   subscription, «Обновить», a new server) runs `ks core import <file.json>`, with the admin prompt if
   needed. The timer only runs `sudo -n ks core refresh <file.json>` and never prompts; if the helper
   refuses it (exit 3: new server addresses) the app shows «Нужно подтверждение: в подписке новые
@@ -45,7 +52,8 @@ Rules are loaded at boot, before login.
   never prompting (a notification instead), with trusted Wi-Fi networks (the name needs Location access
   on macOS 14+; without it every network is untrusted); «Запускать при входе» (SMAppService);
   «Программы без VPN» (apps by CFBundleExecutable → `ks set splitapps <list>`);
-  «Двойной VPN» (`ks set multihop <entry>|off`, chain shown in the window).
+  «Двойной VPN» (`ks set multihop <entry>|off`, chain shown in the window); «Размер пакетов VPN (MTU)»
+  for troubleshooting (`ks set mtu auto|1280…1500`, ADR 0032).
 - `App/Core/` — pure parsers (no AppKit), unit-tested by the `KillSwitchTests` target:
   `xcodegen generate && xcodebuild -scheme KillSwitch test CODE_SIGNING_ALLOWED=NO`.
 - `CLI/` — `killswitch`, the command line over the daemon (ADR 0025), shipped at
@@ -70,14 +78,17 @@ the app target's `.stringsdata` files from DerivedData. Check before a release:
 `rg -n 'ядр|pf |туннел|utun|mihomo|Clash|Remnawave|Обновить защиту' App/*.swift` — only comments
 and code may match. Technical names stay in «Скопировать диагностику» (for support).
 
-Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, wifiguard, adblock, splitapps, multihop, core, xrayserver, failover),
+Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, wifiguard, adblock, blockadult, blocksocial, blockbetting, doh, hosts, splitapps, multihop, core, xrayserver, diag,
+escalate, mtu; `ks set <key> 0|1` for the switches, `ks set mtu <n>|auto`),
 `allow` (addresses reachable by any process), `servers-manual` (VPN server IPs added by `server-add`
 and install.sh, reachable by any process), `servers-core` (proxy addresses of the imported core
 profile, rewritten on every import, reachable only by our core), `servers` (both merged),
 `rules.sha256`, `rules.files` and `tunnels` (state of the last load, for tamper checks), `invalid`
 (world-readable: damaged files that made the last load block everything, ADR 0015), `events.log`
 (world-readable, last 500 corrective actions), `core/geodata` (world-readable: whether install.sh put
-the bundled geodata in place or kept the old file because its sha256 was not the pinned one, #27).
+the bundled geodata in place or kept the old file because its sha256 was not the pinned one, #27),
+`core/escalation-state` and `core/escalation` (root-only: the escalation pass's state and
+what transport escalation remembered per server, ADR 0030).
 
 ## Security model
 
@@ -136,9 +147,11 @@ the bundled geodata in place or kept the old file because its sha256 was not the
   rule sending them DIRECT needs the admin's approval like any DIRECT rule. Never the LAN's DNS.
   Programs without VPN: before the profile's rules the generator puts the apps of
   `ks set splitapps <a,b>` (stored as `splitapps=` in `settings`; ≤50 names, ≤64 bytes, no commas or
-  control characters; also their `<name> Helper…` processes; `""` clears), DIRECT; ad blocking
-  (`adblock=1`) puts `GEOSITE,category-ads-all,REJECT` first. Both are the user's own choices and are
-  reported as such. `core/geosite.dat` and `core/geoip.metadb` (`Helper/fetch-geodata.sh`,
+  control characters; also their `<name> Helper…` processes; `""` clears), DIRECT; blocked
+  categories (ADR 0031: `adblock`, `blockadult`, `blocksocial`, `blockbetting` = `category-ads-all`,
+  `category-porn`, `category-social-media-!cn`, `category-betting-ru`) go first as `GEOSITE,…,REJECT`;
+  the own DoH server (`ks set doh <https url>`) is asked through the VPN only (Xray: Cloudflare DoH after it; mihomo: alone).
+  Both are the user's own choices and are reported as such. `core/geosite.dat` and `core/geoip.metadb` (`Helper/fetch-geodata.sh`,
   sha256-pinned, shipped in the app) serve the profile's `GEOSITE`/`GEOIP` rules; without them such
   rules are left out. The core never downloads geodata (`geo-auto-update: false`).
   Every generation writes `core/routing.json` (644, no secrets): the rules in order, what was left out
@@ -147,7 +160,10 @@ the bundled geodata in place or kept the old file because its sha256 was not the
   route, bytes; no source addresses) for its «Соединения» tab. Double VPN: `ks set multihop <proxy>|off`
   (`multihop=` in `settings`) sets `dialer-proxy: <proxy>` on every other proxy, so pf lets the core
   reach only the entry server; the entry must be a proxy of the profile without its own dialer-proxy.
-  Both need the admin password (not in sudoers: splitapps widens direct egress). The app switches servers without the API being exposed: `ks core proxies` (JSON of
+  Both need the admin password (not in sudoers: splitapps widens direct egress). The TUN's MTU:
+  `ks set mtu auto|1280…1500` (`mtu=` in `settings`, admin, both cores; «auto» = Xray 1500, mihomo
+  9000) rebuilds the config, restarts the core once and puts the previous value back if it does not
+  come up (ADR 0032). The app switches servers without the API being exposed: `ks core proxies` (JSON of
   groups and proxies), `ks core select <group> <proxy>`, `ks core delay <group|proxy>` talk to the
   controller socket; names are length- and control-character-checked and fully percent-encoded.
   `Helper/tests/core-config.sh` runs the generator against fixture profiles, attack ones included,
@@ -186,11 +202,19 @@ the bundled geodata in place or kept the old file because its sha256 was not the
   GmbH, TA739QLA7A) and restarts it; pf lets that group out, the filter trusts the same signature.
   NetBird's network (100.64.0.0/10) passes on its utun like the tailnet.
 - DNS to LAN resolvers is blocked by default (setting `dns`), so names do not leak via the router.
+- The VPN on blocks like protection on (0.20.0, ADR 0035): from «Подключить» (`ks core on`) to
+  «Отключить» (`ks core off`) `/Library/KillSwitch/vpn-on` exists, and pf blocks everything outside
+  the tunnel whatever the protection switch or a pause say: a core restart (an update, a server
+  switch, a crash, a reboot) never goes out directly. `/Library/KillSwitch/vpn-gap` holds the start
+  of the current gap (the VPN on, not connected) for «Журнал защиты». Protection («защита») adds the
+  same blocking while the VPN is off.
 - Rules and settings are root-owned. Passwordless sudo covers only `ks state`, `ks on`, `ks core
-  state|on|off|proxies`, `ks core select|delay …` and `ks core refresh …` (refused if it brings new
-  server names or addresses or changes what goes DIRECT), none of which can widen the rules; turning off, pausing, `ks core import` and
+  state|on|off|restart|proxies`, `ks core select|delay …`, `ks core refresh …` (refused if it brings new
+  server names or addresses or changes what goes DIRECT) and `ks core use …` (another subscription's
+  profile, refused unless one entry the last import approved takes all its servers and DIRECT; a
+  profile of the other core swaps the core under blocking, ADR 0036), none of which can widen the rules; turning off, pausing, `ks core import` and
   every setting change ask for the admin password.
-- Watchdog (`ks watch`, pf every 2 s and tunnels every second, honours off / pause): checks that pf is enabled, that the main
+- Watchdog (`ks watch`, pf every 2 s and tunnels every second, honours off / pause while the VPN is off): checks that pf is enabled, that the main
   ruleset still references the `com.apple/*` anchor (otherwise reloads `/etc/pf.conf`), that the
   sha256 of the loaded anchor equals the hash saved right after our load, and that the set of tunnel
   interfaces did not change. Any mismatch reloads the rules and is written to `events.log`.

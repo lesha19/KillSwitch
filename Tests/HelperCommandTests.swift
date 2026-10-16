@@ -11,7 +11,7 @@ final class HelperCommandTests: XCTestCase {
         let cases: [(HelperCommand, [String])] = [
             (.state, ["state"]), (.probe, ["probe"]), (.protectionOn, ["on"]), (.netRestore, ["netrestore"]),
             (.coreState, ["core", "state"]), (.coreOn, ["core", "on"]), (.coreOff, ["core", "off"]),
-            (.coreProxies, ["core", "proxies"]), (.coreTraffic, ["core", "traffic"]), (.coreConnections, ["core", "connections"]),
+            (.coreRestart, ["core", "restart"]), (.coreProxies, ["core", "proxies"]), (.coreTraffic, ["core", "traffic"]), (.coreConnections, ["core", "connections"]),
             (.coreSelect(group: "🇩🇪 Germany", proxy: "de-1"), ["core", "select", "🇩🇪 Germany", "de-1"]),
             (.coreDelay("Auto"), ["core", "delay", "Auto"]),
             (.coreRefresh(profile: "/private/tmp/p.json"), ["core", "refresh", "/private/tmp/p.json"]),
@@ -23,12 +23,19 @@ final class HelperCommandTests: XCTestCase {
              ["set", "splitapps", "/Applications/Telegram.app,zoom.us"]),
             (.setSplitApps([]), ["set", "splitapps", ""]),
             (.setMultihop("🇩🇪 de-1"), ["set", "multihop", "🇩🇪 de-1"]), (.setMultihop(nil), ["set", "multihop", "off"]),
+            (.setMTU(1380), ["set", "mtu", "1380"]), (.setMTU(nil), ["set", "mtu", "auto"]),
             (.setCore(.xray), ["set", "core", "xray"]), (.setCore(.mihomo), ["set", "core", "mihomo"]),
             (.allow("10.0.0.0/8"), ["allow", "10.0.0.0/8"]), (.unallow("10.0.0.0/8"), ["unallow", "10.0.0.0/8"]),
             (.serverAdd("2001:db8::1"), ["server-add", "2001:db8::1"]),
             (.serverRemove("192.0.2.1"), ["server-remove", "192.0.2.1"]),
             (.coreImport(profile: "/private/tmp/p.json"), ["core", "import", "/private/tmp/p.json"]),
+            (.coreImport(profile: "/private/tmp/p.json", others: ["/private/tmp/q.json", "/private/tmp/r.json"]),
+             ["core", "import", "/private/tmp/p.json", "/private/tmp/q.json", "/private/tmp/r.json"]),
+            (.coreUse(profile: "/private/tmp/q.json"), ["core", "use", "/private/tmp/q.json"]),
             (.repair, ["repair"]),
+            (.setSwitch("blockadult", true), ["set", "blockadult", "1"]), (.setSwitch("blocksocial", false), ["set", "blocksocial", "0"]),
+            (.setSwitch("blockbetting", true), ["set", "blockbetting", "1"]),
+            (.setDoH("https://dns.example.com/dns-query"), ["set", "doh", "https://dns.example.com/dns-query"]), (.setDoH(nil), ["set", "doh", ""]),
         ]
         for (command, arguments) in cases {
             XCTAssertEqual(command.program, .ks, "\(command)")
@@ -106,13 +113,14 @@ final class HelperCommandTests: XCTestCase {
         let sudoers = Set(text.matches(of: /\$ks ([a-z -]+?)( \*)?[,"]/).map { String($0.1) })
         XCTAssertFalse(sudoers.isEmpty)
         let all: [HelperCommand] = [
-            .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreProxies, .coreTraffic, .coreConnections,
-            .coreSelect(group: "g", proxy: "p"), .coreDelay("g"), .coreRefresh(profile: "/tmp/p.json"),
+            .state, .probe, .protectionOn, .netRestore, .coreState, .coreOn, .coreOff, .coreRestart, .coreProxies, .coreTraffic,
+            .coreConnections, .coreSelect(group: "g", proxy: "p"), .coreDelay("g"), .coreRefresh(profile: "/tmp/p.json"),
+            .coreUse(profile: "/tmp/p.json"), .coreImport(profile: "/tmp/p.json", others: ["/tmp/q.json"]),
             .protectionOff, .pause(minutes: 5), .setSwitch("lan", true), .setSwitch("adblock", true), .setSplitApps([]),
-            .setMultihop(nil), .setCore(.xray),
+            .setMultihop(nil), .setCore(.xray), .setMTU(1400),
             .allow("192.0.2.1"), .unallow("192.0.2.1"), .serverAdd("192.0.2.1"), .serverRemove("192.0.2.1"),
             .coreImport(profile: "/tmp/p.json"), .install(user: "alex", servers: []), .uninstall, .repair,
-            .setSwitch("diag", true), .diagReport(directory: "/Users/me/Desktop"),
+            .setSwitch("diag", true), .diagReport(directory: "/Users/me/Desktop"), .setDoH(nil), .setSwitch("blockadult", true),
         ]
         let twoWords: Set<String> = ["core", "diag"]
         for command in all {
@@ -135,8 +143,8 @@ final class HelperCommandTests: XCTestCase {
     /// live connections) is for root or the user at the console who installed KillSwitch.
     func testPasswordlessChangesOnlyForTheConsoleUserWhoInstalled() {
         let restricted: [HelperCommand] = [
-            .protectionOn, .netRestore, .coreOn, .coreOff, .coreSelect(group: "g", proxy: "p"),
-            .coreRefresh(profile: "/tmp/p.json"), .upgrade, .coreConnections,
+            .protectionOn, .netRestore, .coreOn, .coreOff, .coreRestart, .coreSelect(group: "g", proxy: "p"),
+            .coreRefresh(profile: "/tmp/p.json"), .coreUse(profile: "/tmp/p.json"), .upgrade, .coreConnections,
         ]
         let open: [HelperCommand] = [.state, .probe, .coreState, .coreProxies, .coreTraffic, .coreDelay("g")]
         for command in restricted { XCTAssertTrue(command.onlyForConsoleUser, "\(command)") }
@@ -192,13 +200,44 @@ final class HelperCommandTests: XCTestCase {
     }
 
     func testSwitchKeys() {
-        for key in ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag", "failover"] {
+        for key in ["lan", "tailscale", "dns", "direct", "wifiguard", "adblock", "diag", "escalate",
+                    "blockadult", "blocksocial", "blockbetting"] {
             XCTAssertTrue(HelperCommand.setSwitch(key, true).isValid, key)
         }
-        // «Российские сайты напрямую» is gone (ADR 0013): ks refuses it, so the daemon does too
-        for key in ["", "coredirect", "splitapps", "multihop", "LAN", "lan ", "x"] {
+        // «Российские сайты напрямую» (ADR 0013) and the automatic server switch (ADR 0036) are
+        // gone: ks refuses them, so the daemon does too
+        for key in ["", "coredirect", "failover", "splitapps", "multihop", "LAN", "lan ", "x"] {
             XCTAssertFalse(HelperCommand.setSwitch(key, true).isValid, key)
         }
+    }
+
+    /// ADR 0031: the own DoH server as Helper/ks valid_doh takes it (Helper/tests/blocking.sh has the same list).
+    func testDoHAddress() {
+        for url in ["https://dns.example.com/dns-query", "https://dns.nextdns.io/abc123", "https://9.9.9.9/dns-query",
+                    "https://dns.example.com:8443/q/x_y~z", "https://d.adguard-dns.com/dns-query/a1b2", "https://dns.example.com", "https://dns.example.com/q%2Fx%20y"] {
+            XCTAssertTrue(HelperCommand.isDoH(url), url)
+            XCTAssertTrue(HelperCommand.setDoH(url).isValid, url)
+        }
+        for url in ["http://dns.example.com/dns-query", "https://user@dns.example.com/dns-query", "https://dns.example.com/dns query",
+                    "https://dns.example.com/dns-query?x=1", "https://dns.example.com/a#b", "https://localhost/dns-query",
+                    "https://127.0.0.1/dns-query", "https://192.168.1.1/dns-query", "https://10.0.0.1/dns-query",
+                    "https://198.18.0.1/dns-query", "https://172.20.0.1/x", "https://100.100.100.100/x", "https://[::1]/dns-query",
+                    "https://dns.example.com:0/x", "https://dns.example.com:99999/x", "https://300.1.1.1/x", "https://dns/x",
+                    "https://dns.example.com/" + String(repeating: "a", count: 300), "dns.example.com", "https://-bad.example.com/x",
+                    "https://router.local/x", "", "https://dns.example.com/\n", "https://dns.example.com/%zz", "https://dns.example.com/%",
+                    "https://dns.example.com/a%2", "https://Router.LOCAL/x", "https://box.LAN/x",
+                    "https://001.001.001.001/x", "https://9.9.9.09/x", "https://09.9.9.9/x"] {
+            XCTAssertFalse(HelperCommand.isDoH(url), url)
+            XCTAssertFalse(HelperCommand.setDoH(url).isValid, url)
+        }
+        XCTAssertNil(HelperCommand(ks: ["set", "doh", "http://dns.example.com/x"]))
+        XCTAssertTrue(HelperCommand.setDoH(nil).needsAuthorization)
+    }
+
+    /// #73: own addresses of sites are gone, so is «ks set hosts».
+    func testNoHostsCommand() {
+        XCTAssertNil(HelperCommand(ks: ["set", "hosts", "nas.lan=192.168.1.10"]))
+        XCTAssertNil(HelperCommand(ks: ["set", "hosts", ""]))
     }
 
     /// «Собрать отчёт» (ADR 0021): an absolute folder, one line; anything else is not a report.
@@ -220,6 +259,18 @@ final class HelperCommandTests: XCTestCase {
         XCTAssertFalse(HelperCommand.coreDelay("a\u{7}b").isValid)
         XCTAssertNil(HelperCommand(ks: ["set", "core", "sing-box"]))
         XCTAssertFalse(HelperCommand.setMultihop("").isValid)
+        // the TUN's MTU (ADR 0032): auto or 1280…1500, as ks mtu_ok
+        XCTAssertTrue(HelperCommand.setMTU(1280).isValid)
+        XCTAssertTrue(HelperCommand.setMTU(1500).isValid)
+        XCTAssertTrue(HelperCommand.setMTU(nil).isValid)
+        XCTAssertFalse(HelperCommand.setMTU(1279).isValid)
+        XCTAssertFalse(HelperCommand.setMTU(1501).isValid)
+        XCTAssertFalse(HelperCommand.setMTU(9000).isValid)
+        XCTAssertEqual(HelperCommand(ks: ["set", "mtu", "auto"]), .setMTU(nil))
+        XCTAssertEqual(HelperCommand(ks: ["set", "mtu", "1380"]), .setMTU(1380))
+        for bad in ["", "01380", "1380.0", "+1380", "١٣٨٠", "1000", "auto "] {
+            XCTAssertNil(HelperCommand(ks: ["set", "mtu", bad]), bad)
+        }
         XCTAssertFalse(HelperCommand.setMultihop("off").isValid)   // would mean «выключен»
         XCTAssertFalse(HelperCommand.setMultihop("a\tb").isValid)
     }
@@ -243,6 +294,11 @@ final class HelperCommandTests: XCTestCase {
         XCTAssertFalse(HelperCommand.coreImport(profile: "x.json").isValid)
         XCTAssertFalse(HelperCommand.coreRefresh(profile: "").isValid)
         XCTAssertFalse(HelperCommand.coreRefresh(profile: "/tmp/a\nb").isValid)
+        XCTAssertFalse(HelperCommand.coreUse(profile: "x.json").isValid)
+        XCTAssertFalse(HelperCommand.coreImport(profile: "/tmp/p.json", others: ["x.json"]).isValid)
+        // ks takes the first and at most 64 others (core_import)
+        XCTAssertTrue(HelperCommand.coreImport(profile: "/tmp/p.json", others: (1...64).map { "/tmp/\($0).json" }).isValid)
+        XCTAssertFalse(HelperCommand.coreImport(profile: "/tmp/p.json", others: (1...65).map { "/tmp/\($0).json" }).isValid)
     }
 
     func testInstallUser() {

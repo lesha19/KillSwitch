@@ -39,6 +39,17 @@ enum UpdateRelaunch {
         ["-c", "while /bin/kill -0 \"$1\" 2>/dev/null; do /bin/sleep 0.2; done; /usr/bin/open \"$2\"",
          "sh", String(pid), bundlePath]
     }
+
+    /// #51: a relaunch for an update while the window is closed marks the time under this key; the
+    /// new build then starts without the window, as the old one was left.
+    static let windowlessKey = "relaunchWithoutWindow"
+    static let windowlessFor: TimeInterval = 600
+
+    /// Only a launch soon after the mark: a relaunch that never came must not hide the next start.
+    static func startsWithoutWindow(markedAt: TimeInterval?, now: TimeInterval) -> Bool {
+        guard let markedAt else { return false }
+        return now >= markedAt && now - markedAt <= windowlessFor
+    }
 }
 
 /// A window that can carry sheets: NSWindow, or a stand-in in the tests (an NSWindow sheet is only

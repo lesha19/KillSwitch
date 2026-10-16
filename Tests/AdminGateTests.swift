@@ -54,7 +54,7 @@ final class AdminGateTests: XCTestCase {
         "interactive: true", "userInitiated: true", "runAsAdmin(", "adminRun(", "runBundled(", "AdminScript.",
         "authorization.obtain", "turnOn(", "turnOff(", "pause(minutes", "coreOn()", "restartCore(", "install()", "setUp(",
         "coreImport(", "select(group", "runDelay(", "testDelay(", "testAllDelays(", "selectBest(", "setSwitches(",
-        "setExceptions(", "setSplitApps(", "setMultihop(", "setManualServers(", "uninstall(", "restoreNetwork(",
+        "setExceptions(", "setSplitApps(", "setMultihop(", "setMTU(", "setManualServers(", "uninstall(", "restoreNetwork(",
         "prepareHelper(", "confirmNewServers(", "setCore(", "switchCore(", "applySettings(",
     ]
 
@@ -73,7 +73,7 @@ final class AdminGateTests: XCTestCase {
             "init", "refresh", "registerHelperAtLaunch", "updateHelperAvailability", "notifyIfMacOSUpdated", "listenForWidget",
             "scheduleTimer", "watchHelperDirectory", "helperDirectoryChanged", "compareHelper", "upgradeHelper", "trackConnecting",
             "resumeIfReconnected", "publish", "syncFilter", "readSettings", "checkDaemon", "daemonRuns", "loadProxies",
-            "checkFailover", "checkNetwork", "readOtherVPN", "readOtherTunnels", "syncSpeed", "readSpeed",
+            "checkServers", "checkNetwork", "readOtherVPN", "readOtherTunnels", "syncSpeed", "readSpeed",
             "applyPendingChoice", "coreOnAutomatically", "coreRefresh", "readHelper",
         ]
         for name in automatic {
