@@ -131,9 +131,9 @@ setting() {  # setting <key> <default>
 
 # Fail closed (#17, like Mullvad's lockdown on invalid settings): the files the rules are built
 # from must be ours (a regular file owned by whoever runs ks, that is root, not writable by group
-# or others) and hold only lines ks itself writes. A missing file means the defaults. Anything
-# else and rules() blocks everything but loopback until «Сбросить настройки» (ks repair): a
-# switch read wrong could open the home network or leave the boot window open.
+# or others) and hold only lines ks itself writes (unknown keys are ignored, #83). A missing file
+# means the defaults. Anything else and rules() blocks everything but loopback, DHCP and the LAN
+# until «Сбросить настройки» (ks repair): a switch read wrong could open the boot window.
 OWNER_UID=$EUID
 ADDR_LINE='[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?|[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*(/[0-9]{1,3})?'   # valid_addr
 HOST_LINE='[0-9]{1,3}(\.[0-9]{1,3}){3}|[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*'   # one address, no network (tsrelays, KS-19)
@@ -207,9 +207,19 @@ settings_lines_ok() {
       mtu=*) mtu_ok "${line#*=}" || return 1 ;;   # the TUN's MTU, ADR 0032
       failover=[01]) ;;   # the automatic server switch until 0.19 (ADR 0023): ignored, install.sh drops it (ADR 0036)
       escalate=[01]) ;;   # another fingerprint or transport of the same server first, ADR 0030
-      *) return 1 ;;
+      *) [ -n "$(settings_unknown <<<"$line")" ] || return 1 ;;   # a known key with a bad value, or not key=value
     esac
   done < "$1" 2>/dev/null
+}
+# Keys this ks does not know (another version wrote them): nothing reads them, so they are logged
+# and ignored, never a lockdown (#83). A known key with a bad value is still damage.
+SETTING_KEYS=" lan tailscale dns direct wifiguard adblock blockadult blocksocial blockbetting doh hosts coredirect splitapps multihop core xrayserver diag mtu failover escalate "
+settings_unknown() {  # settings_unknown < settings: the unknown keys, one per line
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    [[ "$line" =~ ^([a-z][a-z0-9_]*)= ]] && [[ "$SETTING_KEYS" != *" ${BASH_REMATCH[1]} "* ]] && echo "${BASH_REMATCH[1]}"
+  done
+  return 0
 }
 root_file_ok() {  # root_file_ok <file> settings|addrs|relays|any
   local m
@@ -232,7 +242,18 @@ root_files_bad() {  # root_files_bad [allow-file] [servers-file] [manual-servers
 }
 # what guard compares to notice a file changed behind ks's back (nanosecond times)
 root_files_sig() { stat -f '%N %i %Fm %z %u %Lp' "$SETTINGS" "$ALLOW" "$SERVERS" "$SERVERS_MANUAL" "$TSRELAYS" "$CORE_EGRESS" 2>/dev/null; }
-lockdown() { echo 'pass out quick on lo0 all flags any'; echo 'block drop out quick all'; }
+# Damaged files: nothing out but loopback, DHCP and the LAN (not its DNS), so the Mac keeps its
+# address and its printer while nothing reaches the internet (#83); the same lines as in rules().
+lockdown() {
+  echo 'pass out quick on lo0 all flags any'
+  echo 'pass out quick inet proto udp from any port 68 to any port 67 user 0 keep state'
+  echo 'pass out quick inet to { 169.254.0.0/16, 224.0.0.0/4, 255.255.255.255 } keep state'
+  echo 'block drop out quick inet6 proto { tcp udp } to { fe80::/10, ff00::/8 } port 53'
+  echo 'pass out quick inet6 to { fe80::/10, ff00::/8 } keep state'
+  echo 'block drop out quick proto { tcp udp } to { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } port 53'
+  echo 'pass out quick inet to { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 } flags any keep state'
+  echo 'block drop out quick all'
+}
 
 # "interface address" for every utun that has an IPv4 address, sorted.
 utun_addrs() {
@@ -509,10 +530,16 @@ load_rules() {  # load_rules [lockdown]
 load() {  # load [tunnel_sig, if the caller has it]
   [ -f "$FLAG" ] && [ ! -f "$VPN_ON" ] && return 0   # a switch-off raced with the watchdog (the file itself, not the pass's read)
   pf_enabled || pfctl -E >/dev/null 2>&1   # enable first: loading can take a moment
-  local sig=${1:-} files bad
+  local sig=${1:-} files bad unknown
   [ -n "$sig" ] || sig=$(tunnel_sig)
   files=$(root_files_sig)
   bad=$(root_files_bad | paste -sd, -)
+  unknown=; [ -n "$bad" ] || unknown=$(settings_unknown 2>/dev/null < "$SETTINGS" | sort -u | paste -sd, -)   # a damaged file (a FIFO, a symlink) is never opened
+  # logged when the set changes, not on every load (the event log keeps 500 lines)
+  if [ -z "$unknown" ]; then rm -f "$DIR/unknown-logged"
+  elif [ "$(cat "$DIR/unknown-logged" 2>/dev/null)" != "$unknown" ]; then
+    log_event "unknown settings ignored: $unknown"; echo "$unknown" > "$DIR/unknown-logged" 2>/dev/null
+  fi
   STANDBY=0; [ -z "$bad" ] && vpn_standby && STANDBY=1
   if ! load_rules; then
     load_rules lockdown || { echo "rules failed to load" >&2; return 1; }
@@ -520,7 +547,7 @@ load() {  # load [tunnel_sig, if the caller has it]
   fi
   if [ -n "$bad" ]; then
     # a retry pf refused again is not news (every PF_RETRY seconds)
-    [ "${LOAD_RETRY:-0}" = 1 ] && [ "$bad" = rules ] || log_event "invalid $bad: everything blocked until repaired"
+    [ "${LOAD_RETRY:-0}" = 1 ] && [ "$bad" = rules ] || log_event "invalid $bad: internet blocked until repaired, local network and DHCP still work"
     echo "$bad" > "$INVALIDF.tmp" && chmod 644 "$INVALIDF.tmp" && mv "$INVALIDF.tmp" "$INVALIDF"
   else
     rm -f "$INVALIDF"

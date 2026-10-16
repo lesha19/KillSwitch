@@ -45,11 +45,11 @@ struct DaemonState: Equatable {
         return .off
     }
 
-    /// Written by Helper/ks `load` (world-readable) when it blocked everything because of damaged
+    /// Written by Helper/ks `load` (world-readable) when it blocked the internet (loopback, DHCP and the local network, not its DNS, still work, #83) because of damaged
     /// files (#17): their names, comma separated, or "rules" when pf refused them; absent otherwise.
     static let invalidPath = "/Library/KillSwitch/invalid"
 
-    /// The damaged files that keep everything blocked; empty unless protection is on.
+    /// The damaged files that keep the internet blocked; empty unless protection is on.
     static func lockdown(invalid text: String?, protection: Protection) -> [String] {
         guard protection == .on, let text else { return [] }
         return text.split(whereSeparator: { $0 == "," || $0.isNewline }).map { $0.trimmingCharacters(in: .whitespaces) }

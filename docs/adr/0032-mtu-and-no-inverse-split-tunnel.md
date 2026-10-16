@@ -35,7 +35,7 @@ rule in the core; everything the core cannot attribute stays in the VPN.
 
 - `mtu=<n>` in ks's settings, `n` four digits from 1280 (IPv6's minimum, the core runs IPv4 but
   the floor stays honest) to 1500; no line = «Авто», each core exactly as before (Xray 1500,
-  mihomo 9000). Any other line is a damaged settings file: everything blocked until repaired
+  mihomo 9000). Any other line is a damaged settings file: the internet blocked until repaired
   (ADR 0015), as with every other line.
 - The generators put it into the TUN only: Xray's `ks-tun` inbound `settings.mtu`, mihomo's
   `tun.mtu`. Servers, pins, DIRECT signature, egress and the rest of the config are byte-for-byte

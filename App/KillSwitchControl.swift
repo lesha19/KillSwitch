@@ -43,7 +43,7 @@ final class KillSwitchControl {
     private(set) var servers: [String] = []          // /Library/KillSwitch/servers
     private(set) var manualServers: [String] = []    // /Library/KillSwitch/servers-manual
     private(set) var daemonProblem = false
-    /// A settings file of the service is damaged and protection blocks everything (#17): «Сбросить настройки».
+    /// A settings file of the service is damaged and protection blocks the internet; loopback, DHCP and the local network (not its DNS) still work (#83) (#17): «Сбросить настройки».
     private(set) var settingsDamaged = false
     /// The service is gone and left the network services off (its boot guard): «Включить сеть».
     private(set) var networkLeftOff = false

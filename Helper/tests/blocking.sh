@@ -39,15 +39,14 @@ xtest() {  # xtest <desc> <config>
 }
 genm() { core_generate "$1" "$tmp/c" "$tmp/s" 2>"$tmp/err"; }
 genx() { core_generate_xray "$1" "$tmp/c" "$tmp/s" 2>"$tmp/err"; }
-
-# --- the settings lines ks writes (fail closed on anything else, ADR 0015)
+# --- the settings lines ks writes (fail closed on anything else, ADR 0015; an unknown key is ignored, #83)
 lines_ok() { printf '%s\n' "$1" > "$tmp/lines"; settings_lines_ok "$tmp/lines"; }
 for l in blockadult=1 blocksocial=0 blockbetting=1 adblock=1 doh= doh=https://dns.example.com/q%2Fx%20y \
          doh=https://dns.example.com/dns-query doh=https://dns.nextdns.io/abc123 doh=https://9.9.9.9/dns-query \
          doh=https://dns.example.com:8443/q/x_y~z doh=https://d.adguard-dns.com/dns-query/a1b2; do
   lines_ok "$l" && ok "settings: takes $l" || bad "settings: refused $l"
 done
-for l in blockadult=2 blockmalware=1 doh=http://dns.example.com/dns-query doh=https://user@dns.example.com/dns-query \
+for l in blockadult=2 doh=http://dns.example.com/dns-query doh=https://user@dns.example.com/dns-query \
          "doh=https://dns.example.com/dns query" doh=https://dns.example.com/dns-query?x=1 doh=https://dns.example.com/a#b \
          doh=https://localhost/dns-query doh=https://127.0.0.1/dns-query doh=https://192.168.1.1/dns-query \
          doh=https://10.0.0.1/dns-query doh=https://198.18.0.1/dns-query doh=https://[::1]/dns-query \
