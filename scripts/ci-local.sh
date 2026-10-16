@@ -69,7 +69,9 @@ versions() {
        -destination 'platform=macOS' -derivedDataPath "$tmp/build" CODE_SIGNING_ALLOWED=NO build test \
   && step "test-helper-ci" scripts/test-helper-ci.sh \
   && step "helper tests with mihomo" mihomo_tests \
-  && step "test-filter-trust" scripts/test-filter-trust.sh; } || true
+  && step "test-filter-trust" scripts/test-filter-trust.sh \
+  && { if [ -f "$wt/scripts/test-vm-batch.sh" ]; then step "test-vm-batch" scripts/test-vm-batch.sh
+       else echo "skip: no scripts/test-vm-batch.sh in this tree"; fi; }; } || true
 
 grep "^warning:" "$log" 2>/dev/null
 secs=$(( $(date +%s) - start ))
