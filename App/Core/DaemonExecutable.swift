@@ -26,4 +26,20 @@ enum DaemonExecutable {
               bundle.pathExtension == "app" else { return nil }
         return bundle
     }
+
+    /// Where the watchdog looks for the app (#84, ks app_guard): no app there for ten minutes, and
+    /// protection is removed so an app in the Trash leaves no block behind.
+    static let appRecord = "/Library/KillSwitch/app"
+
+    /// Written at every start (0644), so an app moved elsewhere is followed. Only an app in
+    /// /Applications: one on another volume (a DMG, a disk mounted late) or in a user's folder is
+    /// not recorded, so it is never taken for gone. Only into an installed helper's folder.
+    static func recordApp(executable: String? = current(), directory: String = "/Library/KillSwitch") {
+        var isDirectory: ObjCBool = false
+        guard let app = executable.flatMap(appBundle)?.path, app.hasPrefix("/Applications/"), !app.contains("/../"),
+              FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory), isDirectory.boolValue else { return }
+        let record = URL(fileURLWithPath: directory).appendingPathComponent("app")
+        guard (try? Data((app + "\n").utf8).write(to: record, options: .atomic)) != nil else { return }
+        try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: record.path)
+    }
 }

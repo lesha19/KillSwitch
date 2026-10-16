@@ -703,6 +703,52 @@ watch_pass() {
   [ $(($1 % 10)) = 5 ] && diag_bg
   # Xray: the running host still answers, or another way to it does? (ADR 0030)
   [ $(($1 % 20)) = 15 ] && [ "$CORE_STATE" = on ] && [ "$BLOCKING" = 1 ] && [ "${STANDBY:-0}" != 1 ] && escalate_bg
+  [ $(($1 % 10)) = 7 ] && app_guard
+}
+
+# KillSwitch.app moved to the Trash (#84): nothing would be left to turn the block off. Its daemon
+# writes where the app is at every start ($APP_REC, so a moved app is followed), only for an app in
+# /Applications: one on another volume (a DMG, a disk not mounted yet) is never watched. Missing for
+# APP_GONE_AFTER s of this watchdog's uptime in a row (an update replacing the app: back in time,
+# nothing happens), and no app with our bundle id in /Applications under another name (then that is
+# recorded instead), protection goes as "ks off" plus "ks core off" leave it, and the job is booted
+# out once the boot guard's network is back (net_guard keeps at it). Only ENOENT counts as missing.
+# No record (installed before, or by the password prompt alone): nothing is watched. Once removed,
+# the job comes back at each boot and goes again without a word: nothing is left to remove.
+APP_REC="$DIR/app"; APPS_DIR="/Applications"; APP_ID="com.lesha19.KillSwitch"
+APP_GONE_AFTER=600; APP_MISSING=""; APP_GONE=0
+app_bundle_id() { /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1/Contents/Info.plist" 2>/dev/null; }
+app_find() {  # our app in /Applications under any name: recorded, 0
+  local a
+  for a in "$APPS_DIR"/*.app; do
+    [ -d "$a" ] && [ ! -L "$a" ] && [ "$(app_bundle_id "$a")" = "$APP_ID" ] || continue
+    echo "$a" > "$APP_REC.tmp" && chmod 644 "$APP_REC.tmp" && mv -f "$APP_REC.tmp" "$APP_REC"
+    return 0
+  done
+  return 1
+}
+app_guard() {
+  local app
+  root_file_ok "$APP_REC" any && app=$(head -1 "$APP_REC" 2>/dev/null) || return 0
+  [[ "$app" == "$APPS_DIR"/*.app && "$app" != */../* ]] || return 0
+  if /usr/bin/perl -e 'lstat $ARGV[0] or exit($!{ENOENT} ? 1 : 0)' -- "$app"; then APP_MISSING=""; return 0; fi
+  [ -n "$APP_MISSING" ] || APP_MISSING=$SECONDS
+  [ $((SECONDS - APP_MISSING)) -ge "$APP_GONE_AFTER" ] || return 0
+  if [ "$APP_GONE" = 0 ]; then
+    if app_find; then APP_MISSING=""; return 0; fi
+    APP_GONE=1
+    # an earlier boot removed it all: nothing to do, nothing to log
+    if [ "$(cat "$FLAG" 2>/dev/null)" != 0 ] || [ -f "$VPN_ON" ] || [ -n "$(pfctl -a "$ANCHOR" -s rules 2>/dev/null)" ]; then
+      disable 0
+      "$KS_SELF" core off >/dev/null 2>&1
+      pfctl -a "$ANCHOR" -F all >/dev/null 2>&1
+      log_event "app gone for $((APP_GONE_AFTER / 60)) min ($app): protection removed, watchdog stops"
+    fi
+  fi
+  [ "$APP_GONE" = 1 ] && [ ! -f "$WIFI_MARK" ] || return 0
+  APP_GONE=2
+  # launchd's TERM runs on_term: protection is off, so the shutdown guard leaves the network on
+  launchctl bootout "$WATCH_JOB" >/dev/null 2>&1 &
 }
 
 # The network services the boot window guard turned off, back on once the rules are up; tried on
