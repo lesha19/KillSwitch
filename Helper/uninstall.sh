@@ -4,6 +4,7 @@ set -u
 PATH=/usr/bin:/bin:/usr/sbin:/sbin; export PATH
 export HOME=/var/root LC_ALL=C
 unset CURL_HOME BASH_ENV ENV CDPATH
+KS=/Library/KillSwitch/ks
 
 # networksetup killed after NS_TIMEOUT seconds, as in ks: a hanging one does not hold the uninstall.
 NS_TIMEOUT=3
@@ -33,20 +34,37 @@ network_back() {
     done
 }
 
+# dns_back: the last chance when ks could not give the DNS back (#92): every network service's DNS
+# to automatic, so the Mac is not left asking a resolver that is gone. Each failure is named.
+dns_back() {
+  local list svc
+  list=$(ns -listallnetworkservices | sed '1d; s/^\*//')
+  [ -n "$list" ] || { echo "could not list the network services: set DNS to automatic in System Settings › Network"; return 1; }
+  while IFS= read -r svc; do
+    if ns -setdnsservers "$svc" Empty; then echo "DNS set back to automatic: $svc"
+    else echo "could not set DNS back to automatic: $svc (System Settings › Network › $svc › DNS)"; fi
+  done <<< "$list"
+}
+
 main() {
   # A stopped watchdog disables the physical network services unless protection is off (the
   # shutdown guard), so it is switched off first; then wait until the old watchdog is gone.
-  if [ -x /Library/KillSwitch/ks ]; then /Library/KillSwitch/ks off >/dev/null 2>&1
+  if [ -x "$KS" ]; then "$KS" off >/dev/null 2>&1 || echo "ks off failed: going on"
   elif [ -d /Library/KillSwitch ]; then echo 0 > /Library/KillSwitch/disabled; fi
   # with the VPN on (ADR 0035) the guard would still count as protection on: the target goes first
   rm -f /Library/KillSwitch/vpn-on
   launchctl bootout system/local.killswitch 2>/dev/null
   for _ in $(seq 1 50); do launchctl print system/local.killswitch >/dev/null 2>&1 || break; sleep 0.2; done
-  # stops our core and gives the network services their DNS back
-  [ -x /Library/KillSwitch/ks ] && /Library/KillSwitch/ks core off >/dev/null 2>&1
+  # stops our core and gives the network services their DNS back; without that, the DNS goes to
+  # automatic before the folder (and the DNS ks saved) is gone
+  if ! { [ -x "$KS" ] && "$KS" core off >/dev/null 2>&1; }; then
+    echo "ks core off failed or ks is missing: DNS of every network service set to automatic"
+    dns_back
+  fi
+  launchctl bootout system/local.killswitch.core 2>/dev/null
   launchctl enable system/local.killswitch.core
   # services disabled at an earlier shutdown, or by a watchdog that raced the switch-off
-  network_back /Library/KillSwitch/ks
+  network_back "$KS"
   pfctl -a com.apple/killswitch -F all 2>/dev/null
   dscl . -delete /Groups/_ksvpn 2>/dev/null
   # NetBird's daemon back to how its installer left it (ks netbird_sync gave it our group)

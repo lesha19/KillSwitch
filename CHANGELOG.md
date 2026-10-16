@@ -211,6 +211,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   switches the filter off before it reports done. A filter left enabled after the helper was
   removed (the app quit, or not running) used to drop every connection while no VPN tunnel was up,
   except the local network, Tailscale and NetBird (#55, ADR 0012 addendum).
+- Removing KillSwitch no longer leaves the Mac without DNS (#92). The VPN core's job is stopped too,
+  and if the helper is missing or cannot give the DNS back, every network service's DNS is set to
+  automatic before the KillSwitch folder is removed (DNS servers set by hand are lost in that case).
+  What failed is now said in the output instead of hidden.
 
 ### Security
 - Password prompt: install.sh and uninstall.sh run from a copy of the app in a folder of root's
