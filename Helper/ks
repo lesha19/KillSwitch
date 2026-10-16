@@ -676,8 +676,8 @@ PUBLISHED=""
 publish_state() {
   local s
   [ -n "$PROT" ] || return 0
-  s=$(printf 'pid=%s\nprotection=%s\ncore=%s\ntunnels=%s\nstandby=%s\nvpn=%s\nblocking=%s' "$$" "$PROT" "${CORE_STATE:-off}" "$TSIG" "${STANDBY:-0}" \
-    "$(vpn_on && echo 1 || echo 0)" "$BLOCKING")
+  s=$(printf 'pid=%s\nprotection=%s\ncore=%s\ntunnels=%s\nstandby=%s\nvpn=%s\nblocking=%s\nstuck=%s' "$$" "$PROT" "${CORE_STATE:-off}" "$TSIG" "${STANDBY:-0}" \
+    "$(vpn_on && echo 1 || echo 0)" "$BLOCKING" "${VPN_STUCK:-0}")
   [ "$s" = "$PUBLISHED" ] && return 0
   printf '%s\n' "$s" > "$STATEF.tmp" && chmod 644 "$STATEF.tmp" && mv "$STATEF.tmp" "$STATEF" && PUBLISHED=$s
 }
@@ -696,6 +696,7 @@ watch_pass() {
   # right after the rules, before what may take long (the core, DNS): the network back (ADR 0037)
   [ -f "$WIFI_MARK" ] && net_guard
   [ $(($1 % 2)) = 0 ] && core_guard
+  vpn_stuck
   gap_track
   [ $(($1 % 10)) = 5 ] && netbird_bg
   publish_state
@@ -3615,12 +3616,20 @@ core_off() {
   launchctl bootout "$CORE_JOB" 2>/dev/null
   # a core still there keeps the VPN on, the rules, its DNS and its job enabled (so it runs after
   # a reboot, as the VPN target says): «Отключить VPN» can be pressed again
-  job_gone "$CORE_JOB" || { echo "Ядро не остановилось" >&2; return 1; }
+  # a core that did not answer SIGTERM (stuck starting, #85) is killed rather than left running
+  job_gone "$CORE_JOB" || { launchctl kill SIGKILL "$CORE_JOB" 2>/dev/null; job_gone "$CORE_JOB"; } ||
+    { echo "Ядро не остановилось" >&2; return 1; }
   launchctl disable "$CORE_JOB"
   rm -f "$VPN_ON"
   # protection off or paused: open only now that the core has stopped
   [ -f "$FLAG" ] && pfctl -a "$ANCHOR" -F rules >/dev/null 2>&1
-  dns_locked restore
+  # DNS left on our resolver with the core gone leaves the Mac without names: say so (#92); the
+  # watchdog tries again while the DNS state is there (core_guard)
+  if ! dns_locked restore; then
+    log_event "core off: DNS not restored"
+    echo "VPN отключён, но DNS не вернулся. KillSwitch попробует ещё раз сам; если сайты не открываются, перезагрузи Mac" >&2
+    return 1
+  fi
   log_event "core off"
 }
 
@@ -3912,8 +3921,10 @@ dns_restore() {
         dns_put "$path" "$val"
     done
   fi
-  rm -f "$DNS_STATE"
   dns_strip
+  # what the store refused stays ours: the state is kept for the watchdog to try again (#92)
+  ! dns_snapshot | awk -F'\t' -v o="$DNS_OURS" '{ n = split($2, a, " "); for (i = 1; i <= n; i++) if (a[i] == o) f = 1 } END { exit !f }' || return 1
+  rm -f "$DNS_STATE"
 }
 
 # Whatever the state said (missing, stale, written by 0.16 with ours as the original), our
@@ -3990,6 +4001,17 @@ tun_guard() {
   fi
 }
 
+# The VPN on (ADR 0035) and our core not running: everything is blocked, by design, but after
+# STUCK_AFTER seconds the state file says stuck=1 (the app's notification, #85) and the log says it once.
+STUCK_AFTER=300; STUCK_SINCE=""; VPN_STUCK=0
+vpn_stuck() {
+  if ! vpn_on || [ "$CORE_STATE" = on ]; then STUCK_SINCE=""; VPN_STUCK=0; return 0; fi
+  STUCK_SINCE=${STUCK_SINCE:-$SECONDS}
+  [ "$VPN_STUCK" = 0 ] && [ $((SECONDS - STUCK_SINCE)) -ge "$STUCK_AFTER" ] || return 0
+  VPN_STUCK=1
+  log_event "VPN on, no core for 5 min: everything blocked until it runs or «Отключить VPN»"
+}
+
 # Watchdog part for the core: the system DNS follows it. Set while it runs (and set again if
 # the system overwrote it), restored when it has not been running for 5 s or is unloaded,
 # so a crashed core does not leave the Mac without names.
@@ -3998,7 +4020,7 @@ core_guard() {
   local p now changed
   if ! p=$(launchctl print "$CORE_JOB" 2>/dev/null); then
     CORE_DOWN=""; CORE_STATE=off; CORE_PID=""; rm -f "$FOREIGN_VPN"
-    [ -f "$DNS_STATE" ] && { dns_locked restore; log_event "core not loaded: DNS restored"; }
+    [ -f "$DNS_STATE" ] && dns_locked restore && log_event "core not loaded: DNS restored"
     return 0
   fi
   core_job_parse "$p"   # the pid and last exit for the journal (diag_tick)
@@ -4017,7 +4039,7 @@ core_guard() {
     CORE_STATE=off; rm -f "$FOREIGN_VPN"
     now=$(date +%s); CORE_DOWN=${CORE_DOWN:-$now}
     if [ $((now - CORE_DOWN)) -ge 5 ] && [ -f "$DNS_STATE" ]; then
-      dns_locked restore; log_event "core not running: DNS restored"
+      dns_locked restore && log_event "core not running: DNS restored"
     fi
   fi
 }

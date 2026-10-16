@@ -41,6 +41,14 @@ final class UserNoticeTests: XCTestCase {
         XCTAssertEqual(UserNotice.macOSUpdated.action, .check)
     }
 
+    /// #85: the VPN on and its core not running for 5 minutes; always shown, whatever the switches.
+    func testVPNStuck() {
+        XCTAssertEqual(UserNotice.vpnStuck.title, "Интернет закрыт: VPN не подключается")
+        XCTAssertEqual(UserNotice.vpnStuck.body, "VPN не подключается уже 5 минут, а KillSwitch держит интернет закрытым, чтобы ничего не утекло. Выбери другой сервер или нажми «Отключить VPN».")
+        XCTAssertEqual(UserNotice.vpnStuck.action, .openApp)
+        XCTAssertNil(UserNotice.vpnStuck.setting)
+    }
+
     /// Auto-connect found Happ up: it does not stop it silently, it says so (ADR 0009).
     func testAnotherVPNAtAutoConnect() {
         let notice = UserNotice.otherVPN(name: "Happ")

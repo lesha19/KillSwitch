@@ -28,6 +28,13 @@ final class DaemonStateTests: XCTestCase {
         XCTAssertNil(DaemonState(text: "pid=9\nprotection=on")?.vpnOn)
     }
 
+    /// #85: the watchdog says the VPN has been on without its core for 5 minutes.
+    func testStuck() {
+        XCTAssertEqual(DaemonState(text: "pid=9\nprotection=off\nvpn=1\nblocking=1\nstuck=1")?.stuck, true)
+        XCTAssertEqual(DaemonState(text: "pid=9\nprotection=off\nvpn=1\nblocking=1\nstuck=0")?.stuck, false)
+        XCTAssertEqual(DaemonState(text: "pid=9\nprotection=on")?.stuck, false, "older helpers do not write it")
+    }
+
     func testStandby() {
         XCTAssertEqual(DaemonState(text: "pid=9\nprotection=on\ncore=off\ntunnels=vpn:utun23 ts:\nstandby=1")?.standby, true)
         XCTAssertEqual(DaemonState(text: "pid=9\nprotection=on\ncore=off\nstandby=0")?.standby, false)

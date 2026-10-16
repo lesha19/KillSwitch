@@ -16,6 +16,8 @@ struct DaemonState: Equatable {
     /// The VPN is on (ADR 0035) and whether our rules block; nil from a helper before 0.20.
     var vpnOn: Bool?
     var blocking: Bool?
+    /// The VPN on and its core not running for 5 minutes: everything blocked (#85).
+    var stuck: Bool
 
     /// Nil unless it names the daemon's pid and the protection state.
     init?(text: String) {
@@ -33,6 +35,7 @@ struct DaemonState: Equatable {
         standby = values["standby"] == "1"
         vpnOn = values["vpn"].map { $0 == "1" }
         blocking = values["blocking"].map { $0 == "1" }
+        stuck = values["stuck"] == "1"
     }
 
     /// The word of `ks state` (and of the state file): on | off | paused:<epoch>.

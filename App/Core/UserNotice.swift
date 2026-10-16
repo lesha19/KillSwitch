@@ -19,6 +19,8 @@ enum UserNotice: Equatable {
     case routingChanged
     case pauseEnded
     case serviceOff
+    /// The VPN on and its core not running for 5 minutes: everything stays blocked (#85).
+    case vpnStuck
     case macOSUpdated
     /// The app updated itself and the daemon put the new helper in place (ADR 0012).
     case updateInstalled(coreRestarted: Bool)
@@ -63,6 +65,7 @@ enum UserNotice: Equatable {
         case .routingChanged: "routingChanged"
         case .pauseEnded: "pauseEnded"
         case .serviceOff: "serviceOff"
+        case .vpnStuck: "vpnStuck"
         case .macOSUpdated: "macOS"
         case .updateInstalled: "updated"
         }
@@ -74,14 +77,14 @@ enum UserNotice: Equatable {
         case .subscriptionEnding, .trafficLow, .newServers, .routingChanged: .subscription
         case .pauseEnded: .pause
         case .serviceOff: .service
-        case .macOSUpdated, .updateInstalled: nil
+        case .macOSUpdated, .updateInstalled, .vpnStuck: nil
         }
     }
 
     var action: Action? {
         switch self {
         case .vpnDropped: .connect
-        case .autoConnectNeedsPassword, .serversDown, .otherVPN, .doubleVPNOff: .openApp
+        case .autoConnectNeedsPassword, .serversDown, .otherVPN, .doubleVPNOff, .vpnStuck: .openApp
         case .subscriptionEnding: .renew
         case .newServers, .routingChanged: .approve
         case .serviceOff: .openLoginItems
@@ -104,6 +107,7 @@ enum UserNotice: Equatable {
         case .routingChanged: String(localized: "Подписка меняет правила «напрямую»")
         case .pauseEnded: String(localized: "Защита снова включена")
         case .serviceOff: String(localized: "Служба KillSwitch выключена")
+        case .vpnStuck: String(localized: "Интернет закрыт: VPN не подключается")
         case .macOSUpdated: String(localized: "macOS обновилась")
         case .updateInstalled: String(localized: "Обновление установлено")
         }
@@ -128,6 +132,7 @@ enum UserNotice: Equatable {
         case .routingChanged: String(localized: "Часть трафика пойдёт мимо VPN. Проверь, прежде чем разрешать.")
         case .pauseEnded: String(localized: "Пауза закончилась.")
         case .serviceOff: String(localized: "Включи её в Объектах входа.")
+        case .vpnStuck: String(localized: "VPN не подключается уже 5 минут, а KillSwitch держит интернет закрытым, чтобы ничего не утекло. Выбери другой сервер или нажми «Отключить VPN».")
         case .macOSUpdated: String(localized: "Перезагрузи Mac и запусти проверку утечек.")
         case .updateInstalled(let restarted):
             restarted ? String(localized: "VPN переподключился за секунду, защита не отключалась.")

@@ -110,6 +110,8 @@ final class KillSwitchControl {
     private static let tunnelSeenKey = "tunnelSeenForVPNOn"
     /// The VPN is on and the helper says the rules are not loaded: traffic may be leaking.
     private(set) var rulesMissing = false
+    /// The watchdog's stuck=1 last read: the notification goes out when it turns on (#85).
+    private var vpnStuck = false
     static let vpnOnPath = "/Library/KillSwitch/vpn-on"
     /// The helper's VPN target on disk, for when the watchdog's file does not say.
     private static var vpnOnFile: Bool { FileManager.default.fileExists(atPath: vpnOnPath) }
@@ -901,6 +903,8 @@ final class KillSwitchControl {
             protectionStandby = daemon.standby
             vpnOn = daemon.vpnOn ?? Self.vpnOnFile
             rulesMissing = vpnOn && daemon.blocking == false
+            if daemon.stuck && !vpnStuck { notify(.vpnStuck) }   // once each time it gets stuck (#85)
+            vpnStuck = daemon.stuck
             coreRunning = coreInstalled && daemon.coreRunning
             if !coreRunning { proxies = nil }
             foreignVPN = coreRunning ? Self.readForeignVPN() : nil
