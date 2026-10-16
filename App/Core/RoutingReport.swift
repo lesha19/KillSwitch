@@ -41,16 +41,24 @@ indirect enum JSONValue: Decodable, Equatable, Sendable {
 struct RoutingReport: Decodable, Equatable, Sendable {
     static let path = "/Library/KillSwitch/core/routing.json"
 
-    /// profile: the person's routing profile (ADR 0034), named in `profile`.
-    enum Origin: String, Decodable, Sendable { case subscription, killswitch, profile }
+    /// A report written before routing profiles went (#73) may say "profile": the person's own rule, so KillSwitch's.
+    enum Origin: String, Decodable, Sendable {
+        case subscription, killswitch
+
+        init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            guard let origin = raw == "profile" ? .killswitch : Origin(rawValue: raw) else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: raw))
+            }
+            self = origin
+        }
+    }
 
     struct Rule: Decodable, Equatable, Sendable {
         var rule: String
         var from: Origin
         /// Position in the subscription's list (nil for KillSwitch's).
         var index: Int?
-        /// The routing profile's name, for its rules.
-        var profile: String?
         /// With Xray: the rule object as the core has it, for «Проверить адрес» (ADR 0027).
         var xray: [String: JSONValue]?
     }
@@ -242,9 +250,6 @@ extension RoutingReport.Dropped {
             case "geosite": return String(localized: "Нет базы категорий сайтов (geosite)")
             default: return String(localized: "Нет базы стран (geoip)")
             }
-        case "geodata-code":
-            return detail == "geosite" ? String(localized: "Такой категории сайтов нет в базе (geosite)")
-                : String(localized: "Такой страны нет в базе стран (geoip)")
         case "managed": return String(localized: "Это KillSwitch задаёт сам")
         case "not-allowed": return String(localized: "Этого KillSwitch из подписки не берёт")
         case "bad-value": return String(localized: "Значение не прошло проверку")

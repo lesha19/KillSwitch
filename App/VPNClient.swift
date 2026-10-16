@@ -453,7 +453,7 @@ final class VPNClient {
             lastError = nil
             return true
         }
-        let data = RoutingHint.strippingXray(config)
+        let data = SwitchMark.strippingXray(config)
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-xray-\(UUID().uuidString).json")
         do {
             try data.write(to: file, options: .atomic)
@@ -659,7 +659,7 @@ final class VPNClient {
         let core = core(of: server.subscription)
         if core == .xray {
             guard let config = Subscriptions.xray(for: server, configs: Self.cachedXray(subscriptions), own: manualProxies) else { return nil }
-            let data = RoutingHint.strippingXray(config)
+            let data = SwitchMark.strippingXray(config)
             let file = FileManager.default.temporaryDirectory.appendingPathComponent("ks-xray-\(UUID().uuidString).json")
             do {
                 try data.write(to: file, options: .atomic)
@@ -813,7 +813,7 @@ final class VPNClient {
         return order.dropFirst().compactMap { id in
             let server = ServerID(subscription: id, name: "")
             let data: Data? = switch core(of: id) {
-            case .xray: Subscriptions.xray(for: server, configs: Self.cachedXray(subscriptions), own: manualProxies).map(RoutingHint.strippingXray)
+            case .xray: Subscriptions.xray(for: server, configs: Self.cachedXray(subscriptions), own: manualProxies).map(SwitchMark.strippingXray)
             case .mihomo: forCore(server).flatMap { try? ProfileConverter.json($0) }
             case nil: nil   // no installed core runs it: left unapproved
             }
@@ -838,7 +838,7 @@ final class VPNClient {
     /// (Subscriptions.profile), plus the transport overrides (Transport).
     private func forCore(_ server: ServerID) -> Profile? {
         Subscriptions.profile(for: server, profiles: Self.cachedProfiles(subscriptions), own: manual.compactMap(Self.proxy))
-            .map { RoutingHint.stripping(Transport.adding(transportOverrides, to: $0, subscription: server.subscription)) }
+            .map { Transport.adding(transportOverrides, to: $0, subscription: server.subscription) }
     }
 
     /// The blocks of the servers list from the caches, each in the format of its core (#65).

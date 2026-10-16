@@ -176,28 +176,6 @@ drop_setting escalate; rm -f "$MEM"
 [ "$(cut -f1 "$T/obs" | paste -sd' ' -)" = "ks-ping-0-fp-firefox ks-ping-0-t1" ] &&
   ok "observatory reply: the alternatives' probes read, nothing else" || bad "decoded: $(cat -t "$T/obs")"
 
-# --- a routing profile with block, proxy and direct entries (#30): its proxy rules go to whichever
-# outbound leads, so the transport step must still pass the KS-10 gate (core_rebuild switch) as
-# the step's own code does, not be refused as a change of what goes direct. Imported for real, in a
-# subshell (its own files), then the step's rebuild with the memory the pass prepared
-# (without 🇱🇹Литва XHTTP: its config, LT_1_FB first, would be approved at import for a switch)
-hosts '$a->[0]{"x-ks-routing"} = { name => "p", block => { sites => ["domain:ads.example.com"] }, proxy => { sites => ["full:www.example.org"] }, direct => { sites => ["domain:ru"] } };
-  splice @$a, 2, 1'
-( SERVERS="$T/g/servers"; SERVERS_MANUAL="$T/g/servers-manual"; SERVERS_CORE="$T/g/servers-core"; ALLOW="$T/g/allow"; TSRELAYS="$T/g/none"
-  CORE_DIR="$T/g/core"; CORE_PROFILE="$CORE_DIR/profile.json"; PINS="$CORE_DIR/pins"; APPROVED_HOSTS="$CORE_DIR/approved-hosts"
-  APPROVED_DIRECT="$CORE_DIR/approved-direct"; CORE_EGRESS="$CORE_DIR/egress"; REPORT="$CORE_DIR/routing.json"; CORE_PLIST="$T/g/p.plist"
-  SETTINGS="$T/g/settings"; mkdir -p "$CORE_DIR/ctl"; : > "$SERVERS_MANUAL"
-  printf '#!/bin/sh\nexit 0\n' > "$CORE_DIR/xray"; chmod 755 "$CORE_DIR/xray"
-  install() { :; }; pfctl() { cat >/dev/null; }; dscl() { return 0; }; vpn_ifaces() { :; }; ts_ifaces() { :; }; loaded() { return 1; }
-  launchctl() { return 1; }; sleep() { :; }; xray_observe() { return 1; }
-  put_setting core xray
-  core_import "$T/p.json" import >/dev/null 2>"$T/g.err" || { echo "import: $(cat "$T/g.err")"; exit 1; }
-  printf 'net=en0 192.168.1.1\n🇱🇹Литва\tprobe\t1\t1000000\n🇱🇹Литва\tlead\tLT_1_FB\t1000000\n' > "$CORE_DIR/escalation.next"
-  KS_ESC_FILE="$CORE_DIR/escalation.next" core_rebuild "$PINS" switch >/dev/null 2>"$T/g.err" || { echo "rc $?: $(cat "$T/g.err")"; exit 1; }
-  [ "$(j '$c->{outbounds}[0]{tag}' "$(core_conf)")" = LT_1_FB ] || { echo "not led by LT_1_FB"; exit 1; }
-) > "$T/gate" 2>&1 && ok "a routing profile with block, proxy and direct: the transport step passes the KS-10 gate" || bad "gate: $(cat "$T/gate")"
-hosts
-
 # --- the escalation pass: probes armed after 2 failures, then fingerprint, transport; never another server
 core_job() { CORE_RUN=1; CORE_PID=100; }
 PROBE="0 0"; diag_probe() { echo "$PROBE"; }

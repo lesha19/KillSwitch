@@ -230,7 +230,7 @@ enum Subscriptions {
     /// turns «Двойной VPN» off in that run (its entry was the one before's server) without a second
     /// prompt. mihomo's at the top, Xray's in its first config; nil for what is neither.
     static func markedSwitching(_ profile: Data) -> Data? {
-        let mark = "x-ks-switch"
+        let mark = SwitchMark.key
         switch try? JSONSerialization.jsonObject(with: profile) {
         case var object as [String: Any]:
             object[mark] = true

@@ -1,9 +1,9 @@
 #!/bin/bash
 # shellcheck disable=SC2034 # globals here are read by the sourced Helper/ks
 # Every 0.20.0 setting at once (#14 blocking and own DoH, #18 MTU, #20 escalation, #28 own site
-# addresses, #30 routing profile, #33 double VPN): the core takes the config, and none of them
-# moves what goes past the VPN — the DIRECT signature and egress are those of the routing profile
-# alone (its direct entries), and stay the same across a rebuild. No root, no network.
+# addresses, #33 double VPN): the core takes the config, and none of them
+# moves what goes past the VPN — the DIRECT signature and egress are those of the subscription
+# alone, and stay the same across a rebuild. No root, no network.
 #   Helper/tests/core-all-features.sh   (XRAY=/MIHOMO= to check the configs with the real binaries)
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
@@ -26,8 +26,6 @@ j() { /usr/bin/perl -MJSON::PP -e 'local $/; my $c = JSON::PP->new->decode(<STDI
 same() { cmp -s "$1" "$2"; }
 # the same JSON, whatever the key order (Perl writes hashes in its own order)
 same_json() { [ "$(j 'JSON::PP->new->canonical->encode($c)' "$1")" = "$(j 'JSON::PP->new->canonical->encode($c)' "$2")" ]; }
-PROFILE='{ name => "Всё сразу", block => { sites => ["domain:ads.example.com"] }, proxy => { sites => ["full:www.example.org"] },
-  direct => { sites => ["domain:ru", "keyword:yandex"], ips => ["geoip:ru", "10.0.0.0/8"] } }'
 # all <file>: every new setting on, besides the core and double VPN's entry ($2); plus an old
 # hosts= line of unreleased 0.20.0 builds, ignored (#73)
 all() {
@@ -35,19 +33,19 @@ all() {
 }
 
 # --- Xray: hosts 🇱🇹Литва (the fixture), 🇱🇹Литва XHTTP (the same server, the other transport
-# first: escalation has alternatives) and 🇩🇪Германия (the double VPN entry); the profile in the first
+# first: escalation has alternatives) and 🇩🇪Германия (the double VPN entry)
 xprof() { /usr/bin/perl -MJSON::PP -e 'local $/; my $a = JSON::PP->new->decode(<STDIN>); my $c = JSON::PP->new;
   my $x = $c->decode($c->encode($a->[0])); $x->{remarks} = "🇱🇹Литва XHTTP"; @{ $x->{outbounds} }[0, 1] = @{ $x->{outbounds} }[1, 0];
   my $d = $c->decode($c->encode($a->[0])); $d->{remarks} = "🇩🇪Германия"; $_->{settings}{vnext}[0]{address} = "de.example.com" for @{ $d->{outbounds} }[0, 1];
   $_->{tag} =~ s/\ALT_/DE_/ for @{ $d->{outbounds} };
   # its balancer too, or its fallback names an outbound it lacks (a host left out, #37)
   for my $b (@{ $d->{routing}{balancers} }) { s/\ALT_/DE_/ for $b->{fallbackTag}, @{ $b->{selector} }; s/\ALT_/DE_/ for map { $_->{match} } @{ $b->{strategy}{settings}{costs} } }
-  push @$a, $x, $d; if ($ARGV[0]) { my $h; eval "\$h = $ARGV[0]"; die $@ if $@; $a->[0]{"x-ks-routing"} = $h }
-  print JSON::PP->new->encode($a)' "$1" < "$fx/xray-panel.json" > "$2"; }
+  push @$a, $x, $d;
+  print JSON::PP->new->encode($a)' < "$fx/xray-panel.json" > "$1"; }
 gx() { core_generate_xray "$1" "$T/$2" "$T/$2.srv" 2>"$T/err"; }
-xprof "$PROFILE" "$T/xp.json"
+xprof "$T/xp.json"
 printf 'core=xray\n' > "$SETTINGS"
-gx "$T/xp.json" x-profile || bad "xray, the profile alone: $(cat "$T/err")"
+gx "$T/xp.json" x-off || bad "xray, nothing on: $(cat "$T/err")"
 all xray 🇩🇪Германия
 # escalation armed (the running host failing) with a fingerprint and another outbound to the same
 # server (its transport step: that one leads) that worked remembered
@@ -69,9 +67,8 @@ else echo "skip  blocked categories (no shipped geosite.dat)"; fi
 [ "$(j '$c->{outbounds}[0]{tag} . " " . $c->{outbounds}[0]{streamSettings}{realitySettings}{fingerprint}' "$c")" = "LT_1_FB firefox" ] &&
   [ -n "$(j 'join ",", map { $_->{tag} } grep { $_->{tag} =~ /\Aks-ping-0-/ } @{ $c->{outbounds} }' "$c")" ] &&
   ok "  escalation: the other outbound leads with the remembered fingerprint, the alternatives probed" || bad "  escalation: $(j '[map { $_->{tag} } @{ $c->{outbounds} }]' "$c")"
-grep -q $'^profile-rule\t' "$c.direct" && grep -q $'^profile\t' "$c.direct" && ok "  the profile's direct entries in the DIRECT signature" || bad "  profile sig: $(cat "$c.direct")"
-same "$c.direct" "$T/x-profile.direct" && same "$c.egress" "$T/x-profile.egress" &&
-  ok "  DIRECT signature and egress: the profile's alone (nothing else on adds a way past the VPN)" || bad "  direct differs: $(diff "$T/x-profile.direct" "$c.direct")"
+same "$c.direct" "$T/x-off.direct" && same "$c.egress" "$T/x-off.egress" &&
+  ok "  DIRECT signature and egress: the same as with nothing on (no setting adds a way past the VPN)" || bad "  direct differs: $(diff "$T/x-off.direct" "$c.direct")"
 gx "$T/xp.json" x-again || bad "xray rebuild: $(cat "$T/err")"
 same "$T/x-again.direct" "$c.direct" && same "$T/x-again.egress" "$c.egress" && same_json "$T/x-again" "$c" &&
   ok "  a rebuild: the same config, signature and egress" || bad "  rebuild differs: $(diff "$c.direct" "$T/x-again.direct")"
@@ -81,10 +78,10 @@ else echo "skip  xray run -test (no $XRAY)"; fi
 # --- mihomo: base.json is the fixture without DIRECT in its groups (so "proxy" is the VPN)
 rm -f "$CORE_DIR/escalation"
 /usr/bin/perl -MJSON::PP -e 'local $/; my $p = JSON::PP->new->decode(<STDIN>); for (@{ $p->{"proxy-groups"} }) { $_->{proxies} = [ grep { $_ ne "DIRECT" } @{ $_->{proxies} } ] }
-  my $h; eval "\$h = $ARGV[0]"; die $@ if $@; $p->{"x-ks-routing"} = $h; print JSON::PP->new->encode($p)' "$PROFILE" < "$fx/ok-full.json" > "$T/mp.json"
+  print JSON::PP->new->encode($p)' < "$fx/ok-full.json" > "$T/mp.json"
 gm() { core_generate_mihomo "$1" "$T/$2" "$T/$2.srv" 2>"$T/err"; }
 printf 'core=mihomo\n' > "$SETTINGS"
-gm "$T/mp.json" m-profile || bad "mihomo, the profile alone: $(cat "$T/err")"
+gm "$T/mp.json" m-off || bad "mihomo, nothing on: $(cat "$T/err")"
 all mihomo "NL reality"
 gm "$T/mp.json" m-all || bad "mihomo, everything on: $(cat "$T/err")"
 c="$T/m-all"
@@ -96,9 +93,8 @@ if [ -s "$CORE_DIR/geosite.dat" ]; then
 else echo "skip  blocked categories (no shipped geosite.dat)"; fi
 [ "$(j 'join ",", map { $_->{name} } grep { ($_->{"dialer-proxy"} // "") eq "NL reality" } @{ $c->{proxies} }' "$c")" != "" ] &&
   ok "  double VPN: the other servers dialed through the entry" || bad "  multihop: $(j '$c->{proxies}' "$c")"
-grep -q $'^profile-rule\tDOMAIN-SUFFIX,ru,DIRECT$' "$c.direct" && ok "  the profile's direct entries in the DIRECT signature" || bad "  profile sig: $(cat "$c.direct")"
-same "$c.direct" "$T/m-profile.direct" && same "$c.egress" "$T/m-profile.egress" &&
-  ok "  DIRECT signature and egress: the profile's alone" || bad "  direct differs: $(diff "$T/m-profile.direct" "$c.direct")"
+same "$c.direct" "$T/m-off.direct" && same "$c.egress" "$T/m-off.egress" &&
+  ok "  DIRECT signature and egress: the same as with nothing on" || bad "  direct differs: $(diff "$T/m-off.direct" "$c.direct")"
 gm "$T/mp.json" m-again || bad "mihomo rebuild: $(cat "$T/err")"
 same "$T/m-again.direct" "$c.direct" && same "$T/m-again.egress" "$c.egress" && same_json "$T/m-again" "$c" &&
   ok "  a rebuild: the same config, signature and egress" || bad "  rebuild differs: $(diff "$c.direct" "$T/m-again.direct")"

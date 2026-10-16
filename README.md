@@ -78,7 +78,7 @@ the app target's `.stringsdata` files from DerivedData. Check before a release:
 `rg -n 'ядр|pf |туннел|utun|mihomo|Clash|Remnawave|Обновить защиту' App/*.swift` — only comments
 and code may match. Technical names stay in «Скопировать диагностику» (for support).
 
-Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, wifiguard, adblock, blockadult, blocksocial, blockbetting, doh, hosts, splitapps, multihop, core, xrayserver, diag,
+Root-owned files in `/Library/KillSwitch`: `settings` (key=value: lan, tailscale, dns, direct, wifiguard, adblock, blockadult, blocksocial, blockbetting, doh, splitapps, multihop, core, xrayserver, diag,
 escalate, mtu; `ks set <key> 0|1` for the switches, `ks set mtu <n>|auto`),
 `allow` (addresses reachable by any process), `servers-manual` (VPN server IPs added by `server-add`
 and install.sh, reachable by any process), `servers-core` (proxy addresses of the imported core

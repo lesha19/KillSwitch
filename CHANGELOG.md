@@ -18,6 +18,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   of 0.20.0 still load; this version's files are «newer» for 0.20.0. A subscription titled «own» or
   sharing its title with another one travels with none of these.
 
+### Removed
+- Служба больше не читает ключ `x-ks-routing` (профили маршрутизации убраны из приложения в 0.20.0, #73): он в подписке ничего не меняет. Старые отчёты о правилах по-прежнему открываются (#78).
+
 ### Fixed
 - Установщик больше не печатает лишнюю строку ошибки «exit 141» (SIGPIPE от `ks status | head -1`); установка и раньше проходила успешно.
 

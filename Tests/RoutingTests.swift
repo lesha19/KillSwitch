@@ -108,9 +108,23 @@ final class RoutingReportTests: XCTestCase {
         XCTAssertEqual(RoutingReport.Dropped.reasonText("something-new"), "something-new")
         // the own DoH replaces the template's (ADR 0031): never the raw code
         XCTAssertEqual(RoutingReport.Dropped.reasonText("own-doh"), "Вместо него — твой DNS-over-HTTPS")
-        // a routing profile's code the shipped geodata lacks (ADR 0034)
-        XCTAssertEqual(RoutingReport.Dropped.reasonText("geodata-code:geosite"), "Такой категории сайтов нет в базе (geosite)")
-        XCTAssertEqual(RoutingReport.Dropped.reasonText("geodata-code:geoip"), "Такой страны нет в базе стран (geoip)")
+    }
+
+    /// A report written by 0.20.0 builds with routing profiles (removed in #73) still opens.
+    func testOldReportWithRoutingProfileStillDecodes() throws {
+        let old = Data("""
+        {"version":1,
+         "rules":[{"rule":"DOMAIN-SUFFIX,ru,DIRECT","from":"profile","profile":"Мой выбор"},
+                  {"rule":"MATCH,Сервер","from":"subscription","index":0}],
+         "dropped":[{"section":"routing-profile","item":"geosite:zzz","reason":"geodata-code:geosite"}],
+         "providers":[],"groups":[],"proxies":[],"added":[{"kind":"routing-profile","items":["Мой выбор"]}],
+         "sniffer":{"from":"subscription","value":{}},"dns":{"servers":[],"taken":{}},"egress":[]}
+        """.utf8)
+        let report = try RoutingReport(data: old)
+        XCTAssertEqual(report.ownRules.map(\.rule), ["DOMAIN-SUFFIX,ru,DIRECT"])
+        XCTAssertEqual(report.subscriptionRules.count, 1)
+        XCTAssertEqual(report.dropped.first?.reason, "geodata-code:geosite")
+        XCTAssertFalse(report.added.isEmpty)
     }
 
     /// Hosts of an Xray subscription the helper left out (section "servers", 0.19.1).
