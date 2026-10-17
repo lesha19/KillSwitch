@@ -13,7 +13,6 @@ DIR="$tmp"; FLAG="$DIR/disabled"; SETTINGS="$DIR/settings"; ALLOW="$DIR/allow"; 
 SERVERS="$DIR/servers"; SERVERS_MANUAL="$DIR/servers-manual"; EVENTS="$DIR/events.log"; DIAG="$tmp/diag"
 HASHF="$DIR/rules.sha256"; SIGF="$DIR/tunnels"; FILESF="$DIR/rules.files"; INVALIDF="$DIR/invalid"; CORE_EGRESS="$DIR/none"
 WIFI_MARK="$DIR/wifi-off-by-ks"; NET_SEEN="$DIR/net-guard-seen"; STATEF="$DIR/daemon-state"; NB_PLIST="$DIR/none"
-PF_CONF="$tmp/pf.conf"; echo 'anchor "com.apple/*"' > "$PF_CONF"
 dscl() { return 1; }
 core_running() { return 0; }
 PF_TRIES=1   # a refused load is not tried again here
@@ -23,7 +22,6 @@ pfctl() {
     "-s info") echo "Status: $([ "$PF" = on ] && echo Enabled || echo Disabled)" ;;
     "-E") PF=on ;;
     "-s rules") cat "$tmp/main" ;;
-    "-f $PF_CONF") echo 'anchor "com.apple/*" all' > "$tmp/main" ;;
     "-a $ANCHOR -s rules") cat "$tmp/anchor" ;;
     "-a $ANCHOR -f -") if [ -e "$tmp/pf-refuses" ]; then cat > /dev/null; echo "pfctl: Syntax error" >&2; return 1; fi; cat > "$tmp/anchor" ;;
     "-a $ANCHOR -F rules") : > "$tmp/anchor" ;;

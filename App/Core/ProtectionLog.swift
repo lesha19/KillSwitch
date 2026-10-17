@@ -52,6 +52,8 @@ enum ProtectionLog {
             ("rules found loaded while off", String(localized: "Защита осталась включённой после выключения — снята")),
             ("main ruleset reloaded from", String(localized: "Другая программа заменила правила macOS — они загружены заново")),
             ("/etc/pf.conf has no com.apple anchor", String(localized: "Защита не действует: в /etc/pf.conf нет правил macOS")),
+            ("main ruleset has no com.apple anchor", String(localized: "Другая программа заменила правила macOS — защита не действует, её правила не тронуты")),
+            ("main ruleset has the com.apple anchor again", String(localized: "Правила macOS снова на месте — защита действует")),
             ("rules up: network on", String(localized: "Защита включилась после загрузки — сеть включена")),
             ("shutdown: network off", String(localized: "Mac выключается — сеть отключена")),
             ("watchdog switched off", String(localized: "Службу выключили в Объектах входа — сеть не отключалась")),

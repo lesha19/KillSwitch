@@ -374,6 +374,16 @@ pass
 reset_esc; PROBE="90 1"; pass
 [ "$(cat "$MEM")" = "net=$NETSIG" ] && [ "$(rebuilds)" = 0 ] && [ ! -s "$EVENTS" ] &&
   ok "nothing remembered: a new network is noted, nothing rebuilt" || bad "empty memory: $(cat "$MEM") $(rebuilds)"
+# a flapping network (#88): the reset is a rebuild like a step, under the same 3 an hour
+reset_esc
+printf '%s\t🇱🇹Литва\n' $((NOW - 300)) $((NOW - 200)) $((NOW - 100)) > "$MEM-steps"
+printf 'net=wi-fi 10.0.0.1\n🇱🇹Литва\tfp\tfirefox\t%s\n' "$NOW" > "$MEM"
+PROBE="90 1"; OBS=$'ks-ping-0\t1\t80'; pass
+[ "$(head -1 "$MEM")" = "net=wi-fi 10.0.0.1" ] && [ "$(mem)" = "🇱🇹Литва	fp	firefox" ] && [ "$(rebuilds)" = 0 ] && [ "$(wc -l < "$MEM-steps" | tr -d ' ')" = 3 ] &&
+  ok "network changed, 3 rebuilds in the last hour: no reset, nothing rebuilt, the memory as it runs" || bad "capped net change: $(cat "$MEM") $(rebuilds)"
+NOW=$((NOW + 3600)); pass
+[ "$(cat "$MEM")" = "net=$NETSIG" ] && [ "$(rebuilds)" = 1 ] && [ "$(tail -1 "$MEM-steps" | cut -f2)" = "🇱🇹Литва" ] &&
+  ok "  an hour later: reset, and counted as a step" || bad "  after the hour: $(cat "$MEM") $(rebuilds) $(tail -1 "$MEM-steps" 2>&1)"
 
 # --- slow is not a reason to change the fingerprint or the transport
 OBS=$'ks-ping-0\t0\t0\nks-ping-0-fp-safari\t1\t80\nks-ping-1\t1\t30'

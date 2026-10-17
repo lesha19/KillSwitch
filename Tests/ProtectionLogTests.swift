@@ -22,6 +22,10 @@ final class ProtectionLogTests: XCTestCase {
                        "Другая программа заменила правила macOS — они загружены заново")
         XCTAssertEqual(text("2026-10-10 14:03:22 /etc/pf.conf has no com.apple anchor: main ruleset not reloaded, rules are not in effect"),
                        "Защита не действует: в /etc/pf.conf нет правил macOS")
+        XCTAssertEqual(text("2026-10-17 14:03:22 main ruleset has no com.apple anchor (another program replaced it): rules are not in effect, main ruleset left alone"),
+                       "Другая программа заменила правила macOS — защита не действует, её правила не тронуты")
+        XCTAssertEqual(text("2026-10-17 14:03:22 main ruleset has the com.apple anchor again: rules in effect"),
+                       "Правила macOS снова на месте — защита действует")
     }
 
     /// ADR 0035: a line per gap, its length and why.

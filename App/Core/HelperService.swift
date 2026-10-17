@@ -41,6 +41,16 @@ enum HelperService {
         helperOutdated && previous != .ready && current == .ready
     }
 
+    /// F3 (#91): our app in /Applications is root:wheel. A drag-over reinstall of the same build
+    /// leaves it owned by the user while the helper stays current, so `helperOutdated` never asks the
+    /// daemon to upgrade: ask it once to lock the bundle again (its `upgrade` answers "current" and
+    /// runs install.sh --lock-app). Only for the copy in /Applications, once the daemon is usable.
+    static func shouldAskBundleLock(bundlePath: String, ownerID: Int?, availability: Availability,
+                                    helperOutdated: Bool, asked: Bool) -> Bool {
+        !asked && !helperOutdated && availability == .ready && bundlePath.hasPrefix("/Applications/")
+            && ownerID != nil && ownerID != 0
+    }
+
     static let approvalBannerInterval: TimeInterval = 86400
 
     /// The banner asking for the switch in Login Items: not more often than once a day. Also while

@@ -238,26 +238,31 @@ struct ServerList: View {
     }
 }
 
-/// Traffic and expiry of the subscription.
+/// One subscription's block in Settings (ADR 0036, #67): its usage and expiry, account page,
+/// refresh and error. What waits for the admin shows on the one the helper runs.
 struct SubscriptionSummary: View {
     @Environment(VPNClient.self) private var client
+    let subscription: Subscription
+
+    private var status: SubscriptionStatus { subscription.status }
+    private var inUse: Bool { client.activeID == subscription.id }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(client.status.title ?? String(localized: "Подписка")).font(.headline)
+                Text(subscription.title).font(.headline)
                 Spacer()
                 Button {
-                    Task { await client.update(interactive: true) }
+                    Task { await client.update(subscription.id, interactive: true) }
                 } label: {
                     if client.updating { ProgressView().controlSize(.small) } else { Label("Обновить", systemImage: "arrow.clockwise") }
                 }
                 .buttonStyle(.borderless)
-                .disabled(client.updating || !client.hasURL)
+                .disabled(client.updating)
                 .help("Обновить подписку (⌘R)")
                 .accessibilityLabel(client.updating ? String(localized: "Подписка обновляется") : String(localized: "Обновить подписку"))
             }
-            if let usage = client.status.usage {
+            if let usage = status.usage {
                 if let total = usage.total {
                     ProgressView(value: Double(min(usage.used, total)), total: Double(total))
                         .tint(Double(usage.used) / Double(total) > 0.9 ? .red : .accentColor)
@@ -275,13 +280,13 @@ struct SubscriptionSummary: View {
                     }
                 }
             }
-            if let last = client.status.lastUpdate {
+            if let last = status.lastUpdate {
                 Text("Обновлено \(last.formatted(.relative(presentation: .named)))").font(.caption).foregroundStyle(.secondary)
             }
-            if let source = client.status.source {
+            if let source = status.source {
                 Text("Откуда: \(source.label)").font(.caption).foregroundStyle(.secondary)
             }
-            if client.needsConfirmation {
+            if inUse, client.needsConfirmation {
                 HStack {
                     if client.routingChanged {
                         StatusLabel("Нужно подтверждение: подписка меняет правила «напрямую», часть трафика пойдёт мимо VPN",
@@ -300,11 +305,14 @@ struct SubscriptionSummary: View {
                     Text(note).font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if client.needsPassword {
+            if inUse, client.needsPassword {
                 StatusLabel("Подписка изменилась. Нажми «Обновить», чтобы применить (спросит пароль).",
                             systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.caption)
             }
-            if let error = client.lastError {
+            if let url = status.accountURL {
+                Button("Открыть кабинет") { NSWorkspace.shared.open(url) }.controlSize(.small)
+            }
+            if let error = client.error(of: subscription.id) {
                 InlineError(error: error)
             }
         }

@@ -22,7 +22,6 @@ for c in pfctl launchctl networksetup route scutil ifconfig sfltool sudo osascri
   printf '#!/bin/sh\necho "%s $*" >> "%s/real"\nexit 1\n' "$c" "$tmp" > "$tmp/bin/$c"; chmod 755 "$tmp/bin/$c"
 done
 PATH="$tmp/bin:$PATH"
-PF_CONF="$tmp/pf.conf"; echo 'anchor "com.apple/*"' > "$PF_CONF"
 dscl() { return 1; }
 PF_TRIES=1
 echo 'anchor "com.apple/*" all' > "$tmp/main"; : > "$tmp/anchor"

@@ -157,6 +157,7 @@ final class KillSwitchControl {
             let previous = helperAvailability
             helperAvailability = current
             if HelperService.upgradeWhenReady(previous: previous, current: current, helperOutdated: helperOutdated) { upgradeHelper() }
+            askBundleLock()   // the daemon just became usable: the first compare may have been too early
         }
         let defaults = UserDefaults.standard
         if HelperService.showApprovalBanner(helperInstalled: FileManager.default.fileExists(atPath: helper), availability: current,
@@ -970,7 +971,18 @@ final class KillSwitchControl {
                                         age: modified.map { Date().timeIntervalSince($0) } ?? .infinity)
         if check == .installing { helperComparedAt = nil }   // look again with the next refresh
         helperOutdated = check == .outdated
-        if helperOutdated { upgradeHelper() }
+        if helperOutdated { upgradeHelper() } else { askBundleLock() }
+    }
+
+    /// Once per launch (HelperService.shouldAskBundleLock): the daemon locks a user-owned bundle again.
+    private var bundleLockAsked = false
+    private func askBundleLock() {
+        let path = Bundle.main.bundlePath
+        let owner = (try? FileManager.default.attributesOfItem(atPath: path))?[.ownerAccountID] as? Int
+        guard HelperService.shouldAskBundleLock(bundlePath: path, ownerID: owner, availability: helperClient.availability,
+                                                helperOutdated: helperOutdated, asked: bundleLockAsked) else { return }
+        bundleLockAsked = true
+        Task { _ = await helperClient.send(.upgrade, interactive: false) }
     }
 
     /// ADR 0012: after an app update the daemon puts the new helper in place, without a password

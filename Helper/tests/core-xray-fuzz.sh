@@ -375,6 +375,70 @@ if accepted "echSockopt interface, mark, customSockopt; masterKeyLog" '$c->{outb
   [ "$(j 'join ",", map { keys %$_ } $c->{outbounds}[0]{streamSettings}{tlsSettings}{echSockopt}, $c->{outbounds}[0]{streamSettings}{xhttpSettings}{downloadSettings}{tlsSettings}{echSockopt}')" = "" ] &&
     ! grep -q masterKeyLog "$tmp/c" && ok "  removed, in the download too" || bad "  tls: $(j '$c->{outbounds}[0]{streamSettings}')"
 fi
+# files the core (root) would read wherever the subscription says (#90): certificates and keys by
+# path, in a download too and in any case, go whole and are named in the report
+if accepted "certificateFile, keyFile in TLS certificates" '$c->{outbounds}[0]{streamSettings}{security} = "tls";
+      $c->{outbounds}[0]{streamSettings}{tlsSettings} = { serverName => "a.example.com", keyFile => "/var/root/k0",
+        certificates => [{ usage => "verify", certificateFile => "/etc/master.passwd" }, { keyFile => "/var/root/k1" }] };
+      $c->{outbounds}[0]{streamSettings}{xhttpSettings} = { downloadSettings => { address => "198.51.100.8", port => 443, security => "tls",
+        tlsSettings => { Certificates => [{ CertificateFile => "/etc/a", KEYFILE => "/etc/b" }] } } }'; then
+  ! grep -qiE 'certificateFile|keyFile|/etc/|/var/root' "$tmp/c" &&
+    [ "$(j '$c->{outbounds}[0]{streamSettings}{tlsSettings}{certificates}')" = "[]" ] &&
+    [ "$(j 'join ",", sort map { $_->{item} } grep { $_->{section} eq "profile" && $_->{item} =~ /\Aoutbound / } @{ $c->{dropped} }' "$tmp/c.report")" = \
+      "outbound LT_1: Certificates,outbound LT_1: certificates,outbound LT_1: keyFile" ] &&
+    ok "  left out, in the download too, named in the report" || bad "  tls: $(j '$c->{outbounds}[0]{streamSettings}') dropped $(j '$c->{dropped}' "$tmp/c.report")"
+fi
+# a geodata list from a file (ext:file:tag and its other prefixes, negated too) in a routing rule:
+# the rule goes, named in the report; geosite:/geoip: of the shipped files stay
+n=$(j 'scalar @{ $c->[0]{routing}{rules} }' "$fx/xray-panel.json")
+if accepted "ext: lists in routing rules" 'push @{$c->{routing}{rules}}, { domain => ["ext:../../../etc/hosts:x"], outboundTag => "direct" },
+      { ip => ["!ext-ip:/etc/a:b"], outboundTag => "block" }, { source => ["ext:x.dat:y"], outboundTag => "block" },
+      { domain => ["domain:ok.example.com", "EXT-DOMAIN:a:b"], outboundTag => "block" }, { domain => ["ext-site:a:b"], outboundTag => "block" },
+      { sourceIP => ["ext:a:b"], outboundTag => "block" }, { localIP => [" ext:a:b"], outboundTag => "block" }'; then
+  [ "$(j 'join ",", map { "$_->{index}:$_->{reason}" } grep { $_->{section} eq "rules" && $_->{index} >= '"$n"' } @{ $c->{dropped} }' "$tmp/c.report")" = \
+    "$n:not-allowed,$((n + 1)):not-allowed,$((n + 2)):not-allowed,$((n + 3)):not-allowed,$((n + 4)):not-allowed,$((n + 5)):not-allowed,$((n + 6)):not-allowed" ] &&
+    ! grep -qiE '"!? ?ext(-[a-z]+)?:' "$tmp/c" "$tmp/c.direct" && grep -q '"geosite:youtube"' "$tmp/c" &&
+    ok "  each rule dropped, named in the report; geosite: stays" || bad "  rules: $(j '$c->{routing}{rules}') dropped $(j '$c->{dropped}' "$tmp/c.report")"
+fi
+# the same in DNS: a server with one (domains, expectedIPs, unexpectedIPs, any case) or a host entry
+if accepted "ext: lists in DNS servers and hosts" '$c->{dns}{servers}[1]{domains} = ["ext:/etc/a:b"];
+      $c->{dns}{servers}[2]{expectedIPs} = ["ext-ip:x:y"]; push @{$c->{dns}{servers}}, { address => "9.9.9.9", unexpectedIPs => ["!ext:a:b"] },
+      { address => "9.9.9.10", Domains => ["ext-site:a:b"] }, "ext:a:b";
+      $c->{dns}{hosts} = { "ext:/etc/a:b" => "1.2.3.4", "ok.example.com" => "1.2.3.4" }'; then
+  [ "$(j 'join ",", map { ref $_ ? $_->{address} : $_ } @{ $c->{dns}{servers} }')" = 77.88.8.8 ] &&
+    [ "$(j 'join ",", sort keys %{ $c->{dns}{hosts} }')" = ok.example.com ] &&
+    [ "$(j 'join ",", map { $_->{item} } grep { $_->{section} eq "dns" && $_->{reason} eq "not-allowed" } @{ $c->{dropped} }' "$tmp/c.report")" = \
+      "ext:/etc/a:b,8.8.8.8,1.1.1.1,9.9.9.9,9.9.9.10,ext:a:b" ] && ! grep -qiE '"!?ext(-[a-z]+)?:' "$tmp/c" &&
+    ok "  left out, named in the report; geosite: stays" || bad "  dns: $(j '$c->{dns}') dropped $(j '$c->{dropped}' "$tmp/c.report")"
+fi
+# review of #108: a plain string is a list split on commas, any number of ! may lead a piece
+n=$(j 'scalar @{ $c->[0]{routing}{rules} }' "$fx/xray-panel.json")
+if accepted "ext: lists in routing rules: commas, several !" 'push @{$c->{routing}{rules}}, { domain => "domain:a.example.com,ext:/etc/x:y", outboundTag => "block" },
+      { ip => "1.2.3.4, !!ext-ip:/etc/x:y", outboundTag => "block" }, { source => ["!!!ext:a:b"], outboundTag => "block" },
+      { sourceIP => "10.0.0.1,ext-ip:a:b", outboundTag => "block" }, { domain => "domain:ok.example.com,domain:b.example.com", outboundTag => "block" }'; then
+  [ "$(j 'join ",", map { $_->{index} } grep { $_->{section} eq "rules" && $_->{index} >= '"$n"' } @{ $c->{dropped} }' "$tmp/c.report")" = "$n,$((n + 1)),$((n + 2)),$((n + 3))" ] &&
+    ! grep -qiE 'ext(-[a-z]+)?:' "$tmp/c" "$tmp/c.direct" && grep -q 'b.example.com' "$tmp/c" &&
+    ok "  dropped piece by piece; a clean list stays" || bad "  rules: $(j '$c->{routing}{rules}') dropped $(j '$c->{dropped}' "$tmp/c.report")"
+fi
+if accepted "ext: lists in DNS: commas, several !, script" 'push @{$c->{dns}{servers}}, { address => "9.9.9.9", domains => "domain:a.com,ext:/etc/x:y" },
+      { address => "9.9.9.10", expectedIPs => "1.1.1.1,!!ext-ip:/etc/x:y" }, { address => "9.9.9.11", unexpectedIPs => ["!!ext:a:b"] }, "domain:a.com,ext:a:b";
+      $c->{dns}{hosts} = { "ok.example.com" => "1.2.3.4,ext-ip:a:b" }; $c->{dns}{Script} = "/etc/master.lua"'; then
+  [ "$(j 'join ",", map { ref $_ ? $_->{address} : $_ } @{ $c->{dns}{servers} }')" = 77.88.8.8,8.8.8.8,1.1.1.1 ] &&
+    [ "$(j 'join ",", sort keys %{ $c->{dns}{hosts} }')" = "" ] &&
+    [ "$(j 'join ",", sort map { $_->{item} } grep { $_->{section} eq "dns" && $_->{reason} eq "not-allowed" } @{ $c->{dropped} }' "$tmp/c.report")" = \
+      "9.9.9.10,9.9.9.11,9.9.9.9,Script,domain:a.com,ext:a:b,ok.example.com" ] &&
+    ! grep -qiE 'ext(-[a-z]+)?:|script|master.lua' "$tmp/c" "$tmp/c.direct" &&
+    ok "  left out, script too" || bad "  dns: $(j '$c->{dns}') dropped $(j '$c->{dropped}' "$tmp/c.report")"
+fi
+# freedom finalRules[].ip are geodata rules read at load by the core (root)
+if accepted "ext: lists in freedom finalRules" 'my ($f) = grep { $_->{protocol} eq "freedom" } @{$c->{outbounds}};
+      $f->{settings}{finalRules} = [{ action => "block", ip => ["ext:/etc/x:y"] }, { action => "allow", ip => "1.2.3.4,!!ext-ip:a:b" },
+        { action => "block", ip => ["10.0.0.0/8"] }]'; then
+  [ "$(j 'my ($f) = grep { $_->{protocol} eq "freedom" } @{$c->{outbounds}}; scalar @{ $f->{settings}{finalRules} }')" = 1 ] &&
+    [ "$(j 'scalar grep { $_->{section} eq "profile" && $_->{item} =~ /: finalRules\z/ } @{ $c->{dropped} }' "$tmp/c.report")" = 2 ] &&
+    ! grep -qiE 'ext(-[a-z]+)?:' "$tmp/c" "$tmp/c.direct" && grep -q '10.0.0.0/8' "$tmp/c" &&
+    ok "  rules with a file list dropped, named in the report" || bad "  freedom: $(j '$c->{outbounds}') dropped $(j '$c->{dropped}' "$tmp/c.report")"
+fi
 refused "echSockopt dialerProxy to a missing outbound" '$c->{outbounds}[0]{streamSettings}{security} = "tls";
       $c->{outbounds}[0]{streamSettings}{tlsSettings} = { echConfigList => "AEX+DQBBpQAgACB/RdTe", echSockopt => { dialerProxy => "nope" } }' "несуществующий"
 

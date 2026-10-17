@@ -11,6 +11,10 @@
 # Left-out PRs get a "not merged" comment before the green ones are posted (also when nothing is green,
 # but not when the base is red). Merges use a fixed identity, no signing, no hooks.
 # landed: exit 0 = the tip is the tested tree, 1 = it is not.
+# Before each gate run it waits (scripts/wait-load.sh) for this Mac's load average to drop under
+# KS_LOAD_MAX (default 20), at most KS_LOAD_WAIT seconds (default 600); the gate gets KS_LOAD_WAITED=1
+# so scripts/vm.sh does not wait again. The gate also gets KS_GATE_BASE=<base tip sha>: a merge commit
+# is compared with the base, and xcodebuild is skipped when no app file changed (see ci-local.sh).
 # Env: KS_BATCH_GATE (default scripts/vm.sh, run as "$gate <sha>"), KS_GH (default gh).
 set -u
 usage() { echo "usage: $0 check <base-branch> <PR>... | landed <base-branch> <tree>" >&2; exit 2; }
@@ -89,7 +93,8 @@ gaterun() { # gaterun <sha> <label>: sets res to green|red; a tree is gated once
   local t rc; t=$(git -C "$root" rev-parse "$1^{tree}")
   res=$(awk -v t="$t" '$1 == t { print $2 }' "$cache")
   [ -z "$res" ] || return 0
-  "$gate" "$1" >&2; rc=$?
+  "$(dirname "$0")/wait-load.sh" >&2
+  KS_LOAD_WAITED=1 KS_GATE_BASE=$bsha "$gate" "$1" >&2; rc=$?
   case $rc in 0) res=green;; 1) res=red;; *) echo "gate error (exit $rc) on $1" >&2; exit 2;; esac
   echo "$t $res" >> "$cache"; echo "gate $1 ($2): $res"
 }

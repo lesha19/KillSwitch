@@ -200,21 +200,27 @@ private struct VPNSettings: View {
                         Button(revealed[subscription.id] == nil ? String(localized: "Показать") : String(localized: "Скрыть")) {
                             revealed[subscription.id] = revealed[subscription.id] == nil ? client.revealURL(of: subscription.id) : nil
                         }.hiddenByProvider(client.urlHidden(subscription.id))
+                        Button("Скопировать") {
+                            if let link = client.revealURL(of: subscription.id) {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(link, forType: .string)
+                            }
+                        }.hiddenByProvider(client.urlHidden(subscription.id))
                         SubscriptionQRButton(id: subscription.id)
                         Spacer()
                         Button("Удалить…", role: .destructive) { removing = subscription }
                     }
+                    SubscriptionSummary(subscription: subscription)
                 }
-                if client.hasURL { SubscriptionSummary() }
                 HStack {
                     TextField(client.hasURL ? String(localized: "Ещё одна подписка: https://…") : "https://…", text: $newURL).onSubmit(saveURL)
                         .accessibilityLabel("Ссылка на подписку")
                     Button("Добавить", action: saveURL).disabled(newURL.isEmpty)
                     QRScanButton()
                 }
-                if client.hasURL, let error = client.lastError { InlineError(error: error) }
+                if client.hasURL, let error = client.lastError, client.subscriptions.allSatisfy({ client.error(of: $0.id) == nil }) { InlineError(error: error) }
                 Picker("Обновлять", selection: $client.intervalHours) {
-                    Text("как просит подписка (\(client.status.serverIntervalHours) ч)").tag(0)
+                    Text("как просит подписка").tag(0)
                     ForEach([1, 3, 6, 12, 24, 48], id: \.self) { Text("каждые \($0) ч").tag($0) }
                 }
             }
@@ -272,7 +278,7 @@ private struct VPNSettings: View {
                             presenting: removing) { subscription in
             Button("Удалить", role: .destructive) { revealed = [:]; Task { await client.remove(subscription.id) } }
         } message: { _ in
-            Text("Ссылка удалится из связки ключей. VPN продолжит работать с последним списком серверов.")
+            Text("Ссылка, кеш, избранное и недавние этой подписки удалятся. Если VPN подключён через неё, он продолжит работать и блокировать трафик мимо туннеля, пока ты не выберешь другой сервер.")
         }
     }
 

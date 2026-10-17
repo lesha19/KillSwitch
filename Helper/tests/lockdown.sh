@@ -14,7 +14,6 @@ SERVERS="$DIR/servers"; SERVERS_MANUAL="$DIR/servers-manual"; SERVERS_CORE="$DIR
 HASHF="$DIR/rules.sha256"; SIGF="$DIR/tunnels"; FILESF="$DIR/rules.files"; INVALIDF="$DIR/invalid"; WIFI_MARK="$DIR/wifi-off-by-ks"; NET_SEEN="$DIR/net-guard-seen"; STATEF="$DIR/daemon-state"
 NB_PLIST="$DIR/none"   # never the real NetBird plist (netbird.sh tests netbird_sync)
 CORE_DIR="$DIR/core"; mkdir "$CORE_DIR"; CORE_EGRESS="$CORE_DIR/egress"; CORE_PROFILE="$CORE_DIR/none"
-PF_CONF="$tmp/pf.conf"; echo 'anchor "com.apple/*"' > "$PF_CONF"
 vpn_ifaces() { echo utun9; }
 ts_ifaces() { :; }
 dscl() { return 0; }

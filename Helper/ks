@@ -278,7 +278,8 @@ tunnel_sig() {
 # list change within a second and loads the blocking rules) or our core comes up.
 # Never while our VPN is on (ADR 0035): its own restart would open everything to the other tunnel.
 vpn_standby() {
-  ! vpn_on && ! core_running &&
+  # launchd not answering in time counts as running: no standby, the rules keep blocking
+  ! vpn_on && { bounded "$CALL_TIMEOUT" core_running; [ $? = 1 ]; } &&
     utun_addrs | awk -v a="$CORE_TUN_ADDR" '$2 ~ /^198\.18\./ { v = 1 } $2 == a { o = 1 } END { exit !(v && !o) }'
 }
 
@@ -390,6 +391,21 @@ ns() {
     exit "$rc"
   )
 }
+# bounded <seconds> <command|function> [args]: killed after <seconds> with everything it started
+# (its own process group): exit 137; stdin and stderr pass through. The watchdog's calls to
+# launchd, configd and the DNS lock go through it: its one-second loop never waits longer (#88).
+CALL_TIMEOUT=3
+bounded() {
+  local t=$1; shift
+  (
+    set -m; exec 3>&2 2>/dev/null   # the job in its own group; no job notices
+    "$@" <&0 2>&3 & p=$!
+    perl -e 'sleep shift; kill 9, -(shift)' "$t" "$p" >/dev/null 2>&1 & k=$!
+    wait "$p"; rc=$?
+    kill "$k" 2>/dev/null
+    exit "$rc"
+  )
+}
 # Every network service bound to a physical port (en*, bridge*): "on|off<TAB>name<TAB>device".
 # Disabled ones are listed as "(*) Name". A name with a control character (a tab) could not be told
 # from its device: "bad<TAB><TAB>device", left alone. A name with a newline is not listed at all.
@@ -403,7 +419,7 @@ service_list() {
 # Interfaces configd knows (State:/Network/Interface), one per line. The kernel can have one
 # (ifconfig -l) and networksetup call it Enabled while configd does not know it yet: then nothing
 # comes up on it (the 15.10.2026 incident).
-configd_ifs() { echo 'show State:/Network/Interface' | scutil 2>/dev/null | awk '$2 == ":" && $1 ~ /^[0-9]+$/ { print $3 }'; }
+configd_ifs() { echo 'show State:/Network/Interface' | bounded "$CALL_TIMEOUT" scutil 2>/dev/null | awk '$2 == ":" && $1 ~ /^[0-9]+$/ { print $3 }'; }
 net_now() { date +%s; }
 
 # The boot window guard's mark ($WIFI_MARK): "name<TAB>device" per service ks turned off (a mark
@@ -611,24 +627,38 @@ guard() {
   elif [ "$TSIG" != "$(cat "$SIGF" 2>/dev/null)" ]; then why="tunnels changed ($TSIG)"
   elif [ "$mode" != full ]; then return 0
   elif ! pf_enabled; then why="pf was disabled"
-  elif ! pfctl -s rules 2>/dev/null | grep -q 'anchor "com.apple/\*"'; then
-    why="anchor missing from main ruleset"
-    restore_main_ruleset
   elif [ "$(root_files_sig)" != "$(cat "$FILESF" 2>/dev/null)" ]; then why="settings files changed"
   elif [ "$(rules_hash)" != "$(cat "$HASHF" 2>/dev/null)" ]; then why="rules were changed or flushed"
   elif standby_changed; then why="standby $([ "$STANDBY" = 1 ] && echo ended || echo began)"
   elif rules_retry_due; then why=retry
   fi
-  if [ -z "$why" ]; then PROT=$prot; BLOCKING=1; return 0; fi
-  if [ "$why" = retry ]; then
+  if [ -z "$why" ]; then PROT=$prot; BLOCKING=1
+  elif [ "$why" = retry ]; then
     LOAD_RETRY=1
     if load "$TSIG"; then PROT=$prot; BLOCKING=1; else PROT=off; BLOCKING=0; log_event "reload failed"; fi
     LOAD_RETRY=0
     [ -f "$INVALIDF" ] || log_event "rules loaded again after pf had refused them"
+  else
+    log_event "$why: reloading"
+    if load "$TSIG"; then PROT=$prot; BLOCKING=1; else PROT=off; BLOCKING=0; log_event "reload failed"; fi
+  fi
+  [ "$BLOCKING" = 1 ] && ! anchor_point && BLOCKING=0
+  return 0
+}
+
+# Our anchor is evaluated only through Apple's anchor point in the main ruleset. A program that
+# loaded a main ruleset without it (another VPN's own pf.conf) is left alone (#86): the main ruleset
+# is never reloaded or flushed, that would wipe its rules (Mullvad's anchor and the like) and fight
+# it every 2 s over the Mac's network. The app is told our rules do not block (BLOCKING=0); the
+# change is logged each way.
+ANCHOR_POINT_GONE=0
+anchor_point() {
+  if pfctl -s rules 2>/dev/null | grep -q 'anchor "com.apple/\*"'; then
+    [ "$ANCHOR_POINT_GONE" = 0 ] || { ANCHOR_POINT_GONE=0; log_event "main ruleset has the com.apple anchor again: rules in effect"; }
     return 0
   fi
-  log_event "$why: reloading"
-  if load "$TSIG"; then PROT=$prot; BLOCKING=1; else PROT=off; BLOCKING=0; log_event "reload failed"; fi
+  [ "$ANCHOR_POINT_GONE" = 1 ] || { ANCHOR_POINT_GONE=1; log_event "main ruleset has no com.apple anchor (another program replaced it): rules are not in effect, main ruleset left alone"; }
+  return 1
 }
 # pf refused the rules (load): the lockdown holds, the rules are tried again every PF_RETRY seconds
 rules_retry_due() {
@@ -646,27 +676,6 @@ standby_changed() {
   [ ! -f "$INVALIDF" ] || return 1
   [[ "$TSIG" == "vpn: "* ]] || { vpn_standby && s=1; }
   [ "$s" != "${STANDBY:-0}" ]
-}
-
-# Someone loaded a main ruleset without Apple's anchor point, so ours is not evaluated at all.
-# The system's own /etc/pf.conf is the only file that brings it back; it replaces whatever main
-# ruleset is loaded (anchors, ours included, keep their rules). Pointless, and so skipped, when
-# pf.conf itself lacks the anchor point. Restored every time (the kill switch must hold), logged
-# at most once a minute so a program fighting over the ruleset does not flood the log.
-PF_CONF="/etc/pf.conf"
-PFCONF_LOGGED=0
-restore_main_ruleset() {
-  local now msg
-  if grep -q '^[[:space:]]*anchor "com.apple/\*"' "$PF_CONF" 2>/dev/null; then
-    pfctl -f "$PF_CONF" >/dev/null 2>&1
-    msg="main ruleset reloaded from $PF_CONF"
-  else
-    msg="$PF_CONF has no com.apple anchor: main ruleset not reloaded, rules are not in effect"
-  fi
-  now=$(date +%s)
-  [ $((now - PFCONF_LOGGED)) -ge 60 ] || return 0
-  PFCONF_LOGGED=$now
-  log_event "$msg"
 }
 
 # The state for the app (world-readable, nothing secret): what "ks state" and "ks core state"
@@ -2007,6 +2016,13 @@ KS_XRAY_PL='
       }
     } elsif (ref $x eq "ARRAY") { far_transport($_) and return 1 for @$x }
     0 }
+  # a geodata list from a file the subscription names, read by the core as root: ext:file:tag,
+  # ext-domain:, ext-site:, ext-ip:, also negated with ! (Xray docs config/routing.md, RuleObject
+  # domain and ip; xray-core common/geodata/rule_parser.go). Anywhere in a value or a key (DNS hosts).
+  # A plain string is a list split on commas (StringList), and any number of ! may lead a piece
+  sub ext_file { my $x = shift;
+    ref $x eq "HASH" ? grep { ext_file($_) } %$x : ref $x eq "ARRAY" ? grep { ext_file($_) } @$x
+      : defined $x && grep { /\A[!\s]*ext(-[a-z]+)?:/i } split /,/, $x, -1 }
   # every socket setting in a stream (sockopt, the ECH lookup'"'"'s echSockopt, in downloads too)
   sub sockopts { my $x = shift; my @r;
     if (ref $x eq "HASH") { for (keys %$x) { push @r, $x->{$_} if /\A(sockopt|echSockopt)\z/i && ref $x->{$_} eq "HASH"; push @r, sockopts($x->{$_}) } }
@@ -2254,6 +2270,19 @@ KS_XRAY_PL='
       delete $cfg{burstObservatory}{pingConfig}{connectivity};
       push @dropped, { section => "profile", item => "burstObservatory.pingConfig.connectivity", reason => "not-allowed" };
     }
+    # DNS lists from a file (#90; Xray docs config/dns.md: hosts keys, DnsServerObject domains,
+    # expectedIPs, unexpectedIPs): the server or the host entry that has one is left out
+    if (ref $cfg{dns} eq "HASH") {
+      # dns.script is a Lua file the core reads as root
+      for (sort grep { /\Ascript\z/i } keys %{ $cfg{dns} }) { delete $cfg{dns}{$_}; push @dropped, { section => "dns", item => $_, reason => "not-allowed" } }
+      for my $v (map { $cfg{dns}{$_} } sort keys %{ $cfg{dns} }) {
+        if (ref $v eq "HASH") { for (sort grep { ext_file($_) || ext_file($v->{$_}) } keys %$v) { delete $v->{$_}; push @dropped, { section => "dns", item => $_, reason => "not-allowed" } } }
+        elsif (ref $v eq "ARRAY") {
+          for (grep { ext_file($_) } @$v) { my $s = ref $_ eq "HASH" ? $_->{address} // "?" : $_; push @dropped, { section => "dns", item => ref $s ? "?" : $s, reason => "not-allowed" } }
+          @$v = grep { !ext_file($_) } @$v;
+        }
+      }
+    }
     my $outs = $cfg{outbounds};
     # bound to no interface (pf lets the core out by its group), server names pinned (ADR 0020)
     # (customSockopt sets raw socket options, the bound interface among them; also in an XHTTP
@@ -2282,13 +2311,31 @@ KS_XRAY_PL='
           }
         }
       };
+      # freedom finalRules[].ip are geodata rules too: an ext: list is opened at load, as root (#90)
+      if (ref $o->{settings} eq "HASH") { for my $fk (grep { /\AfinalRules\z/i && ref $o->{settings}{$_} eq "ARRAY" } sort keys %{ $o->{settings} }) {
+        my @keep = grep { !ext_file($_) } @{ $o->{settings}{$fk} };
+        next if @keep == @{ $o->{settings}{$fk} };
+        if (defined $t) { push @dropped, { section => "profile", item => "outbound " . (length $t ? $t : "?") . ": $fk", reason => "not-allowed" } for 1 .. @{ $o->{settings}{$fk} } - @keep }
+        $o->{settings}{$fk} = \@keep;
+      } }
       my $ss = ref $o->{streamSettings} eq "HASH" ? $o->{streamSettings} : undef;
       for my $so (sockopts($ss)) {
         for my $k (qw(interface mark customSockopt)) { if (exists $so->{$k}) { delete $so->{$k}; $unbound{$t} = 1 if defined $t } }
       }
-      # a TLS key log: a file the core would write wherever the subscription says
+      # files the core (root) would write or read wherever the subscription says (#90; Xray docs
+      # config/transports/tls.md): a TLS key log, certificates and keys by path. A certificate by
+      # path goes whole: Xray refuses one with neither a file nor the text
+      my $file = qr/\A(certificateFile|keyFile)\z/i;
       my $nolog; $nolog = sub { my $x = shift;
-        if (ref $x eq "HASH") { for (keys %$x) { if (/\AmasterKeyLog\z/i) { delete $x->{$_} } else { $nolog->($x->{$_}) } } }
+        if (ref $x eq "HASH") { for my $k (keys %$x) {
+          if ($k =~ /\AmasterKeyLog\z/i || $k =~ $file) { delete $x->{$k} }
+          elsif ($k =~ /\Acertificates\z/i && ref $x->{$k} eq "ARRAY") {
+            my @c = grep { !(ref $_ eq "HASH" && grep { $_ =~ $file } keys %$_) } @{ $x->{$k} };
+            next if @c == @{ $x->{$k} };
+            $x->{$k} = \@c;
+          } else { $nolog->($x->{$k}); next }
+          push @dropped, { section => "profile", item => "outbound " . (length $t ? $t : "?") . ": $k", reason => "not-allowed" } if defined $t;
+        } }
         elsif (ref $x eq "ARRAY") { $nolog->($_) for @$x } };
       $nolog->($ss);
       $pinned->($_, $ss) for own_addrs($o);
@@ -2362,7 +2409,7 @@ KS_XRAY_PL='
     for my $i (0 .. $#in) {
       my $x = $in[$i];
       my $text = ref $x eq "HASH" ? rule_text($x) : "?";
-      if (ref $x ne "HASH" || grep { !$RULE_KEYS{$_} } keys %$x) { push @dropped, { section => "rules", index => $i, item => $text, reason => "not-allowed" }; next }
+      if (ref $x ne "HASH" || ext_file($x) || grep { !$RULE_KEYS{$_} } keys %$x) { push @dropped, { section => "rules", index => $i, item => $text, reason => "not-allowed" }; next }
       if (defined $x->{outboundTag} ? !$tag{ $x->{outboundTag} } : !(defined $x->{balancerTag} && $bal{ $x->{balancerTag} })) {
         push @dropped, { section => "rules", index => $i, item => $text, reason => "target:" . ($x->{outboundTag} // $x->{balancerTag} // "") }; next }
       push @rules, $x; push @report, { rule => $text, from => "subscription", index => $i, small($x) ? (xray => $x) : () };
@@ -3700,7 +3747,7 @@ dns_migrate() {
 }
 
 dns_apply() {  # prints the keys it had to (re)write
-  local boot snap old path cur prev
+  local boot snap old path cur prev todo=""
   dns_migrate && return 0
   boot=$(boot_id)
   snap=$(dns_snapshot)
@@ -3718,11 +3765,17 @@ dns_apply() {  # prints the keys it had to (re)write
         printf '%s\t%s\n' "$path" "$prev"
       else
         printf '%s\t%s\n' "$path" "$cur"
-        dns_put "$path" "$DNS_OURS"
-        echo "$path" >&3
+        todo+="$path"$'\n'
       fi
     done <<<"$snap"
-  } 3>&1 > "$DNS_STATE.tmp" && mv "$DNS_STATE.tmp" "$DNS_STATE"
+  } > "$DNS_STATE.tmp" && mv "$DNS_STATE.tmp" "$DNS_STATE" || return 1
+  # the originals are on disk before the first key is rewritten: killed in between (the watchdog's
+  # DNS_TIMEOUT), the next pass still finds what to put back
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    dns_put "$path" "$DNS_OURS"
+    echo "$path"
+  done <<<"$todo"
 }
 
 # Whether dns_apply would write anything: read-only, so the watchdog can ask without the lock.
@@ -3777,7 +3830,13 @@ core_log_tidy() {
 }
 
 # "ks core on|off" and the watchdog run these at the same time; lockf serialises them.
-dns_locked() { lock_ready "$CORE_DIR/dns.lock" 2>/dev/null; lockf -k -t 30 "$CORE_DIR/dns.lock" "$0" _dns "$1"; }
+# dns_locked apply|restore [watch]: the watchdog's never waits for the lock (held: its next pass
+# tries again) and is killed after DNS_TIMEOUT s; "ks core" waits up to 30 s for it.
+DNS_TIMEOUT=10
+dns_locked() {
+  if [ "${2:-}" = watch ]; then lock_ready "$CORE_DIR/dns.lock" 2>/dev/null; bounded "$DNS_TIMEOUT" lockf -k -t 0 "$CORE_DIR/dns.lock" "$0" _dns "$1"
+  else lock_ready "$CORE_DIR/dns.lock" 2>/dev/null; lockf -k -t 30 "$CORE_DIR/dns.lock" "$0" _dns "$1"; fi
+}
 core_running() { launchctl print "$CORE_JOB" 2>/dev/null | grep -q 'state = running'; }
 
 # "interface address" for every tunnel interface (utun, ipsec, ppp), IPv4 and IPv6, sorted.
@@ -3839,29 +3898,31 @@ vpn_stuck() {
 # so a crashed core does not leave the Mac without names.
 CORE_DOWN=""; CORE_STATE=off; LOG_CHECKS=0; CORE_PID=""; CORE_EXIT=""
 core_guard() {
-  local p now changed
-  if ! p=$(launchctl print "$CORE_JOB" 2>/dev/null); then
+  local p now changed rc
+  p=$(bounded "$CALL_TIMEOUT" launchctl print "$CORE_JOB" 2>/dev/null); rc=$?
+  [ "$rc" -le 128 ] || return 0   # launchd did not answer in time: all kept, asked again next pass
+  if [ "$rc" != 0 ]; then
     CORE_DOWN=""; CORE_STATE=off; CORE_PID=""; rm -f "$FOREIGN_VPN"
-    [ -f "$DNS_STATE" ] && dns_locked restore && log_event "core not loaded: DNS restored"
+    [ -f "$DNS_STATE" ] && dns_locked restore watch && log_event "core not loaded: DNS restored"
     return 0
   fi
   core_job_parse "$p"   # the pid and last exit for the journal (diag_tick)
   if grep -q 'state = running' <<<"$p"; then
     CORE_DOWN=""; CORE_STATE=on
     # lockf and a second ks only when something has to be written
-    if dns_pending; then
-      changed=$(dns_locked apply)
+    if bounded "$CALL_TIMEOUT" dns_pending; then
+      changed=$(dns_locked apply watch)
       [ -n "$changed" ] && log_event "core DNS set: $(paste -sd' ' - <<<"$changed")"
     fi
     tun_guard
     LOG_CHECKS=$((LOG_CHECKS + 1)); [ $((LOG_CHECKS % 30)) = 1 ] && core_log_tidy   # about once a minute
     # lookups can take seconds: in the background, so the pf checks keep their pace
-    if [ -s "$APPROVED_HOSTS" ] && rotate_due "$(date +%s)" "$(net_sig)"; then core_rotate_bg; fi
+    if [ -s "$APPROVED_HOSTS" ] && rotate_due "$(date +%s)" "$(bounded "$CALL_TIMEOUT" net_sig || echo "$NET_SIG")"; then core_rotate_bg; fi
   else
     CORE_STATE=off; rm -f "$FOREIGN_VPN"
     now=$(date +%s); CORE_DOWN=${CORE_DOWN:-$now}
     if [ $((now - CORE_DOWN)) -ge 5 ] && [ -f "$DNS_STATE" ]; then
-      dns_locked restore && log_event "core not running: DNS restored"
+      dns_locked restore watch && log_event "core not running: DNS restored"
     fi
   fi
 }
@@ -4028,7 +4089,7 @@ escalate_pass() {  # escalate_pass [epoch]
   [ "$CORE_RUN" = 1 ] || return 0
   # no network at all (no primary interface): a failed probe says nothing of the server
   [ -n "$(primary_iface)" ] || return 0
-  escalate_net
+  escalate_net "$now"
   read -r _ ok <<<"$(diag_probe)"
   rm -f "$CORE_DIR/escalation-state.next" "$mem.next" "$mem.fail"
   out=$(umask 077; PROBE_OK=$ok NOW=$now ENTRY=$(setting multihop off) P=$(xray_pings 2>/dev/null) ST="$CORE_DIR/escalation-state" \
@@ -4069,13 +4130,19 @@ escalate_step() {
 }
 # escalate_net: a new network (interface and router) forgets what worked: another one may block
 # something else. The config is rebuilt only when something was remembered; if that fails the
-# memory stays (it is what runs), noted for the new network.
-escalate_net() {
-  local mem="$CORE_DIR/escalation" sig
+# memory stays (it is what runs), noted for the new network. The rebuild counts against the steps'
+# limits (3 an hour, 10 a day per host, escalation-steps): past them nothing is done, the network
+# stays unnoted and the next pass after the limit resets it (#88: a flapping network).
+escalate_net() {  # escalate_net <epoch>
+  local mem="$CORE_DIR/escalation" sig host
   sig=$(net_sig)
   [ -f "$mem" ] && [ "$(sed -n 's/^net=//p' "$mem" | head -1)" = "$sig" ] && return 0
   ( umask 077; echo "net=$sig" > "$mem.next" ) || return 0
   if [ -f "$mem" ] && grep -q "$(printf '\t')" "$mem"; then
+    host=$(report_selected)
+    if awk -F'\t' -v h="$host" -v t="$1" '$2 == h && $1 + 0 > t - 86400 { d++; if ($1 + 0 > t - 3600) n++ }
+         END { exit !(n >= 3 || d >= 10) }' "$mem-steps" 2>/dev/null; then rm -f "$mem.next"; return 0; fi
+    stamp_line "$mem-steps" "$1" 86400 "$host"
     if KS_ESC_FILE="$mem.next" core_rebuild "$PINS" switch 2>/dev/null; then
       mv "$mem.next" "$mem"; reload_if_on; core_reload
       log_event "escalate reset (network changed)"
@@ -4560,6 +4627,8 @@ diag_redact() {
       $s =~ s/(server-\d+) \d{1,3}(?:\.\d{1,3}){3}(?![\w.])/$1 <old>/g;
       $s =~ s{[A-Za-z][A-Za-z0-9+.\-]*://\S+}{<ссылка>}g;
       $s =~ s/[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/<uuid>/g;
+      # a secret by the name it is written under, however short (a Reality shortId, a password; #93)
+      $s =~ s~(["\x27]?(?:short[-_]?ids?|password|passwd|pass|psk|secret|token|auth|private[-_]?key|public[-_]?key|obfs[-_]?password)["\x27]?[ \t]*[:=][ \t]*)(?:(?:\n[ \t]*-[ \t]*[^\s,}\]]+)+|"[^"\n]*"|\x27[^\x27\n]*\x27|\[[^\]\n]*\]|[^\s,}\]]+)~$1<ключ>~gi;
       $s =~ s{([A-Za-z0-9+/_\-]{20,}={0,2})}{ $1 =~ /[0-9]/ ? "<ключ>" : $1 }ge;
       $s =~ s{(?<![\w.])(\d{1,3}(?:\.\d{1,3}){3})(?!\w|\.\d)}{ my $a = $1; !$keep{$a} && v4_public($a) ? $tok->($a) : $a }ge;
       $s =~ s{(?<![\w:.%])([0-9A-Fa-f:]*:[0-9A-Fa-f:]*)(?![\w:])}{ my $a = $1; v6_public($a) ? $tok->(lc $a) : $a }ge;
@@ -4585,7 +4654,7 @@ diag_report() {  # diag_report <dir> [uid of the user who asked]: prints the arc
   out="$dest/$name.tar.gz"
   ( umask 077; diag_collect "$w/$name" "$uid" ) && diag_redact "$w/$name" && tar -czf "$w/$name.tar.gz" -C "$w" "$name" &&
     if [ ${#as[@]} -gt 0 ]; then "${as[@]}" /usr/bin/tee "$out" < "$w/$name.tar.gz" > /dev/null
-    else rm -f "$out" && cp "$w/$name.tar.gz" "$out"; fi
+    else rm -f "$out" && ( set -C; cat "$w/$name.tar.gz" > "$out" ); fi   # O_EXCL: a symlink put in at $out is not followed (#93)
   rc=$?
   rm -rf "$w"
   [ "$rc" = 0 ] || { echo "Не удалось собрать отчёт" >&2; return 1; }

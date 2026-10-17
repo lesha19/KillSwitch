@@ -6,7 +6,18 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 
 ## [Unreleased]
 
+### Security
+- «Собрать отчёт» (#93): secrets are masked by the name they are written under (shortId, password,
+  psk, token…) however short; the archive is written with O_EXCL, so a symlink put at its name is
+  not followed. `Helper/fetch-mihomo.sh` ignores `~/.curlrc` and has a time limit.
+
 ### Changed
+- Several subscriptions, each on its own (#67, ADR 0036): every subscription is refreshed on its
+  own interval (the person's, else the provider's `profile-update-interval`) and retries after a
+  failure on its own; a failed refresh keeps its servers and shows the error on its block only. A
+  block has its refresh button, ping (the one in use), usage and expiry, account page, the masked
+  link with show / copy, and delete. Refreshing a subscription not in use only updates its cache.
+  Deleting the subscription in use keeps the VPN and the blocking on and asks to pick another server.
 - Several subscriptions with servers of the same name (#74, ADR 0036): a Wi‑Fi rule's preferred
   server remembers its subscription and is chosen only while that subscription is in use (a rule
   never switches subscriptions); «Способ подключения» set for a server is kept per subscription;
@@ -18,11 +29,48 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   of 0.20.0 still load; this version's files are «newer» for 0.20.0. A subscription titled «own» or
   sharing its title with another one travels with none of these.
 
+- Merge gate in the VM (scripts only, not the app): `scripts/vm.sh <ref> --only <test.sh>...` runs just
+  those Helper/tests files and prints a "partial (only ...)" result line (never posted with `--pr`);
+  `xcodebuild build test` is skipped ("skip: no app changes") when the diff against the base touches only
+  docs, scripts (not release.sh), tests and the like; the run waits for a quiet Mac first
+  (`scripts/wait-load.sh`, `KS_LOAD_MAX` 20, `KS_LOAD_WAIT` 600 s, also before each `vm-batch.sh` gate).
+  Timing failures are not rerun: they cannot be told from logic failures by the output.
+
 ### Removed
 - Служба больше не читает ключ `x-ks-routing` (профили маршрутизации убраны из приложения в 0.20.0, #73): он в подписке ничего не меняет. Старые отчёты о правилах по-прежнему открываются (#78).
 
+### Security
+- Папка программы `/Applications/KillSwitch.app` после установки и при каждом запуске обновления службы (даже если версия службы не менялась)
+  принадлежит системе (root:wheel, писать в неё может только администратор), как у Mullvad (#91,
+  аудит 2026-10-15, F3): служба с правами root запускается из этой папки, и программа, работающая
+  от имени пользователя, больше не может подменить её файл. Обновление через Sparkle и удаление
+  программы теперь спрашивают пароль администратора; автоматическое тихое обновление вместо
+  этого показывает окно обновления.
+
 ### Fixed
+- KillSwitch больше не трогает чужие правила pf (#86): сторож загружает и сбрасывает только свой
+  якорь и никогда не перезагружает основной набор правил. Раньше, если другая программа заменяла
+  основной набор без якоря macOS, сторож каждые 2 с загружал `/etc/pf.conf` заново и стирал её
+  правила (Mullvad и подобные). Теперь он оставляет их как есть, пишет в «Журнал защиты» «Другая
+  программа заменила правила macOS — защита не действует» (и «Правила macOS снова на месте», когда
+  они вернутся), а при включённом VPN приложение предупреждает, что правила не блокируют.
 - Установщик больше не печатает лишнюю строку ошибки «exit 141» (SIGPIPE от `ks status | head -1`); установка и раньше проходила успешно.
+- Сторож больше не зависает (#88): его запросы к launchd и configd ограничены 3 с, запись DNS под
+  замком — 10 с, а занятый замок DNS он не ждёт (раньше до 30 с), повторяет на следующем проходе.
+  Не дождался ответа — ничего не меняет: состояние ядра и DNS прежние, режим ожидания рядом с
+  другим VPN не включается, блокировка держится.
+  Худший проход при зависших launchd и configd — около 19 с. Запись DNS теперь сначала сохраняет
+  исходные значения, потом меняет ключи: оборванная запись не теряет ручной DNS пользователя.
+- Xray: сброс подбора способа подключения при смене сети теперь входит в тот же лимит перезапусков
+  ядра (3 в час, 10 в сутки на сервер), так что мигающая сеть больше не перезапускает ядро на каждой смене (#88).
+
+### Security
+- Подписка Xray больше не может заставить ядро (оно работает от root) читать файлы Mac (#90):
+  сертификаты и ключи по пути (`certificateFile`, `keyFile`) убираются вместе с сертификатом,
+  правила маршрутизации, DNS-серверы и записи hosts со списками из файла (`ext:`, `ext-ip:`,
+  `ext-domain:`, `ext-site:`; в том числе через запятую в строке и с несколькими `!`), правила
+  `finalRules` у freedom и `dns.script` не берутся. Всё убранное видно в «Трафик» → «Что не взято»; списки
+  `geosite:`/`geoip:` из встроенных файлов работают как раньше.
 
 ## [0.20.0] - 2026-10-12
 

@@ -30,7 +30,7 @@ git clone -q "$T/origin.git" "$T/work"
 
 cat > "$T/gate" <<'EOF'
 #!/bin/bash
-echo "$1" >> "$T/gates"
+echo "$1" >> "$T/gates"; echo "$KS_LOAD_WAITED ${KS_GATE_BASE:-}" >> "$T/gate-env"
 [ -z "$(git ls-tree "$1" BAD)" ]
 EOF
 cat > "$T/gate-error" <<'EOF'
@@ -57,7 +57,7 @@ g="git --git-dir=$T/origin.git"
 $g update-ref refs/heads/rel "$($g commit-tree 'rel^{tree}' -p rel -m moved)"
 EOF
 chmod +x "$T/gate" "$T/gate-error" "$T/gate-moves" "$T/gh"
-export T KS_GH="$T/gh" KS_BATCH_GATE="$T/gate"
+export T KS_GH="$T/gh" KS_BATCH_GATE="$T/gate" KS_LOAD_WAIT=0 # no waiting for a quiet Mac in these tests
 
 run() { # run <args...>: sets rc, out (stdout), last; logs reset
   rm -f "$T/gates" "$T/comments" "$T"/views.*; touch "$T/gates" "$T/comments"
@@ -167,5 +167,50 @@ check "landed: extra commit, exit 1" '[ "$rc" = 1 ] && echo "$last" | grep -q "s
 
 KS_BATCH_GATE="$T/gate-moves" run check rel 1 2
 check "base moved during the gate: exit 3, nothing posted" '[ "$rc" = 3 ] && [ ! -s "$T/comments" ] && grep -q "base rel moved" "$T/stderr"'
+
+# the gate gets the base tip and "load already waited"
+run check rel 1
+check "gate env: KS_GATE_BASE is the base tip, KS_LOAD_WAITED=1" \
+  'grep -q "^1 $(git --git-dir="$T/origin.git" rev-parse rel)\$" "$T/gate-env"'
+
+# wait-load.sh: KS_LOAD_FILE stands in for the load average
+wl="$(dirname "$batch")/wait-load.sh"
+echo 3.5 > "$T/load"
+check "wait-load: quiet Mac, no wait" 'KS_LOAD_FILE="$T/load" KS_LOAD_WAIT=5 "$wl" 2> "$T/wl.err"; [ ! -s "$T/wl.err" ]'
+echo 90.1 > "$T/load"
+check "wait-load: busy and KS_LOAD_WAIT=0, no wait" 'KS_LOAD_FILE="$T/load" KS_LOAD_WAIT=0 "$wl" 2> "$T/wl.err"; [ ! -s "$T/wl.err" ]'
+check "wait-load: busy all the time, gives up with a message, exit 0" \
+  'KS_LOAD_FILE="$T/load" KS_LOAD_WAIT=2 KS_LOAD_POLL=1 "$wl" 2> "$T/wl.err"; rc=$?; [ "$rc" = 0 ] && grep -q "waiting up to 2s" "$T/wl.err" && grep -q "starting anyway" "$T/wl.err"'
+( sleep 2; echo 4 > "$T/load" ) &
+check "wait-load: load drops, starts early" \
+  'KS_LOAD_FILE="$T/load" KS_LOAD_WAIT=20 KS_LOAD_MAX=20 KS_LOAD_POLL=1 "$wl" 2> "$T/wl.err"; grep -q "starting after" "$T/wl.err"'
+wait
+check "wait-load: KS_LOAD_MAX is honoured" 'echo 6 > "$T/load"; KS_LOAD_FILE="$T/load" KS_LOAD_MAX=5 KS_LOAD_WAIT=1 KS_LOAD_POLL=1 "$wl" 2> "$T/wl.err"; grep -q "not below 5" "$T/wl.err"'
+check "wait-load: unreadable load, no wait" 'KS_LOAD_FILE="$T/nosuch" KS_LOAD_WAIT=5 "$wl" 2> "$T/wl.err"; grep -q "cannot read" "$T/wl.err"'
+
+# ci-local.sh: --only / --pr and the xcodebuild skip
+ci="$(dirname "$batch")/ci-local.sh"; vmsh="$(dirname "$batch")/vm.sh"
+check "ci-local: --pr with --only refused (exit 2)" '"$ci" HEAD --pr 1 --only args.sh 2> /dev/null; [ $? = 2 ]'
+check "ci-local: --only without files refused" '"$ci" HEAD --only 2> /dev/null; [ $? = 2 ]'
+check "vm.sh: --pr with --only refused before the VM (exit 2)" '"$vmsh" HEAD --pr 1 --only args.sh 2> /dev/null; [ $? = 2 ]'
+check "vm.sh: --only without files refused" '"$vmsh" HEAD --only 2> /dev/null; [ $? = 2 ]'
+check "ci-local: --only with an unknown test (exit 2)" '"$ci" HEAD --only no-such-test.sh 2>&1 | grep -q "no such test"'
+eval "$(sed -n '/^app_changes()/,/^}/p' "$ci")"
+root=$T/work; sha=HEAD
+changes() { printf '%s' "$1" > "$T/changed"; KS_CHANGED_FILE="$T/changed" app_changes; }
+check "skip: docs, scripts, tests, changelog only" '! changes "docs/a.md
+scripts/vm.sh
+Helper/tests/args.sh
+CHANGELOG.md"'
+check "no skip: App/ file" 'changes "docs/a.md
+App/Core/X.swift"'
+check "no skip: project.yml" 'changes "project.yml"'
+check "no skip: KillSwitch.xcodeproj" 'changes "KillSwitch.xcodeproj/project.pbxproj"'
+check "no skip: Helper/ks (bundled in the app)" 'changes "Helper/ks"'
+check "no skip: Tests/" 'changes "Tests/CLITests.swift"'
+check "no skip: scripts/release.sh (read by CLITests)" 'changes "scripts/release.sh"'
+check "no skip: unknown path" 'changes "somewhere/new.txt"'
+check "no skip: empty list" 'changes ""'
+check "no skip: no base (git diff fails)" 'unset KS_CHANGED_FILE; KS_GATE_BASE=nosuchbase app_changes'
 
 [ "$fails" = 0 ] && echo "test-vm-batch: all passed" || { echo "test-vm-batch: $fails failed"; exit 1; }

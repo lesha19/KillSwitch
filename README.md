@@ -215,7 +215,8 @@ what transport escalation remembered per server, ADR 0030).
   profile of the other core swaps the core under blocking, ADR 0036), none of which can widen the rules; turning off, pausing, `ks core import` and
   every setting change ask for the admin password.
 - Watchdog (`ks watch`, pf every 2 s and tunnels every second, honours off / pause while the VPN is off): checks that pf is enabled, that the main
-  ruleset still references the `com.apple/*` anchor (otherwise reloads `/etc/pf.conf`), that the
+  ruleset still references the `com.apple/*` anchor (otherwise it reports that the rules do not
+  block and leaves the main ruleset alone: it never reloads or flushes it, #86), that the
   sha256 of the loaded anchor equals the hash saved right after our load, and that the set of tunnel
   interfaces did not change. Any mismatch reloads the rules and is written to `events.log`.
 - The app warns (banner and notification) when the daemon is disabled in System Settings → Login Items

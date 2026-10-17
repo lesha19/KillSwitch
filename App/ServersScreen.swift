@@ -43,6 +43,10 @@ struct ServersScreen: View {
                     .textFieldStyle(.roundedBorder)
                     .focused($searchFocused)
                     .accessibilityLabel("Поиск сервера")
+                if client.activeRemoved {
+                    StatusLabel("Подписка, через которую ты подключён, удалена. Блокировка работает: выбери другой сервер.",
+                                systemImage: "exclamationmark.triangle.fill", tint: .orange).font(.callout)
+                }
                 list
                 HStack {
                     Picker("Порядок", selection: $sort) {
@@ -136,7 +140,7 @@ struct ServersScreen: View {
                             if let fastest = block.fastest { row(fastest, current: current) }
                             ForEach(block.servers) { row($0, current: current) }
                         } header: {
-                            Text(verbatim: block.title)
+                            blockHeader(block)
                         }
                     }
                 }
@@ -150,7 +154,7 @@ struct ServersScreen: View {
                     if let id = ids.first.map(Self.id(fromTag:)), let entry = all.first(where: { $0.id == id }) { choose(entry) }
                 }
             }
-            if let error = control.coreError ?? client.lastError { InlineError(error: error) }
+            if let error = control.coreError ?? (client.error(of: client.activeID) == nil ? client.lastError : nil) { InlineError(error: error) }
         } else if control.coreRunning, let error = control.proxiesError {
             InlineError(error: error)
             // `ks core restart` needs the VPN on (ADR 0035)
@@ -163,6 +167,37 @@ struct ServersScreen: View {
             .frame(maxWidth: .infinity, minHeight: 120)
         } else {
             empty(String(localized: "Список появится после первого обновления подписки."))
+        }
+    }
+
+    /// A block's title, its refresh and, where the core runs, its ping; a failed refresh shows here only
+    /// (the servers stay as they were).
+    @ViewBuilder private func blockHeader(_ block: ServerPicker.List.Block) -> some View {
+        let subscription = client.subscriptions.first { $0.id == block.id }
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(verbatim: block.title)
+                Spacer()
+                if let subscription {
+                    Button {
+                        Task { await client.update(subscription.id, interactive: true) }
+                    } label: { Image(systemName: "arrow.clockwise") }
+                        .buttonStyle(.borderless)
+                        .disabled(client.updating)
+                        .help("Обновить эту подписку")
+                        .accessibilityLabel("Обновить подписку \(block.title)")
+                }
+                if block.id == client.activeID {
+                    Button { Task { await control.testAllDelays() } } label: { Image(systemName: "speedometer") }
+                        .buttonStyle(.borderless)
+                        .disabled(!control.coreRunning || control.proxies == nil || !control.testing.isEmpty)
+                        .help("Проверить пинг серверов этой подписки")
+                        .accessibilityLabel("Проверить пинг серверов \(block.title)")
+                }
+            }
+            if let error = client.error(of: block.id) {
+                StatusLabel(error.title, systemImage: "exclamationmark.triangle.fill", tint: .red).font(.caption).textCase(nil)
+            }
         }
     }
 

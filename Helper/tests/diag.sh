@@ -246,6 +246,7 @@ printf '2026-10-11 13:00:00 server addresses changed: old.example 198.51.100.7 -
 printf 'connect 198.51.100.7:443 [2001:db8:1::5]:443 dns 1.1.1.1 lan 10.0.0.1 tun 198.18.0.1 lo ::1 ll fe80::1%%en0 ts 100.100.100.100 at 14:38:44 in Foo::bar\n' > "$CORE_DIR/core.log.1"
 echo '2026/10/11 14:38:45 from 127.0.0.1:59996 accepted tcp:93.184.216.34:443 [ks-tun >> LT_1]' >> "$DIAG/access.log"
 core_job() { CORE_RUN=0; CORE_PID=""; }
+printf '{"shortId":"ab12","password": "hunter2"}\npsk=s3cr  short-ids:\n  - ab34\npassword:\nname: keepme\ntoken: \x27xy\x27\n' >> "$CORE_DIR/core.log"
 mkdir -m 755 "$tmp/out"
 out=$(diag_report "$tmp/out" 2>"$tmp/err") || bad "report failed: $(cat "$tmp/err")"
 [[ "$out" =~ ^$tmp/out/KillSwitch-report-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}\.tar\.gz$ ]] && [ -f "$out" ] &&
@@ -266,6 +267,8 @@ grep -rqE '203\.0\.113|lt\.example\.com|sni\.hidden\.example' "$r" && bad "repor
   ok "report: server addresses and names masked"
 grep -rq 'server-1' "$r/events.log" && grep -q 'server-1' "$r/routing.json" && [ "$(grep -o 'server-[0-9]*' "$r/events.log" | sort -u | wc -l | tr -d ' ')" -ge 1 ] &&
   ok "report: masked as stable placeholders (server-N)" || bad "placeholders: $(cat "$r/events.log")"
+grep -qE 'ab12|ab34|hunter2|s3cr|token: .xy' "$r/core.log" && bad "report holds a short secret: $(cat "$r/core.log")" ||
+  ok "report: secrets masked by the name they are written under, however short (#93)"
 grep -rqE 'sub\.example\.org|00000000-0000-4000|Z84J2Iel' "$r" && bad "report holds a link, uuid or key: $(grep -rE 'sub\.example|00000000|Z84J' "$r" | head -3)" ||
   ok "report: links, uuids and keys masked"
 grep -rqE 'Ab12cd34|Qx7tok9|Lt5tok2|sub\.example\.net' "$r" && bad "report holds a scheme-less link's token: $(grep -rE 'Ab12cd34|Qx7tok9|Lt5tok2|example\.net' "$r" | head -3)" ||

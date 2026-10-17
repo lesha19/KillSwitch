@@ -55,6 +55,11 @@ enum Runner {
             return HelperReply(status: HelperReply.refused, stdout: "",
                                stderr: "Эта версия KillSwitch старше установленной службы: обновите программу")
         case .current:
+            // F3 (#91): the helper is current, but a drag-over reinstall or Sparkle can leave the
+            // bundle user-owned; lock it again, whatever the reply (a failure is only logged)
+            let lock = execute("/bin/bash", HelperCommand.scriptArguments(helperDir.appendingPathComponent("install.sh").path,
+                                                                          ["--lock-app"]))
+            if lock.status != 0 { Log.daemon.error("lock app: status \(lock.status, privacy: .public) \(lock.stderr, privacy: .public)") }
             return HelperReply(status: 0, stdout: "helper: current", stderr: "")
         case .upgrade:
             return execute("/bin/bash", HelperCommand.scriptArguments(helperDir.appendingPathComponent("install.sh").path,

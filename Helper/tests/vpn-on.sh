@@ -14,7 +14,6 @@ WIFI_MARK="$DIR/wifi-off-by-ks"; NET_SEEN="$DIR/net-guard-seen"; STATEF="$DIR/da
 CORE_DIR="$tmp/core"; mkdir -p "$CORE_DIR"; CORE_PLIST="$tmp/core.plist"
 printf '#!/bin/sh\nexit 0\n' > "$CORE_DIR/xray"; chmod 755 "$CORE_DIR/xray"; echo '{}' > "$CORE_DIR/xray.json"
 echo core=xray > "$SETTINGS"
-PF_CONF="$tmp/pf.conf"; echo 'anchor "com.apple/*"' > "$PF_CONF"
 dscl() { return 1; }
 PF=on; echo 'anchor "com.apple/*" all' > "$tmp/main"; : > "$tmp/anchor"
 pfctl() {

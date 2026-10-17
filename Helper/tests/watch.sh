@@ -11,7 +11,6 @@ DIR="$tmp"; FLAG="$DIR/disabled"; SETTINGS="$DIR/settings"; ALLOW="$DIR/allow"; 
 SERVERS="$DIR/servers"; SERVERS_MANUAL="$DIR/servers-manual"; EVENTS="$DIR/events.log"
 HASHF="$DIR/rules.sha256"; SIGF="$DIR/tunnels"; FILESF="$DIR/rules.files"; INVALIDF="$DIR/invalid"; CORE_EGRESS="$DIR/none"; WIFI_MARK="$DIR/wifi-off-by-ks"; NET_SEEN="$DIR/net-guard-seen"; STATEF="$DIR/daemon-state"
 NB_PLIST="$DIR/none"   # no NetBird: netbird_sync has its own test
-PF_CONF="$tmp/pf.conf"; echo 'anchor "com.apple/*"' > "$PF_CONF"
 dscl() { return 1; }   # no core group: fewer rules, same logic
 core_running() { [ "${CORE_RUNS:-1}" = 1 ]; }   # no standby (ADR 0018) unless said so
 # Fake pf: "on"/"off", the main ruleset and our anchor in files; every call logged.
@@ -22,7 +21,6 @@ pfctl() {
     "-s info") echo "Status: $([ "$PF" = on ] && echo Enabled || echo Disabled)" ;;
     "-E") PF=on ;;
     "-s rules") cat "$tmp/main" ;;
-    "-f $PF_CONF") echo 'anchor "com.apple/*" all' > "$tmp/main" ;;
     "-a $ANCHOR -s rules") cat "$tmp/anchor" ;;
     "-a $ANCHOR -f -") cat > "$tmp/anchor" ;;
     "-a $ANCHOR -F rules") : > "$tmp/anchor" ;;
@@ -57,21 +55,27 @@ PF=off
 passes 7 8
 [ "$PF" = on ] && ok "pf disabled: enabled again within 2 passes" || bad "pf disabled not caught"
 
-# --- someone loaded a main ruleset without Apple's anchor point: ours is not evaluated at all
-echo 'pass out all' > "$tmp/main"; : > "$EVENTS"; : > "$tmp/calls"
-passes 30 31
-grep -q "pfctl -f $PF_CONF" "$tmp/calls" && grep -q 'com.apple' "$tmp/main" && ok "anchor missing: main ruleset reloaded from pf.conf within 2 passes" ||
-  bad "anchor missing: $(cat "$tmp/calls")"
-grep -q 'anchor missing from main ruleset: reloading' "$EVENTS" && grep -q "main ruleset reloaded from $PF_CONF" "$EVENTS" &&
-  ok "  logged, with the file it came from" || bad "  log: $(cat "$EVENTS")"
-for i in 1 2 3; do echo 'pass out all' > "$tmp/main"; passes $((30 + 2 * i)) $((31 + 2 * i)); done
-[ "$(grep -c "main ruleset reloaded" "$EVENTS")" = 1 ] && ok "  a program fighting over it: restored every time, logged once a minute" ||
-  bad "  logged $(grep -c "main ruleset reloaded" "$EVENTS") times"
-echo 'pass out all' > "$tmp/main"; : > "$PF_CONF"; : > "$tmp/calls"; : > "$EVENTS"; PFCONF_LOGGED=0
-passes 40 41
-grep -q "pfctl -f $PF_CONF" "$tmp/calls" && bad "pf.conf without the anchor reloaded anyway" || ok "pf.conf without Apple's anchor: not reloaded (it would not help)"
-grep -q "has no com.apple anchor" "$EVENTS" && ok "  logged" || bad "  not logged: $(cat "$EVENTS")"
-echo 'anchor "com.apple/*"' > "$PF_CONF"; echo 'anchor "com.apple/*" all' > "$tmp/main"
+# --- the main ruleset is never reloaded or flushed (#86): other programs' rules there (Mullvad's
+# anchor and the like) survive every pass; only our own anchor is ever loaded or flushed
+st() { awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print }' "$STATEF"; }
+mainpf() { grep '^pfctl' "$tmp/calls" | grep -E -- ' -[fF]' | grep -v -- "-a $ANCHOR"; }
+printf '%s\n' 'anchor "com.apple/*" all' 'anchor "mullvad" all' > "$tmp/main"; : > "$EVENTS"; : > "$tmp/calls"
+passes 30 37
+grep -q '"mullvad"' "$tmp/main" && [ -z "$(mainpf)" ] && ok "another program's anchor survives 8 passes" || bad "foreign anchor: $(mainpf)"
+# a program replaced the main ruleset without Apple's anchor point: ours is not evaluated, and
+# reloading /etc/pf.conf would wipe that program's rules every 2 s (a fight over the network)
+echo 'anchor "mullvad" all' > "$tmp/main"; : > "$tmp/calls"
+passes 38 45
+[ "$(cat "$tmp/main")" = 'anchor "mullvad" all' ] && [ -z "$(mainpf)" ] && ok "anchor point missing: the main ruleset left as it is" ||
+  bad "anchor point missing: main $(cat "$tmp/main"), calls $(mainpf)"
+[ "$(st blocking)" = 0 ] && ok "  the app is told the rules do not block" || bad "  blocking=$(st blocking)"
+[ "$(grep -c "main ruleset has no com.apple anchor" "$EVENTS")" = 1 ] && ok "  logged once" || bad "  log: $(cat "$EVENTS")"
+grep -q 'anchor.*-f -' "$tmp/calls" && bad "  our rules reloaded for it" || ok "  our rules not reloaded for it"
+printf '%s\n' 'anchor "com.apple/*" all' 'anchor "mullvad" all' > "$tmp/main"
+passes 46 47
+[ "$(st blocking)" = 1 ] && grep -q "main ruleset has the com.apple anchor again" "$EVENTS" && ok "  back: blocking again, logged" ||
+  bad "  back: blocking=$(st blocking), log $(cat "$EVENTS")"
+echo 'anchor "com.apple/*" all' > "$tmp/main"
 
 # --- a new tunnel is let in on the very next pass, whichever it is
 ADDRS="utun4 198.18.0.1
@@ -80,7 +84,6 @@ passes 9 9
 grep -q 'utun7' "$tmp/anchor" && ok "new tunnel: rules follow on the next pass" || bad "new tunnel not caught"
 
 # --- the state file for the app
-st() { awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print }' "$STATEF"; }
 [ "$(st protection)" = on ] && [ "$(st tunnels)" = "vpn:utun4,utun7 ts:" ] && [ "$(st pid)" = "$$" ] && [ "$(st core)" = off ] &&
   ok "state file: protection, tunnels, core, pid" || bad "state file: $(cat "$STATEF")"
 [ "$(stat -f %Lp "$STATEF")" = 644 ] && ok "state file world-readable" || bad "state file mode $(stat -f %Lp "$STATEF")"

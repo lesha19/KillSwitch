@@ -2,6 +2,7 @@
 # Installs the kill switch into root-owned locations and starts it.
 #   install.sh <user> [server-ip ...]
 #   install.sh --upgrade
+#   install.sh --lock-app   (only the bundle lock, F3)
 # Server addresses are added to /Library/KillSwitch/servers (VPN servers that may be reached
 # without the tunnel). Safe to run again: it upgrades the helper in place and keeps the
 # existing settings, exceptions and servers.
@@ -118,6 +119,25 @@ write_marker() {
   printf 'version %s\nsha256 %s\n' "$(script_version "$DIR/ks")" "${sum%% *}" > "$new"
   chmod 644 "$new"
   mv -f "$new" "$DIR/installed"
+}
+
+# F3 (#91): launchd runs the root daemon (SMAppService, BundleProgram) from inside the app bundle,
+# so a bundle its user can write is a way to root. Like Mullvad, our app in /Applications (by bundle
+# id, under any name; not a link) becomes root:wheel and writable by nobody else: changing it, an
+# update by Sparkle included, then needs the admin password. -R does not follow links inside.
+# Also run alone as "install.sh --lock-app" when the daemon finds the helper current (a drag-over
+# reinstall or Sparkle can leave a user-owned bundle without any helper change).
+# A failure is said and the install goes on: the bundle is then as it was before.
+APPS_DIR=/Applications; APP_ID=com.lesha19.KillSwitch
+app_lock() {
+  local a
+  for a in "$APPS_DIR"/*.app; do
+    [ -d "$a" ] && [ ! -L "$a" ] || continue
+    [ -f "$a/Contents/Info.plist" ] || continue   # a FIFO there would hang PlistBuddy
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$a/Contents/Info.plist" 2>/dev/null)" = "$APP_ID" ] || continue
+    # -P: never through a link; -N: an ACL granting write survives chown and chmod go-w
+    { chown -hR -P root:wheel "$a" && chmod -R go-w "$a" && chmod -R -N "$a"; } || echo "app: cannot lock $a (root:wheel, go-w, no ACL)" >&2
+  done
 }
 
 ks_run() { "$DIR/ks" "$@"; }
@@ -254,6 +274,10 @@ core_update() {
 
 main() {
   local upgrade=0 ks_new=0 plist_new=0 old new USER_NAME ip
+  if [ "${1:-}" = --lock-app ]; then
+    [ $# -eq 1 ] || { echo "usage: install.sh --lock-app" >&2; exit 1; }
+    app_lock; exit 0
+  fi
   if [ "${1:-}" = --upgrade ]; then
     [ $# -eq 1 ] || { echo "usage: install.sh --upgrade" >&2; exit 1; }
     upgrade=1; shift
@@ -279,6 +303,7 @@ main() {
     [[ "$ip" =~ ^[0-9A-Fa-f:.]+(/[0-9]{1,3})?$ ]] || { echo "bad server address: $ip" >&2; exit 1; }
   done
 
+  app_lock
   install -d -o root -g wheel -m 755 "$DIR"
   rm -f "$DIR/installed"   # written again as the last step
   if put_file ks "$DIR/ks" 755; then ks_new=1; fi

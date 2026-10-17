@@ -35,6 +35,23 @@ final class HelperLaunchTests: XCTestCase {
         XCTAssertFalse(HelperService.upgradeWhenReady(previous: .needsRegistration, current: .needsApproval, helperOutdated: true))
     }
 
+    /// F3 (#91): a user-owned copy in /Applications with a current helper asks the daemon once to lock it.
+    func testAskBundleLockOnlyForAUserOwnedCopyInApplications() {
+        let app = "/Applications/KillSwitch.app"
+        func ask(_ path: String = app, owner: Int? = 501, _ availability: HelperService.Availability = .ready,
+                 outdated: Bool = false, asked: Bool = false) -> Bool {
+            HelperService.shouldAskBundleLock(bundlePath: path, ownerID: owner, availability: availability,
+                                              helperOutdated: outdated, asked: asked)
+        }
+        XCTAssertTrue(ask())
+        XCTAssertFalse(ask(owner: 0), "already root")
+        XCTAssertFalse(ask(owner: nil), "owner unknown")
+        XCTAssertFalse(ask("/Users/me/Build/KillSwitch.app"), "only /Applications")
+        XCTAssertFalse(ask(app, .needsApproval), "no daemon to ask")
+        XCTAssertFalse(ask(outdated: true), "the upgrade path is on its way")
+        XCTAssertFalse(ask(asked: true), "once per launch")
+    }
+
     /// The registration at launch did not take (still not registered): the banner too, never a password.
     func testBannerWhileTheDaemonIsStillNotRegistered() {
         XCTAssertTrue(HelperService.showApprovalBanner(helperInstalled: true, availability: .needsRegistration, lastShown: nil, now: now))

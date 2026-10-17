@@ -101,15 +101,33 @@ final class VPNClient {
     private let control: KillSwitchControl
     private var timer: Timer?
     /// After a failed or refused update: try again in an hour, not after the full interval.
-    private var retryAt: Date?
+    private var retryAt: [String: Date] = [:]
+    /// The last refresh's error of each subscription: shown on its own block, nowhere else (#67).
+    private(set) var errors: [String: UserError] = [:]
 
-    /// The timer's: by the subscription the helper runs (one schedule per subscription is #67).
-    private var schedule: UpdateSchedule {
-        get { UpdateSchedule(lastUpdate: status.lastUpdate, retryAt: retryAt) }
-        set {
-            retryAt = newValue.retryAt
-            if let id = current?.id, newValue.lastUpdate != status.lastUpdate { changeStatus(id) { $0.lastUpdate = newValue.lastUpdate } }
-        }
+    func error(of id: String) -> UserError? { errors[id] }
+
+    /// The subscription the helper ran was deleted: it keeps running that profile, blocking, until
+    /// another server is picked (#67).
+    var activeRemoved: Bool {
+        SubscriptionRefresh.activeWasRemoved(active: activeID, list: subscriptions, coreConfigured: control.coreConfigured)
+    }
+
+    func interval(of id: String) -> TimeInterval {
+        SubscriptionRefresh.interval(of: subscriptions.first { $0.id == id }?.status ?? Status(), appHours: intervalHours)
+    }
+
+    /// One subscription's schedule: when it was last applied, when it tries again.
+    private func record(_ result: UpdateSchedule.Result, for id: String) {
+        guard let subscription = subscriptions.first(where: { $0.id == id }) else { return }
+        var schedule = UpdateSchedule(lastUpdate: subscription.status.lastUpdate, retryAt: retryAt[id])
+        schedule.record(result, now: Date())
+        retryAt[id] = schedule.retryAt
+        if schedule.lastUpdate != subscription.status.lastUpdate { changeStatus(id) { $0.lastUpdate = schedule.lastUpdate } }
+    }
+
+    private func recordCurrent(_ result: UpdateSchedule.Result) {
+        if !activeRemoved { record(result, for: activeID) }
     }
 
     private static let backupAccount = "subscription-url-backup"   // only to delete it
@@ -143,8 +161,8 @@ final class VPNClient {
         // #11: a fetch that failed while the VPN was off goes again as soon as it connects
         NotificationCenter.default.addObserver(forName: UpdateRetry.vpnConnected, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.hasURL, self.retryAt != nil, !self.updating else { return }
-                Task { await self.update(interactive: false) }
+                guard let self, self.hasURL, !self.retryAt.isEmpty, !self.updating else { return }
+                Task { await self.refresh(Array(self.retryAt.keys), interactive: false) }
             }
         }
         if let data = Keychain.read(Self.linksAccount), let saved = try? JSONDecoder().decode([ManualServer].self, from: data) {
@@ -200,7 +218,7 @@ final class VPNClient {
             return false
         }
         guard activeID == added.id else { return true }
-        if await applyCurrent(interactive: true) { schedule.record(.applied, now: Date()) }
+        if await applyCurrent(interactive: true) { record(.applied, for: added.id) }
         return true
     }
 
@@ -208,6 +226,8 @@ final class VPNClient {
     private func forget(_ id: String) {
         Subscriptions.remove(id, Self.store)
         subscriptions = Subscriptions.load(Self.store)
+        errors[id] = nil
+        retryAt[id] = nil
         control.forget(subscription: id)
         reloadProfileProxies()
     }
@@ -215,8 +235,8 @@ final class VPNClient {
     private static let notALink = UserError(title: String(localized: "Это не ссылка на подписку"), message: String(localized: "Нужна ссылка вида https://…"))
 
     /// Its link, caches, status and what was kept of its servers go (Subscriptions.remove). The
-    /// helper keeps running what it was handed, even the deleted subscription's servers, until
-    /// another server is picked (what deleting the one in use does is #67). Without subscriptions
+    /// helper keeps running what it was handed, even the deleted subscription's servers, with the
+    /// blocking on, until another server is picked (activeRemoved asks for it). Without subscriptions
     /// the own servers alone go to the helper, as before.
     func remove(_ id: String) async {
         forget(id)
@@ -301,39 +321,61 @@ final class VPNClient {
 
     // MARK: updating
 
+    /// The timer's: each subscription that is due on its own interval, one after the other.
     func updateIfDue() {
         guard !updating else { return }
-        guard hasURL, schedule.isDue(interval: effectiveInterval, now: Date()) else { return }
-        Task { await update(interactive: false) }
+        let due = SubscriptionRefresh.due(subscriptions, retryAt: retryAt, appHours: intervalHours, now: Date())
+        guard !due.isEmpty else { return }
+        Task { await refresh(due, interactive: false) }
     }
 
-    /// Fetches every subscription and hands the profile the helper runs over again. On any failure
-    /// the core keeps its old config. «Обновлено» moves only when the profile reached the core;
-    /// otherwise again in an hour. (A schedule and an error per subscription: #67.)
+    /// Fetches every subscription (and hands the profile the helper runs over again).
     func update(interactive: Bool) async {
+        await refresh(subscriptions.map(\.id), interactive: interactive)
+    }
+
+    /// The refresh button of one subscription's block.
+    func update(_ id: String, interactive: Bool) async {
+        await refresh([id], interactive: interactive)
+    }
+
+    /// Each subscription is fetched on its own: a failure keeps its servers and lands in its own
+    /// error (`errors`) and its own retry, and touches nothing else. One that is not in use only
+    /// refreshes its cache (new servers there wait for the next password); the one the helper runs
+    /// is handed over again. On any failure the core keeps its old config. «Обновлено» of that one
+    /// moves only when the profile reached the core; otherwise it tries again in an hour.
+    private func refresh(_ ids: [String], interactive: Bool) async {
         guard !updating else { return }
         updating = true
         defer { updating = false }
         let active = activeID
         var activeError: UserError?
         var fetchedActive = false
-        for subscription in subscriptions {
-            let fetched = await fetch(subscription.id)
-            if subscription.id == active {
+        for id in ids where subscriptions.contains(where: { $0.id == id }) {
+            let before = lastError
+            lastError = nil
+            let fetched = await fetch(id)
+            let error = lastError
+            lastError = before
+            if subscriptions.contains(where: { $0.id == id }) { errors[id] = error } else { continue }   // deleted meanwhile
+            if id == active {
                 fetchedActive = fetched
-                activeError = lastError
+                activeError = error
             } else if fetched {
-                changeStatus(subscription.id) { $0.lastUpdate = Date() }
+                retryAt[id] = nil
+                changeStatus(id) { $0.lastUpdate = Date() }
             }
         }
-        lastError = activeError
+        if ids.contains(active) { lastError = activeError }
+        guard ids.contains(active) else { return }   // one not in use: its cache only
         if active == ServerID.own {
             if !manual.isEmpty { await applyCurrent(interactive: interactive) }
             return
         }
         guard fetchedActive else { return }
         let applied = await applyCurrent(interactive: interactive)
-        schedule.record(applied ? .applied : .notApplied, now: Date())
+        if !applied, let message = lastError { errors[active] = message }
+        record(applied ? .applied : .notApplied, for: active)
     }
 
     /// Downloads and caches one subscription in the format of its core (core(of:)), without
@@ -415,7 +457,7 @@ final class VPNClient {
     }
 
     private func failed(_ id: String, raw: String) {
-        if id == current?.id { schedule.record(.fetchFailed(offline: raw.hasPrefix("offline")), now: Date()) }
+        record(.fetchFailed(offline: raw.hasPrefix("offline")), for: id)
         lastError = UserError.from(raw: raw, context: .subscription)
     }
 
@@ -682,7 +724,7 @@ final class VPNClient {
         }
         setupSubscription = nil
         // the wizard fetched the subscription a moment ago (check)
-        if hasURL { schedule.record(.applied, now: Date()) }
+        if hasURL { recordCurrent(.applied) }
         discard(prepared)
     }
 
@@ -710,7 +752,7 @@ final class VPNClient {
         guard !updating else { return }
         updating = true
         defer { updating = false }
-        if await applyCurrent(interactive: true) { schedule.record(.applied, now: Date()) }
+        if await applyCurrent(interactive: true) { recordCurrent(.applied) }
     }
 
     /// Hands the server's subscription profile to the helper, unless the core already has exactly
