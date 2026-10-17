@@ -18,6 +18,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   block has its refresh button, ping (the one in use), usage and expiry, account page, the masked
   link with show / copy, and delete. Refreshing a subscription not in use only updates its cache.
   Deleting the subscription in use keeps the VPN and the blocking on and asks to pick another server.
+- Merge gate: a pool of small VMs instead of one big one. `KS_VM_HOST` picks the VM (`ks-vm`, `ks-vm2`); the
+  run lock is per VM, `/tmp/<host>.lock` (`/tmp/ks-vm.lock`, `/tmp/ks-vm2.lock`); the helper tests in
+  `scripts/ci-local.sh` and `scripts/test-helper-ci.sh` run 4 at a time, not 6.
 - Several subscriptions with servers of the same name (#74, ADR 0036): a Wi‑Fi rule's preferred
   server remembers its subscription and is chosen only while that subscription is in use (a rule
   never switches subscriptions); «Способ подключения» set for a server is kept per subscription;
@@ -35,6 +38,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
   docs, scripts (not release.sh), tests and the like; the run waits for a quiet Mac first
   (`scripts/wait-load.sh`, `KS_LOAD_MAX` 20, `KS_LOAD_WAIT` 600 s, also before each `vm-batch.sh` gate).
   Timing failures are not rerun: they cannot be told from logic failures by the output.
+- Merge gate: `xcodebuild build test` compiles one architecture (this Mac's: `ONLY_ACTIVE_ARCH=YES`,
+  `ARCHS=$(uname -m)`, destination `arch=`) and writes no index store, instead of x86_64+arm64;
+  `KS_GATE_UNIVERSAL=1` brings the universal build back. `scripts/release.sh` is unchanged (universal).
+- Merge gate in two parallel parts (`scripts/ci-local.sh --part host|vm`, started together by
+  `scripts/vm.sh`; same checks, only where they run): lint, tool versions, xcodegen and
+  `xcodebuild build test` run on the host Mac in a clean worktree of the commit with derived data in a
+  temp folder (the app tests read sources and use mocks: no installed app, service, pf or keychain; nothing is
+  installed or started on the host), while test-helper-ci, the helper tests with mihomo, test-filter-trust
+  and test-vm-batch stay in the VM. Red if either is red; the result line, `vm-batch.sh` bisection and
+  the per-tree cache are unchanged. `KS_VM_ONLY=1` puts the whole gate back into the VM.
 
 ### Removed
 - Служба больше не читает ключ `x-ks-routing` (профили маршрутизации убраны из приложения в 0.20.0, #73): он в подписке ничего не меняет. Старые отчёты о правилах по-прежнему открываются (#78).

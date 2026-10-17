@@ -15,7 +15,8 @@
 # KS_LOAD_MAX (default 20), at most KS_LOAD_WAIT seconds (default 600); the gate gets KS_LOAD_WAITED=1
 # so scripts/vm.sh does not wait again. The gate also gets KS_GATE_BASE=<base tip sha>: a merge commit
 # is compared with the base, and xcodebuild is skipped when no app file changed (see ci-local.sh).
-# Env: KS_BATCH_GATE (default scripts/vm.sh, run as "$gate <sha>"), KS_GH (default gh).
+# Env: KS_BATCH_GATE (default scripts/vm.sh, run as "$gate <sha>"), KS_GH (default gh); KS_VM_HOST and
+# KS_VM_SSH_CONFIG reach the gate unchanged, so a batch runs in the VM it names (lock: /tmp/<host>.lock).
 set -u
 usage() { echo "usage: $0 check <base-branch> <PR>... | landed <base-branch> <tree>" >&2; exit 2; }
 cmd=${1:-}; base=${2:-}

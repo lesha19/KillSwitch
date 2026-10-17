@@ -1,7 +1,8 @@
 #!/bin/bash
 # shellcheck disable=SC2034 # rc, sha, tree are read inside the check strings (eval)
 # Tests scripts/vm-batch.sh on a local bare "origin" with PR heads as refs/pull/N/head, a fake gate
-# (red when the tree has a file BAD) and a fake gh. No network, no VM.
+# (red when the tree has a file BAD) and a fake gh. No network, no VM. Also static checks of the host/vm
+# split in scripts/ci-local.sh and scripts/vm.sh.
 set -eu
 batch="$(cd "$(dirname "$0")" && pwd)/vm-batch.sh"
 T=$(mktemp -d "${TMPDIR:-/tmp}/test-vm-batch.XXXXXX")
@@ -188,13 +189,25 @@ wait
 check "wait-load: KS_LOAD_MAX is honoured" 'echo 6 > "$T/load"; KS_LOAD_FILE="$T/load" KS_LOAD_MAX=5 KS_LOAD_WAIT=1 KS_LOAD_POLL=1 "$wl" 2> "$T/wl.err"; grep -q "not below 5" "$T/wl.err"'
 check "wait-load: unreadable load, no wait" 'KS_LOAD_FILE="$T/nosuch" KS_LOAD_WAIT=5 "$wl" 2> "$T/wl.err"; grep -q "cannot read" "$T/wl.err"'
 
-# ci-local.sh: --only / --pr and the xcodebuild skip
+# ci-local.sh: --only / --pr / --part and the xcodebuild skip
 ci="$(dirname "$batch")/ci-local.sh"; vmsh="$(dirname "$batch")/vm.sh"
 check "ci-local: --pr with --only refused (exit 2)" '"$ci" HEAD --pr 1 --only args.sh 2> /dev/null; [ $? = 2 ]'
+check "ci-local: xcodebuild builds one arch, release.sh is not touched" \
+  'grep -q "ONLY_ACTIVE_ARCH=YES" "$ci" && grep -q "ARCHS=\$arch" "$ci" && ! grep -q "ONLY_ACTIVE_ARCH" "$(dirname "$ci")/release.sh"'
 check "ci-local: --only without files refused" '"$ci" HEAD --only 2> /dev/null; [ $? = 2 ]'
 check "vm.sh: --pr with --only refused before the VM (exit 2)" '"$vmsh" HEAD --pr 1 --only args.sh 2> /dev/null; [ $? = 2 ]'
 check "vm.sh: --only without files refused" '"$vmsh" HEAD --only 2> /dev/null; [ $? = 2 ]'
 check "ci-local: --only with an unknown test (exit 2)" '"$ci" HEAD --only no-such-test.sh 2>&1 | grep -q "no such test"'
+check "ci-local: --part needs host or vm (exit 2)" '"$ci" HEAD --part 2> /dev/null; [ $? = 2 ]; "$ci" HEAD --part both 2> /dev/null; [ $? = 2 ]'
+check "ci-local: --pr or --only with --part refused (exit 2)" '"$ci" HEAD --part host --only args.sh 2> /dev/null; [ $? = 2 ]'
+hs=$(sed -n '/^host_steps()/,/^}/p' "$ci"); vs=$(sed -n '/^vm_steps()/,/^}/p' "$ci")
+check "ci-local: host part is lint, versions, xcodegen, xcodebuild and nothing that touches the system" \
+  'for w in lint versions xcodegen build_test; do echo "$hs" | grep -q "$w"; done && ! echo "$hs" | grep -qE "helper|filter-trust|mihomo|vm-batch"'
+check "ci-local: vm part is every other step" \
+  'for w in test-helper-ci mihomo_tests test-filter-trust test-vm-batch; do echo "$vs" | grep -q "$w"; done && ! echo "$vs" | grep -qE "xcodebuild|build_test|xcodegen|lint"'
+check "ci-local: no --part runs host then vm steps" 'grep -q "host_steps && vm_steps" "$ci"'
+check "vm.sh: the host part runs on this Mac, the vm part in the VM, KS_VM_ONLY and --only keep one VM run" \
+  'grep -q -- "--part host" "$vmsh" && grep -q "partarg=\" --part vm\"" "$vmsh" && grep -q "KS_VM_ONLY" "$vmsh" && grep -q "split=0" "$vmsh"'
 eval "$(sed -n '/^app_changes()/,/^}/p' "$ci")"
 root=$T/work; sha=HEAD
 changes() { printf '%s' "$1" > "$T/changed"; KS_CHANGED_FILE="$T/changed" app_changes; }

@@ -5,8 +5,9 @@ Read by the `done` skill first; these rules are stricter than it and win.
 ## The merge gate
 
 GitHub Actions does not run (not paid): `gh pr checks` reports no checks, so nothing on GitHub stops a
-merge. The gate is `scripts/ci-local.sh` (the ci.yml steps) run **inside the tart VM** by `scripts/vm.sh`;
-never build, test or run the app on the host Mac (KillSwitch changes the network). One VM run at a time:
+merge. The gate is `scripts/ci-local.sh` (the ci.yml steps) run by `scripts/vm.sh` in two parallel parts:
+lint, xcodegen and `xcodebuild build test` (app tests, no network or system effect) on the host Mac in a temp worktree,
+everything that touches the network/pf/DNS/service in the **tart VM**; never install or run the app on the host Mac (KillSwitch changes the network). One VM run at a time:
 before starting one, make sure no other session is gating or building in the VM.
 
 A PR is merged only with a green gate result posted on it for exactly what the base branch will hold.

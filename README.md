@@ -16,7 +16,7 @@ Rules are loaded at boot, before login.
   `scripts/test-helper-ci.sh "$(brew --prefix)/bin/bash"`.
   Merge gate (Actions is not paid): `scripts/ci-local.sh <commit> [--pr N]` runs the ci.yml steps
   on a clean worktree of that commit; merge only on its `green`.
-  `scripts/vm.sh <commit> [--pr N]` runs the same gate inside the tart VM (never build or test on the host Mac).
+  `scripts/vm.sh <commit> [--pr N]` runs the same gate in two parallel parts: lint, xcodegen and `xcodebuild build test` on the host Mac (temp worktree), the network/pf/service tests inside the tart VM (never install or run the app on the host Mac).
   `scripts/vm-batch.sh check <base> <PR>...` gates a batch of reviewed PRs once (the merge of all of them onto the base tip; a red batch is bisected and the culprit left out), then they are squash-merged in that order
   and `scripts/vm-batch.sh landed <base> <tree>` must say the tip is the tested tree. Rules: docs/agents/done.md.
 - `Helper/local.killswitch.plist` — LaunchDaemon: runs `ks watch` (RunAtLoad + KeepAlive), so rules
