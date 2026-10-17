@@ -6,6 +6,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-17
+
 ### Security
 - «Собрать отчёт» (#93): secrets are masked by the name they are written under (shortId, password,
   psk, token…) however short; the archive is written with O_EXCL, so a symlink put at its name is
