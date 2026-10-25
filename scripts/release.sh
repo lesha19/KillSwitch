@@ -1,6 +1,6 @@
 #!/bin/bash
 # Release build outside the App Store: Developer ID signing, hardened runtime, notarization,
-# a signed and notarized .dmg in build/release/. See README, section "Выпуск".
+# a signed and notarized .dmg in build/release/. See README, section "Release".
 #
 #   scripts/release.sh           full release
 #   scripts/release.sh --check   only check that certificates, profiles and the notary profile exist
@@ -74,7 +74,7 @@ core_source() {
 }
 
 # write_sums <dir> <file>...: <dir>/SHA256SUMS for files in <dir>, by bare name, in the format
-# `shasum -a 256 -c SHA256SUMS` checks (README, «Проверка загрузки»). Fails if one is missing.
+# `shasum -a 256 -c SHA256SUMS` checks (README, "Verifying a download"). Fails if one is missing.
 write_sums() {
   local dir=$1
   shift

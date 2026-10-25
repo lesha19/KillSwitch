@@ -1,13 +1,80 @@
 # KillSwitch
 
-Kill switch for the dropweb VPN (mihomo) on macOS: when it is on, nothing leaves
-the Mac through Wi-Fi or Ethernet except the local network and the dropweb core.
-If the VPN drops, apps lose internet instead of leaking around the tunnel.
-Rules are loaded at boot, before login.
+KillSwitch is a kill switch and VPN client for macOS. A root helper loads macOS packet-filter (pf)
+rules at boot, before login, with a default-deny policy: nothing leaves the Mac through Wi-Fi or
+Ethernet except the local network and the VPN tunnel (and the few server addresses the tunnel needs).
+An optional content filter adds a second layer. It ships as a SwiftUI app with a menu bar icon, a
+widget and a command-line tool, and it runs its own VPN cores (mihomo and Xray) on subscriptions from
+Remnawave or any mihomo/Clash provider, on share links, or on a WireGuard config.
 
-Open source under the [MIT License](LICENSE). Found a vulnerability? See [SECURITY.md](SECURITY.md).
+## Why
 
-## Parts
+When a VPN connection drops, most Macs quietly fall back to the plain connection and apps keep
+talking over your real IP. With KillSwitch on, a dropped VPN means apps lose internet instead of
+leaking around the tunnel.
+
+## Features
+
+- Default-deny firewall (pf anchor `com.apple/killswitch`), loaded at boot and re-checked by a
+  watchdog every 2 s; tampering is detected, the rules are restored and the event is logged.
+- Built-in VPN client for our own cores: subscription URL (kept in the keychain, auto-updated every
+  12 h by default, traffic and expiry shown), servers from share links (vless, trojan, ss, hysteria2,
+  tuic, wireguard) or a wg-quick `.conf` (AmneziaWG fields supported).
+- Server list with latency tests, a "best server" choice, and double VPN (chain through an entry server).
+- Programs without VPN (split by app), blocked categories (ads, adult, social media, betting),
+  your own DoH server, MTU setting for troubleshooting.
+- Optional second layer: a content filter system extension that drops new flows while no tunnel is up.
+- Leak test (public IPv4/IPv6 and DNS resolvers), protection log, non-secret diagnostics for support.
+- Connect automatically on start and on network change, with trusted Wi-Fi networks; launch at login.
+- Menu bar icon, WidgetKit widget with an on/off button, and the `killswitch` command line tool.
+- Works alongside Tailscale and NetBird.
+- Signed and notarized builds with automatic updates through Sparkle.
+
+## Download
+
+Get the latest signed and notarized build from
+[GitHub Releases](https://github.com/lesha19/KillSwitch-releases/releases/latest). The app also updates
+itself through Sparkle. Requires macOS 15.0 or later. Checksum and signature verification steps are
+under [Development > Release](#release).
+
+<p>
+  <img src="docs/ux/screens/05-window-connected-light.png" alt="KillSwitch main window, connected and protected (light)" width="45%">
+  <img src="docs/ux/screens/05-window-connected-dark.png" alt="KillSwitch main window, connected and protected (dark)" width="45%">
+</p>
+
+Note: the app's interface is in Russian for now.
+
+## Security
+
+The rules and settings are root-owned; turning protection off, pausing and changing settings ask for
+the administrator password. The helper blocks everything on every interface except loopback, AirDrop
+links and real VPN tunnels, and the watchdog restores tampered rules. What it cannot protect
+against (for example anything already running as root) is listed in
+[Known limits](#known-limits) and the [security model](#security-model). To report a vulnerability, see
+[SECURITY.md](SECURITY.md). Audits are in [docs/security/](docs/security/).
+
+## Build from source
+
+```bash
+xcodegen generate
+xcodebuild -project KillSwitch.xcodeproj -scheme KillSwitch -configuration Release -derivedDataPath build -allowProvisioningUpdates build
+cp -R build/Build/Products/Release/KillSwitch.app /Applications/
+```
+
+Then open the app and press «Начать настройку…» ("Start setup…") (or run `Helper/install.sh` in
+Terminal; server addresses found in dropweb and Happ configs are passed to it). After updating the
+app, press «Восстановить службу…» ("Restore service…") in Settings to upgrade the installed helper.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Bundled cores (mihomo, Xray) keep their own licences, see
+[App/ThirdPartyNotices.txt](App/ThirdPartyNotices.txt).
+
+## Development
+
+Maintainer and developer material.
+
+### Parts
 
 - `Helper/ks` — root helper: generates the pf rules from settings and loads them into anchor
   `com.apple/killswitch` (`/etc/pf.conf` untouched). `status | state | on | off | pause [min] |
@@ -36,25 +103,25 @@ Open source under the [MIT License](LICENSE). Found a vulnerability? See [SECURI
   and expiry from `subscription-userinfo`, servers added from share links (vless, trojan, ss, hysteria2,
   tuic, wireguard) or a wg-quick `.conf` (AmneziaWG fields → `amnezia-wg-option`, several `[Peer]` →
   `peers:`), server list with latency and selection (`ks core proxies` /
-  `ks core select`), latency tests and «Лучший» (`ks core delay <group>`), non-secret diagnostics. The subscription
+  `ks core select`), latency tests and «Лучший» ("Best") (`ks core delay <group>`), non-secret diagnostics. The subscription
   is fetched with a mihomo User-Agent and Remnawave's device headers (`x-hwid` = hash of the Mac's
   hardware UUID, `x-device-os`, `x-ver-os`, `x-device-model`), reduced to proxies, proxy-groups, rules
   and rule-providers and handed to the helper; a failed update keeps the old config. If the subscription's host does not answer,
   the app asks again through the core's loopback listener (127.0.0.1:47890, always through the VPN),
   and shows which way worked (ADR 0016; the backup link is gone, ADR 0036). A click (adding the
-  subscription, «Обновить», a new server) runs `ks core import <file.json>`, with the admin prompt if
+  subscription, «Обновить» ("Refresh"), a new server) runs `ks core import <file.json>`, with the admin prompt if
   needed. The timer only runs `sudo -n ks core refresh <file.json>` and never prompts; if the helper
   refuses it (exit 3: new server addresses) the app shows «Нужно подтверждение: в подписке новые
-  серверы» and imports only after the user clicks «Подтвердить». The User-Agent starts with
+  серверы» and imports only after the user clicks «Подтвердить» ("Confirm"). The User-Agent starts with
   `mihomo/<core version>` (Remnawave's anchored Mihomo rule); `x-hwid-max-devices-reached` and
   `x-hwid-not-supported` are shown as device-limit errors.
-  Also in the app: «Проверка утечек» (public IPv4 from api.ipify.org and am.i.mullvad.net, IPv6 from
+  Also in the app: «Проверка утечек» ("Leak test") (public IPv4 from api.ipify.org and am.i.mullvad.net, IPv6 from
   ipv6.am.i.mullvad.net, DNS resolvers via the bash.ws API; the provider's address is remembered from a
-  run with the VPN off and compared later); «Подключаться автоматически» on start and network change,
+  run with the VPN off and compared later); «Подключаться автоматически» ("Connect automatically") on start and network change,
   never prompting (a notification instead), with trusted Wi-Fi networks (the name needs Location access
-  on macOS 14+; without it every network is untrusted); «Запускать при входе» (SMAppService);
-  «Программы без VPN» (apps by CFBundleExecutable → `ks set splitapps <list>`);
-  «Двойной VPN» (`ks set multihop <entry>|off`, chain shown in the window); «Размер пакетов VPN (MTU)»
+  on macOS 14+; without it every network is untrusted); «Запускать при входе» ("Launch at login") (SMAppService);
+  «Программы без VPN» ("Programs without VPN"; apps by CFBundleExecutable → `ks set splitapps <list>`);
+  «Двойной VPN» ("Double VPN"; `ks set multihop <entry>|off`, chain shown in the window); «Размер пакетов VPN (MTU)»
   for troubleshooting (`ks set mtu auto|1280…1500`, ADR 0032).
 - `App/Core/` — pure parsers (no AppKit), unit-tested by the `KillSwitchTests` target:
   `xcodegen generate && xcodebuild -scheme KillSwitch test CODE_SIGNING_ALLOWED=NO`.
@@ -68,7 +135,7 @@ Open source under the [MIT License](LICENSE). Found a vulnerability? See [SECURI
 - `Widget/` — WidgetKit widget with on/off button. It is sandboxed, so its button posts a Darwin
   notification and the running app performs the switch; state reaches it via app group `YR58655PJ7.killswitch`.
 
-## Words on screen
+### Words on screen
 
 The app speaks Russian, without technical words: «VPN» (never core, mihomo, tunnel), «Защита»
 (never pf, rules, filter), «Защита macOS» for the content filter, «Служба KillSwitch» for the root
@@ -92,7 +159,7 @@ the bundled geodata in place or kept the old file because its sha256 was not the
 `core/escalation-state` and `core/escalation` (root-only: the escalation pass's state and
 what transport escalation remembered per server, ADR 0030).
 
-## Security model
+### Security model
 
 - Default deny on every interface except loopback, AirDrop links and real VPN tunnels. A tunnel is a
   `utun` whose IPv4 address is in 198.18.0.0/16 (dropweb and Happ TUN both use 198.18.0.1), detected
@@ -231,103 +298,98 @@ restores the rules within 3 s and logs it, but this is detection, not prevention
 before the LaunchDaemon runs (only system daemons are up then); dropweb's own rules in `direct=1` mode;
 LAN hosts that act as proxies; anything that can reach a listed VPN server, if the server itself relays.
 
-## Install
 
-```bash
-xcodegen generate
-xcodebuild -project KillSwitch.xcodeproj -scheme KillSwitch -configuration Release -derivedDataPath build -allowProvisioningUpdates build
-cp -R build/Build/Products/Release/KillSwitch.app /Applications/
-```
+### Release
 
-Then open the app and press «Начать настройку…» (or run `Helper/install.sh` in Terminal; server
-addresses found in dropweb and Happ configs are passed to it). After updating the app, press
-«Восстановить службу…» in Settings to upgrade the installed helper.
+Builds for other Macs are distributed outside the App Store, like Mullvad and IVPN: the app needs a
+root service and pf, which the App Store sandbox does not allow. Developer ID signature, hardened
+runtime, Apple notarization, `.dmg`.
 
-## Выпуск
+One-time setup:
 
-Сборка для других Mac — вне App Store, как у Mullvad и IVPN: приложению нужны root-служба и pf, в
-песочнице App Store это невозможно. Подпись Developer ID, hardened runtime, нотаризация Apple, `.dmg`.
-
-Один раз:
-
-1. Сертификат: Xcode → Settings → Accounts → команда YR58655PJ7 → Manage Certificates → «+» →
-   **Developer ID Application**. Ключ остаётся в связке ключей входа.
-2. Профили: на developer.apple.com есть два профиля Developer ID — «KillSwitch Developer ID»
-   (`com.lesha19.KillSwitch`: System Extension, Network Extensions) и «KillSwitch Filter Developer ID»
-   (`com.lesha19.KillSwitch.Filter`: Network Extensions); в обоих `content-filter-provider-systemextension`.
-   Скачать: Xcode → Settings → Accounts → YR58655PJ7 → **Download Manual Profiles** (лягут в
-   `~/Library/Developer/Xcode/UserData/Provisioning Profiles`, скрипт найдёт их сам; другой путь можно
-   указать в `KS_PROFILE_APP` / `KS_PROFILE_FILTER`). Виджету профиль не нужен: ограниченных прав у него
-   нет, группа приложений начинается с ID команды.
-3. Профиль нотаризации: создать пароль приложения на appleid.apple.com → «Вход и безопасность» →
-   «Пароли приложений», затем в Терминале
+1. Certificate: Xcode → Settings → Accounts → team YR58655PJ7 → Manage Certificates → "+" →
+   **Developer ID Application**. The key stays in the login keychain.
+2. Profiles: developer.apple.com has two Developer ID profiles, "KillSwitch Developer ID"
+   (`com.lesha19.KillSwitch`: System Extension, Network Extensions) and "KillSwitch Filter Developer ID"
+   (`com.lesha19.KillSwitch.Filter`: Network Extensions); both carry
+   `content-filter-provider-systemextension`. Download them: Xcode → Settings → Accounts → YR58655PJ7 →
+   **Download Manual Profiles** (they land in `~/Library/Developer/Xcode/UserData/Provisioning Profiles`,
+   the script finds them itself; another path can be set in `KS_PROFILE_APP` / `KS_PROFILE_FILTER`).
+   The widget needs no profile: it has no restricted entitlements and its app group starts with the
+   team ID.
+3. Notarization profile: create an app-specific password at appleid.apple.com → "Sign-In and Security"
+   → "App-Specific Passwords", then in Terminal
    `xcrun notarytool store-credentials killswitch-notary --apple-id <Apple ID> --team-id YR58655PJ7`
-   и ввести пароль, когда спросит (в командную строку его не писать). Он хранится в связке ключей.
-4. Ядра: `Helper/fetch-xray.sh` (основное, ADR 0020) и `Helper/fetch-mihomo.sh`; геоданные для правил подписки GEOSITE/GEOIP и блокировки рекламы: `Helper/fetch-geodata.sh`
-   (выпуск meta-rules-dat и его sha256 уже закреплены в скрипте; без `Helper/geosite.dat` и `Helper/geoip.metadb` выпуск не соберётся).
-   Скрипт сначала берёт копию каждого файла из последнего выпуска `lesha19/KillSwitch-releases` (их кладёт туда
-   `--publish`), а закреплённый коммит meta-rules-dat — только если копии нет или она другого sha256:
-   meta-rules-dat переписывает ветку `release`, и старый коммит может исчезнуть.
-5. Ключ Sparkle: один раз `generate_keys` из `build/spm/artifacts/sparkle/Sparkle/bin/` (появится после
-   первой сборки) — закрытый ключ EdDSA ляжет в связку ключей входа, открытый (`generate_keys -p`) уже
-   записан в `project.yml` как `SUPublicEDKey`.
-6. Резервные копии — без них новые версии выпустить нельзя:
-   - ключ Sparkle: `generate_keys -x <файл>` выгружает закрытый ключ, `generate_keys -f <файл>` возвращает
-     его на другом Mac. Потеряете — уже установленные копии не примут ни одного обновления;
-   - ключ Developer ID: «Связка ключей» → «Мои сертификаты» → «Developer ID Application: … (YR58655PJ7)»
-     → «Экспортировать…» в `.p12` с паролем (сертификат вместе с закрытым ключом). Без закрытого ключа
-     сертификат придётся выпускать заново.
-   Обе копии хранить вне этого Mac (зашифрованный диск или менеджер паролей), не в репозитории.
+   and enter the password when asked (never put it on the command line). It is stored in the keychain.
+4. Cores: `Helper/fetch-xray.sh` (the main one, ADR 0020) and `Helper/fetch-mihomo.sh`; geodata for the
+   subscription's GEOSITE/GEOIP rules and ad blocking: `Helper/fetch-geodata.sh` (the meta-rules-dat
+   release and its sha256 are already pinned in the script; without `Helper/geosite.dat` and
+   `Helper/geoip.metadb` the release will not build). The script first takes a copy of each file from
+   the latest release of `lesha19/KillSwitch-releases` (`--publish` puts them there), and the pinned
+   meta-rules-dat commit only if there is no copy or it has another sha256: meta-rules-dat rewrites its
+   `release` branch, and the old commit may disappear.
+5. Sparkle key: run `generate_keys` once from `build/spm/artifacts/sparkle/Sparkle/bin/` (it appears after
+   the first build); the private EdDSA key goes into the login keychain, the public one
+   (`generate_keys -p`) is already in `project.yml` as `SUPublicEDKey`.
+6. Backups; without them new versions cannot be released:
+   - Sparkle key: `generate_keys -x <file>` exports the private key, `generate_keys -f <file>` restores
+     it on another Mac. If you lose it, installed copies will accept no further updates;
+   - Developer ID key: Keychain Access → My Certificates → "Developer ID Application: … (YR58655PJ7)"
+     → Export… to a `.p12` with a password (the certificate together with its private key). Without
+     the private key the certificate has to be issued again.
+   Keep both copies away from this Mac (an encrypted disk or a password manager), not in the repository.
 
-Выпуск: `scripts/release.sh`. Сначала проверяет всё перечисленное и без этого ничего не собирает
-(`scripts/release.sh --check` — только проверка), затем собирает Release, подписывает изнутри наружу
-(ядро как `com.lesha19.KillSwitch.core`, виджет, фильтр, приложение — с правами Developer ID и
-вложенными профилями), отправляет в нотаризацию, прикрепляет квитанцию (`stapler`) и делает
-подписанный и нотаризованный `build/release/KillSwitch-<версия>.dmg`. `scripts/release.sh --sign-only`
-только собирает и подписывает приложение, без нотаризации. Системное расширение включается, только
-когда приложение лежит в /Applications.
+Releasing: `scripts/release.sh`. It first checks everything listed above and builds nothing without it
+(`scripts/release.sh --check` only checks), then builds Release, signs from the inside out (the core as
+`com.lesha19.KillSwitch.core`, the widget, the filter, the app with Developer ID entitlements and
+embedded profiles), submits for notarization, staples the ticket (`stapler`) and produces a signed,
+notarized `build/release/KillSwitch-<version>.dmg`. `scripts/release.sh --sign-only` only builds and
+signs the app, without notarization. The system extension is enabled only when the app is in
+/Applications.
 
-Кроме `.dmg` выпуск делает `build/release/appcast.xml` для Sparkle, подписанный ключом EdDSA.
-`scripts/release.sh --publish` — то же, а затем `gh release create v<версия>` в
-`lesha19/KillSwitch-releases` с `.dmg`, `appcast.xml`, копией `geosite.dat` (с `geosite.dat.sha256`),
-исходниками закреплённых тегов ядер (`mihomo-<тег>-source.tar.gz` — GPL-3.0 требует их рядом с
-бинарником; `Xray-core-<тег>-source.tar.gz`; sha256 закреплены как `SOURCE_SHA256` в
-`Helper/fetch-mihomo.sh` и `Helper/fetch-xray.sh`) и `SHA256SUMS` всех них; описание берётся из
-раздела «## <версия>» `CHANGELOG.md` (или из файла в `KS_RELEASE_NOTES`). Нужен `gh`, вошедший с доступом к этому
-репозиторию. Приложение читает `releases/latest/download/appcast.xml`, поэтому опубликованный выпуск
-сразу становится обновлением для всех.
+Besides the `.dmg`, a release produces `build/release/appcast.xml` for Sparkle, signed with the EdDSA key.
+`scripts/release.sh --publish` does the same, then runs `gh release create v<version>` in
+`lesha19/KillSwitch-releases` with the `.dmg`, `appcast.xml`, a copy of `geosite.dat` (with
+`geosite.dat.sha256`), the sources of the pinned core tags (`mihomo-<tag>-source.tar.gz`, because
+GPL-3.0 requires them next to the binary; `Xray-core-<tag>-source.tar.gz`; sha256 pinned as
+`SOURCE_SHA256` in `Helper/fetch-mihomo.sh` and `Helper/fetch-xray.sh`) and `SHA256SUMS` of all of them;
+the description comes from the "## <version>" section of `CHANGELOG.md` (or from the file in
+`KS_RELEASE_NOTES`). Needs `gh` logged in with access to that repository. The app reads
+`releases/latest/download/appcast.xml`, so a published release becomes an update for everyone at once.
 
-Бета: `KS_CHANNEL=beta scripts/release.sh --publish`. Выпуск создаётся как pre-release (он не
-становится «latest»), его пункт с `<sparkle:channel>beta</sparkle:channel>` дописывается в
-`appcast.xml` последнего обычного выпуска (и его `SHA256SUMS` пересчитывается). Ставят его только
-те, у кого включены «Бета-версии» в «О программе»; следующий обычный выпуск убирает пункт беты.
+Beta: `KS_CHANNEL=beta scripts/release.sh --publish`. The release is created as a pre-release (it does
+not become "latest"), and its entry with `<sparkle:channel>beta</sparkle:channel>` is appended to the
+`appcast.xml` of the latest regular release (and its `SHA256SUMS` is recomputed). Only people who turned
+on «Бета-версии» ("Beta versions") in «О программе» ("About") get it; the next regular release removes
+the beta entry.
 
-### Проверка загрузки
+#### Verifying a download
 
-Каждый выпуск в `lesha19/KillSwitch-releases` несёт `SHA256SUMS` — суммы `.dmg`, `appcast.xml`,
-`geosite.dat`, `geoip.metadb` и исходников ядер. Скачать `.dmg` и `SHA256SUMS` в одну папку и в ней:
+Every release in `lesha19/KillSwitch-releases` carries `SHA256SUMS`: sums of the `.dmg`, `appcast.xml`,
+`geosite.dat`, `geoip.metadb` and the core sources. Download the `.dmg` and `SHA256SUMS` into one
+folder and in it run:
 
 ```bash
-shasum -a 256 -c SHA256SUMS --ignore-missing      # KillSwitch-<версия>.dmg: OK
-spctl -a -t open --context context:primary-signature -v KillSwitch-<версия>.dmg
+shasum -a 256 -c SHA256SUMS --ignore-missing      # KillSwitch-<version>.dmg: OK
+spctl -a -t open --context context:primary-signature -v KillSwitch-<version>.dmg
                                                   # accepted, source=Notarized Developer ID
-codesign -dv /Volumes/KillSwitch\ <версия>/KillSwitch.app 2>&1 | grep TeamIdentifier
+codesign -dv /Volumes/KillSwitch\ <version>/KillSwitch.app 2>&1 | grep TeamIdentifier
                                                   # TeamIdentifier=YR58655PJ7
 ```
 
-Суммы лежат там же, где файлы, поэтому защищают от битой или подменённой по дороге загрузки, но не
-от подмены самого выпуска. От неё — подпись: приложение и образ подписаны Developer ID команды
-`YR58655PJ7` и нотаризованы Apple, а обновления через Sparkle ещё и подписью EdDSA, открытый ключ
-которой зашит в приложение (`SUPublicEDKey`). Суммы стоит сверить и с теми, что печатает
-`scripts/release.sh` в конце выпуска.
+The sums sit next to the files, so they protect against a corrupted or swapped download, but not
+against a swapped release. The signature protects against that: the app and the image are signed with
+the team's Developer ID (`YR58655PJ7`) and notarized by Apple, and Sparkle updates also carry an EdDSA
+signature whose public key is built into the app (`SUPublicEDKey`). It is worth comparing the sums with
+the ones `scripts/release.sh` prints at the end of a release.
 
-## Emergency off
+### Emergency off
 
 ```bash
 sudo pfctl -a com.apple/killswitch -F all
 ```
 
-## Known limits
+### Known limits
 
 - Happ's direct sites (Russian, Apple, Steam) do not open while it is on: only VPN server addresses are open.
 - Captive Wi-Fi portals: use pause.
@@ -340,8 +402,3 @@ sudo pfctl -a com.apple/killswitch -F all
 - At boot, protection starts when launchd starts the daemon; for full protection switch Wi-Fi off before
   shutting the Mac down.
 - If the daemon is switched off in System Settings, the rules stay but nothing watches them.
-
-## License
-
-MIT, see [LICENSE](LICENSE). Bundled cores (mihomo, Xray) keep their own licences, see
-`App/ThirdPartyNotices.txt`. Security reports: [SECURITY.md](SECURITY.md).
