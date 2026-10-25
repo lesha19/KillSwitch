@@ -33,7 +33,7 @@ leaking around the tunnel.
 ## Download
 
 Get the latest signed and notarized build from
-[GitHub Releases](https://github.com/lesha19/KillSwitch-releases/releases/latest). The app also updates
+[GitHub Releases](https://github.com/lesha19/KillSwitch/releases/latest). The app also updates
 itself through Sparkle. Requires macOS 15.0 or later. Checksum and signature verification steps are
 under [Development > Release](#release).
 
