@@ -5,6 +5,8 @@ the Mac through Wi-Fi or Ethernet except the local network and the dropweb core.
 If the VPN drops, apps lose internet instead of leaking around the tunnel.
 Rules are loaded at boot, before login.
 
+Open source under the [MIT License](LICENSE). Found a vulnerability? See [SECURITY.md](SECURITY.md).
+
 ## Parts
 
 - `Helper/ks` — root helper: generates the pf rules from settings and loads them into anchor
@@ -338,3 +340,8 @@ sudo pfctl -a com.apple/killswitch -F all
 - At boot, protection starts when launchd starts the daemon; for full protection switch Wi-Fi off before
   shutting the Mac down.
 - If the daemon is switched off in System Settings, the rules stay but nothing watches them.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Bundled cores (mihomo, Xray) keep their own licences, see
+`App/ThirdPartyNotices.txt`. Security reports: [SECURITY.md](SECURITY.md).
