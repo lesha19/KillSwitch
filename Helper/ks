@@ -18,7 +18,8 @@
 #   ks set mtu auto|<n>     the TUN's MTU for both cores, 1280…1500 (ADR 0032); restarts the core
 #   ks allow <addr[/n]>     always let this address or network out without VPN
 #   ks unallow <addr[/n]>
-#   ks server-add <addr>    VPN server: reachable by any process (needed by Happ)
+#   ks server-add <addr>    VPN server: reachable by any process (needed by Happ); with one listed,
+#                           protection blocks next to another VPN instead of standing by (ADR 0038)
 #   ks server-remove <addr>
 #   ks core on|off|state    our own VPN core (Xray or mihomo, run by launchd as group _ksvpn); from
 #                           "core on" to "core off" the VPN is on and pf blocks whatever on/off/pause
@@ -277,7 +278,12 @@ tunnel_sig() {
 # next to it. So the rules let everything out until that VPN goes (the watchdog sees the tunnel
 # list change within a second and loads the blocking rules) or our core comes up.
 # Never while our VPN is on (ADR 0035): its own restart would open everything to the other tunnel.
-vpn_standby() {
+# Never with a server added by hand (ADR 0038): that VPN's server is known and open to it, so the rules
+# block around it, and while it is down nothing goes out with the real address.
+vpn_standby() {  # vpn_standby [manual-servers-file]
+  local manual=${1:-$SERVERS_MANUAL}
+  [ -e "$manual" ] || manual=$SERVERS   # before the first servers_migrate, as rules() reads it
+  [ ! -s "$manual" ] &&
   # launchd not answering in time counts as running: no standby, the rules keep blocking
   ! vpn_on && { bounded "$CALL_TIMEOUT" core_running; [ $? = 1 ]; } &&
     utun_addrs | awk -v a="$CORE_TUN_ADDR" '$2 ~ /^198\.18\./ { v = 1 } $2 == a { o = 1 } END { exit !(v && !o) }'
@@ -300,7 +306,7 @@ rules() {  # rules [allow-file] [servers-file] [manual-servers-file]
   local allow_file="${1:-$ALLOW}" servers_file="${2:-$SERVERS}" manual_file="${3:-$SERVERS_MANUAL}" vpn ts
   [ -e "$manual_file" ] || manual_file=$servers_file   # before the first servers_migrate
   if [ -n "$(root_files_bad "$allow_file" "$servers_file" "$manual_file")" ]; then lockdown; return 0; fi
-  if vpn_standby; then echo 'pass out quick all flags any keep state'; return 0; fi
+  if vpn_standby "$manual_file"; then echo 'pass out quick all flags any keep state'; return 0; fi
   vpn=$(vpn_ifaces | paste -sd' ' -)
   ts=$(ts_ifaces | paste -sd' ' -)
   # tables go before the filter rules

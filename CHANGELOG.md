@@ -6,6 +6,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 
 ## [Unreleased]
 
+### Changed
+- Next to another VPN (Happ, dropweb) protection no longer stands by when a server was added by hand
+  in «Адреса серверов для других VPN-программ» (`ks server-add`, ADR 0038): that VPN's tunnel and the
+  listed servers pass, everything else around it is blocked, and while that VPN is down there is no
+  internet instead of the real address. What that VPN sends DIRECT (Apple, often Russian sites) is
+  blocked. With the list empty, standby (ADR 0018) is as before.
+
 ## [0.21.0] - 2026-10-17
 
 ### Security
