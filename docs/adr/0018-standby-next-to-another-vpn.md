@@ -1,6 +1,7 @@
 # ADR 0018: protection stands by while only another VPN is up
 
-- Status: accepted (Unreleased); amends ADR 0009
+- Status: accepted (Unreleased); amends ADR 0009; amended by ADR 0038 (no standby once a server was
+  added by hand)
 - Date: 2026-10-10
 
 ## Context

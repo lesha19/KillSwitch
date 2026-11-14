@@ -86,8 +86,16 @@ servers_migrate
 core_running() { return 1; }
 utun_addrs() { echo "utun23 198.18.0.1"; }
 rules > "$tmp/out"
-[ "$(cat "$tmp/out")" = "pass out quick all flags any keep state" ] && echo "ok    other VPN up, ours not running: standby, nothing blocked" ||
+expect "ADR 0038: a server added by hand: no standby next to another VPN" '^block drop out quick all$'
+expect "  that server open to any process" '^pass out quick to \{ 192\.0\.2\.1,203\.0\.113\.10 \} flags any keep state$'
+expect "  the other VPN's tunnel passed" '^pass out quick on \{ lo0 awdl0 llw0 utun9 \} all flags any$'
+: > "$SERVERS_MANUAL"
+rules > "$tmp/out"
+[ "$(cat "$tmp/out")" = "pass out quick all flags any keep state" ] && echo "ok    other VPN up, ours not running, no server added by hand: standby, nothing blocked" ||
   { echo "FAIL  standby: $(cat "$tmp/out")"; fails=$((fails + 1)); }
+echo 192.0.2.9 > "$tmp/manual-new"
+rules "$ALLOW" "$SERVERS" "$tmp/manual-new" > "$tmp/out"
+expect "  the manual list passed in is what counts (server-add checks the new one)" '^pass out quick to \{ 192\.0\.2\.9 \} flags any keep state$'
 utun_addrs() { printf 'utun23 198.18.0.1\nutun7 198.18.128.1\n'; }
 rules > "$tmp/out"
 expect "other VPN next to our TUN: no standby" '^block drop out quick all$'

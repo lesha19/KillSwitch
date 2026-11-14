@@ -66,6 +66,7 @@ rm -f "$DNS_STATE" "$tmp/puts"
 
 # --- standby (ADR 0018): launchd not answering counts as our core running, so no standby
 utun_addrs() { echo "utun9 198.18.0.5"; }   # another program's VPN tunnel
+SERVERS_MANUAL="$tmp/none"; SERVERS="$tmp/none"   # no server added by hand (ADR 0038), whatever this Mac has
 launchctl() { hang; }
 s=$SECONDS; if vpn_standby; then r=1; else r=0; fi
 quick && [ "$r" = 0 ] && ok "launchd hangs: no standby, the rules keep blocking, in time" || bad "standby with launchd hanging: $r, $(took) s"
