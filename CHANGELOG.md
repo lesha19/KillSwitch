@@ -6,6 +6,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) 
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-11-14
+
 ### Changed
 - Next to another VPN (Happ, dropweb) protection no longer stands by when a server was added by hand
   in «Адреса серверов для других VPN-программ» (`ks server-add`, ADR 0038): that VPN's tunnel and the
