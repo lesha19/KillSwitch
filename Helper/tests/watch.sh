@@ -127,6 +127,27 @@ ADDRS="utun4 198.18.0.1
 utun7 198.18.128.1"; CORE_RUNS=1
 passes 61 61
 
+# --- ADR 0038: the other VPN's server added by hand (ks server-add): no standby. Its tunnel and that
+# server stay open, everything else is blocked, also while that VPN is down or reconnecting.
+echo 192.0.2.7 > "$SERVERS_MANUAL"; ADDRS="utun4 198.18.0.1"; CORE_RUNS=0
+passes 40 41
+grep -qx 'pass out quick on { lo0 awdl0 llw0 utun4 } all flags any' "$tmp/anchor" &&
+  grep -qx 'pass out quick to { 192.0.2.7 } flags any keep state' "$tmp/anchor" &&
+  grep -qx 'block drop out quick all' "$tmp/anchor" && [ "$(st standby)" = 0 ] && [ "$(st protection)" = on ] &&
+  ok "other VPN alone, its server added by hand: blocking, its tunnel and server open, no standby" ||
+  bad "strict next to another VPN: $(cat "$tmp/anchor"; cat "$STATEF")"
+ADDRS=""
+passes 42 42
+! grep -q 'utun4' "$tmp/anchor" && grep -q '192.0.2.7' "$tmp/anchor" && grep -qx 'block drop out quick all' "$tmp/anchor" &&
+  ok "  that VPN down: everything blocked but its server (it can come back)" || bad "  VPN down: $(cat "$tmp/anchor")"
+: > "$SERVERS_MANUAL"; ADDRS="utun4 198.18.0.1"
+passes 44 44
+[ "$(cat "$tmp/anchor")" = "pass out quick all flags any keep state" ] && [ "$(st standby)" = 1 ] &&
+  ok "  the server removed: standby again (ADR 0018)" || bad "  no standby after removal: $(cat "$tmp/anchor"; cat "$STATEF")"
+ADDRS="utun4 198.18.0.1
+utun7 198.18.128.1"; CORE_RUNS=1
+passes 45 46
+
 # --- ADR 0035: while the VPN is on, pf blocks whatever the protection switch says
 [ "$(st vpn)" = 0 ] && [ "$(st blocking)" = 1 ] && ok "state file: VPN off, blocking (protection on)" || bad "vpn/blocking: $(cat "$STATEF")"
 : > "$VPN_ON"; echo 0 > "$FLAG"; rules > "$tmp/anchor"; : > "$EVENTS"
